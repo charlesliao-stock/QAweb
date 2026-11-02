@@ -1,69 +1,14 @@
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>醫院美髮部服務系統</title>
-    <link rel="stylesheet" href="style.css">
-    <style>
-        /* 簡單的首頁內建樣式 */
-        body {
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            background-color: #f0f4f8;
-            font-family: "Microsoft JhengHei", Arial, sans-serif;
-        }
-        .container {
-            text-align: center;
-            background: white;
-            padding: 40px 20px;
-            border-radius: 15px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-            width: 90%;
-            max-width: 400px;
-        }
-        h1 { color: #2c3e50; margin-bottom: 30px; }
-        .nav-btn {
-            display: block;
-            width: 100%;
-            padding: 18px;
-            margin: 15px 0;
-            font-size: 1.2rem;
-            color: white;
-            text-decoration: none;
-            border-radius: 10px;
-            transition: transform 0.2s, background 0.3s;
-            box-sizing: border-box;
-        }
-        .nav-btn:active { transform: scale(0.98); }
-        .btn-booking { background-color: #3498db; }
-        .btn-search { background-color: #2ecc71; }
-        .btn-login { background-color: #95a5a6; margin-top: 40px; font-size: 1rem; }
-        .footer { margin-top: 20px; font-size: 0.85rem; color: #7f8c8d; }
-    </style>
-</head>
-<body>
-
-<div class="container">
-    <h1>醫院美髮部<br>服務預約系統</h1>
-    
-    <a href="booking.html" class="nav-btn btn-booking">即刻預約服務</a>
-    <a href="search.html" class="nav-btn btn-search">查詢 / 取消預約</a>
-    
-    <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-    
-    <a href="login.html" class="nav-btn btn-login">美髮部員工登入</a>
-    
-    <div class="footer">
-        服務時間：週一至週五 08:30 - 17:30<br>
-        (夜間時段目前暫未開放)
-    </div>
-</div>
-
-</body>
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f5f7f8" />
+    <meta name="description" content="護理品質指標管理系統展示版，僅供流程與介面確認。" />
+    <title>護理品質指標管理系統｜展示版</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
