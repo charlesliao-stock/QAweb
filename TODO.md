@@ -46,5 +46,7 @@
 
 ## 工程與交付
 - [x] 以手機優先 RWD 呈現，支援手機、平板與桌機。
-- [x] 建置 GitHub 可讀取的靜態網站程式；推送前保留既有 `main` 歷史，不強制推送。展示版程式碼放在 `nursingqc-demo` 分支；`main` 與目前 GitHub Pages 服務維持不變。
+- [x] 建置 GitHub 可讀取的靜態網站程式；推送時保留既有 `main` 歷史，不強制推送。展示版程式碼已在 `nursingqc-demo`；使用者已授權直接更新 `main`。
 - [x] 提供 README，說明展示模式、Firebase 環境變數、啟動方式，以及切換正式系統前必須完成的安全工作。
+- [x] 請協助編寫 GitHub Actions workflow 檔案（`.github/workflows/deploy.yml`），以便自動建置與部署到 GitHub Pages。PR 只建置檢查；`main` 更新後建置 `dist/` 並部署；workflow 不提供 Firebase 連線值，Firebase 讀取旗標維持 `false`。已完成本機 production build 與 YAML 格式檢查。
+- [ ] 將 GitHub Pages 發布來源從 `main` 根目錄切換為 GitHub Actions；合併 `nursingqc-demo` 後確認 Actions 部署成功並檢視公開網站。

@@ -10,11 +10,11 @@
 
 ## 實作方式
 
-採 Vite、React、TypeScript 與 Firebase Web SDK，輸出靜態網站，適合後續放在 GitHub Pages；本次只提交網站程式，不自動啟用公開部署。專案以環境變數管理 Firebase Web 設定；資料服務採唯讀 adapter，限制在 `qms_demo` 專用集合，並將 UI fixture 作為安全回退。畫面不依賴後端寫入。
+採 Vite、React、TypeScript 與 Firebase Web SDK，輸出至 `dist/` 的靜態網站由 `.github/workflows/deploy.yml` 建置與發布至 GitHub Pages。對 `main` 的 pull request 只建置檢查，不發布；合併到 `main` 後自動發布。專案以環境變數管理 Firebase Web 設定；資料服務採唯讀 adapter，限制在 `qms_demo` 專用集合，並將 UI fixture 作為安全回退。Pages 的讀取旗標固定為 `false`，Rules 核實前不連接 Firebase。
 
 展示功能包含：展示模式登入與角色視角切換、依角色呈現的儀表板、群組／次群組導覽、指標清單及版本狀態、審查排程、逐題審查展示、結果摘要與圖表、角色／群組管理介面、CAPA 追蹤介面。互動僅改變本地展示狀態，不寫回 Firebase。
 
-GitHub 上會以一般 commit 更新 `main`，不重寫歷史、不強制推送；原有的 QAweb 網頁程式檔案可依使用者授權替換。Firebase 既有資料與 Rules 不修改。
+GitHub 上會以一般 commit 更新 `main`，不重寫歷史、不強制推送；原有的 QAweb 網頁程式檔案可依使用者授權替換。GitHub Pages 發布來源由 `main` 根目錄切換為 GitHub Actions，部署 Vite `dist/` 產物。Firebase 既有資料與 Rules 不修改；Rules 尚未核實時保持展示資料模式。
 
 ## 專案結構
 
@@ -24,6 +24,7 @@ GitHub 上會以一般 commit 更新 `main`，不重寫歷史、不強制推送�
 - `src/data/`：純展示用 fixture；`src/types.ts` 集中資料型別。
 - `src/lib/firebase.ts`：Firebase 初始化與唯讀 demo 資料 adapter；不含寫入函式。
 - `public/`：靜態圖示、路由宣告及品牌資產。
+- `.github/workflows/deploy.yml`：PR 建置檢查；`main` 更新時建置 `dist/` 並自動部署，Firebase 讀取保持關閉。
 - `README.md`：展示模式限制、啟動方式、Firebase 環境變數及正式化前置工作。
 
 ## 設計
