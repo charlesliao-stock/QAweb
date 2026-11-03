@@ -7,12 +7,23 @@ import {
   ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
-import { doc, getDoc, serverTimestamp, updateDoc } from "../lib/db";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  serverTimestamp,
+  updateDoc,
+} from "../lib/db";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { isDemoMode } from "../lib/demoMode";
 import { useAuth } from "../lib/auth";
 import { applyTheme } from "../lib/uiPrefs";
+import { maskName } from "../lib/mask";
 import {
   SYSTEM_PARAM_LABELS,
   UI_THEMES,
@@ -80,7 +91,7 @@ function SystemInitSection({ onAction }: { onAction: (message: string) => void }
   }
 
   return (
-    <section className="panel data-panel">
+    <section className="panel data-panel" id="system-init">
       <SectionTitle
         title="系統初始化"
         note={
@@ -153,6 +164,113 @@ function SystemInitSection({ onAction }: { onAction: (message: string) => void }
   );
 }
 
+interface AuditRow {
+  id: string;
+  timeText: string;
+  actorLabel: string;
+  action: string;
+  target: string;
+  detail: string;
+}
+
+/** 稽核軌跡紀錄（唯讀列表；查詢限系統管理員，見 firestore.rules） */
+function AuditLogSection() {
+  const { user } = useAuth();
+  const [rows, setRows] = useState<AuditRow[] | null>(null);
+  const isAdmin = user?.roles.includes("系統管理員") ?? false;
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    getDocs(
+      query(
+        collection(getFirebaseDb(), "auditLogs"),
+        orderBy("createdAt", "desc"),
+        limit(50),
+      ),
+    )
+      .then((snap) => {
+        if (cancelled) return;
+        setRows(
+          snap.docs.map((d) => {
+            const data = d.data();
+            const createdAt = (
+              data.createdAt as { toDate?: () => Date } | undefined
+            )?.toDate?.();
+            const actor =
+              typeof data.actor === "string" ? data.actor : "";
+            const actorName =
+              typeof data.actorName === "string" ? data.actorName : "";
+            const targetId =
+              typeof data.targetId === "string" ? data.targetId : "";
+            return {
+              id: d.id,
+              timeText: createdAt ? createdAt.toLocaleString("zh-Hant") : "—",
+              actorLabel:
+                actorName && actorName !== actor
+                  ? `${maskName(actorName)}（${actor}）`
+                  : actor || "—",
+              action: typeof data.action === "string" ? data.action : "",
+              target: targetId,
+              detail: typeof data.detail === "string" ? data.detail : "",
+            };
+          }),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setRows([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
+  return (
+    <section className="panel data-panel">
+      <SectionTitle title="稽核軌跡紀錄" note="最近 50 筆，僅系統管理員可查閱" />
+      {!isAdmin ? (
+        <p className="settings-note">
+          稽核軌跡僅開放系統管理員查閱。
+        </p>
+      ) : rows === null ? (
+        <p className="settings-note">讀取中…</p>
+      ) : rows.length === 0 ? (
+        <EmptyState
+          title="尚無稽核紀錄"
+          description="建立、編輯或停用指標後，系統會自動寫入操作紀錄。"
+        />
+      ) : (
+        <div className="table-scroll">
+          <table className="permission-table">
+            <thead>
+              <tr>
+                <th>時間</th>
+                <th>人員</th>
+                <th>動作</th>
+                <th>對象</th>
+                <th>說明</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.timeText}</td>
+                  <td>{r.actorLabel}</td>
+                  <td>
+                    <b>{r.action}</b>
+                  </td>
+                  <td>{r.target || "—"}</td>
+                  <td>{r.detail || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function AdminPage({
   onAction,
 }: {
@@ -172,7 +290,11 @@ export function AdminPage({
         action={
           <button
             className="button button-outline"
-            onClick={() => onAction("資料串接完成後才能調整系統參數")}
+            onClick={() =>
+              document
+                .getElementById("system-init")
+                ?.scrollIntoView({ behavior: "smooth", block: "start" })
+            }
           >
             <SlidersHorizontal size={15} />
             系統參數
@@ -247,10 +369,7 @@ export function AdminPage({
           </table>
         </div>
       </section>
-      <EmptyState
-        title="系統參數尚未串接"
-        description="參數值、稽核軌跡與人員主檔將在 Firestore 串接完成後顯示與管理。"
-      />
+      <AuditLogSection />
       <div className="admin-settings-grid">
         <section className="panel settings-panel">
           <SectionTitle title="稽核軌跡" note="不可關閉的必要紀錄" />

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Pencil, Plus, Trash2, X } from "lucide-react";
 import {
   collection,
@@ -17,6 +17,7 @@ import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
+import { logAudit } from "../lib/audit";
 import {
   TEN_STEP_TITLES,
   emptyTenSteps,
@@ -142,6 +143,22 @@ export function IndicatorsPage({
   const [groupMap, setGroupMap] = useState<Map<string, string>>(new Map());
   const [staffMap, setStaffMap] = useState<Map<string, StaffOption>>(new Map());
   const [staffLoaded, setStaffLoaded] = useState(false);
+  const formErrorRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * 顯示表單錯誤並捲動到可視範圍。
+   * 表單很長（基本資料＋10 steps＋審核表）、按鈕在最下方，
+   * 錯誤訊息若只出現在頂端，使用者會以為「點了沒反應」。
+   */
+  function showFormError(message: string) {
+    setFormError(message);
+    window.setTimeout(() => {
+      formErrorRef.current?.scrollIntoView?.({
+        behavior: "smooth",
+        block: "center",
+      });
+    }, 60);
+  }
 
   const loadMeta = useCallback(async () => {
     try {
@@ -482,11 +499,11 @@ export function IndicatorsPage({
   async function handleSave() {
     const message = validate();
     if (message) {
-      setFormError(message);
+      showFormError(message);
       return;
     }
     if (!user) {
-      setFormError("請先登入");
+      showFormError("請先登入");
       return;
     }
     setFormError("");
@@ -552,7 +569,7 @@ export function IndicatorsPage({
         const ref = doc(db, "indicators", code);
         const exists = await getDoc(ref);
         if (exists.exists()) {
-          setFormError(`指標編號 ${code} 已存在`);
+          showFormError(`指標編號 ${code} 已存在`);
           setSaving(false);
           return;
         }
@@ -575,10 +592,18 @@ export function IndicatorsPage({
           createdBy: user.staffId,
         });
         onAction(`已新增指標 ${code}`);
+        logAudit(db, {
+          actor: user.staffId,
+          actorName: user.name,
+          action: "建立指標",
+          targetType: "indicator",
+          targetId: code,
+          detail: form.name.trim(),
+        });
       } else {
         const code = view.kind === "edit" ? view.code : "";
         if (!code) {
-          setFormError("狀態異常，請重新開啟編輯");
+          showFormError("狀態異常，請重新開啟編輯");
           setSaving(false);
           return;
         }
@@ -609,15 +634,31 @@ export function IndicatorsPage({
             hasReviewData: true,
           });
           onAction(`已儲存為新版本 ${newVersion}`);
+          logAudit(db, {
+            actor: user.staffId,
+            actorName: user.name,
+            action: "編輯指標",
+            targetType: "indicator",
+            targetId: code,
+            detail: `新版本 ${newVersion}：${form.name.trim()}`,
+          });
         } else {
           await updateDoc(doc(db, "indicators", code), base);
           onAction("已儲存指標修改");
+          logAudit(db, {
+            actor: user.staffId,
+            actorName: user.name,
+            action: "編輯指標",
+            targetType: "indicator",
+            targetId: code,
+            detail: form.name.trim(),
+          });
         }
       }
       setView({ kind: "list" });
       await loadList();
     } catch (error) {
-      setFormError(`儲存失敗：${toErrorMessage(error)}`);
+      showFormError(`儲存失敗：${toErrorMessage(error)}`);
     } finally {
       setSaving(false);
     }
@@ -641,6 +682,13 @@ export function IndicatorsPage({
         updatedBy: user.staffId,
       });
       onAction(`指標 ${code} 已停用`);
+      logAudit(getFirebaseDb(), {
+        actor: user.staffId,
+        actorName: user.name,
+        action: "停用指標",
+        targetType: "indicator",
+        targetId: code,
+      });
       await loadList();
     } catch (error) {
       onAction(`停用失敗：${toErrorMessage(error)}`);
@@ -750,7 +798,11 @@ export function IndicatorsPage({
                 : undefined
             }
           />
-          {formError && <div className="login-error">{formError}</div>}
+          {formError && (
+            <div className="login-error" ref={formErrorRef} aria-live="assertive">
+              {formError}
+            </div>
+          )}
 
           <SectionTitle title="基本資料" />
           <div className="form-grid">
