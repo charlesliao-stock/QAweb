@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { AuthProvider, useAuth } from "../lib/auth";
+import { isDemoMode } from "../lib/demoMode";
 import { BrandMark, PAGE_COPY } from "../components/ui";
 import { AdminPage } from "../features/AdminPage";
 import { AuditPage } from "../features/AuditPage";
@@ -210,6 +211,9 @@ function LoginScreen() {
             <div className="login-foot">
               <LockKeyhole size={13} /> 連續錯誤 5 次將鎖定 15 分鐘
             </div>
+            <div className="login-demo-hint">
+              展示帳號：demo／demo（展示模式，操作不會寫入資料庫）
+            </div>
           </>
         )}
       </section>
@@ -395,6 +399,7 @@ function Shell() {
             <span>{user.unitName || "護理品質"}</span>
             <ChevronRight size={14} />
             <b>{PAGE_COPY[page].title}</b>
+            {isDemoMode() && <span className="demo-pill">展示模式</span>}
           </div>
           <div className="topbar-actions">
             <button

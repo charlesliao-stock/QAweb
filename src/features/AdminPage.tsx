@@ -6,9 +6,10 @@ import {
   ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc } from "../lib/db";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
+import { isDemoMode } from "../lib/demoMode";
 import { useAuth } from "../lib/auth";
 import {
   SYSTEM_PARAM_LABELS,
@@ -60,7 +61,14 @@ function SystemInitSection({ onAction }: { onAction: (message: string) => void }
 
   return (
     <section className="panel data-panel">
-      <SectionTitle title="系統初始化" note="首次啟用時寫入預設參數與角色" />
+      <SectionTitle
+        title="系統初始化"
+        note={
+          isDemoMode()
+            ? "展示模式：系統參數、角色、職稱與展示資料已預載"
+            : "首次啟用時寫入預設參數與角色"
+        }
+      />
       {params === undefined ? (
         <p className="settings-note">讀取中…</p>
       ) : params === null ? (

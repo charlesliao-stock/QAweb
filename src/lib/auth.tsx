@@ -14,8 +14,9 @@ import {
   updatePassword,
   type User as FirebaseUser,
 } from "firebase/auth";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc } from "./db";
 import { getFirebaseAuth, getFirebaseDb } from "./firebase";
+import { isDemoMode, setDemoMode } from "./demoMode";
 
 /** 登入用 email 合成規則：職編即帳號，phase 1 不寄信故用內部網域 */
 export function staffEmail(staffId: string): string {
@@ -42,6 +43,16 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+/** 展示模式假使用者：不經 Firebase Auth，所有資料走記憶體 */
+const DEMO_USER: StaffProfile = {
+  staffId: "demo",
+  name: "展示管理員",
+  unitCode: "",
+  unitName: "",
+  roles: ["系統管理員"],
+  mustChangePassword: false,
+};
 
 function toAuthErrorMessage(error: unknown): string {
   const code =
@@ -102,6 +113,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [needsPasswordChange, setNeedsPasswordChange] = useState(false);
 
   useEffect(() => {
+    // 展示模式：直接恢復 demo session，不訂閱 Firebase Auth
+    if (isDemoMode()) {
+      setFirebaseUser(null);
+      setUser(DEMO_USER);
+      setNeedsPasswordChange(false);
+      setLoading(false);
+      return;
+    }
     const auth = getFirebaseAuth();
     const unsubscribe = onAuthStateChanged(auth, async (current) => {
       setFirebaseUser(current);
@@ -131,6 +150,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!trimmed || !password) {
       throw new Error("請輸入職編與密碼");
     }
+    // 展示帳號：不經 Firebase，所有操作只寫入記憶體
+    if (trimmed === "demo" && password === "demo") {
+      setDemoMode(true);
+      setFirebaseUser(null);
+      setUser(DEMO_USER);
+      setNeedsPasswordChange(false);
+      return;
+    }
     try {
       const auth = getFirebaseAuth();
       await signInWithEmailAndPassword(auth, staffEmail(trimmed), password);
@@ -144,6 +171,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const changePassword = useCallback(
     async (newPassword: string) => {
+      // 展示模式：直接成功，不做任何事
+      if (isDemoMode()) {
+        setNeedsPasswordChange(false);
+        return;
+      }
       const auth = getFirebaseAuth();
       const current = auth.currentUser;
       if (!current || !user) {
@@ -167,6 +199,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    if (isDemoMode()) {
+      setDemoMode(false);
+      setUser(null);
+      setFirebaseUser(null);
+      setNeedsPasswordChange(false);
+      return;
+    }
     await signOut(getFirebaseAuth());
     setUser(null);
     setFirebaseUser(null);

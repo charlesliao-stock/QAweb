@@ -4,7 +4,7 @@ import {
   serverTimestamp,
   setDoc,
   type Firestore,
-} from "firebase/firestore";
+} from "./db";
 
 /**
  * 10 steps 正式標題（需求規格書 v2.1 §3，全院統一，僅系統管理員可修改標題）。

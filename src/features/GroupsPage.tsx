@@ -22,7 +22,7 @@ import {
   where,
   writeBatch,
   type WriteBatch,
-} from "firebase/firestore";
+} from "../lib/db";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
