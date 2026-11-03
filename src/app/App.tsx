@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -16,16 +16,10 @@ import {
   LogOut,
   Menu,
   Settings2,
-  ShieldCheck,
   X,
 } from "lucide-react";
-import { DEMO_INDICATORS } from "../data/demo";
-import {
-  isFirebaseDemoReadEnabled,
-  readDemoIndicators,
-  type DemoDataSource,
-} from "../lib/firebase";
-import { BrandMark, DemoBanner, PAGE_COPY } from "../components/ui";
+import { AuthProvider, useAuth } from "../lib/auth";
+import { BrandMark, PAGE_COPY } from "../components/ui";
 import { AdminPage } from "../features/AdminPage";
 import { AuditPage } from "../features/AuditPage";
 import { CapaPage } from "../features/CapaPage";
@@ -35,16 +29,6 @@ import { IndicatorsPage } from "../features/IndicatorsPage";
 import { ResultsPage } from "../features/ResultsPage";
 import { SchedulePage } from "../features/SchedulePage";
 import type { PageId, Role } from "../types";
-
-const ROLES: Role[] = [
-  "一般人員",
-  "審查員",
-  "護理長",
-  "督導",
-  "品管執行幹事",
-  "系統管理員",
-  "指標負責人",
-];
 
 const NAV_GROUPS = [
   {
@@ -70,8 +54,53 @@ const NAV_GROUPS = [
   },
 ] as const;
 
-function DemoLogin({ onEnter }: { onEnter: (role: Role) => void }) {
-  const [role, setRole] = useState<Role>("品管執行幹事");
+const ROLE_NAMES: Role[] = [
+  "一般人員",
+  "審查員",
+  "護理長",
+  "督導",
+  "品管執行幹事",
+  "系統管理員",
+  "指標負責人",
+];
+
+function LoginScreen() {
+  const { login, changePassword, needsPasswordChange } = useAuth();
+  const [staffId, setStaffId] = useState("");
+  const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submitLogin = async () => {
+    setError("");
+    setBusy(true);
+    try {
+      await login(staffId, password);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "登入失敗");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitPasswordChange = async () => {
+    setError("");
+    if (newPassword !== confirmPassword) {
+      setError("兩次輸入的新密碼不一致");
+      return;
+    }
+    setBusy(true);
+    try {
+      await changePassword(newPassword);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "密碼變更失敗");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <main className="login-screen">
       <div className="login-backdrop" />
@@ -82,49 +111,107 @@ function DemoLogin({ onEnter }: { onEnter: (role: Role) => void }) {
             護理品質<span>管理系統</span>
           </span>
         </div>
-        <div className="login-eyebrow">
-          <span className="live-dot" /> 僅供流程展示
-        </div>
-        <h1>
-          讓品質改善
-          <br />
-          <em>每一步都有依據。</em>
-        </h1>
-        <p className="login-lead">
-          檢視指標、審查進度與改善成效，從同一個工作台開始。
-        </p>
-        <div className="login-demo-note">
-          <ShieldCheck size={17} />
-          <span>
-            <strong>展示模式已啟用</strong>
-            <br />
-            不需要帳號或密碼。系統使用虛構資料，未連接正式登入。
-          </span>
-        </div>
-        <label className="field-label" htmlFor="demo-role">
-          選擇展示角色
-        </label>
-        <div className="select-wrap">
-          <select
-            id="demo-role"
-            value={role}
-            onChange={(event) => setRole(event.target.value as Role)}
-          >
-            {ROLES.map((item) => (
-              <option key={item}>{item}</option>
-            ))}
-          </select>
-          <ChevronDown size={17} />
-        </div>
-        <button
-          className="button button-primary login-action"
-          onClick={() => onEnter(role)}
-        >
-          進入展示工作台 <ArrowRight size={17} />
-        </button>
-        <div className="login-foot">
-          <LockKeyhole size={13} /> 展示流程不驗證身分，也不儲存輸入內容
-        </div>
+        {needsPasswordChange ? (
+          <>
+            <div className="login-eyebrow">
+              <span className="live-dot" /> 首次登入
+            </div>
+            <h1>
+              請先<em>變更密碼</em>
+            </h1>
+            <p className="login-lead">
+              為保障帳號安全，首次登入須設定新密碼（至少 6 個字元）。
+            </p>
+            <label className="field-label" htmlFor="new-password">
+              新密碼
+            </label>
+            <input
+              id="new-password"
+              className="text-input"
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              placeholder="請輸入新密碼"
+              autoComplete="new-password"
+            />
+            <label className="field-label" htmlFor="confirm-password">
+              確認新密碼
+            </label>
+            <input
+              id="confirm-password"
+              className="text-input"
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              placeholder="請再輸入一次新密碼"
+              autoComplete="new-password"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void submitPasswordChange();
+              }}
+            />
+            {error && <div className="login-error">{error}</div>}
+            <button
+              className="button button-primary login-action"
+              onClick={() => void submitPasswordChange()}
+              disabled={busy}
+            >
+              {busy ? "變更中…" : "變更密碼並進入"}
+              <ArrowRight size={17} />
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="login-eyebrow">
+              <span className="live-dot" /> 護理品質指標管理
+            </div>
+            <h1>
+              讓品質改善
+              <br />
+              <em>每一步都有依據。</em>
+            </h1>
+            <p className="login-lead">
+              檢視指標、審查進度與改善成效，從同一個工作台開始。
+            </p>
+            <label className="field-label" htmlFor="staff-id">
+              職編
+            </label>
+            <input
+              id="staff-id"
+              className="text-input"
+              value={staffId}
+              onChange={(event) => setStaffId(event.target.value)}
+              placeholder="請輸入職編"
+              autoComplete="username"
+            />
+            <label className="field-label" htmlFor="password">
+              密碼
+            </label>
+            <input
+              id="password"
+              className="text-input"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="請輸入密碼"
+              autoComplete="current-password"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void submitLogin();
+              }}
+            />
+            {error && <div className="login-error">{error}</div>}
+            <button
+              className="button button-primary login-action"
+              onClick={() => void submitLogin()}
+              disabled={busy}
+            >
+              {busy ? "登入中…" : "登入"}
+              <ArrowRight size={17} />
+            </button>
+            <div className="login-foot">
+              <LockKeyhole size={13} /> 連續錯誤 5 次將鎖定 15 分鐘
+            </div>
+          </>
+        )}
       </section>
       <aside className="login-side-copy">
         <span>護理品質指標管理</span>
@@ -154,21 +241,21 @@ function DemoLogin({ onEnter }: { onEnter: (role: Role) => void }) {
 
 function Sidebar({
   page,
-  role,
   onPage,
-  onRole,
   onExit,
   mobileOpen,
   onClose,
 }: {
   page: PageId;
-  role: Role;
   onPage: (page: PageId) => void;
-  onRole: (role: Role) => void;
   onExit: () => void;
   mobileOpen: boolean;
   onClose: () => void;
 }) {
+  const { user } = useAuth();
+  const displayName = user?.name ?? "";
+  const staffId = user?.staffId ?? "";
+  const unitName = user?.unitName || user?.unitCode || "";
   return (
     <>
       {mobileOpen && (
@@ -194,10 +281,10 @@ function Sidebar({
           </button>
         </div>
         <div className="org-chip">
-          <span className="org-avatar">護</span>
+          <span className="org-avatar">{displayName.slice(0, 1) || "護"}</span>
           <span>
-            <b>示範醫療機構</b>
-            <small>單院區 · 品質管理</small>
+            <b>{unitName || "護理品質"}</b>
+            <small>品質管理</small>
           </span>
           <ChevronDown size={14} />
         </div>
@@ -218,7 +305,6 @@ function Sidebar({
                   >
                     <Icon size={18} strokeWidth={1.8} />
                     <span>{item.label}</span>
-                    {item.id === "capa" && <i className="nav-count">3</i>}
                   </button>
                 );
               })}
@@ -226,31 +312,20 @@ function Sidebar({
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="role-box">
-            <span className="role-box-label">目前角色視角</span>
-            <div className="select-wrap role-select">
-              <select
-                value={role}
-                onChange={(event) => onRole(event.target.value as Role)}
-                aria-label="切換展示角色"
-              >
-                {ROLES.map((item) => (
-                  <option key={item}>{item}</option>
-                ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-            <small>僅供展示，不代表實際授權</small>
-          </div>
           <div className="profile-row">
-            <div className="profile-avatar">示</div>
+            <div className="profile-avatar">
+              {displayName.slice(0, 1) || "使"}
+            </div>
             <div className="profile-info">
-              <b>示範使用者</b>
-              <span>DEMO-001 · 示範單位</span>
+              <b>{displayName}</b>
+              <span>
+                {staffId}
+                {unitName ? ` · ${unitName}` : ""}
+              </span>
             </div>
             <button
               className="icon-button profile-exit"
-              aria-label="離開展示"
+              aria-label="登出"
               onClick={onExit}
             >
               <LogOut size={16} />
@@ -262,57 +337,48 @@ function Sidebar({
   );
 }
 
-export default function App() {
-  const [entered, setEntered] = useState(false);
-  const [role, setRole] = useState<Role>("品管執行幹事");
+function Shell() {
+  const { user, loading, needsPasswordChange, logout } = useAuth();
   const [page, setPage] = useState<PageId>("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [toast, setToast] = useState("");
-  const [indicators, setIndicators] = useState(DEMO_INDICATORS);
-  const [dataSource, setDataSource] = useState<DemoDataSource>("local");
-
-  useEffect(() => {
-    if (!isFirebaseDemoReadEnabled()) return;
-    let mounted = true;
-    readDemoIndicators()
-      .then((rows) => {
-        if (!mounted) return;
-        if (rows) {
-          setIndicators(rows);
-          setDataSource("firebase");
-        }
-      })
-      .catch(() => {
-        if (mounted) setDataSource("firebase-unavailable");
-      });
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   const notify = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(""), 2600);
   };
 
-  if (!entered)
+  if (loading) {
     return (
-      <DemoLogin
-        onEnter={(selectedRole) => {
-          setRole(selectedRole);
-          setEntered(true);
-        }}
-      />
+      <main className="login-screen">
+        <div className="login-backdrop" />
+        <section className="login-card">
+          <div className="login-brand">
+            <BrandMark />
+            <span>
+              護理品質<span>管理系統</span>
+            </span>
+          </div>
+          <p className="login-lead">載入中…</p>
+        </section>
+      </main>
     );
+  }
+
+  if (!user || needsPasswordChange) {
+    return <LoginScreen />;
+  }
+
+  const primaryRole: Role = ROLE_NAMES.includes(user.roles[0] as Role)
+    ? (user.roles[0] as Role)
+    : "一般人員";
 
   return (
     <div className="app-shell">
       <Sidebar
         page={page}
-        role={role}
         onPage={setPage}
-        onRole={setRole}
-        onExit={() => setEntered(false)}
+        onExit={() => void logout()}
         mobileOpen={mobileOpen}
         onClose={() => setMobileOpen(false)}
       />
@@ -326,46 +392,38 @@ export default function App() {
             <Menu size={20} />
           </button>
           <div className="topbar-crumb">
-            <span>示範醫療機構</span>
+            <span>{user.unitName || "護理品質"}</span>
             <ChevronRight size={14} />
             <b>{PAGE_COPY[page].title}</b>
           </div>
           <div className="topbar-actions">
-            <div className="connection-status">
-              <span className="live-dot" />
-              線上展示
-            </div>
             <button
               className="icon-button notification-button"
               aria-label="通知"
-              onClick={() => notify("目前沒有新的展示通知")}
+              onClick={() => notify("目前沒有新通知")}
             >
               <Bell size={18} />
-              <i />
             </button>
             <div className="topbar-user">
-              <span className="profile-avatar small-avatar">示</span>
+              <span className="profile-avatar small-avatar">
+                {user.name.slice(0, 1)}
+              </span>
               <div>
-                <b>示範使用者</b>
-                <small>{role}</small>
+                <b>{user.name}</b>
+                <small>{primaryRole}</small>
               </div>
               <ChevronDown size={14} />
             </div>
           </div>
         </header>
-        <DemoBanner source={dataSource} />
         <div className="page-content">
           {page === "dashboard" && (
-            <DashboardPage role={role} onAction={notify} />
+            <DashboardPage role={primaryRole} onAction={notify} />
           )}
-          {page === "indicators" && (
-            <IndicatorsPage indicators={indicators} onAction={notify} />
-          )}
+          {page === "indicators" && <IndicatorsPage onAction={notify} />}
           {page === "schedule" && <SchedulePage onAction={notify} />}
           {page === "audit" && <AuditPage onAction={notify} />}
-          {page === "results" && (
-            <ResultsPage indicators={indicators} onAction={notify} />
-          )}
+          {page === "results" && <ResultsPage onAction={notify} />}
           {page === "groups" && <GroupsPage onAction={notify} />}
           {page === "capa" && <CapaPage onAction={notify} />}
           {page === "admin" && <AdminPage onAction={notify} />}
@@ -404,5 +462,13 @@ export default function App() {
         })}
       </nav>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <Shell />
+    </AuthProvider>
   );
 }

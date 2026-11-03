@@ -2952,3 +2952,63 @@ button:disabled {
     width: 28px;
   }
 }
+
+/* 真實登入與空狀態（移除展示模式後新增） */
+.text-input {
+  width: 100%;
+  border: 1px solid #dce4e4;
+  border-radius: 9px;
+  background: #fff;
+  color: #314447;
+  padding: 12px 13px;
+  outline: none;
+  font-size: 15px;
+  margin-bottom: 14px;
+  box-sizing: border-box;
+}
+.text-input:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+.login-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  border-radius: 9px;
+  padding: 10px 13px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+.empty-state-block {
+  padding: 56px 28px;
+  text-align: center;
+  color: #5b6b69;
+}
+.empty-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: #eaf5f2;
+  color: #2c786e;
+  margin-bottom: 14px;
+}
+.empty-state-block b {
+  display: block;
+  font-size: 16px;
+  margin-bottom: 8px;
+  color: #314447;
+}
+.empty-state-block p {
+  margin: 0;
+  font-size: 13px;
+  color: #8a979a;
+}
+.chart-empty {
+  padding: 48px 20px;
+  text-align: center;
+  color: #a0aaac;
+  font-size: 13px;
+}

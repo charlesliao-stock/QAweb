@@ -1,10 +1,15 @@
-import { MONTHLY_TREND } from "../data/demo";
-
-export function TrendChart() {
-  const values = MONTHLY_TREND;
+export function TrendChart({ values = [] }: { values?: number[] }) {
+  if (values.length === 0) {
+    return (
+      <div className="trend-chart-wrap">
+        <div className="chart-empty">尚無趨勢資料</div>
+      </div>
+    );
+  }
   const points = values
     .map((value, index) => `${42 + index * 75},${158 - (value - 70) * 4.2}`)
     .join(" ");
+  const latest = values[values.length - 1] ?? 0;
   return (
     <div className="trend-chart-wrap">
       <div className="chart-legend">
@@ -13,7 +18,7 @@ export function TrendChart() {
           整體達標率
         </span>
         <span className="chart-current">
-          本月 <b>93%</b>
+          本月 <b>{latest}%</b>
         </span>
       </div>
       <svg
@@ -21,7 +26,7 @@ export function TrendChart() {
         viewBox="0 0 600 200"
         preserveAspectRatio="none"
         role="img"
-        aria-label="近八個月達標率趨勢圖"
+        aria-label="達標率趨勢圖"
       >
         <defs>
           <linearGradient id="areaFill" x1="0" x2="0" y1="0" y2="1">
@@ -58,13 +63,6 @@ export function TrendChart() {
           </circle>
         ))}
       </svg>
-      <div className="chart-x-labels">
-        {["4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月"].map(
-          (month) => (
-            <span key={month}>{month}</span>
-          ),
-        )}
-      </div>
     </div>
   );
 }

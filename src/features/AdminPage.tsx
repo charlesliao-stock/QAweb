@@ -1,11 +1,10 @@
 import {
   ArrowRight,
   Check,
-  ChevronRight,
   ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
-import { PageHeading, SectionTitle } from "../components/ui";
+import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 
 export function AdminPage({
   onAction,
@@ -26,7 +25,7 @@ export function AdminPage({
         action={
           <button
             className="button button-outline"
-            onClick={() => onAction("展示版設定不會存入 Firebase")}
+            onClick={() => onAction("資料串接完成後才能調整系統參數")}
           >
             <SlidersHorizontal size={15} />
             系統參數
@@ -36,14 +35,14 @@ export function AdminPage({
       <div className="admin-alert">
         <ShieldCheck size={17} />
         <span>
-          <b>展示權限矩陣</b> ·
-          組長只管理所屬群組與下層次群組；管理員可授予全院範圍。此表不代表正式授權。
+          <b>權限矩陣</b> ·
+          角色可由系統管理員動態建立，不需修改程式；正式授權以系統管理員設定為準。
         </span>
       </div>
       <section className="panel data-panel permission-panel">
         <SectionTitle
           title="功能 × 資料範圍"
-          note="依需求規格整理的展示基線"
+          note="依需求規格整理的授權基線"
           action={
             <button
               className="text-button"
@@ -100,14 +99,11 @@ export function AdminPage({
           </table>
         </div>
       </section>
+      <EmptyState
+        title="系統參數尚未串接"
+        description="參數值、稽核軌跡與人員主檔將在 Firestore 串接完成後顯示與管理。"
+      />
       <div className="admin-settings-grid">
-        <section className="panel settings-panel">
-          <SectionTitle title="系統參數" note="展示項目" />
-          <SettingRow title="補審截止日" value="次月 10 日" />
-          <SettingRow title="伺服器草稿保留" value="30 天" />
-          <SettingRow title="草稿到期提醒" value="到期前 5 天" />
-          <SettingRow title="資料保存政策" value="原則上不刪除" />
-        </section>
         <section className="panel settings-panel">
           <SectionTitle title="稽核軌跡" note="不可關閉的必要紀錄" />
           <div className="audit-logs">
@@ -127,20 +123,10 @@ export function AdminPage({
             ))}
           </div>
           <p className="settings-note">
-            資料原則上不刪除；實際保存年限依院方政策設定。
+            審查資料與稽核紀錄保存 3 年（可於系統參數調整）。
           </p>
         </section>
       </div>
     </>
-  );
-}
-
-function SettingRow({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="setting-row">
-      <span>{title}</span>
-      <b>{value}</b>
-      <ChevronRight size={15} />
-    </div>
   );
 }

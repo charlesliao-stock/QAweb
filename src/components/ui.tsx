@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
-import { Check, ChevronRight, ShieldCheck } from "lucide-react";
-import type { DemoDataSource } from "../lib/firebase";
+import { Check, ChevronRight, Inbox } from "lucide-react";
 import type { PageId, Rag } from "../types";
 
 export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
@@ -67,25 +66,23 @@ export function BrandMark({ small = false }: { small?: boolean }) {
   );
 }
 
-export function DemoBanner({ source }: { source: DemoDataSource }) {
-  const sourceText =
-    source === "firebase"
-      ? "Firebase 展示集合（唯讀）"
-      : source === "firebase-unavailable"
-        ? "Firebase 不可讀，已回退本機假資料"
-        : "本機假資料";
+export function EmptyState({
+  title,
+  description,
+}: {
+  title: string;
+  description?: string;
+}) {
   return (
-    <div className="demo-banner">
-      <span className="demo-banner-icon">
-        <ShieldCheck size={15} />
-      </span>
-      <span>
-        <strong>展示模式</strong>
-        <span className="demo-banner-divider">/</span>
-        非正式系統，請勿輸入真實個資
-      </span>
-      <span className="demo-source">資料來源：{sourceText}</span>
-    </div>
+    <section className="panel">
+      <div className="empty-state-block">
+        <span className="empty-state-icon">
+          <Inbox size={28} strokeWidth={1.6} />
+        </span>
+        <b>{title}</b>
+        {description && <p>{description}</p>}
+      </div>
+    </section>
   );
 }
 
