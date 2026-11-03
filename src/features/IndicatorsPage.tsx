@@ -91,15 +91,10 @@ interface IndicatorForm {
   name: string;
   owners: string[];
   ownerSearch: string;
-  resultName: string;
-  applicableUnitsText: string;
-  cycle: string;
   status: IndicatorStatus;
   steps: TenSteps;
   questions: AuditQuestion[];
 }
-
-const RESULT_NAMES = ["符合率", "正確率", "完整率", "達成率"];
 
 function emptyForm(): IndicatorForm {
   const steps = emptyTenSteps();
@@ -110,9 +105,6 @@ function emptyForm(): IndicatorForm {
     name: "",
     owners: [],
     ownerSearch: "",
-    resultName: "符合率",
-    applicableUnitsText: "",
-    cycle: "每月",
     status: "草稿",
     steps,
     questions: [],
@@ -123,13 +115,6 @@ function nextVersion(version: string): string {
   const m = /^v(\d+)\.(\d+)$/.exec(version.trim());
   if (!m) return "v1.1";
   return `v${m[1]}.${Number(m[2]) + 1}`;
-}
-
-function splitList(text: string): string[] {
-  return text
-    .split(/[,，、\s]+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
 }
 
 function toErrorMessage(error: unknown): string {
@@ -280,12 +265,6 @@ export function IndicatorsPage({
         name: typeof data.name === "string" ? data.name : "",
         owners: Array.isArray(data.owners) ? data.owners.map(String) : [],
         ownerSearch: "",
-        resultName:
-          typeof data.resultName === "string" ? data.resultName : "符合率",
-        applicableUnitsText: Array.isArray(data.applicableUnits)
-          ? data.applicableUnits.join(", ")
-          : "",
-        cycle: typeof data.cycle === "string" ? data.cycle : "每月",
         status: STATUSES.includes(data.status) ? data.status : "草稿",
         steps,
         questions: normalizeQuestions(data.questions),
@@ -559,10 +538,7 @@ export function IndicatorsPage({
         name: form.name.trim(),
         groupId: form.groupId,
         owners: form.owners,
-        resultName: form.resultName,
         threshold,
-        applicableUnits: splitList(form.applicableUnitsText),
-        cycle: form.cycle.trim() || "每月",
         status: form.status,
         tenSteps: steps,
         questions,
@@ -813,22 +789,6 @@ export function IndicatorsPage({
                 onChange={(e) => setField("name", e.target.value)}
               />
             </div>
-            <div className="form-field">
-              <label className="field-label">結果名稱</label>
-              <div className="select-wrap">
-                <select
-                  value={form.resultName}
-                  onChange={(e) => setField("resultName", e.target.value)}
-                >
-                  {RESULT_NAMES.map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
             <div className="form-field" style={{ gridColumn: "1 / -1" }}>
               <label className="field-label">
                 負責人 *（輸入職編或姓名搜尋，可多選）
@@ -874,24 +834,6 @@ export function IndicatorsPage({
                   人員清單載入失敗（可能無查詢權限），請確認帳號角色後重試。
                 </p>
               )}
-            </div>
-            <div className="form-field">
-              <label className="field-label">適用單位（以逗號分隔代號）</label>
-              <input
-                className="text-input"
-                value={form.applicableUnitsText}
-                placeholder="例如 9B, 10B"
-                onChange={(e) => setField("applicableUnitsText", e.target.value)}
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">稽核週期</label>
-              <input
-                className="text-input"
-                value={form.cycle}
-                placeholder="例如 每月"
-                onChange={(e) => setField("cycle", e.target.value)}
-              />
             </div>
             <div className="form-field">
               <label className="field-label">狀態</label>
