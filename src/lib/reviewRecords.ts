@@ -1,4 +1,4 @@
-/** 審查執行紀錄（v1.10.0 新增）：一 task 一筆，doc id＝taskId */
+/** 審查執行紀錄（v1.10.0 新增；v1.11.0 起改為逐件：一 task 可有多筆） */
 
 /** 單題作答快照 */
 export interface ReviewAnswer {
@@ -19,6 +19,14 @@ export interface ReviewRecord {
   reviewerId: string;
   year: number;
   month: number;
+  /** 件次（v1.11.0 起逐件；舊格式單筆為 null，統計時視為第 1 件） */
+  caseSeq: number | null;
+  /** 審查日期 YYYY-MM-DD（v1.11.0 新增） */
+  reviewDate: string;
+  /** 審查人員職編（v1.11.0 新增；可能與任務指派的審查員不同人） */
+  reviewerEmpNo: string;
+  /** 審查人員姓名（v1.11.0 新增，快照） */
+  reviewerName: string;
   answers: ReviewAnswer[];
   totalScore: number;
   maxScore: number;
@@ -29,7 +37,10 @@ export interface ReviewRecord {
   submittedBy: string;
 }
 
-/** reviewRecords 的 doc id 即 taskId（一 task 一筆，upsert） */
+/**
+ * reviewRecords 的舊 doc id 即 taskId（一 task 一筆，upsert；v1.10.0 格式）。
+ * v1.11.0 起逐件寫入請用 reviewProgress.reviewCaseDocId(taskId, seq)。
+ */
 export function reviewRecordDocId(taskId: string): string {
   return taskId;
 }

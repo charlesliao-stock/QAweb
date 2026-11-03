@@ -11,6 +11,10 @@ import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
 import { isOverdue, type ReviewTask } from "../lib/scheduling";
 import {
+  progressLabel,
+  taskTab,
+} from "../lib/reviewProgress";
+import {
   ReviewExecutePage,
   type ExecuteTarget,
 } from "./ReviewExecutePage";
@@ -18,8 +22,8 @@ import type { Role } from "../types";
 
 interface TaskRow extends ReviewTask {
   id: string;
-  /** 審查結果正確率（來自 reviewRecords；null＝無紀錄或滿分 0） */
-  rate: number | null;
+  /** 該單位完成數（該 task 的 reviewRecords 筆數；舊格式單筆算 1 件） */
+  doneCount: number;
 }
 
 export function DashboardPage({
@@ -32,12 +36,13 @@ export function DashboardPage({
   const { user } = useAuth();
   const isIndividual = role === "一般人員";
 
-  // ---- 本月我的審查（v1.8.0） ----
+  // ---- YYYY/MM 我的審查（v1.11.0：待完成／已完成雙頁籤） ----
   const now = new Date();
   const curYear = now.getFullYear();
   const curMonth = now.getMonth() + 1;
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [tab, setTab] = useState<"pending" | "done">("pending");
   const [indicatorNames, setIndicatorNames] = useState<Map<string, string>>(
     new Map(),
   );
@@ -74,8 +79,8 @@ export function DashboardPage({
         unm.set(d.id, typeof n === "string" ? n : d.id);
       });
       setUnitNames(unm);
-      // 審查結果：taskId → 正確率（v1.10.0 起數據來自實際審查結果）
-      const rateMap = new Map<string, number | null>();
+      // 逐件完成數：taskId → reviewRecords 筆數（v1.11.0 起數據來自實際審查結果）
+      const countMap = new Map<string, number>();
       rsnap.docs.forEach((d) => {
         const data = d.data();
         if (
@@ -83,9 +88,9 @@ export function DashboardPage({
           Number(data.month) !== curMonth
         )
           return;
-        const tid = typeof data.taskId === "string" ? data.taskId : d.id;
-        const rt = data.rate;
-        rateMap.set(tid, typeof rt === "number" ? rt : null);
+        const tid =
+          typeof data.taskId === "string" ? data.taskId : d.id;
+        countMap.set(tid, (countMap.get(tid) ?? 0) + 1);
       });
       const list: TaskRow[] = [];
       tsnap.docs.forEach((d) => {
@@ -107,15 +112,20 @@ export function DashboardPage({
           status: data.status === "done" ? "done" : "pending",
           completedAt: data.completedAt,
           createdAt: data.createdAt,
-          rate: rateMap.has(d.id) ? (rateMap.get(d.id) ?? null) : null,
+          doneCount: countMap.get(d.id) ?? 0,
         });
       });
-      list.sort((a, b) =>
-        (inm.get(a.indicatorId) ?? a.indicatorId).localeCompare(
+      list.sort((a, b) => {
+        const c = (inm.get(a.indicatorId) ?? a.indicatorId).localeCompare(
           inm.get(b.indicatorId) ?? b.indicatorId,
           "zh-Hant",
-        ),
-      );
+        );
+        if (c !== 0) return c;
+        return (unm.get(a.unitId) ?? a.unitId).localeCompare(
+          unm.get(b.unitId) ?? b.unitId,
+          "zh-Hant",
+        );
+      });
       setTasks(list);
     } catch {
       // 讀不到就顯示空狀態，不阻擋儀表板
@@ -130,42 +140,31 @@ export function DashboardPage({
     loadMyTasks();
   }, [loadMyTasks]);
 
-  /** 審查表單執行目標（v1.10.0）：task 模式＝指定任務；indicator 模式＝點指標名稱進入 */
+  /** 審查表單執行目標（v1.11.0）：task＝審查表單；records＝查詢逐件結果 */
   const [executing, setExecuting] = useState<ExecuteTarget | null>(null);
 
-  const byIndicator = useMemo(() => {
-    const map = new Map<string, TaskRow[]>();
-    tasks.forEach((t) => {
-      const arr = map.get(t.indicatorId) ?? [];
-      arr.push(t);
-      map.set(t.indicatorId, arr);
-    });
-    return map;
-  }, [tasks]);
+  /** 頁籤分類（v1.11.0）：完成數 ≧ 應審件數 → 已完成 */
+  const isDone = useCallback(
+    (t: TaskRow) => taskTab(t.doneCount, t.caseCount, t.status === "done") === "done",
+    [],
+  );
 
-  /** 任務狀態呈現（v1.10.2：表格／手機卡片共用） */
-  function taskStatus(t: TaskRow) {
-    const overdue = isOverdue(t.deadline, t.status);
-    const isDone = t.status === "done";
-    return {
-      isDone,
-      overdue,
-      pillClass: isDone
-        ? "status-pill success"
-        : overdue
-          ? "status-pill danger"
-          : "status-pill warning",
-      label: isDone
-        ? t.rate != null
-          ? `已完成 ${t.rate}%`
-          : "已完成"
-        : overdue
-          ? "逾期未完成"
-          : "待完成",
-    };
-  }
+  const pendingTasks = useMemo(
+    () => tasks.filter((t) => !isDone(t)),
+    [tasks, isDone],
+  );
+  const doneTasks = useMemo(
+    () => tasks.filter((t) => isDone(t)),
+    [tasks, isDone],
+  );
+  const shown = tab === "pending" ? pendingTasks : doneTasks;
 
-  // 審查表單執行中 → 顯示執行頁（返回時重讀任務）
+  const overdueOf = useCallback(
+    (t: TaskRow) => isOverdue(t.deadline, isDone(t) ? "done" : "pending"),
+    [isDone],
+  );
+
+  // 審查表單／查詢執行中 → 顯示執行頁（返回時重讀任務）
   if (executing) {
     return (
       <ReviewExecutePage
@@ -178,6 +177,8 @@ export function DashboardPage({
       />
     );
   }
+
+  const ymTitle = `${curYear}/${String(curMonth).padStart(2, "0")} 我的審查`;
 
   return (
     <>
@@ -216,133 +217,69 @@ export function DashboardPage({
         </div>
       </div>
 
-      {/* 本月我的審查（v1.8.0；v1.10.2 手機卡片） */}
+      {/* YYYY/MM 我的審查（v1.11.0：待完成／已完成雙頁籤） */}
       <section className="panel my-review">
-        <SectionTitle
-          title="本月我的審查"
-          note={`${curYear} 年 ${curMonth} 月・共 ${tasks.length} 筆任務`}
-        />
+        <SectionTitle title={ymTitle} note={`共 ${tasks.length} 筆任務`} />
+        <div className="tabs" style={{ marginBottom: 12 }} role="tablist">
+          <button
+            className={`tab${tab === "pending" ? " active" : ""}`}
+            role="tab"
+            aria-selected={tab === "pending"}
+            onClick={() => setTab("pending")}
+          >
+            待完成 <span>{pendingTasks.length}</span>
+          </button>
+          <button
+            className={`tab${tab === "done" ? " active" : ""}`}
+            role="tab"
+            aria-selected={tab === "done"}
+            onClick={() => setTab("done")}
+          >
+            已完成 <span>{doneTasks.length}</span>
+          </button>
+        </div>
         {tasksLoading ? (
           <p className="settings-note">讀取中…</p>
-        ) : tasks.length === 0 ? (
-          <p className="settings-note">本月無指派給您的審查任務。</p>
+        ) : shown.length === 0 ? (
+          <p className="settings-note">
+            {tab === "pending" ? "待完成任務已全數完成。" : "尚無已完成任務。"}
+          </p>
         ) : (
-          [...byIndicator.entries()].map(([indicatorId, list]) => {
-            const pendingList = list.filter((t) => t.status !== "done");
-            const doneList = list.filter((t) => t.status === "done");
-            const sumCases = (arr: TaskRow[]) =>
-              arr.reduce(
-                (n, t) => n + (t.caseCount != null ? t.caseCount : 0),
-                0,
-              );
-            return (
-              <div key={indicatorId} className="unit-group-block">
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "baseline",
-                    flexWrap: "wrap",
-                    gap: 8,
-                    marginBottom: 8,
-                  }}
-                >
-                  <button
-                    className="text-button"
-                    onClick={() =>
-                      setExecuting({
-                        mode: "indicator",
-                        indicatorId,
-                        year: curYear,
-                        month: curMonth,
-                      })
-                    }
-                    title="開啟該指標的審查表單"
-                  >
-                    <b>{indicatorNames.get(indicatorId) ?? indicatorId}</b>
-                  </button>
-                  <span className="muted-text">
-                    待完成 {pendingList.length} 筆（{sumCases(pendingList)}{" "}
-                    件）・已完成 {doneList.length} 筆（{sumCases(doneList)} 件）
-                  </span>
-                </div>
-                <div className="table-scroll task-table-wrap">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>受審單位</th>
-                        <th>審查件數</th>
-                        <th>狀態</th>
-                        <th>截止日期</th>
-                        <th>操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {list.map((t) => {
-                        const st = taskStatus(t);
-                        return (
-                          <tr key={t.id}>
-                            <td>{unitNames.get(t.unitId) ?? t.unitId}</td>
-                            <td>
-                              {t.caseCount != null ? `${t.caseCount}件` : "—"}
-                            </td>
-                            <td>
-                              <span className={st.pillClass}>{st.label}</span>
-                            </td>
-                            <td
-                              style={
-                                st.overdue
-                                  ? { color: "#b3372f", fontWeight: 600 }
-                                  : undefined
-                              }
-                            >
-                              {t.deadline}
-                              {st.overdue && (
-                                <CircleAlert
-                                  size={14}
-                                  style={{
-                                    verticalAlign: "-2px",
-                                    marginLeft: 4,
-                                  }}
-                                />
-                              )}
-                            </td>
-                            <td>
-                              <button
-                                className="text-button"
-                                onClick={() =>
-                                  setExecuting({ mode: "task", taskId: t.id })
-                                }
-                              >
-                                {st.isDone ? "查看／修改" : "填寫審查表"}
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                {/* 手機卡片（v1.10.2：≤640px 顯示，寬螢幕隱藏） */}
-                <div className="task-cards">
-                  {list.map((t) => {
-                    const st = taskStatus(t);
+          <>
+            <div className="table-scroll task-table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>指標名稱</th>
+                    <th>審查單位</th>
+                    <th>完成/應審件數</th>
+                    <th>截止日期</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((t) => {
+                    const done = isDone(t);
+                    const overdue = overdueOf(t);
                     return (
-                      <div key={t.id} className="task-card">
-                        <div className="task-card-top">
-                          <b>{unitNames.get(t.unitId) ?? t.unitId}</b>
-                          <span className={st.pillClass}>{st.label}</span>
-                        </div>
-                        <div className="task-card-meta">
-                          <span>
-                            審查件數：
-                            {t.caseCount != null ? `${t.caseCount}件` : "—"}
-                          </span>
-                          <span
-                            className={st.overdue ? "overdue-text" : undefined}
-                          >
-                            截止：{t.deadline}
-                            {st.overdue && (
+                      <tr key={t.id}>
+                        <td>{indicatorNames.get(t.indicatorId) ?? t.indicatorId}</td>
+                        <td>{unitNames.get(t.unitId) ?? t.unitId}</td>
+                        <td>{progressLabel(t.doneCount, t.caseCount)}</td>
+                        <td
+                          style={
+                            overdue
+                              ? { color: "#b3372f", fontWeight: 600 }
+                              : undefined
+                          }
+                        >
+                          {t.deadline}
+                          {overdue && (
+                            <>
+                              {" "}
+                              <span className="status-pill danger">
+                                逾期未完成
+                              </span>
                               <CircleAlert
                                 size={14}
                                 style={{
@@ -350,24 +287,81 @@ export function DashboardPage({
                                   marginLeft: 4,
                                 }}
                               />
-                            )}
-                          </span>
-                        </div>
-                        <button
-                          className="button button-primary task-card-btn"
-                          onClick={() =>
-                            setExecuting({ mode: "task", taskId: t.id })
-                          }
-                        >
-                          {st.isDone ? "查看／修改" : "填寫審查表"}
-                        </button>
-                      </div>
+                            </>
+                          )}
+                        </td>
+                        <td>
+                          <button
+                            className="text-button"
+                            onClick={() =>
+                              setExecuting(
+                                done
+                                  ? { mode: "records", taskId: t.id }
+                                  : { mode: "task", taskId: t.id },
+                              )
+                            }
+                          >
+                            {done ? "查詢" : "審查"}
+                          </button>
+                        </td>
+                      </tr>
                     );
                   })}
-                </div>
-              </div>
-            );
-          })
+                </tbody>
+              </table>
+            </div>
+            {/* 手機卡片（v1.10.2：≤640px 顯示，寬螢幕隱藏） */}
+            <div className="task-cards">
+              {shown.map((t) => {
+                const done = isDone(t);
+                const overdue = overdueOf(t);
+                return (
+                  <div key={t.id} className="task-card">
+                    <div className="task-card-top">
+                      <b>{indicatorNames.get(t.indicatorId) ?? t.indicatorId}</b>
+                      <span
+                        className={`status-pill${overdue ? " danger" : done ? " success" : " warning"}`}
+                      >
+                        {overdue ? "逾期未完成" : done ? "已完成" : "待完成"}
+                      </span>
+                    </div>
+                    <div className="task-card-meta">
+                      <span>審查單位：{unitNames.get(t.unitId) ?? t.unitId}</span>
+                      <span>
+                        完成/應審：{progressLabel(t.doneCount, t.caseCount)}
+                      </span>
+                      <span
+                        className={overdue ? "overdue-text" : undefined}
+                      >
+                        截止：{t.deadline}
+                        {overdue && (
+                          <CircleAlert
+                            size={14}
+                            style={{
+                              verticalAlign: "-2px",
+                              marginLeft: 4,
+                            }}
+                          />
+                        )}
+                      </span>
+                    </div>
+                    <button
+                      className="button button-primary task-card-btn"
+                      onClick={() =>
+                        setExecuting(
+                          done
+                            ? { mode: "records", taskId: t.id }
+                            : { mode: "task", taskId: t.id },
+                        )
+                      }
+                    >
+                      {done ? "查詢" : "審查"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </section>
 

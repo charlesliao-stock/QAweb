@@ -3867,6 +3867,103 @@ button:disabled {
   color: #9aa5a4;
 }
 
+/* ---------- 審查表單：桌機/平板一題一行（v1.11.0） ---------- */
+.review-qrow {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr) minmax(0, 1.15fr) 92px;
+  gap: 12px;
+  align-items: start;
+  border: 1px solid #e2e8e7;
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fbfdfd;
+  margin-bottom: 10px;
+}
+.review-qrow:last-child {
+  margin-bottom: 0;
+}
+.review-qrow .q-group {
+  font-size: var(--font-small);
+  color: #5b6b6a;
+  padding-top: 3px;
+  overflow-wrap: anywhere;
+}
+.review-qrow .q-text {
+  font-size: var(--font-body);
+  padding-top: 2px;
+  overflow-wrap: anywhere;
+}
+.review-qrow .radio-group {
+  gap: 6px;
+}
+.review-qrow .check-row {
+  padding: 8px 10px;
+}
+.review-qrow .q-guidance .guidance-details {
+  margin-top: 0;
+  border-top: none;
+  padding-top: 0;
+}
+.review-qrow .q-guidance .guidance-details summary {
+  font-size: var(--font-small);
+}
+:root[data-mode="dark"] .review-qrow {
+  background: #202726;
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .review-qrow .q-group {
+  color: #9aa5a4;
+}
+/* 手機（≤640px）：題組＋題目在上、選項在下、審核指引最下（v1.11.0） */
+@media (max-width: 640px) {
+  .review-qrow {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .review-qrow .q-group {
+    padding-top: 0;
+    font-weight: 700;
+  }
+}
+
+/* ---------- 審查人員搜尋下拉（v1.11.0） ---------- */
+.sugg-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  margin: 2px 0 0;
+  padding: 4px;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #dce4e4;
+  border-radius: 9px;
+  box-shadow: 0 6px 18px rgba(30, 60, 55, 0.12);
+  max-height: 220px;
+  overflow-y: auto;
+}
+.sugg-list li {
+  margin: 0;
+}
+.sugg-list .text-button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+.sugg-list .text-button:hover {
+  background: #eef5f3;
+}
+:root[data-mode="dark"] .sugg-list {
+  background: #232a29;
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .sugg-list .text-button:hover {
+  background: #2c3836;
+}
+
 /* ============ 儀表板「本月我的審查」手機卡片（v1.10.2） ============ */
 /* 預設（寬螢幕）：顯示表格，隱藏卡片；窄螢幕（≤640px）反之 */
 .my-review .task-cards {
