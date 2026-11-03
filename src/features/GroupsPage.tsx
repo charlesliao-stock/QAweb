@@ -26,6 +26,7 @@ import {
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
+import { maskName } from "../lib/mask";
 import { SYSTEM_ROLE_NAMES } from "../lib/seed";
 import { downloadCSV, parseCSV } from "../lib/csv";
 
@@ -1733,7 +1734,7 @@ export function GroupsPage({
                       <td>
                         <b>{row.staffId}</b>
                       </td>
-                      <td>{row.name}</td>
+                      <td>{maskName(row.name)}</td>
                       <td>
                         {row.unitCode
                           ? `${row.unitCode}${unitNameOf(row.unitCode) !== row.unitCode ? ` ${unitNameOf(row.unitCode)}` : ""}`

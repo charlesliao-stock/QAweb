@@ -23,6 +23,7 @@ import { AuthProvider, useAuth } from "../lib/auth";
 import { isDemoMode } from "../lib/demoMode";
 import { doc, getDoc } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
+import { maskName } from "../lib/mask";
 import {
   FONT_SIZE_LABELS,
   applyTheme,
@@ -502,7 +503,7 @@ function Shell() {
                 {user.name.slice(0, 1)}
               </span>
               <div>
-                <b>{user.name}</b>
+                <b>{maskName(user.name)}</b>
                 <small>{primaryRole}</small>
               </div>
               <ChevronDown size={14} />

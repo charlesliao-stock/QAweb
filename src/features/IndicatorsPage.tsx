@@ -16,6 +16,7 @@ import {
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
+import { maskName } from "../lib/mask";
 import {
   TEN_STEP_TITLES,
   emptyTenSteps,
@@ -337,7 +338,7 @@ export function IndicatorsPage({
 
   function ownerLabel(staffId: string): string {
     const s = staffMap.get(staffId);
-    return s && s.name !== staffId ? `${s.name}（${staffId}）` : staffId;
+    return s && s.name !== staffId ? `${maskName(s.name)}（${staffId}）` : staffId;
   }
 
   // ---- 題目 / 子指標 / 閾值 ----
@@ -821,7 +822,7 @@ export function IndicatorsPage({
                     {ownerSuggestions.map((s) => (
                       <li key={s.staffId}>
                         <button type="button" onClick={() => addOwner(s.staffId)}>
-                          {s.name}（{s.staffId}）
+                          {maskName(s.name)}（{s.staffId}）
                           {s.unitCode ? `・${s.unitCode}` : ""}
                         </button>
                       </li>
