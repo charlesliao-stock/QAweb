@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, Pencil, Plus, Trash2, X } from "lucide-react";
 import {
   collection,
@@ -16,7 +16,18 @@ import {
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
-import { TEN_STEPS_TITLES } from "../lib/seed";
+import {
+  TEN_STEP_TITLES,
+  emptyTenSteps,
+  normalizeQuestions,
+  normalizeTenSteps,
+  primaryThreshold,
+  type AuditQuestion,
+  type NamedThreshold,
+  type OptionSet,
+  type SubIndicator,
+  type TenSteps,
+} from "../lib/indicators";
 
 export type IndicatorStatus =
   | "草稿"
@@ -44,25 +55,23 @@ const STATUS_PILL: Record<IndicatorStatus, string> = {
   停用: "warning",
 };
 
-export type QuestionOptions = "yes-no-na" | "yes-no";
-
-const QUESTION_OPTION_LABELS: Record<QuestionOptions, string> = {
+const QUESTION_OPTION_LABELS: Record<OptionSet, string> = {
   "yes-no-na": "是／否／不適用",
   "yes-no": "是／否",
 };
 
-export interface AuditQuestion {
-  text: string;
-  options: QuestionOptions;
+interface StaffOption {
+  staffId: string;
+  name: string;
+  unitCode: string;
 }
 
 interface IndicatorRow {
   code: string;
   name: string;
-  group: string;
+  groupId: string;
   owners: string[];
-  resultName: string;
-  threshold: number;
+  mainThreshold: number;
   status: IndicatorStatus;
   version: string;
 }
@@ -77,33 +86,35 @@ interface VersionRow {
 }
 
 interface IndicatorForm {
+  groupId: string;
   code: string;
   name: string;
-  group: string;
-  ownersText: string;
+  owners: string[];
+  ownerSearch: string;
   resultName: string;
-  thresholdText: string;
   applicableUnitsText: string;
   cycle: string;
   status: IndicatorStatus;
-  steps: string[];
+  steps: TenSteps;
   questions: AuditQuestion[];
 }
 
 const RESULT_NAMES = ["符合率", "正確率", "完整率", "達成率"];
 
 function emptyForm(): IndicatorForm {
+  const steps = emptyTenSteps();
+  steps.step5.thresholds = [{ name: "主閾值", value: NaN }];
   return {
+    groupId: "",
     code: "",
     name: "",
-    group: "",
-    ownersText: "",
+    owners: [],
+    ownerSearch: "",
     resultName: "符合率",
-    thresholdText: "",
     applicableUnitsText: "",
     cycle: "每月",
     status: "草稿",
-    steps: TEN_STEPS_TITLES.map(() => ""),
+    steps,
     questions: [],
   };
 }
@@ -142,6 +153,39 @@ export function IndicatorsPage({
   const [saving, setSaving] = useState(false);
   const [hasReviewData, setHasReviewData] = useState(false);
   const [versions, setVersions] = useState<VersionRow[]>([]);
+  const [groupMap, setGroupMap] = useState<Map<string, string>>(new Map());
+  const [staffMap, setStaffMap] = useState<Map<string, StaffOption>>(new Map());
+  const [staffLoaded, setStaffLoaded] = useState(false);
+
+  const loadMeta = useCallback(async () => {
+    try {
+      const gsnap = await getDocs(collection(getFirebaseDb(), "groups"));
+      const gm = new Map<string, string>();
+      gsnap.docs.forEach((d) => {
+        const n = d.data().name;
+        if (typeof n === "string") gm.set(d.id, n);
+      });
+      setGroupMap(gm);
+    } catch {
+      /* 群組讀取失敗時下拉為空，表單會提示 */
+    }
+    try {
+      const usnap = await getDocs(collection(getFirebaseDb(), "users"));
+      const sm = new Map<string, StaffOption>();
+      usnap.docs.forEach((d) => {
+        const data = d.data();
+        sm.set(d.id, {
+          staffId: d.id,
+          name: typeof data.name === "string" ? data.name : d.id,
+          unitCode: typeof data.unitCode === "string" ? data.unitCode : "",
+        });
+      });
+      setStaffMap(sm);
+      setStaffLoaded(true);
+    } catch {
+      setStaffLoaded(false);
+    }
+  }, []);
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -152,11 +196,9 @@ export function IndicatorsPage({
         return {
           code: d.id,
           name: typeof data.name === "string" ? data.name : "",
-          group: typeof data.group === "string" ? data.group : "",
+          groupId: typeof data.groupId === "string" ? data.groupId : "",
           owners: Array.isArray(data.owners) ? data.owners.map(String) : [],
-          resultName:
-            typeof data.resultName === "string" ? data.resultName : "符合率",
-          threshold: typeof data.threshold === "number" ? data.threshold : 0,
+          mainThreshold: primaryThreshold(data),
           status: STATUSES.includes(data.status) ? data.status : "草稿",
           version: typeof data.version === "string" ? data.version : "v1.0",
         };
@@ -171,11 +213,19 @@ export function IndicatorsPage({
   }, [onAction]);
 
   useEffect(() => {
+    loadMeta();
     loadList();
-  }, [loadList]);
+  }, [loadMeta, loadList]);
 
-  function setField<K extends keyof IndicatorForm>(key: K, value: IndicatorForm[K]) {
+  function setField<K extends keyof IndicatorForm>(
+    key: K,
+    value: IndicatorForm[K],
+  ) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function setStep<K extends keyof TenSteps>(key: K, value: TenSteps[K]) {
+    setForm((prev) => ({ ...prev, steps: { ...prev.steps, [key]: value } }));
   }
 
   async function checkReviewData(code: string): Promise<boolean> {
@@ -210,32 +260,35 @@ export function IndicatorsPage({
         return;
       }
       const data = snap.data();
-      const stepsRecord: Record<string, string> =
-        data.steps && typeof data.steps === "object" ? data.steps : {};
-      const questions: AuditQuestion[] = Array.isArray(data.questions)
-        ? data.questions.map((q: { text?: unknown; options?: unknown }) => ({
-            text: typeof q.text === "string" ? q.text : "",
-            options: q.options === "yes-no" ? "yes-no" : "yes-no-na",
-          }))
-        : [];
+      const steps = normalizeTenSteps(data.tenSteps, data.steps);
+      if (
+        steps.step5.thresholds.length === 0 &&
+        typeof data.threshold === "number"
+      ) {
+        steps.step5.thresholds = [{ name: "主閾值", value: data.threshold }];
+      }
+      let groupId = typeof data.groupId === "string" ? data.groupId : "";
+      if (!groupId && typeof data.group === "string" && data.group) {
+        const found = [...groupMap.entries()].find(
+          ([, name]) => name === data.group,
+        );
+        if (found) groupId = found[0];
+      }
       setForm({
+        groupId,
         code: snap.id,
         name: typeof data.name === "string" ? data.name : "",
-        group: typeof data.group === "string" ? data.group : "",
-        ownersText: Array.isArray(data.owners) ? data.owners.join(", ") : "",
+        owners: Array.isArray(data.owners) ? data.owners.map(String) : [],
+        ownerSearch: "",
         resultName:
           typeof data.resultName === "string" ? data.resultName : "符合率",
-        thresholdText:
-          typeof data.threshold === "number" ? String(data.threshold) : "",
         applicableUnitsText: Array.isArray(data.applicableUnits)
           ? data.applicableUnits.join(", ")
           : "",
         cycle: typeof data.cycle === "string" ? data.cycle : "每月",
         status: STATUSES.includes(data.status) ? data.status : "草稿",
-        steps: TEN_STEPS_TITLES.map((t) =>
-          typeof stepsRecord[t] === "string" ? stepsRecord[t] : "",
-        ),
-        questions,
+        steps,
+        questions: normalizeQuestions(data.questions),
       });
       const locked = await checkReviewData(snap.id);
       setHasReviewData(locked);
@@ -257,7 +310,9 @@ export function IndicatorsPage({
               effectiveDate:
                 typeof vd.effectiveDate === "string" ? vd.effectiveDate : "",
               createdBy: typeof vd.createdBy === "string" ? vd.createdBy : "",
-              createdAtText: createdAt ? createdAt.toLocaleString("zh-Hant") : "",
+              createdAtText: createdAt
+                ? createdAt.toLocaleString("zh-Hant")
+                : "",
             };
           }),
         );
@@ -270,13 +325,174 @@ export function IndicatorsPage({
     }
   }
 
+  // ---- 負責人 autocomplete ----
+  const ownerSuggestions = useMemo(() => {
+    const q = form.ownerSearch.trim().toLowerCase();
+    if (!q || !staffLoaded) return [];
+    return [...staffMap.values()]
+      .filter(
+        (s) =>
+          !form.owners.includes(s.staffId) &&
+          (s.staffId.toLowerCase().includes(q) ||
+            s.name.toLowerCase().includes(q)),
+      )
+      .slice(0, 8);
+  }, [form.ownerSearch, form.owners, staffMap, staffLoaded]);
+
+  function addOwner(staffId: string) {
+    setForm((prev) => ({
+      ...prev,
+      owners: prev.owners.includes(staffId)
+        ? prev.owners
+        : [...prev.owners, staffId],
+      ownerSearch: "",
+    }));
+  }
+
+  function removeOwner(staffId: string) {
+    setForm((prev) => ({
+      ...prev,
+      owners: prev.owners.filter((id) => id !== staffId),
+    }));
+  }
+
+  function ownerLabel(staffId: string): string {
+    const s = staffMap.get(staffId);
+    return s && s.name !== staffId ? `${s.name}（${staffId}）` : staffId;
+  }
+
+  // ---- 題目 / 子指標 / 閾值 ----
+  function addQuestion() {
+    setForm((prev) => ({
+      ...prev,
+      questions: [
+        ...prev.questions,
+        { text: "", optionSet: "yes-no-na" as OptionSet, guidance: "", group: "" },
+      ],
+    }));
+  }
+
+  function updateQuestion(index: number, patch: Partial<AuditQuestion>) {
+    setForm((prev) => ({
+      ...prev,
+      questions: prev.questions.map((q, i) =>
+        i === index ? { ...q, ...patch } : q,
+      ),
+    }));
+  }
+
+  function removeQuestion(index: number) {
+    setForm((prev) => ({
+      ...prev,
+      questions: prev.questions.filter((_, i) => i !== index),
+    }));
+  }
+
+  function addSubIndicator() {
+    setForm((prev) => ({
+      ...prev,
+      steps: {
+        ...prev.steps,
+        step4: {
+          ...prev.steps.step4,
+          subIndicators: [
+            ...prev.steps.step4.subIndicators,
+            { name: "", numerator: "", denominator: "" },
+          ],
+        },
+      },
+    }));
+  }
+
+  function updateSubIndicator(index: number, patch: Partial<SubIndicator>) {
+    setForm((prev) => ({
+      ...prev,
+      steps: {
+        ...prev.steps,
+        step4: {
+          ...prev.steps.step4,
+          subIndicators: prev.steps.step4.subIndicators.map((s, i) =>
+            i === index ? { ...s, ...patch } : s,
+          ),
+        },
+      },
+    }));
+  }
+
+  function removeSubIndicator(index: number) {
+    setForm((prev) => ({
+      ...prev,
+      steps: {
+        ...prev.steps,
+        step4: {
+          ...prev.steps.step4,
+          subIndicators: prev.steps.step4.subIndicators.filter(
+            (_, i) => i !== index,
+          ),
+        },
+      },
+    }));
+  }
+
+  function addThreshold() {
+    setForm((prev) => ({
+      ...prev,
+      steps: {
+        ...prev.steps,
+        step5: {
+          thresholds: [
+            ...prev.steps.step5.thresholds,
+            { name: "", value: NaN },
+          ],
+        },
+      },
+    }));
+  }
+
+  function updateThreshold(index: number, patch: Partial<NamedThreshold>) {
+    setForm((prev) => ({
+      ...prev,
+      steps: {
+        ...prev.steps,
+        step5: {
+          thresholds: prev.steps.step5.thresholds.map((t, i) =>
+            i === index ? { ...t, ...patch } : t,
+          ),
+        },
+      },
+    }));
+  }
+
+  function removeThreshold(index: number) {
+    setForm((prev) => ({
+      ...prev,
+      steps: {
+        ...prev.steps,
+        step5: {
+          thresholds: prev.steps.step5.thresholds.filter((_, i) => i !== index),
+        },
+      },
+    }));
+  }
+
+  function activeThresholds(): NamedThreshold[] {
+    return form.steps.step5.thresholds.filter(
+      (t) => t.name.trim() !== "" || Number.isFinite(t.value),
+    );
+  }
+
   function validate(): string {
+    if (!form.groupId) return "請選擇分類組別";
     if (view.kind === "create" && !form.code.trim()) return "請填寫指標編號";
     if (!form.name.trim()) return "請填寫指標名稱";
-    if (!form.thresholdText.trim()) return "閾值為必填，請填寫百分比數字";
-    const threshold = Number(form.thresholdText);
-    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100)
-      return "閾值須為 0～100 的數字（代表百分比）";
+    if (form.owners.length === 0) return "請選擇至少一位負責人";
+    const thresholds = activeThresholds();
+    if (thresholds.length === 0) return "請至少新增一筆閾值";
+    for (const [i, t] of thresholds.entries()) {
+      if (!t.name.trim()) return `第 ${i + 1} 筆閾值請填寫名稱`;
+      if (!Number.isFinite(t.value) || t.value < 0 || t.value > 100)
+        return `第 ${i + 1} 筆閾值須為 0～100 的數字（代表百分比）`;
+    }
     for (const [i, q] of form.questions.entries()) {
       if (!q.text.trim()) return `第 ${i + 1} 題尚未填寫題目文字`;
     }
@@ -297,36 +513,69 @@ export function IndicatorsPage({
     setSaving(true);
     try {
       const db = getFirebaseDb();
-      const threshold = Number(form.thresholdText);
-      const stepsRecord: Record<string, string> = {};
-      TEN_STEPS_TITLES.forEach((title, i) => {
-        stepsRecord[title] =
-          title === "閾值" ? `${threshold}%` : form.steps[i].trim();
-      });
+      const thresholds = activeThresholds().map((t) => ({
+        name: t.name.trim(),
+        value: t.value,
+      }));
+      const steps: TenSteps = {
+        step1: form.steps.step1.trim(),
+        step2: form.steps.step2.trim(),
+        step3: form.steps.step3.trim(),
+        step4: {
+          basis: form.steps.step4.basis.trim(),
+          subIndicators: form.steps.step4.subIndicators
+            .filter(
+              (s) =>
+                s.name.trim() !== "" ||
+                s.numerator.trim() !== "" ||
+                s.denominator.trim() !== "",
+            )
+            .map((s) => ({
+              name: s.name.trim(),
+              numerator: s.numerator.trim(),
+              denominator: s.denominator.trim(),
+            })),
+        },
+        step5: { thresholds },
+        step6: {
+          caseCount: form.steps.step6.caseCount.trim(),
+          auditors: form.steps.step6.auditors.trim(),
+          auditDate: form.steps.step6.auditDate.trim(),
+          auditMethod: form.steps.step6.auditMethod.trim(),
+        },
+        step7: form.steps.step7.trim(),
+        step8: form.steps.step8.trim(),
+        step9: form.steps.step9.trim(),
+        step10: form.steps.step10.trim(),
+      };
       const questions = form.questions.map((q) => ({
         text: q.text.trim(),
-        options: q.options,
+        optionSet: q.optionSet,
+        guidance: q.guidance.trim(),
+        group: q.group.trim(),
       }));
+      const threshold = thresholds[0]?.value ?? 0;
       const base = {
         name: form.name.trim(),
-        group: form.group.trim(),
-        owners: splitList(form.ownersText),
+        groupId: form.groupId,
+        owners: form.owners,
         resultName: form.resultName,
         threshold,
         applicableUnits: splitList(form.applicableUnitsText),
         cycle: form.cycle.trim() || "每月",
         status: form.status,
-        steps: stepsRecord,
+        tenSteps: steps,
         questions,
         updatedAt: serverTimestamp(),
         updatedBy: user.staffId,
       };
 
       if (view.kind === "create") {
-        const ref = doc(db, "indicators", form.code.trim());
+        const code = form.code.trim();
+        const ref = doc(db, "indicators", code);
         const exists = await getDoc(ref);
         if (exists.exists()) {
-          setFormError(`指標編號 ${form.code.trim()} 已存在`);
+          setFormError(`指標編號 ${code} 已存在`);
           setSaving(false);
           return;
         }
@@ -337,19 +586,18 @@ export function IndicatorsPage({
           createdAt: serverTimestamp(),
           createdBy: user.staffId,
         });
-        // 同步建立 v1.0 版本快照
-        await setDoc(doc(db, "indicators", form.code.trim(), "versions", "v1.0"), {
+        await setDoc(doc(db, "indicators", code, "versions", "v1.0"), {
           version: "v1.0",
           status: form.status,
           threshold,
-          steps: stepsRecord,
+          tenSteps: steps,
           questions,
           effectiveDate: new Date().toISOString().slice(0, 10),
           note: "初版",
           createdAt: serverTimestamp(),
           createdBy: user.staffId,
         });
-        onAction(`已新增指標 ${form.code.trim()}`);
+        onAction(`已新增指標 ${code}`);
       } else {
         const code = view.kind === "edit" ? view.code : "";
         if (!code) {
@@ -371,7 +619,7 @@ export function IndicatorsPage({
             version: newVersion,
             status: form.status,
             threshold,
-            steps: stepsRecord,
+            tenSteps: steps,
             questions,
             effectiveDate: new Date().toISOString().slice(0, 10),
             note: "審查資料鎖定後修訂",
@@ -422,29 +670,6 @@ export function IndicatorsPage({
     }
   }
 
-  function addQuestion() {
-    setForm((prev) => ({
-      ...prev,
-      questions: [...prev.questions, { text: "", options: "yes-no-na" }],
-    }));
-  }
-
-  function updateQuestion(index: number, patch: Partial<AuditQuestion>) {
-    setForm((prev) => ({
-      ...prev,
-      questions: prev.questions.map((q, i) =>
-        i === index ? { ...q, ...patch } : q,
-      ),
-    }));
-  }
-
-  function removeQuestion(index: number) {
-    setForm((prev) => ({
-      ...prev,
-      questions: prev.questions.filter((_, i) => i !== index),
-    }));
-  }
-
   const isEditing = view.kind === "edit";
 
   return (
@@ -477,7 +702,7 @@ export function IndicatorsPage({
         ) : rows.length === 0 ? (
           <EmptyState
             title="尚無指標"
-            description="使用右上角「新增指標」建立第一支指標，閾值為必填。"
+            description="使用右上角「新增指標」建立第一支指標，分類組別、編號、名稱、負責人與閾值為必填。"
           />
         ) : (
           <section className="panel data-panel">
@@ -489,7 +714,7 @@ export function IndicatorsPage({
                     <th>名稱</th>
                     <th>組別</th>
                     <th>負責人</th>
-                    <th>閾值</th>
+                    <th>主閾值</th>
                     <th>版本</th>
                     <th>狀態</th>
                     <th>操作</th>
@@ -502,9 +727,13 @@ export function IndicatorsPage({
                         <b>{row.code}</b>
                       </td>
                       <td>{row.name}</td>
-                      <td>{row.group || "—"}</td>
-                      <td>{row.owners.length > 0 ? row.owners.join("、") : "—"}</td>
-                      <td>{row.threshold}%</td>
+                      <td>{groupMap.get(row.groupId) || "—"}</td>
+                      <td>
+                        {row.owners.length > 0
+                          ? row.owners.map(ownerLabel).join("、")
+                          : "—"}
+                      </td>
+                      <td>{row.mainThreshold}%</td>
                       <td>{row.version}</td>
                       <td>
                         <span className={`status-pill ${STATUS_PILL[row.status]}`}>
@@ -541,12 +770,30 @@ export function IndicatorsPage({
             note={
               isEditing && hasReviewData
                 ? "此指標已有審查資料，儲存時將自動產生新版本"
-                : "閾值為必填（百分比）"
+                : undefined
             }
           />
           {formError && <div className="login-error">{formError}</div>}
 
+          <SectionTitle title="基本資料" />
           <div className="form-grid">
+            <div className="form-field">
+              <label className="field-label">分類組別 *</label>
+              <div className="select-wrap">
+                <select
+                  value={form.groupId}
+                  onChange={(e) => setField("groupId", e.target.value)}
+                >
+                  <option value="">請選擇組別</option>
+                  {[...groupMap.entries()].map(([id, name]) => (
+                    <option key={id} value={id}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={15} />
+              </div>
+            </div>
             <div className="form-field">
               <label className="field-label">指標編號 *</label>
               <input
@@ -567,24 +814,6 @@ export function IndicatorsPage({
               />
             </div>
             <div className="form-field">
-              <label className="field-label">分類組別</label>
-              <input
-                className="text-input"
-                value={form.group}
-                placeholder="例如 病房組"
-                onChange={(e) => setField("group", e.target.value)}
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">負責人（可多位，以逗號分隔職編）</label>
-              <input
-                className="text-input"
-                value={form.ownersText}
-                placeholder="例如 A12345, B67890"
-                onChange={(e) => setField("ownersText", e.target.value)}
-              />
-            </div>
-            <div className="form-field">
               <label className="field-label">結果名稱</label>
               <div className="select-wrap">
                 <select
@@ -600,17 +829,51 @@ export function IndicatorsPage({
                 <ChevronDown size={15} />
               </div>
             </div>
-            <div className="form-field">
-              <label className="field-label">閾值（百分比） *</label>
-              <input
-                className="text-input"
-                type="number"
-                min={0}
-                max={100}
-                value={form.thresholdText}
-                placeholder="例如 90（代表 90%）"
-                onChange={(e) => setField("thresholdText", e.target.value)}
-              />
+            <div className="form-field" style={{ gridColumn: "1 / -1" }}>
+              <label className="field-label">
+                負責人 *（輸入職編或姓名搜尋，可多選）
+              </label>
+              {form.owners.length > 0 && (
+                <div className="chip-row">
+                  {form.owners.map((id) => (
+                    <span className="chip" key={id}>
+                      {ownerLabel(id)}
+                      <button
+                        type="button"
+                        aria-label={`移除 ${ownerLabel(id)}`}
+                        onClick={() => removeOwner(id)}
+                      >
+                        <X size={13} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="suggest-wrap">
+                <input
+                  className="text-input"
+                  value={form.ownerSearch}
+                  placeholder="輸入職編或姓名搜尋…"
+                  onChange={(e) => setField("ownerSearch", e.target.value)}
+                />
+                {ownerSuggestions.length > 0 && (
+                  <ul className="suggest-list">
+                    {ownerSuggestions.map((s) => (
+                      <li key={s.staffId}>
+                        <button type="button" onClick={() => addOwner(s.staffId)}>
+                          {s.name}（{s.staffId}）
+                          {s.unitCode ? `・${s.unitCode}` : ""}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              {!staffLoaded && (
+                <p className="settings-note">
+                  人員清單載入失敗（可能無查詢權限），請確認帳號角色後重試。
+                </p>
+              )}
             </div>
             <div className="form-field">
               <label className="field-label">適用單位（以逗號分隔代號）</label>
@@ -650,38 +913,243 @@ export function IndicatorsPage({
             </div>
           </div>
 
-          <SectionTitle title="10 steps" note="全院統一標題；閾值自動帶入上方設定" />
-          {TEN_STEPS_TITLES.map((title, i) =>
-            title === "閾值" ? (
-              <div className="form-field" key={title}>
-                <label className="field-label">{title}（自動帶入）</label>
+          <SectionTitle title="10 steps" note="全院統一標題" />
+          {(
+            [
+              ["step1", 1],
+              ["step2", 2],
+              ["step3", 3],
+            ] as const
+          ).map(([key, n]) => (
+            <div className="form-field" key={key}>
+              <label className="field-label">
+                {n}. {TEN_STEP_TITLES[n - 1]}
+              </label>
+              <textarea
+                className="text-input"
+                value={form.steps[key]}
+                onChange={(e) => setStep(key, e.target.value)}
+              />
+            </div>
+          ))}
+
+          <div className="form-field">
+            <label className="field-label">4. {TEN_STEP_TITLES[3]}（標準依據）</label>
+            <textarea
+              className="text-input"
+              value={form.steps.step4.basis}
+              onChange={(e) =>
+                setForm((prev) => ({
+                  ...prev,
+                  steps: {
+                    ...prev.steps,
+                    step4: { ...prev.steps.step4, basis: e.target.value },
+                  },
+                }))
+              }
+            />
+          </div>
+          <div className="sub-block">
+            <SectionTitle
+              title="指標"
+              note="可自行新增；公式預覽為「分子／分母 ×100%」"
+              action={
+                <button className="text-button" onClick={addSubIndicator}>
+                  <Plus size={14} /> 新增指標
+                </button>
+              }
+            />
+            {form.steps.step4.subIndicators.length === 0 ? (
+              <p className="settings-note">尚未新增指標。</p>
+            ) : (
+              form.steps.step4.subIndicators.map((s, i) => (
+                <div key={i}>
+                  <div className="sub-indicator-row">
+                    <input
+                      className="text-input"
+                      value={s.name}
+                      placeholder="指標名稱"
+                      onChange={(e) =>
+                        updateSubIndicator(i, { name: e.target.value })
+                      }
+                    />
+                    <input
+                      className="text-input"
+                      value={s.numerator}
+                      placeholder="分子（自由輸入）"
+                      onChange={(e) =>
+                        updateSubIndicator(i, { numerator: e.target.value })
+                      }
+                    />
+                    <input
+                      className="text-input"
+                      value={s.denominator}
+                      placeholder="分母（自由輸入）"
+                      onChange={(e) =>
+                        updateSubIndicator(i, { denominator: e.target.value })
+                      }
+                    />
+                    <button
+                      className="icon-button"
+                      aria-label="刪除指標"
+                      onClick={() => removeSubIndicator(i)}
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                  <div className="formula-preview">
+                    {s.name.trim() || `指標 ${i + 1}`}：
+                    <b>
+                      {s.numerator.trim() || "分子"}／
+                      {s.denominator.trim() || "分母"} ×100%
+                    </b>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <SectionTitle
+            title={`5. ${TEN_STEP_TITLES[4]}（閾值）`}
+            note="至少一筆；第一筆為主閾值，用於達標判斷"
+            action={
+              <button className="text-button" onClick={addThreshold}>
+                <Plus size={14} /> 新增閾值
+              </button>
+            }
+          />
+          {form.steps.step5.thresholds.map((t, i) => (
+            <div key={i}>
+              <div className="threshold-row">
                 <input
                   className="text-input"
-                  value={form.thresholdText ? `${form.thresholdText}%` : ""}
-                  disabled
-                  placeholder="由上方閾值自動帶入"
+                  value={t.name}
+                  placeholder={i === 0 ? "主閾值名稱" : "閾值名稱"}
+                  onChange={(e) => updateThreshold(i, { name: e.target.value })}
                 />
-              </div>
-            ) : (
-              <div className="form-field" key={title}>
-                <label className="field-label">{title}</label>
-                <textarea
+                <input
                   className="text-input"
-                  value={form.steps[i]}
+                  type="number"
+                  min={0}
+                  max={100}
+                  placeholder="0～100"
+                  value={Number.isFinite(t.value) ? String(t.value) : ""}
                   onChange={(e) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      steps: prev.steps.map((s, si) => (si === i ? e.target.value : s)),
-                    }))
+                    updateThreshold(i, {
+                      value:
+                        e.target.value === "" ? NaN : Number(e.target.value),
+                    })
                   }
                 />
+                <button
+                  className="icon-button"
+                  aria-label="刪除閾值"
+                  onClick={() => removeThreshold(i)}
+                >
+                  <X size={15} />
+                </button>
               </div>
-            ),
-          )}
+              {i === 0 && (
+                <span className="main-threshold-tag">
+                  主閾值，用於達標判斷
+                </span>
+              )}
+            </div>
+          ))}
+
+          <div className="form-field" style={{ marginTop: 14 }}>
+            <label className="field-label">6. {TEN_STEP_TITLES[5]}（資料收集）</label>
+          </div>
+          <div className="form-grid">
+            <div className="form-field">
+              <label className="field-label">個案數</label>
+              <input
+                className="text-input"
+                value={form.steps.step6.caseCount}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    steps: {
+                      ...prev.steps,
+                      step6: { ...prev.steps.step6, caseCount: e.target.value },
+                    },
+                  }))
+                }
+              />
+            </div>
+            <div className="form-field">
+              <label className="field-label">審核人員</label>
+              <input
+                className="text-input"
+                value={form.steps.step6.auditors}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    steps: {
+                      ...prev.steps,
+                      step6: { ...prev.steps.step6, auditors: e.target.value },
+                    },
+                  }))
+                }
+              />
+            </div>
+            <div className="form-field">
+              <label className="field-label">審核日期</label>
+              <input
+                className="text-input"
+                value={form.steps.step6.auditDate}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    steps: {
+                      ...prev.steps,
+                      step6: { ...prev.steps.step6, auditDate: e.target.value },
+                    },
+                  }))
+                }
+              />
+            </div>
+            <div className="form-field">
+              <label className="field-label">審核方式</label>
+              <input
+                className="text-input"
+                value={form.steps.step6.auditMethod}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    steps: {
+                      ...prev.steps,
+                      step6: { ...prev.steps.step6, auditMethod: e.target.value },
+                    },
+                  }))
+                }
+              />
+            </div>
+          </div>
+
+          {(
+            [
+              ["step7", 7],
+              ["step8", 8],
+              ["step9", 9],
+              ["step10", 10],
+            ] as const
+          ).map(([key, n]) => (
+            <div className="form-field" key={key}>
+              <label className="field-label">
+                {n}. {TEN_STEP_TITLES[n - 1]}
+              </label>
+              <textarea
+                className="text-input"
+                value={form.steps[key]}
+                onChange={(e) => setStep(key, e.target.value)}
+              />
+            </div>
+          ))}
 
           <SectionTitle
             title="審核表題目"
-            note="每題獨立設定選項組合"
+            note="每題含題目、選項組合與審核指引（審查員填寫時的判斷依據）"
             action={
               <button className="text-button" onClick={addQuestion}>
                 <Plus size={14} /> 新增題目
@@ -694,39 +1162,55 @@ export function IndicatorsPage({
             </p>
           ) : (
             form.questions.map((q, i) => (
-              <div className="question-row" key={i}>
-                <input
-                  className="text-input"
-                  value={q.text}
-                  placeholder={`第 ${i + 1} 題題目文字`}
-                  onChange={(e) => updateQuestion(i, { text: e.target.value })}
-                />
-                <div className="select-wrap">
-                  <select
-                    value={q.options}
-                    onChange={(e) =>
-                      updateQuestion(i, {
-                        options: e.target.value as QuestionOptions,
-                      })
-                    }
+              <div className="question-block" key={i}>
+                <div className="question-row">
+                  <input
+                    className="text-input"
+                    value={q.text}
+                    placeholder={`第 ${i + 1} 題題目文字`}
+                    onChange={(e) => updateQuestion(i, { text: e.target.value })}
+                  />
+                  <div className="select-wrap">
+                    <select
+                      value={q.optionSet}
+                      onChange={(e) =>
+                        updateQuestion(i, {
+                          optionSet: e.target.value as OptionSet,
+                        })
+                      }
+                    >
+                      {(
+                        Object.keys(QUESTION_OPTION_LABELS) as OptionSet[]
+                      ).map((k) => (
+                        <option key={k} value={k}>
+                          {QUESTION_OPTION_LABELS[k]}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown size={15} />
+                  </div>
+                  <button
+                    className="icon-button"
+                    aria-label="刪除題目"
+                    onClick={() => removeQuestion(i)}
                   >
-                    {(
-                      Object.keys(QUESTION_OPTION_LABELS) as QuestionOptions[]
-                    ).map((k) => (
-                      <option key={k} value={k}>
-                        {QUESTION_OPTION_LABELS[k]}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={15} />
+                    <X size={15} />
+                  </button>
                 </div>
-                <button
-                  className="icon-button"
-                  aria-label="刪除題目"
-                  onClick={() => removeQuestion(i)}
-                >
-                  <X size={15} />
-                </button>
+                <textarea
+                  className="text-input"
+                  value={q.guidance}
+                  placeholder="審核指引（審查員填寫時的判斷依據）"
+                  onChange={(e) =>
+                    updateQuestion(i, { guidance: e.target.value })
+                  }
+                />
+                <input
+                  className="text-input question-group-input"
+                  value={q.group}
+                  placeholder="題組（選填，例如：確認病人、給藥前）"
+                  onChange={(e) => updateQuestion(i, { group: e.target.value })}
+                />
               </div>
             ))
           )}

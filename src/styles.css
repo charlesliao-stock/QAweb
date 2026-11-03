@@ -3125,3 +3125,131 @@ button:disabled {
   flex-basis: 100%;
   margin-top: 4px;
 }
+
+/* 指標管理重構（2026-11-03）：負責人 chips、autocomplete、子指標、閾值、題組 */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 12px;
+  border-radius: 999px;
+  background: #eef4f3;
+  color: #314447;
+  font-size: 13px;
+  font-weight: 600;
+}
+.chip button {
+  display: inline-flex;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #7a8b89;
+  padding: 2px;
+}
+.suggest-wrap {
+  position: relative;
+}
+.suggest-list {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  top: 100%;
+  margin: 4px 0 0;
+  padding: 6px;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #e3ecea;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(49, 68, 71, 0.12);
+  max-height: 220px;
+  overflow: auto;
+}
+.suggest-list button {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #314447;
+}
+.suggest-list button:hover {
+  background: #f2f7f6;
+}
+.sub-block {
+  margin: 4px 0 14px 12px;
+  padding: 12px 12px 4px;
+  border-left: 3px solid #d7e5e2;
+  background: #fbfdfc;
+  border-radius: 0 10px 10px 0;
+}
+.sub-indicator-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 40px;
+  gap: 10px;
+  align-items: start;
+  margin-bottom: 10px;
+}
+.sub-indicator-row .text-input {
+  margin-bottom: 0;
+}
+.formula-preview {
+  font-size: 13px;
+  color: #51615f;
+  background: #eef4f3;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+.formula-preview b {
+  color: #314447;
+}
+.threshold-row {
+  display: grid;
+  grid-template-columns: 1fr 160px 40px;
+  gap: 10px;
+  align-items: start;
+  margin-bottom: 6px;
+}
+.threshold-row .text-input {
+  margin-bottom: 0;
+}
+.main-threshold-tag {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f766e;
+  background: #ccfbf1;
+  border-radius: 999px;
+  padding: 2px 10px;
+  margin-bottom: 12px;
+}
+.question-block {
+  margin-bottom: 16px;
+}
+.question-block > textarea.text-input {
+  min-height: 60px;
+  margin-top: 10px;
+}
+.question-group-input {
+  margin-top: 10px;
+  max-width: 340px;
+}
+@media (max-width: 720px) {
+  .sub-indicator-row,
+  .threshold-row {
+    grid-template-columns: 1fr;
+  }
+  .question-group-input {
+    max-width: none;
+  }
+}

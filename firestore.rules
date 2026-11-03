@@ -1,5 +1,5 @@
 rules_version = '2';
-// 護理品質指標管理系統 — Firestore Security Rules（第一階段：Spark 方案 v1.2）
+// 護理品質指標管理系統 — Firestore Security Rules（第一階段：Spark 方案 v1.3）
 // 權限以 users/{職編} 文件的 roles 欄位判斷（第二階段改 custom claims）。
 // 登入 email 格式為 {職編}@nurseboard.internal，規則從 token email 取職編。
 service cloud.firestore {
@@ -34,9 +34,10 @@ service cloud.firestore {
     }
 
     // 人員主檔：本人可讀寫自己（不可改 roles/status）；管理員全權
+    // 幹事可查人員清單（建指標選負責人用），但不可新增/刪除
     match /users/{id} {
       allow get: if isAuthed() && (id == staffId() || isAdmin());
-      allow list: if isAdmin();
+      allow list: if isAdmin() || isGanShi();
       allow create: if isAdmin();
       allow update: if isAuthed() && (isAdmin() || (id == staffId()
         && request.resource.data.get('roles', []) == resource.data.get('roles', [])
