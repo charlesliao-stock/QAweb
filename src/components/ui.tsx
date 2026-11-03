@@ -22,8 +22,8 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
       description: "追蹤各項品質指標的趨勢與達標狀況",
     },
     groups: {
-      title: "群組與人員",
-      description: "以階層群組管理角色與資料範圍",
+      title: "人員管理",
+      description: "群組、單位、職稱與人員主檔維護（含批次上傳）",
     },
     capa: {
       title: "CAPA 改善追蹤",

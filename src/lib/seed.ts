@@ -74,6 +74,29 @@ export const SEED_ROLES: SeedRoleDef[] = [
   },
 ];
 
+export interface SeedTitleDef {
+  name: string;
+  /** 群組層級（召集人／執行幹事／組長）或單位層級（主任／副主任／督導／護理長／副護理長／執行幹事） */
+  level: "群組" | "單位";
+}
+
+/** 預設職稱（需求規格書 v2.1 §6 系統管理：職稱分群組與單位兩層） */
+export const SEED_TITLES: SeedTitleDef[] = [
+  { name: "召集人", level: "群組" },
+  { name: "執行幹事", level: "群組" },
+  { name: "組長", level: "群組" },
+  { name: "主任", level: "單位" },
+  { name: "副主任", level: "單位" },
+  { name: "督導", level: "單位" },
+  { name: "護理長", level: "單位" },
+  { name: "副護理長", level: "單位" },
+  { name: "執行幹事", level: "單位" },
+  { name: "護理師", level: "單位" },
+];
+
+/** 七個系統角色名稱（批次上傳人員時驗證用） */
+export const SYSTEM_ROLE_NAMES: string[] = SEED_ROLES.map((r) => r.name);
+
 export interface SystemParams {
   /** RAG 黃燈區間：閾值以下幾個百分點為「接近閾值」 */
   ragYellowBand: number;
@@ -153,6 +176,20 @@ export async function runSystemSeed(
       {
         name: role.name,
         description: role.description,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: staffId,
+      },
+      { merge: true },
+    );
+  }
+  // 預設職稱：文件 ID 以「層級-名稱」固定，避免重複寫入；merge 不覆蓋自訂
+  for (const title of SEED_TITLES) {
+    await setDoc(
+      doc(db, "titles", `${title.level}-${title.name}`),
+      {
+        name: title.name,
+        level: title.level,
         createdAt: now,
         updatedAt: now,
         createdBy: staffId,
