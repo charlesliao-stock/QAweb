@@ -143,6 +143,28 @@ export function DashboardPage({
     return map;
   }, [tasks]);
 
+  /** 任務狀態呈現（v1.10.2：表格／手機卡片共用） */
+  function taskStatus(t: TaskRow) {
+    const overdue = isOverdue(t.deadline, t.status);
+    const isDone = t.status === "done";
+    return {
+      isDone,
+      overdue,
+      pillClass: isDone
+        ? "status-pill success"
+        : overdue
+          ? "status-pill danger"
+          : "status-pill warning",
+      label: isDone
+        ? t.rate != null
+          ? `已完成 ${t.rate}%`
+          : "已完成"
+        : overdue
+          ? "逾期未完成"
+          : "待完成",
+    };
+  }
+
   // 審查表單執行中 → 顯示執行頁（返回時重讀任務）
   if (executing) {
     return (
@@ -194,8 +216,8 @@ export function DashboardPage({
         </div>
       </div>
 
-      {/* 本月我的審查（v1.8.0） */}
-      <section className="panel">
+      {/* 本月我的審查（v1.8.0；v1.10.2 手機卡片） */}
+      <section className="panel my-review">
         <SectionTitle
           title="本月我的審查"
           note={`${curYear} 年 ${curMonth} 月・共 ${tasks.length} 筆任務`}
@@ -244,7 +266,7 @@ export function DashboardPage({
                     件）・已完成 {doneList.length} 筆（{sumCases(doneList)} 件）
                   </span>
                 </div>
-                <div className="table-scroll">
+                <div className="table-scroll task-table-wrap">
                   <table className="data-table">
                     <thead>
                       <tr>
@@ -257,8 +279,7 @@ export function DashboardPage({
                     </thead>
                     <tbody>
                       {list.map((t) => {
-                        const overdue = isOverdue(t.deadline, t.status);
-                        const isDone = t.status === "done";
+                        const st = taskStatus(t);
                         return (
                           <tr key={t.id}>
                             <td>{unitNames.get(t.unitId) ?? t.unitId}</td>
@@ -266,33 +287,17 @@ export function DashboardPage({
                               {t.caseCount != null ? `${t.caseCount}件` : "—"}
                             </td>
                             <td>
-                              <span
-                                className={
-                                  isDone
-                                    ? "status-pill success"
-                                    : overdue
-                                      ? "status-pill danger"
-                                      : "status-pill warning"
-                                }
-                              >
-                                {isDone
-                                  ? t.rate != null
-                                    ? `已完成 ${t.rate}%`
-                                    : "已完成"
-                                  : overdue
-                                    ? "逾期未完成"
-                                    : "待完成"}
-                              </span>
+                              <span className={st.pillClass}>{st.label}</span>
                             </td>
                             <td
                               style={
-                                overdue
+                                st.overdue
                                   ? { color: "#b3372f", fontWeight: 600 }
                                   : undefined
                               }
                             >
                               {t.deadline}
-                              {overdue && (
+                              {st.overdue && (
                                 <CircleAlert
                                   size={14}
                                   style={{
@@ -309,7 +314,7 @@ export function DashboardPage({
                                   setExecuting({ mode: "task", taskId: t.id })
                                 }
                               >
-                                {isDone ? "查看／修改" : "填寫審查表"}
+                                {st.isDone ? "查看／修改" : "填寫審查表"}
                               </button>
                             </td>
                           </tr>
@@ -317,6 +322,48 @@ export function DashboardPage({
                       })}
                     </tbody>
                   </table>
+                </div>
+                {/* 手機卡片（v1.10.2：≤640px 顯示，寬螢幕隱藏） */}
+                <div className="task-cards">
+                  {list.map((t) => {
+                    const st = taskStatus(t);
+                    return (
+                      <div key={t.id} className="task-card">
+                        <div className="task-card-top">
+                          <b>{unitNames.get(t.unitId) ?? t.unitId}</b>
+                          <span className={st.pillClass}>{st.label}</span>
+                        </div>
+                        <div className="task-card-meta">
+                          <span>
+                            審查件數：
+                            {t.caseCount != null ? `${t.caseCount}件` : "—"}
+                          </span>
+                          <span
+                            className={st.overdue ? "overdue-text" : undefined}
+                          >
+                            截止：{t.deadline}
+                            {st.overdue && (
+                              <CircleAlert
+                                size={14}
+                                style={{
+                                  verticalAlign: "-2px",
+                                  marginLeft: 4,
+                                }}
+                              />
+                            )}
+                          </span>
+                        </div>
+                        <button
+                          className="button button-primary task-card-btn"
+                          onClick={() =>
+                            setExecuting({ mode: "task", taskId: t.id })
+                          }
+                        >
+                          {st.isDone ? "查看／修改" : "填寫審查表"}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );

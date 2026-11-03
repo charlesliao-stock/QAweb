@@ -3866,3 +3866,61 @@ button:disabled {
 :root[data-mode="dark"] .guidance-details p {
   color: #9aa5a4;
 }
+
+/* ============ 儀表板「本月我的審查」手機卡片（v1.10.2） ============ */
+/* 預設（寬螢幕）：顯示表格，隱藏卡片；窄螢幕（≤640px）反之 */
+.my-review .task-cards {
+  display: none;
+}
+@media (max-width: 640px) {
+  .my-review .task-table-wrap {
+    display: none;
+  }
+  .my-review .task-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .task-card {
+    border: 1px solid #e2e8e7;
+    border-radius: 10px;
+    padding: 12px 14px;
+    background: #fbfdfd;
+  }
+  .task-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .task-card-top b {
+    font-size: var(--font-subtitle);
+    overflow-wrap: anywhere;
+  }
+  .task-card-top .status-pill {
+    flex-shrink: 0;
+  }
+  .task-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    font-size: var(--font-body);
+    color: #5b6b6a;
+    margin-bottom: 10px;
+  }
+  .task-card-meta .overdue-text {
+    color: #b3372f;
+    font-weight: 600;
+  }
+  .task-card-btn {
+    width: 100%;
+  }
+}
+:root[data-mode="dark"] .task-card {
+  background: #202726;
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .task-card-meta {
+  color: #9aa5a4;
+}
