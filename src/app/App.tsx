@@ -7,7 +7,6 @@ import {
   CalendarDays,
   Check,
   ChevronDown,
-  ChevronRight,
   ClipboardCheck,
   FileBarChart2,
   GitBranch,
@@ -301,14 +300,6 @@ function Sidebar({
             <X size={18} />
           </button>
         </div>
-        <div className="org-chip">
-          <span className="org-avatar">{displayName.slice(0, 1) || "護"}</span>
-          <span>
-            <b>{unitName || "護理品質"}</b>
-            <small>品質管理</small>
-          </span>
-          <ChevronDown size={14} />
-        </div>
         <nav className="main-nav" aria-label="主要導覽">
           {NAV_GROUPS.map((group) => (
             <div className="nav-group" key={group.label}>
@@ -489,8 +480,6 @@ function Shell() {
             <Menu size={20} />
           </button>
           <div className="topbar-crumb">
-            <span>{user.unitName || "護理品質"}</span>
-            <ChevronRight size={14} />
             <b>{PAGE_COPY[page].title}</b>
             {isDemoMode() && <span className="demo-pill">展示模式</span>}
           </div>

@@ -28,6 +28,8 @@ export interface StaffProfile {
   name: string;
   unitCode: string;
   unitName: string;
+  /** 職稱名稱（v1.12.0：權限交集判斷用；""＝未設定） */
+  title: string;
   roles: string[];
   mustChangePassword: boolean;
 }
@@ -50,6 +52,7 @@ const DEMO_USER: StaffProfile = {
   name: "展示管理員",
   unitCode: "",
   unitName: "",
+  title: "督導",
   roles: ["系統管理員"],
   mustChangePassword: false,
 };
@@ -101,6 +104,7 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
     name: typeof raw.name === "string" ? raw.name : staffId,
     unitCode: typeof raw.unitCode === "string" ? raw.unitCode : "",
     unitName: typeof raw.unitName === "string" ? raw.unitName : "",
+    title: typeof raw.title === "string" ? raw.title : "",
     roles,
     mustChangePassword: raw.mustChangePassword === true,
   };

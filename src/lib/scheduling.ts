@@ -207,6 +207,17 @@ export function reviewerDocId(groupId: string, personId: string): string {
   return `${groupId}__${personId}`;
 }
 
+/** 審查員自動連動用的「未分類」組別代號（v1.12.0，非真實群組） */
+export const UNCATEGORIZED_GROUP_ID = "__uncategorized__";
+
+/**
+ * 人員儲存時是否應自動加入審查員名單（純函式）：roles 含「審查員」。
+ * 移除角色時，同步移除自動加入的「未分類」審查員（手動指派的不動）。
+ */
+export function shouldAutoLinkReviewer(roles: string[]): boolean {
+  return roles.includes("審查員");
+}
+
 export function yearScheduleDocId(indicatorId: string, year: number): string {
   return `${indicatorId}__${year}`;
 }

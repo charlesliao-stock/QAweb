@@ -7,6 +7,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleDashed,
+  ClipboardList,
   Pencil,
   Plus,
   Trash2,
@@ -24,8 +25,9 @@ import {
   writeBatch,
 } from "../lib/db";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
+import { ReviewOverviewPage } from "./ReviewOverviewPage";
 import { getFirebaseDb } from "../lib/firebase";
-import { useAuth } from "../lib/auth";
+import { usePermissions } from "../lib/usePermissions";
 import { maskName } from "../lib/mask";
 import {
   MONTH_LABELS,
@@ -70,7 +72,8 @@ type View =
   | { kind: "list" }
   | { kind: "yearSchedule"; indicatorId: string }
   | { kind: "assignment"; indicatorId: string }
-  | { kind: "generate"; indicatorId: string };
+  | { kind: "generate"; indicatorId: string }
+  | { kind: "overview"; indicatorId: string };
 
 type SortKey = "group" | "name" | "schedule" | "assignment";
 
@@ -78,10 +81,8 @@ const STATUS_PILL_OK = "status-pill success";
 const STATUS_PILL_NONE = "status-pill muted";
 
 export function SchedulePage({ onAction }: { onAction: (message: string) => void }) {
-  const { user } = useAuth();
-  const canEdit =
-    (user?.roles ?? []).includes("系統管理員") ||
-    (user?.roles ?? []).includes("品管執行幹事");
+  const { can } = usePermissions();
+  const canEdit = can("manageSchedule");
 
   const [view, setView] = useState<View>({ kind: "list" });
   const [loading, setLoading] = useState(true);
@@ -470,6 +471,15 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                         </td>
                         <td>
                           <button
+                            className="text-button"
+                            onClick={() =>
+                              setView({ kind: "overview", indicatorId: r.id })
+                            }
+                            title="查看各單位各輪次的審查紀錄"
+                          >
+                            <ClipboardList size={14} /> 審查總覽
+                          </button>{" "}
+                          <button
                             className="button button-outline"
                             disabled={!canGenerate}
                             title={
@@ -554,6 +564,14 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               assignment={assignments.get(indicator.id) ?? null}
               onAction={onAction}
               onDone={backToList}
+            />
+          )}
+          {view.kind === "overview" && (
+            <ReviewOverviewPage
+              indicatorId={indicator.id}
+              indicatorName={indicator.name}
+              onBack={backToList}
+              onAction={onAction}
             />
           )}
         </>
@@ -907,8 +925,6 @@ function AssignmentEditor({
     maskName(
       usersMap.get(id) ?? reviewers.find((r) => r.personId === id)?.name ?? id,
     );
-  const unitName = (code: string) =>
-    units.find((u) => u.code === code)?.name ?? code;
 
   const unitsByGroup = useMemo(() => {
     const map = new Map<string, UnitLite[]>();
@@ -1003,7 +1019,7 @@ function AssignmentEditor({
     const dups = findDuplicateUnits(items);
     if (dups.size > 0) {
       const lines = [...dups.entries()].map(
-        ([u, rs]) => `${unitName(u)}：${rs.map((r) => reviewerName(r)).join("、")}`,
+        ([u, rs]) => `${u}：${rs.map((r) => reviewerName(r)).join("、")}`,
       );
       const ok = window.confirm(
         `以下單位被重複指派給 2 位以上審查員：\n${lines.join("\n")}\n\n確定要儲存嗎？（僅警示，不阻擋）`,
@@ -1089,7 +1105,7 @@ function AssignmentEditor({
                             onChange={() => toggleUnit(u.code)}
                           />
                           <span>
-                            {u.name}
+                            {u.code}
                             {duplicates.has(u.code) && (
                               <CircleAlert
                                 size={14}
@@ -1153,7 +1169,7 @@ function AssignmentEditor({
                       {it.units.map((u) => (
                         <div key={u.unitId} className="assign-unit-row">
                           <span>
-                            {unitName(u.unitId)}
+                            {u.unitId}
                             {duplicates.has(u.unitId) && (
                               <CircleAlert
                                 size={13}
@@ -1166,7 +1182,7 @@ function AssignmentEditor({
                             <button
                               className="text-button"
                               onClick={() => removeUnit(it.reviewerId, u.unitId)}
-                              aria-label={`移除${unitName(u.unitId)}`}
+                              aria-label={`移除${u.unitId}`}
                             >
                               <Trash2 size={13} />
                             </button>
@@ -1199,7 +1215,7 @@ function AssignmentEditor({
         {duplicates.size > 0 && (
           <p className="dup-note">
             <CircleAlert size={14} /> 以下單位被重複指派（儲存時會再次確認，不阻擋）：
-            {[...duplicates.keys()].map((u) => unitName(u)).join("、")}
+            {[...duplicates.keys()].join("、")}
           </p>
         )}
         {canEdit && (

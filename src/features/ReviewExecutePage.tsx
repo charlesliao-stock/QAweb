@@ -122,7 +122,6 @@ export function ReviewExecutePage({
   const [indicatorName, setIndicatorName] = useState("");
   const [questions, setQuestions] = useState<AuditQuestion[]>([]);
   const [task, setTask] = useState<TaskFull | null>(null);
-  const [unitNames, setUnitNames] = useState<Map<string, string>>(new Map());
   const [records, setRecords] = useState<CaseRecordRow[]>([]);
   const [loadError, setLoadError] = useState("");
 
@@ -142,7 +141,6 @@ export function ReviewExecutePage({
   /** records 模式下正在編輯的單件（null＝列表） */
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const unitName = (code: string) => unitNames.get(code) ?? code;
   const doneCount = records.length;
 
   /* ---------- 載入：該 task 的逐件紀錄 ---------- */
@@ -207,18 +205,6 @@ export function ReviewExecutePage({
       setLoadError("");
       try {
         const db = getFirebaseDb();
-        // 單位名稱
-        try {
-          const usnap = await getDocs(collection(db, "units"));
-          const m = new Map<string, string>();
-          usnap.docs.forEach((d) => {
-            const n = d.data().name;
-            m.set(d.id, typeof n === "string" ? n : d.id);
-          });
-          if (!cancelled) setUnitNames(m);
-        } catch {
-          /* 單位名稱讀不到就顯示代碼 */
-        }
         // 人員清單（審查人員搜尋用）
         try {
           const psnap = await getDocs(collection(db, "users"));
@@ -449,7 +435,7 @@ export function ReviewExecutePage({
       </div>
       <SectionTitle
         title={`${isRecordsView ? "審查結果查詢" : "審查表單"}：${indicatorName}`}
-        note={`${ymLabel(task.year, task.month)}・${unitName(task.unitId)}・已完成 ${progressLabel(doneCount, task.caseCount)} 件`}
+        note={`${ymLabel(task.year, task.month)}・${task.unitId}・已完成 ${progressLabel(doneCount, task.caseCount)} 件`}
       />
 
       {isRecordsView ? (
@@ -541,7 +527,7 @@ export function ReviewExecutePage({
               <div className="form-field">
                 <label className="field-label">受審單位</label>
                 <p>
-                  <b>{unitName(task.unitId)}</b>
+                  <b>{task.unitId}</b>
                   <span className="muted-text">（已鎖定）</span>
                 </p>
               </div>

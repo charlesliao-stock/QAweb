@@ -46,7 +46,6 @@ export function DashboardPage({
   const [indicatorNames, setIndicatorNames] = useState<Map<string, string>>(
     new Map(),
   );
-  const [unitNames, setUnitNames] = useState<Map<string, string>>(new Map());
 
   const loadMyTasks = useCallback(async () => {
     const staffId = user?.staffId;
@@ -54,12 +53,11 @@ export function DashboardPage({
     setTasksLoading(true);
     try {
       const db = getFirebaseDb();
-      const [tsnap, isnap, usnap, rsnap] = await Promise.all([
+      const [tsnap, isnap, rsnap] = await Promise.all([
         getDocs(
           query(collection(db, "reviewTasks"), where("reviewerId", "==", staffId)),
         ),
         getDocs(collection(db, "indicators")),
-        getDocs(collection(db, "units")),
         getDocs(
           query(
             collection(db, "reviewRecords"),
@@ -73,12 +71,6 @@ export function DashboardPage({
         inm.set(d.id, typeof n === "string" ? n : d.id);
       });
       setIndicatorNames(inm);
-      const unm = new Map<string, string>();
-      usnap.docs.forEach((d) => {
-        const n = d.data().name;
-        unm.set(d.id, typeof n === "string" ? n : d.id);
-      });
-      setUnitNames(unm);
       // 逐件完成數：taskId → reviewRecords 筆數（v1.11.0 起數據來自實際審查結果）
       const countMap = new Map<string, number>();
       rsnap.docs.forEach((d) => {
@@ -121,10 +113,7 @@ export function DashboardPage({
           "zh-Hant",
         );
         if (c !== 0) return c;
-        return (unm.get(a.unitId) ?? a.unitId).localeCompare(
-          unm.get(b.unitId) ?? b.unitId,
-          "zh-Hant",
-        );
+        return a.unitId.localeCompare(b.unitId, "zh-Hant");
       });
       setTasks(list);
     } catch {
@@ -264,7 +253,7 @@ export function DashboardPage({
                     return (
                       <tr key={t.id}>
                         <td>{indicatorNames.get(t.indicatorId) ?? t.indicatorId}</td>
-                        <td>{unitNames.get(t.unitId) ?? t.unitId}</td>
+                        <td>{t.unitId}</td>
                         <td>{progressLabel(t.doneCount, t.caseCount)}</td>
                         <td
                           style={
@@ -326,7 +315,7 @@ export function DashboardPage({
                       </span>
                     </div>
                     <div className="task-card-meta">
-                      <span>審查單位：{unitNames.get(t.unitId) ?? t.unitId}</span>
+                      <span>審查單位：{t.unitId}</span>
                       <span>
                         完成/應審：{progressLabel(t.doneCount, t.caseCount)}
                       </span>

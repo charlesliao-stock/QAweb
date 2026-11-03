@@ -29,7 +29,8 @@ import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import { SYSTEM_ROLE_NAMES } from "../lib/seed";
 import { downloadCSV, parseCSV } from "../lib/csv";
-import { reviewerDocId } from "../lib/scheduling";
+import { reviewerDocId, UNCATEGORIZED_GROUP_ID, shouldAutoLinkReviewer } from "../lib/scheduling";
+import { emptyPermissions, parsePermissions } from "../lib/permissions";
 
 type Tab = "groups" | "units" | "titles" | "users" | "reviewers";
 
@@ -52,6 +53,8 @@ interface TitleRow {
   name: string;
   level: string;
   userCount: number | null;
+  /** 功能權限（v1.12.0：與角色分開設定，目前僅儲存） */
+  permissions: Record<string, boolean>;
 }
 
 interface UserRow {
@@ -539,6 +542,7 @@ export function GroupsPage({
             id: d.id,
             name: typeof data.name === "string" ? data.name : "",
             level: typeof data.level === "string" ? data.level : "",
+            permissions: { ...parsePermissions(data.permissions) },
           };
         })
         .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
@@ -599,7 +603,10 @@ export function GroupsPage({
     loadMaster();
     loadRoles();
     loadTitles();
-  }, [loadMaster, loadRoles, loadTitles]);
+    // v1.12.0：掛載時即預載人員（修頁籤 badge 初始顯示 0 的問題）
+    if (isAdmin) loadUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadMaster, loadRoles, loadTitles, isAdmin]);
 
   useEffect(() => {
     if (tab === "users" && isAdmin) {
@@ -913,17 +920,19 @@ export function GroupsPage({
         await setDoc(doc(db, "titles", titleKey(name, titleForm.level)), {
           name,
           level: titleForm.level,
+          permissions: emptyPermissions(),
           ...auditFields(user.staffId, true),
         });
         onAction(`已新增職稱 ${name}（${titleForm.level}）`);
       } else if (view.kind === "edit") {
-        // 名稱或層級變更 → 換文件 ID（舊文件刪除）
+        // 名稱或層級變更 → 換文件 ID（舊文件刪除）；權限一併搬移
         const old = titles.find((t) => t.id === view.id);
         const newId = titleKey(name, titleForm.level);
         if (old && old.id !== newId) {
           await setDoc(doc(db, "titles", newId), {
             name,
             level: titleForm.level,
+            permissions: { ...old.permissions },
             ...auditFields(user.staffId, true),
           });
           await deleteDoc(doc(db, "titles", old.id));
@@ -1075,6 +1084,46 @@ export function GroupsPage({
       }
       setUserView({ kind: "list" });
       await loadUsers();
+      // 審查員連動（v1.12.0）：roles 含「審查員」→ 自動加入審查員名單（未分類）
+      const savedStaffId =
+        view.kind === "edit" ? view.staffId : userForm.staffId.trim();
+      try {
+        if (shouldAutoLinkReviewer(userForm.roles)) {
+          const existing = await getDocs(
+            query(
+              collection(db, "reviewReviewers"),
+              where("personId", "==", savedStaffId),
+              limit(1),
+            ),
+          );
+          if (existing.empty) {
+            await setDoc(
+              doc(
+                db,
+                "reviewReviewers",
+                reviewerDocId(UNCATEGORIZED_GROUP_ID, savedStaffId),
+              ),
+              {
+                groupId: UNCATEGORIZED_GROUP_ID,
+                personId: savedStaffId,
+                createdAt: serverTimestamp(),
+              },
+            );
+            onAction(`已將 ${savedStaffId} 自動加入審查員名單（未分類）`);
+          }
+        } else {
+          // 移除角色時，同步移除自動加入的「未分類」審查員（手動指派的不動）
+          await deleteDoc(
+            doc(
+              db,
+              "reviewReviewers",
+              reviewerDocId(UNCATEGORIZED_GROUP_ID, savedStaffId),
+            ),
+          );
+        }
+      } catch {
+        onAction("審查員名單連動失敗，請到「審查員」頁籤手動調整");
+      }
     } catch (error) {
       setUserError(`儲存失敗：${toErrorMessage(error)}`);
     } finally {
@@ -1302,8 +1351,6 @@ export function GroupsPage({
   const isUnitEditing = unitView.kind === "edit";
   const isTitleEditing = titleView.kind === "edit";
   const isUserEditing = userView.kind === "edit";
-  const unitNameOf = (code: string) =>
-    units.find((u) => u.code === code)?.name ?? code;
 
   const headingAction = (() => {
     const back = (reset: () => void) => (
@@ -1830,11 +1877,7 @@ export function GroupsPage({
                         <b>{row.staffId}</b>
                       </td>
                       <td>{maskName(row.name)}</td>
-                      <td>
-                        {row.unitCode
-                          ? `${row.unitCode}${unitNameOf(row.unitCode) !== row.unitCode ? ` ${unitNameOf(row.unitCode)}` : ""}`
-                          : "—"}
-                      </td>
+                      <td>{row.unitCode || "—"}</td>
                       <td>{row.title || "—"}</td>
                       <td>
                         {row.roles.length > 0
@@ -1924,7 +1967,7 @@ export function GroupsPage({
                   <option value="">— 未指定 —</option>
                   {units.map((u) => (
                     <option key={u.code} value={u.code}>
-                      {u.code} {u.name}
+                      {u.code}
                     </option>
                   ))}
                 </select>
@@ -2054,6 +2097,7 @@ export function GroupsPage({
                 onChange={(e) => setReviewerGroupId(e.target.value)}
               >
                 <option value="">請選擇組別</option>
+                <option value={UNCATEGORIZED_GROUP_ID}>未分類</option>
                 {groups.map((g) => (
                   <option key={g.id} value={g.id}>
                     {g.name}

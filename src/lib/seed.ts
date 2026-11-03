@@ -9,19 +9,9 @@ import {
 /**
  * 10 steps 正式標題（需求規格書 v2.1 §3，全院統一，僅系統管理員可修改標題）。
  * 「閾值」以百分比數字存於指標文件的 threshold 欄位，此處標題僅供顯示對應。
+ * 單一來源：src/lib/indicators.ts 的 TEN_STEP_TITLES（v1.12.0 合併）。
  */
-export const TEN_STEPS_TITLES = [
-  "負責單位",
-  "照護範圍",
-  "照護面",
-  "標準依據",
-  "閾值",
-  "資料收集",
-  "評值",
-  "採取行動",
-  "評估活動之有效性",
-  "溝通",
-] as const;
+export { TEN_STEP_TITLES as TEN_STEPS_TITLES } from "./indicators";
 
 export interface SeedRoleDef {
   id: string;

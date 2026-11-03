@@ -1320,7 +1320,7 @@ export function IndicatorsPage({
           ))}
 
           <div className="form-field">
-            <label className="field-label">4. {TEN_STEP_TITLES[3]}（標準依據）</label>
+            <label className="field-label">4. {TEN_STEP_TITLES[3]}</label>
             <textarea
               className="text-input"
               value={form.steps.step4.basis}
@@ -1400,7 +1400,7 @@ export function IndicatorsPage({
           </div>
 
           <SectionTitle
-            title={`5. ${TEN_STEP_TITLES[4]}（閾值）`}
+            title={`5. ${TEN_STEP_TITLES[4]}`}
             note="每支指標一列、自動編號（與步驟四對應）；第一筆為主閾值，用於達標判斷"
           />
           {form.steps.step4.subIndicators.length === 0 ? (
@@ -1449,7 +1449,7 @@ export function IndicatorsPage({
           )}
 
           <div className="form-field" style={{ marginTop: 14 }}>
-            <label className="field-label">6. {TEN_STEP_TITLES[5]}（資料收集）</label>
+            <label className="field-label">6. {TEN_STEP_TITLES[5]}</label>
           </div>
           <div className="form-stack">
             <div className="form-field">

@@ -7,6 +7,7 @@ import {
   SEED_ROLES,
   SEED_TITLES,
 } from "./seed";
+import { PERM_KEYS } from "./permissions";
 
 const QI001_TEN_STEPS = {
   step1: "所有護理單位",
@@ -179,6 +180,14 @@ export function getDemoData(): Record<string, Record<string, unknown>> {
         id: `${t.level}-${t.name}`,
         name: t.name,
         level: t.level,
+        // 展示帳號職稱為「督導」：給滿權限，交集判斷才不會把展示模式鎖死
+        ...(t.name === "督導"
+          ? {
+              permissions: Object.fromEntries(
+                PERM_KEYS.map((k) => [k, true]),
+              ),
+            }
+          : {}),
       })),
     ),
     roles: buildDocs(

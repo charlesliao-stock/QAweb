@@ -39,3 +39,31 @@ export function logAudit(db: any, entry: AuditEntry): void {
     /* 稽核寫入失敗不擋主流程 */
   });
 }
+
+export interface AuditFilterRow {
+  actorLabel: string;
+  action: string;
+  target: string;
+  detail: string;
+  /** YYYY-MM-DD（本地日期） */
+  dateKey: string;
+}
+
+/**
+ * 稽核列表篩選（純函式）：關鍵字比對人員／動作／對象／說明＋日期相等。
+ * 供 AdminPage 稽核軌跡的搜尋＋日期篩選用，可單元測試。
+ */
+export function filterAuditRows<T extends AuditFilterRow>(
+  rows: T[],
+  keyword: string,
+  dateFilter: string,
+): T[] {
+  const kw = keyword.trim().toLowerCase();
+  return rows.filter((r) => {
+    if (dateFilter && r.dateKey !== dateFilter) return false;
+    if (!kw) return true;
+    return [r.actorLabel, r.action, r.target, r.detail].some((f) =>
+      f.toLowerCase().includes(kw),
+    );
+  });
+}
