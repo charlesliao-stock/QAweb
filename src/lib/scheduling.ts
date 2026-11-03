@@ -39,8 +39,62 @@ export interface IndicatorYearSchedule {
   months: number[];
   /** 一次涵蓋幾個月（1-3，顯示用） */
   monthsPerAudit: number;
+  /** 該年度各單位每輪審查件數（v1.10.0 起：件數改在年度排程設定；key＝單位代碼） */
+  unitCaseCounts: Record<string, number>;
   notes: string;
   updatedAt: unknown;
+}
+
+/**
+ * 防禦性解析年度排程的 unitCaseCounts（只接受 ≥1 整數）。
+ */
+export function parseUnitCaseCounts(raw: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (raw && typeof raw === "object") {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof v === "number" && Number.isInteger(v) && v >= 1) out[k] = v;
+    }
+  }
+  return out;
+}
+
+/**
+ * 年度件數表單初值（字串 map，供數字輸入框用）。
+ * 遷移貼心做法：若該年度 unitCaseCounts 為空，但分工表舊資料有 caseCount，
+ * 自動帶入作預設值（僅初次開啟時，存檔後即寫入年度設定）。
+ */
+export function initialUnitCaseCounts(
+  schedule: { unitCaseCounts?: Record<string, number> } | null | undefined,
+  assignment: { items: AssignmentItem[] } | null | undefined,
+): Record<string, string> {
+  const cur = schedule?.unitCaseCounts;
+  if (cur && Object.keys(cur).length > 0) {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(cur)) out[k] = String(v);
+    return out;
+  }
+  const out: Record<string, string> = {};
+  assignment?.items.forEach((it) =>
+    it.units.forEach((u) => {
+      if (u.caseCount != null && !(u.unitId in out))
+        out[u.unitId] = String(u.caseCount);
+    }),
+  );
+  return out;
+}
+
+/**
+ * 表單字串 map → 儲存用數字 map（只保留 ≥1 整數；空白或非法即省略）。
+ */
+export function toUnitCaseCounts(
+  raw: Record<string, string>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const t = (v ?? "").trim();
+    if (t !== "" && /^\d+$/.test(t) && Number(t) >= 1) out[k] = Number(t);
+  }
+  return out;
 }
 
 /** 分工表：一位審查員負責的單位＋每輪審查件數（v1.9.0） */
@@ -105,7 +159,7 @@ export interface ReviewTask {
   month: number;
   unitId: string;
   reviewerId: string;
-  /** 每輪審查件數（產生時自分工表快照；null＝未設定） */
+  /** 每輪審查件數（產生時自該年度 unitCaseCounts 快照；null＝未設定） */
   caseCount: number | null;
   /** 截止日 YYYY-MM-DD（審查月份次月＋系統參數「補審截止（次月幾日）」） */
   deadline: string;
@@ -185,13 +239,16 @@ export interface GenerateInput {
   year: number;
   months: number[];
   items: AssignmentItem[];
+  /** 該年度各單位每輪審查件數（v1.10.0；key＝單位代碼） */
+  unitCaseCounts?: Record<string, number>;
   /** 系統參數「補審截止（次月幾日）」 */
   deadlineDay: number;
 }
 
 /**
  * 展開全年審查任務（純函式，可單元測試）。
- * 每（月份 × 審查員 × 單位）一筆，截止日＝次月 deadlineDay 日，件數自分工表快照。
+ * 每（月份 × 審查員 × 單位）一筆，截止日＝次月 deadlineDay 日，
+ * 件數取自該年度 unitCaseCounts（未設則 null；不再讀分工表 caseCount）。
  */
 export function buildReviewTasks(
   input: GenerateInput,
@@ -206,7 +263,7 @@ export function buildReviewTasks(
           month,
           unitId: u.unitId,
           reviewerId: it.reviewerId,
-          caseCount: u.caseCount,
+          caseCount: input.unitCaseCounts?.[u.unitId] ?? null,
           deadline: deadlineFor(input.year, month, input.deadlineDay),
           status: "pending",
         });
@@ -214,4 +271,13 @@ export function buildReviewTasks(
     }
   }
   return tasks;
+}
+
+/** 預估全年總件數：月份數 × 各單位件數合計（未設定不計） */
+export function estimateTotalCases(
+  months: number[],
+  unitCaseCounts: Record<string, number>,
+): number {
+  const perRound = Object.values(unitCaseCounts).reduce((n, v) => n + v, 0);
+  return months.length * perRound;
 }

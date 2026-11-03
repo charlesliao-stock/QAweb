@@ -5,18 +5,21 @@ import {
   collection,
   getDocs,
   query,
-  serverTimestamp,
-  updateDoc,
   where,
-  doc,
 } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
 import { isOverdue, type ReviewTask } from "../lib/scheduling";
+import {
+  ReviewExecutePage,
+  type ExecuteTarget,
+} from "./ReviewExecutePage";
 import type { Role } from "../types";
 
 interface TaskRow extends ReviewTask {
   id: string;
+  /** 審查結果正確率（來自 reviewRecords；null＝無紀錄或滿分 0） */
+  rate: number | null;
 }
 
 export function DashboardPage({
@@ -46,12 +49,18 @@ export function DashboardPage({
     setTasksLoading(true);
     try {
       const db = getFirebaseDb();
-      const [tsnap, isnap, usnap] = await Promise.all([
+      const [tsnap, isnap, usnap, rsnap] = await Promise.all([
         getDocs(
           query(collection(db, "reviewTasks"), where("reviewerId", "==", staffId)),
         ),
         getDocs(collection(db, "indicators")),
         getDocs(collection(db, "units")),
+        getDocs(
+          query(
+            collection(db, "reviewRecords"),
+            where("reviewerId", "==", staffId),
+          ),
+        ),
       ]);
       const inm = new Map<string, string>();
       isnap.docs.forEach((d) => {
@@ -65,6 +74,19 @@ export function DashboardPage({
         unm.set(d.id, typeof n === "string" ? n : d.id);
       });
       setUnitNames(unm);
+      // 審查結果：taskId → 正確率（v1.10.0 起數據來自實際審查結果）
+      const rateMap = new Map<string, number | null>();
+      rsnap.docs.forEach((d) => {
+        const data = d.data();
+        if (
+          Number(data.year) !== curYear ||
+          Number(data.month) !== curMonth
+        )
+          return;
+        const tid = typeof data.taskId === "string" ? data.taskId : d.id;
+        const rt = data.rate;
+        rateMap.set(tid, typeof rt === "number" ? rt : null);
+      });
       const list: TaskRow[] = [];
       tsnap.docs.forEach((d) => {
         const data = d.data();
@@ -85,6 +107,7 @@ export function DashboardPage({
           status: data.status === "done" ? "done" : "pending",
           completedAt: data.completedAt,
           createdAt: data.createdAt,
+          rate: rateMap.has(d.id) ? (rateMap.get(d.id) ?? null) : null,
         });
       });
       list.sort((a, b) =>
@@ -107,31 +130,8 @@ export function DashboardPage({
     loadMyTasks();
   }, [loadMyTasks]);
 
-  const [busyId, setBusyId] = useState<string | null>(null);
-
-  /** 標記完成／改回待完成（v1.9.0） */
-  async function toggleTaskStatus(task: TaskRow) {
-    setBusyId(task.id);
-    try {
-      const db = getFirebaseDb();
-      if (task.status === "done") {
-        await updateDoc(doc(db, "reviewTasks", task.id), {
-          status: "pending",
-          completedAt: null,
-        });
-      } else {
-        await updateDoc(doc(db, "reviewTasks", task.id), {
-          status: "done",
-          completedAt: serverTimestamp(),
-        });
-      }
-      await loadMyTasks();
-    } catch {
-      onAction("更新任務狀態失敗，請檢查網路連線後再試");
-    } finally {
-      setBusyId(null);
-    }
-  }
+  /** 審查表單執行目標（v1.10.0）：task 模式＝指定任務；indicator 模式＝點指標名稱進入 */
+  const [executing, setExecuting] = useState<ExecuteTarget | null>(null);
 
   const byIndicator = useMemo(() => {
     const map = new Map<string, TaskRow[]>();
@@ -142,6 +142,20 @@ export function DashboardPage({
     });
     return map;
   }, [tasks]);
+
+  // 審查表單執行中 → 顯示執行頁（返回時重讀任務）
+  if (executing) {
+    return (
+      <ReviewExecutePage
+        target={executing}
+        onBack={() => {
+          setExecuting(null);
+          void loadMyTasks();
+        }}
+        onAction={onAction}
+      />
+    );
+  }
 
   return (
     <>
@@ -211,7 +225,20 @@ export function DashboardPage({
                     marginBottom: 8,
                   }}
                 >
-                  <b>{indicatorNames.get(indicatorId) ?? indicatorId}</b>
+                  <button
+                    className="text-button"
+                    onClick={() =>
+                      setExecuting({
+                        mode: "indicator",
+                        indicatorId,
+                        year: curYear,
+                        month: curMonth,
+                      })
+                    }
+                    title="開啟該指標的審查表單"
+                  >
+                    <b>{indicatorNames.get(indicatorId) ?? indicatorId}</b>
+                  </button>
                   <span className="muted-text">
                     待完成 {pendingList.length} 筆（{sumCases(pendingList)}{" "}
                     件）・已完成 {doneList.length} 筆（{sumCases(doneList)} 件）
@@ -249,7 +276,9 @@ export function DashboardPage({
                                 }
                               >
                                 {isDone
-                                  ? "已完成"
+                                  ? t.rate != null
+                                    ? `已完成 ${t.rate}%`
+                                    : "已完成"
                                   : overdue
                                     ? "逾期未完成"
                                     : "待完成"}
@@ -276,14 +305,11 @@ export function DashboardPage({
                             <td>
                               <button
                                 className="text-button"
-                                disabled={busyId === t.id}
-                                onClick={() => toggleTaskStatus(t)}
+                                onClick={() =>
+                                  setExecuting({ mode: "task", taskId: t.id })
+                                }
                               >
-                                {busyId === t.id
-                                  ? "處理中…"
-                                  : isDone
-                                    ? "改回待完成"
-                                    : "標記完成"}
+                                {isDone ? "查看／修改" : "填寫審查表"}
                               </button>
                             </td>
                           </tr>

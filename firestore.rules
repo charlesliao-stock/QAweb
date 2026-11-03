@@ -107,6 +107,11 @@ service cloud.firestore {
       allow read, write: if isAuthed();
     }
 
+    // 審查執行紀錄（v1.10.0）：業務資料，第一階段登入者可讀寫
+    match /reviewRecords/{id} {
+      allow read, write: if isAuthed();
+    }
+
     // 業務資料：第一階段登入者可讀寫（第二階段按單位/角色收緊）
     match /schedules/{id} {
       allow read, write: if isAuthed();

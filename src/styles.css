@@ -3809,3 +3809,60 @@ button:disabled {
 :root[data-mode="dark"] .muted-text {
   color: #9aa5a4;
 }
+
+/* ---------- 審查表單執行頁（v1.10.0） ---------- */
+.question-card {
+  border: 1px solid #e2e8e7;
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: #fbfdfd;
+}
+.question-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.question-head b {
+  font-size: var(--font-subtitle);
+}
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.radio-group .check-row input[type="radio"] {
+  accent-color: var(--accent, #2f7d6d);
+  width: 16px;
+  height: 16px;
+}
+.guidance-details {
+  margin-top: 10px;
+  border-top: 1px dashed #dfe6e5;
+  padding-top: 8px;
+}
+.guidance-details summary {
+  cursor: pointer;
+  color: #5b6b6a;
+  font-size: var(--font-body);
+}
+.guidance-details summary:hover {
+  color: var(--accent, #2f7d6d);
+}
+.guidance-details p {
+  margin: 8px 0 0;
+  color: #44514f;
+  font-size: var(--font-body);
+}
+:root[data-mode="dark"] .question-card {
+  background: #202726;
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .guidance-details {
+  border-top-color: #3d4a49;
+}
+:root[data-mode="dark"] .guidance-details summary,
+:root[data-mode="dark"] .guidance-details p {
+  color: #9aa5a4;
+}
