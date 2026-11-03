@@ -29,8 +29,9 @@ import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import { SYSTEM_ROLE_NAMES } from "../lib/seed";
 import { downloadCSV, parseCSV } from "../lib/csv";
+import { reviewerDocId } from "../lib/scheduling";
 
-type Tab = "groups" | "units" | "titles" | "users";
+type Tab = "groups" | "units" | "titles" | "users" | "reviewers";
 
 interface GroupRow {
   id: string;
@@ -99,6 +100,13 @@ interface PreviewRow {
   values: string[];
   ok: boolean;
   error: string;
+}
+
+interface ReviewerRow {
+  personId: string;
+  name: string;
+  unitCode: string;
+  groupId: string;
 }
 
 function emptyGroupForm(): GroupForm {
@@ -428,6 +436,13 @@ export function GroupsPage({
   const [userSaving, setUserSaving] = useState(false);
   const [roleOptions, setRoleOptions] = useState<OptionItem[]>([]);
 
+  // ---- 審查員（v1.8.0：依指標分類組別分組） ----
+  const [reviewerGroupId, setReviewerGroupId] = useState("");
+  const [reviewers, setReviewers] = useState<ReviewerRow[]>([]);
+  const [reviewersLoading, setReviewersLoading] = useState(false);
+  const [reviewerSearch, setReviewerSearch] = useState("");
+  const [reviewerSaving, setReviewerSaving] = useState(false);
+
   const loadRoles = useCallback(async () => {
     try {
       const snap = await getDocs(collection(getFirebaseDb(), "roles"));
@@ -591,6 +606,80 @@ export function GroupsPage({
       loadUsers();
     }
   }, [tab, isAdmin, loadUsers]);
+
+  /** 審查員（v1.8.0）：讀取 reviewReviewers，並以 users 主檔補姓名/單位 */
+  const loadReviewers = useCallback(async () => {
+    setReviewersLoading(true);
+    try {
+      const db = getFirebaseDb();
+      const snap = await getDocs(collection(db, "reviewReviewers"));
+      const userMap = new Map(users.map((u) => [u.staffId, u]));
+      const list: ReviewerRow[] = snap.docs
+        .map((d) => {
+          const data = d.data();
+          const personId =
+            typeof data.personId === "string" ? data.personId : d.id;
+          const u = userMap.get(personId);
+          return {
+            personId,
+            name: u?.name ?? "",
+            unitCode: u?.unitCode ?? "",
+            groupId: typeof data.groupId === "string" ? data.groupId : "",
+          };
+        })
+        .filter((r) => !reviewerGroupId || r.groupId === reviewerGroupId)
+        .sort((a, b) => a.personId.localeCompare(b.personId, "zh-Hant"));
+      setReviewers(list);
+    } catch (error) {
+      onAction(`讀取審查員清單失敗：${toErrorMessage(error)}`);
+    } finally {
+      setReviewersLoading(false);
+    }
+  }, [onAction, users, reviewerGroupId]);
+
+  useEffect(() => {
+    if (tab === "reviewers") {
+      if (canManageMaster && users.length === 0) loadUsers();
+      loadReviewers();
+    }
+  }, [tab, canManageMaster, users.length, loadUsers, loadReviewers]);
+
+  async function handleReviewerAdd(personId: string) {
+    if (!reviewerGroupId) {
+      onAction("請先選擇組別");
+      return;
+    }
+    setReviewerSaving(true);
+    try {
+      const db = getFirebaseDb();
+      await setDoc(
+        doc(db, "reviewReviewers", reviewerDocId(reviewerGroupId, personId)),
+        { groupId: reviewerGroupId, personId, createdAt: serverTimestamp() },
+      );
+      setReviewerSearch("");
+      onAction(`已將 ${personId} 加入審查員`);
+      loadReviewers();
+    } catch (error) {
+      onAction(`加入審查員失敗：${toErrorMessage(error)}`);
+    } finally {
+      setReviewerSaving(false);
+    }
+  }
+
+  async function handleReviewerRemove(personId: string) {
+    const ok = window.confirm(`確定將 ${personId} 移出審查員名單？`);
+    if (!ok) return;
+    try {
+      const db = getFirebaseDb();
+      await deleteDoc(
+        doc(db, "reviewReviewers", reviewerDocId(reviewerGroupId, personId)),
+      );
+      onAction(`已將 ${personId} 移出審查員名單`);
+      loadReviewers();
+    } catch (error) {
+      onAction(`移除審查員失敗：${toErrorMessage(error)}`);
+    }
+  }
 
   // ================= 群組 =================
 
@@ -1292,6 +1381,12 @@ export function GroupsPage({
         >
           人員{isAdmin && <span>{users.length}</span>}
         </button>
+        <button
+          className={`tab${tab === "reviewers" ? " active" : ""}`}
+          onClick={() => setTab("reviewers")}
+        >
+          審查員
+        </button>
       </div>
 
       {/* 批次上傳工具列（僅清單檢視） */}
@@ -1696,14 +1791,14 @@ export function GroupsPage({
             </div>
           </section>
         )
-      ) : !isAdmin ? (
+      ) : tab === "users" && !isAdmin ? (
         <section className="panel">
           <div className="empty-state-block">
             <b>僅系統管理員可管理人員</b>
             <p>如需新增或異動人員資料，請聯絡系統管理員。</p>
           </div>
         </section>
-      ) : userView.kind === "list" ? (
+      ) : tab === "users" && userView.kind === "list" ? (
         usersLoading ? (
           <section className="panel">
             <p className="settings-note">讀取中…</p>
@@ -1782,7 +1877,7 @@ export function GroupsPage({
             </div>
           </section>
         )
-      ) : (
+      ) : tab === "users" ? (
         <section className="panel data-panel indicator-form">
           <SectionTitle
             title={isUserEditing ? `編輯人員 ${userForm.staffId}` : "新增人員"}
@@ -1945,7 +2040,152 @@ export function GroupsPage({
             </button>
           </div>
         </section>
-      )}
+      ) : tab === "reviewers" ? (
+        <section className="panel">
+          <SectionTitle
+            title="審查員"
+            note="依指標分類組別設定審查員名單，供「指標排程」的單位／審查員設定選用"
+          />
+          <div className="form-field" style={{ maxWidth: 320 }}>
+            <label className="field-label">組別</label>
+            <div className="select-wrap">
+              <select
+                value={reviewerGroupId}
+                onChange={(e) => setReviewerGroupId(e.target.value)}
+              >
+                <option value="">請選擇組別</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+
+          {!reviewerGroupId ? (
+            <p className="settings-note">請先選擇組別。</p>
+          ) : reviewersLoading ? (
+            <p className="settings-note">讀取中…</p>
+          ) : (
+            <>
+              {reviewers.length === 0 ? (
+                <p className="settings-note">
+                  此組別尚無審查員
+                  {canManageMaster ? "，請由下方加入。" : "。"}
+                </p>
+              ) : (
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>職編</th>
+                        <th>姓名</th>
+                        <th>所屬單位</th>
+                        {canManageMaster && <th>操作</th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reviewers.map((r) => (
+                        <tr key={r.personId}>
+                          <td>{r.personId}</td>
+                          <td>{r.name ? maskName(r.name) : "—"}</td>
+                          <td>{r.unitCode || "—"}</td>
+                          {canManageMaster && (
+                            <td>
+                              <button
+                                className="text-button"
+                                onClick={() => handleReviewerRemove(r.personId)}
+                              >
+                                <Trash2 size={13} /> 移除
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {canManageMaster && (
+                <>
+                  <SectionTitle
+                    title="加入審查員"
+                    note="從在職人員中搜尋（職編／姓名）"
+                  />
+                  <div className="form-field" style={{ maxWidth: 320 }}>
+                    <input
+                      className="text-input"
+                      placeholder="輸入職編或姓名搜尋"
+                      value={reviewerSearch}
+                      onChange={(e) => setReviewerSearch(e.target.value)}
+                    />
+                  </div>
+                  {reviewerSearch.trim() === "" ? (
+                    <p className="settings-note">
+                      輸入關鍵字後，從下方結果加入。
+                    </p>
+                  ) : (
+                    (() => {
+                      const kw = reviewerSearch.trim().toLowerCase();
+                      const existed = new Set(
+                        reviewers.map((r) => r.personId),
+                      );
+                      const hits = users
+                        .filter(
+                          (u) =>
+                            u.status === "在職" &&
+                            !existed.has(u.staffId) &&
+                            (u.staffId.toLowerCase().includes(kw) ||
+                              u.name.toLowerCase().includes(kw)),
+                        )
+                        .slice(0, 20);
+                      return hits.length === 0 ? (
+                        <p className="settings-note">無符合的在職人員。</p>
+                      ) : (
+                        <div className="table-scroll">
+                          <table className="data-table">
+                            <thead>
+                              <tr>
+                                <th>職編</th>
+                                <th>姓名</th>
+                                <th>所屬單位</th>
+                                <th>操作</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {hits.map((u) => (
+                                <tr key={u.staffId}>
+                                  <td>{u.staffId}</td>
+                                  <td>{maskName(u.name)}</td>
+                                  <td>{u.unitCode || "—"}</td>
+                                  <td>
+                                    <button
+                                      className="text-button"
+                                      disabled={reviewerSaving}
+                                      onClick={() =>
+                                        handleReviewerAdd(u.staffId)
+                                      }
+                                    >
+                                      <Plus size={13} /> 加入
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      );
+                    })()
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </section>
+      ) : null}
     </>
   );
 }

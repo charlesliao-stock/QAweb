@@ -3677,3 +3677,83 @@ button:disabled {
   border: 0;
   cursor: default;
 }
+
+/* ===== 指標排程（v1.8.0） ===== */
+.filter-bar {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.filter-bar .form-field {
+  margin-bottom: 0;
+}
+.muted-text {
+  font-size: var(--font-small);
+  color: #8a9494;
+  margin-top: 2px;
+}
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+.month-cell {
+  border: 1px solid #dde5e4;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.month-cell.checked {
+  border-color: var(--teal);
+  background: #eef6f4;
+}
+.unit-group-block {
+  border: 1px solid #e3e9e8;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+.unit-group-head {
+  margin-bottom: 6px;
+}
+.unit-check-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 12px;
+  padding-left: 24px;
+}
+.dup-warn {
+  color: #b7791f;
+  vertical-align: -2px;
+  margin-left: 4px;
+}
+.dup-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--font-body);
+  color: #8a5a13;
+  background: #fdf6e7;
+  border: 1px solid #f0dfb8;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 12px;
+}
+:root[data-mode="dark"] .dup-note {
+  background: #3a2f18;
+  border-color: #6b5320;
+  color: #e8c87e;
+}
+:root[data-mode="dark"] .month-cell {
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .month-cell.checked {
+  background: #1e3a36;
+}
+:root[data-mode="dark"] .unit-group-block {
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .muted-text {
+  color: #9aa5a4;
+}

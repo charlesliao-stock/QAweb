@@ -13,8 +13,8 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
       description: "管理指標版本、閾值與審核狀態",
     },
     schedule: {
-      title: "審查排程",
-      description: "檢視排程進度、任務指派與逾期項目",
+      title: "指標排程",
+      description: "設定指標年度審查月份、分工表並產生全年審查任務",
     },
     audit: { title: "指標審查", description: "以一題一卡方式完成現場稽核" },
     results: {

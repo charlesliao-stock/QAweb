@@ -88,6 +88,25 @@ service cloud.firestore {
       allow write: if isGanShi();
     }
 
+    // 指標排程（v1.8.0）：主檔與設定類登入可讀、幹事以上可寫
+    match /reviewReviewers/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+    match /indicatorYearSchedules/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+    match /indicatorAssignments/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+
+    // 指標排程（v1.8.0）：審查任務為業務資料，第一階段登入者可讀寫
+    match /reviewTasks/{id} {
+      allow read, write: if isAuthed();
+    }
+
     // 業務資料：第一階段登入者可讀寫（第二階段按單位/角色收緊）
     match /schedules/{id} {
       allow read, write: if isAuthed();

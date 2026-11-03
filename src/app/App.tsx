@@ -56,7 +56,7 @@ const NAV_GROUPS = [
     label: "品質管理",
     items: [
       { id: "indicators", label: "指標管理", icon: BookOpenCheck },
-      { id: "schedule", label: "審查排程", icon: CalendarDays },
+      { id: "schedule", label: "指標排程", icon: CalendarDays },
       { id: "audit", label: "指標審查", icon: ClipboardCheck },
       { id: "results", label: "結果分析", icon: FileBarChart2 },
       { id: "capa", label: "CAPA 改善追蹤", icon: Activity },
