@@ -1,10 +1,104 @@
+import { useEffect, useState } from "react";
 import {
   ArrowRight,
   Check,
+  Database,
   ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
+import { doc, getDoc } from "firebase/firestore";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
+import { getFirebaseDb } from "../lib/firebase";
+import { useAuth } from "../lib/auth";
+import {
+  SYSTEM_PARAM_LABELS,
+  runSystemSeed,
+  type SystemParams,
+} from "../lib/seed";
+
+function formatParamValue(value: unknown): string {
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") return value;
+  return "—";
+}
+
+function SystemInitSection({ onAction }: { onAction: (message: string) => void }) {
+  const { user } = useAuth();
+  const [params, setParams] = useState<SystemParams | null | undefined>(undefined);
+  const [seeding, setSeeding] = useState(false);
+  const isAdmin = user?.roles.includes("系統管理員") ?? false;
+
+  useEffect(() => {
+    let cancelled = false;
+    getDoc(doc(getFirebaseDb(), "systemParams", "config"))
+      .then((snap) => {
+        if (!cancelled) setParams(snap.exists() ? (snap.data() as SystemParams) : null);
+      })
+      .catch(() => {
+        if (!cancelled) setParams(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleSeed() {
+    if (!user || seeding) return;
+    setSeeding(true);
+    try {
+      await runSystemSeed(getFirebaseDb(), user.staffId);
+      const snap = await getDoc(doc(getFirebaseDb(), "systemParams", "config"));
+      setParams(snap.exists() ? (snap.data() as SystemParams) : null);
+      onAction("系統初始化完成：已寫入預設參數與 7 個角色");
+    } catch {
+      onAction("初始化失敗：權限不足或網路異常，請稍後再試");
+    } finally {
+      setSeeding(false);
+    }
+  }
+
+  return (
+    <section className="panel data-panel">
+      <SectionTitle title="系統初始化" note="首次啟用時寫入預設參數與角色" />
+      {params === undefined ? (
+        <p className="settings-note">讀取中…</p>
+      ) : params === null ? (
+        isAdmin ? (
+          <div>
+            <p className="settings-note">
+              尚未初始化。將寫入 systemParams/config 預設參數（RAG
+              黃燈區間、補審期限、草稿保留天數等）與 7 個預設角色定義。
+            </p>
+            <button
+              className="button button-primary"
+              disabled={seeding}
+              onClick={handleSeed}
+            >
+              <Database size={15} />
+              {seeding ? "寫入中…" : "一鍵初始化系統參數與角色"}
+            </button>
+          </div>
+        ) : (
+          <p className="settings-note">
+            系統尚未初始化，請聯絡系統管理員執行初始化。
+          </p>
+        )
+      ) : (
+        <dl className="param-list">
+          {(Object.keys(SYSTEM_PARAM_LABELS) as (keyof SystemParams)[]).map(
+            (key) => (
+              <div key={key} className="param-row">
+                <dt>{SYSTEM_PARAM_LABELS[key]}</dt>
+                <dd>{formatParamValue(params[key])}</dd>
+              </div>
+            ),
+          )}
+        </dl>
+      )}
+    </section>
+  );
+}
 
 export function AdminPage({
   onAction,
@@ -39,6 +133,7 @@ export function AdminPage({
           角色可由系統管理員動態建立，不需修改程式；正式授權以系統管理員設定為準。
         </span>
       </div>
+      <SystemInitSection onAction={onAction} />
       <section className="panel data-panel permission-panel">
         <SectionTitle
           title="功能 × 資料範圍"

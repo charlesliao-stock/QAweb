@@ -3012,3 +3012,79 @@ button:disabled {
   color: #a0aaac;
   font-size: 13px;
 }
+
+/* 指標管理表單與系統初始化（Firestore 第一階段串接） */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 18px;
+}
+.form-field {
+  margin-bottom: 14px;
+}
+.form-field .text-input {
+  margin-bottom: 0;
+}
+.form-field textarea.text-input {
+  min-height: 76px;
+  resize: vertical;
+}
+.form-field .select-wrap {
+  display: flex;
+  width: 100%;
+}
+.form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+.question-row {
+  display: grid;
+  grid-template-columns: 1fr 180px 40px;
+  gap: 10px;
+  align-items: start;
+  margin-bottom: 10px;
+}
+.question-row .text-input {
+  margin-bottom: 0;
+}
+.question-row .select-wrap {
+  display: flex;
+}
+.param-list {
+  margin: 0;
+}
+.param-row {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid #eef2f2;
+  font-size: 14px;
+}
+.param-row:last-child {
+  border-bottom: none;
+}
+.param-row dt {
+  color: #51615f;
+  font-weight: 700;
+}
+.param-row dd {
+  margin: 0;
+  color: #314447;
+}
+.indicator-form .section-title {
+  margin-top: 22px;
+}
+@media (max-width: 720px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .question-row {
+    grid-template-columns: 1fr;
+  }
+  .param-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
