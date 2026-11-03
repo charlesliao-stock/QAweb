@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -15,11 +15,25 @@ import {
   LockKeyhole,
   LogOut,
   Menu,
+  Palette,
   Settings2,
   X,
 } from "lucide-react";
 import { AuthProvider, useAuth } from "../lib/auth";
 import { isDemoMode } from "../lib/demoMode";
+import { doc, getDoc } from "../lib/db";
+import { getFirebaseDb } from "../lib/firebase";
+import {
+  FONT_SIZE_LABELS,
+  applyTheme,
+  applyUiPrefs,
+  getColorMode,
+  getFontSize,
+  setColorMode,
+  setFontSize,
+  type ColorModeOption,
+  type FontSizeOption,
+} from "../lib/uiPrefs";
 import { BrandMark, PAGE_COPY } from "../components/ui";
 import { AdminPage } from "../features/AdminPage";
 import { AuditPage } from "../features/AuditPage";
@@ -341,6 +355,66 @@ function Sidebar({
   );
 }
 
+function DisplaySettings() {
+  const [open, setOpen] = useState(false);
+  const [fontSize, setFontSizeState] = useState<FontSizeOption>(getFontSize());
+  const [mode, setModeState] = useState<ColorModeOption>(getColorMode());
+
+  function pickFont(v: FontSizeOption) {
+    setFontSize(v);
+    setFontSizeState(v);
+  }
+  function toggleMode() {
+    const next: ColorModeOption = mode === "dark" ? "light" : "dark";
+    setColorMode(next);
+    setModeState(next);
+  }
+
+  return (
+    <div className="display-settings-wrap">
+      <button
+        className="icon-button"
+        aria-label="顯示設定"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Palette size={18} />
+      </button>
+      {open && (
+        <>
+          <button
+            className="display-pop-scrim"
+            aria-label="關閉顯示設定"
+            onClick={() => setOpen(false)}
+          />
+          <div className="display-pop">
+            <h4>顯示設定</h4>
+            <div className="pop-row-label">字體大小</div>
+            <div className="font-size-options">
+              {(Object.keys(FONT_SIZE_LABELS) as FontSizeOption[]).map((k) => (
+                <button
+                  key={k}
+                  className={fontSize === k ? "selected" : ""}
+                  onClick={() => pickFont(k)}
+                >
+                  {FONT_SIZE_LABELS[k]}
+                </button>
+              ))}
+            </div>
+            <div className="pop-row-label">深色模式</div>
+            <button
+              className={`mode-toggle${mode === "dark" ? " on" : ""}`}
+              onClick={toggleMode}
+            >
+              <span>{mode === "dark" ? "開" : "關"}</span>
+              <span className="toggle-track" />
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function Shell() {
   const { user, loading, needsPasswordChange, logout } = useAuth();
   const [page, setPage] = useState<PageId>("dashboard");
@@ -351,6 +425,19 @@ function Shell() {
     setToast(message);
     window.setTimeout(() => setToast(""), 2600);
   };
+
+  // 個人顯示設定（本機）＋ 全院主題配色（系統參數）
+  useEffect(() => {
+    applyUiPrefs();
+    getDoc(doc(getFirebaseDb(), "systemParams", "config"))
+      .then((snap) => {
+        const t = snap.exists()
+          ? (snap.data() as { uiTheme?: unknown }).uiTheme
+          : undefined;
+        applyTheme(typeof t === "string" ? t : "green-2");
+      })
+      .catch(() => applyTheme("green-2"));
+  }, []);
 
   if (loading) {
     return (
@@ -402,6 +489,7 @@ function Shell() {
             {isDemoMode() && <span className="demo-pill">展示模式</span>}
           </div>
           <div className="topbar-actions">
+            <DisplaySettings />
             <button
               className="icon-button notification-button"
               aria-label="通知"

@@ -21,6 +21,13 @@
   --teal-soft: #e9f5f3;
   --surface: #fff;
   --bg: #f5f7f8;
+  /* 輔助色：由 [data-theme] 主題覆寫（green-2 雙色主題預設與主色同系） */
+  --accent: #4d7f78;
+  --accent-deep: #3d6660;
+  --accent-soft: #edf4f2;
+  --accent2: #4d7f78;
+  --accent2-deep: #3d6660;
+  --accent2-soft: #edf4f2;
 }
 
 * {
@@ -111,7 +118,7 @@ button:disabled {
   color: #fff;
   background: var(--teal);
   border-radius: 12px;
-  box-shadow: 0 6px 14px rgba(15, 118, 110, 0.18);
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--teal) 18%, transparent);
 }
 .brand-mark.small {
   width: 32px;
@@ -134,8 +141,8 @@ button:disabled {
   height: 7px;
   display: inline-block;
   border-radius: 50%;
-  background: #41a78e;
-  box-shadow: 0 0 0 3px rgba(65, 167, 142, 0.12);
+  background: var(--accent2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent2) 12%, transparent);
 }
 .login-card h1 {
   margin: 16px 0 12px;
@@ -199,7 +206,7 @@ button:disabled {
 }
 .select-wrap select:focus {
   border-color: #6bb3a8;
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 10%, transparent);
 }
 .select-wrap > svg {
   position: absolute;
@@ -232,19 +239,19 @@ button:disabled {
 .button-primary {
   background: var(--teal);
   color: #fff;
-  box-shadow: 0 4px 12px rgba(15, 118, 110, 0.12);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--teal) 12%, transparent);
 }
 .button-primary:hover {
   background: var(--teal-deep);
 }
 .button-outline {
-  color: #53666b;
+  color: var(--accent-deep);
   background: #fff;
   border-color: #dfe7e8;
 }
 .button-outline:hover {
-  border-color: #93bdb7;
-  background: #fbfefd;
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 .button-ghost {
   color: #637277;
@@ -443,8 +450,8 @@ button:disabled {
   color: #42625e;
 }
 .nav-item.active {
-  background: #eaf5f3;
-  color: var(--teal);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
   font-weight: 700;
 }
 .nav-item.active::before {
@@ -454,7 +461,7 @@ button:disabled {
   height: 18px;
   left: 0;
   border-radius: 0 4px 4px 0;
-  background: var(--teal);
+  background: var(--accent);
 }
 .nav-count {
   margin-left: auto;
@@ -965,7 +972,7 @@ button:disabled {
   justify-content: center;
   gap: 5px;
   border: 0;
-  color: #36847a;
+  color: var(--accent-deep);
   background: transparent;
   padding: 4px 2px;
   font-size: 9px;
@@ -973,7 +980,7 @@ button:disabled {
   white-space: nowrap;
 }
 .text-button:hover {
-  color: #135f58;
+  color: var(--accent);
 }
 .chart-legend {
   display: flex;
@@ -1265,8 +1272,8 @@ button:disabled {
   background: #eaf5f2;
 }
 .status-pill.info {
-  color: #5d89a0;
-  background: #edf4f7;
+  color: var(--accent-deep);
+  background: var(--accent-soft);
 }
 .status-pill.warning {
   color: #b28a40;
@@ -2987,7 +2994,7 @@ button:disabled {
 }
 .text-input:focus {
   border-color: var(--teal);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 12%, transparent);
 }
 .login-error {
   background: #fef2f2;
@@ -3271,4 +3278,247 @@ button:disabled {
   .question-group-input {
     max-width: none;
   }
+}
+
+/* ============ 主題配色（管理員於系統參數設定，全院統一） ============ */
+/* green-2 雅致綠（雙色）為 :root 預設值，不需覆寫 */
+:root[data-theme="blue-3"] {
+  --teal: #1e6fb8;
+  --teal-deep: #175a95;
+  --teal-soft: #e9f2fb;
+  --accent: #2f9fd8;
+  --accent-deep: #237fae;
+  --accent-soft: #e6f4fc;
+  --accent2: #2f9fd8;
+  --accent2-deep: #237fae;
+  --accent2-soft: #e6f4fc;
+}
+:root[data-theme="teal-orange-3"] {
+  --teal: #0f766e;
+  --teal-deep: #0d625c;
+  --teal-soft: #e9f5f3;
+  --accent: #d97a2b;
+  --accent-deep: #b25f1d;
+  --accent-soft: #fdf0e2;
+  --accent2: #d97a2b;
+  --accent2-deep: #b25f1d;
+  --accent2-soft: #fdf0e2;
+}
+:root[data-theme="purple-4"] {
+  --teal: #6d4fa3;
+  --teal-deep: #573d85;
+  --teal-soft: #f0eaf8;
+  --accent: #0f766e;
+  --accent-deep: #0d625c;
+  --accent-soft: #e9f5f3;
+  --accent2: #c08a2d;
+  --accent2-deep: #9a6e22;
+  --accent2-soft: #faf3e4;
+}
+
+/* ============ 深色模式（個人顯示設定；RAG 燈號色相不變） ============ */
+:root[data-mode="dark"] {
+  --bg: #0e1518;
+  --surface: #152024;
+  --ink: #e3ebee;
+  --muted: #8fa0a8;
+  --line: #243237;
+  color: #e3ebee;
+  background: #0e1518;
+  color-scheme: dark;
+}
+:root[data-mode="dark"] body {
+  background: #0e1518;
+  color: #e3ebee;
+}
+:root[data-mode="dark"] .app-shell {
+  background: var(--bg);
+}
+:root[data-mode="dark"] .sidebar {
+  background: #111a1e;
+  border-right-color: #223036;
+}
+:root[data-mode="dark"] .sidebar-brand b,
+:root[data-mode="dark"] .topbar-crumb b,
+:root[data-mode="dark"] .topbar-user b,
+:root[data-mode="dark"] .profile-info b {
+  color: var(--ink);
+}
+:root[data-mode="dark"] .topbar {
+  background: rgba(17, 26, 30, 0.94);
+  border-bottom-color: #223036;
+}
+:root[data-mode="dark"] .topbar-crumb,
+:root[data-mode="dark"] .nav-group-label {
+  color: var(--muted);
+}
+:root[data-mode="dark"] .panel {
+  background: var(--surface);
+  border-color: #223036;
+  box-shadow: none;
+}
+:root[data-mode="dark"] .nav-item {
+  color: #8fa0a8;
+}
+:root[data-mode="dark"] .nav-item:hover {
+  background: #1a262b;
+  color: #cfd9dd;
+}
+:root[data-mode="dark"] .text-input,
+:root[data-mode="dark"] .select-wrap select,
+:root[data-mode="dark"] textarea.text-input {
+  background: #0e1518;
+  border-color: #2a3a41;
+  color: var(--ink);
+}
+:root[data-mode="dark"] .permission-table th {
+  background: #182528;
+  color: #8fa0a8;
+  border-top-color: #223036;
+  border-bottom-color: #223036;
+}
+:root[data-mode="dark"] .permission-table td {
+  border-bottom-color: #1e2b30;
+  color: var(--ink);
+}
+:root[data-mode="dark"] .button-outline,
+:root[data-mode="dark"] .button-ghost {
+  background: transparent;
+  border-color: #2a3a41;
+}
+:root[data-mode="dark"] .button-outline:hover {
+  background: var(--accent-soft);
+}
+:root[data-mode="dark"] .login-screen {
+  background: #0e1518;
+}
+:root[data-mode="dark"] .login-card {
+  background: rgba(21, 32, 36, 0.96);
+  border-color: #223036;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4);
+}
+:root[data-mode="dark"] .login-card h1,
+:root[data-mode="dark"] .login-brand {
+  color: var(--ink);
+}
+:root[data-mode="dark"] .login-lead,
+:root[data-mode="dark"] .field-label {
+  color: var(--muted);
+}
+/* RAG 燈號：色相不變，深色下略調亮度 */
+:root[data-mode="dark"] .status-pill.success {
+  color: #63b89e;
+  background: rgba(51, 134, 117, 0.22);
+}
+:root[data-mode="dark"] .status-pill.warning {
+  color: #d3a75e;
+  background: rgba(178, 138, 64, 0.22);
+}
+:root[data-mode="dark"] .status-pill.danger {
+  color: #d68d7c;
+  background: rgba(187, 111, 94, 0.22);
+}
+:root[data-mode="dark"] .status-pill.muted {
+  color: #9fb0b5;
+  background: rgba(137, 151, 154, 0.2);
+}
+
+/* ============ 顯示設定彈出面板（頂欄） ============ */
+.display-settings-wrap {
+  position: relative;
+}
+.display-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  width: 240px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--line, #e8edef);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(20, 40, 44, 0.16);
+  padding: 14px 16px 16px;
+  z-index: 60;
+}
+:root[data-mode="dark"] .display-pop {
+  background: #152024;
+  border-color: #2a3a41;
+}
+.display-pop h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--ink, #20313a);
+}
+.display-pop .pop-row-label {
+  font-size: 11px;
+  color: var(--muted, #7c8b92);
+  margin: 10px 0 6px;
+}
+.display-pop .pop-row-label:first-of-type {
+  margin-top: 0;
+}
+.font-size-options {
+  display: flex;
+  gap: 6px;
+}
+.font-size-options button {
+  flex: 1;
+  border: 1px solid var(--line, #e8edef);
+  background: transparent;
+  border-radius: 8px;
+  padding: 7px 0;
+  font-size: 12px;
+  color: var(--muted, #7c8b92);
+}
+.font-size-options button.selected {
+  border-color: var(--teal);
+  color: var(--teal-deep);
+  background: var(--teal-soft);
+  font-weight: 700;
+}
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: 1px solid var(--line, #e8edef);
+  background: transparent;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--ink, #20313a);
+}
+.mode-toggle .toggle-track {
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: #d5dde0;
+  position: relative;
+  transition: background 0.15s;
+  flex: none;
+}
+.mode-toggle .toggle-track::after {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  top: 2px;
+  left: 2px;
+  transition: left 0.15s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.mode-toggle.on .toggle-track {
+  background: var(--teal);
+}
+.mode-toggle.on .toggle-track::after {
+  left: 18px;
+}
+.display-pop-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: transparent;
+  border: 0;
+  cursor: default;
 }

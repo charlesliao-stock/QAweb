@@ -2,18 +2,22 @@ import { useEffect, useState } from "react";
 import {
   ArrowRight,
   Check,
+  ChevronDown,
   Database,
   ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
-import { doc, getDoc } from "../lib/db";
+import { doc, getDoc, serverTimestamp, updateDoc } from "../lib/db";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { isDemoMode } from "../lib/demoMode";
 import { useAuth } from "../lib/auth";
+import { applyTheme } from "../lib/uiPrefs";
 import {
   SYSTEM_PARAM_LABELS,
+  UI_THEMES,
   runSystemSeed,
+  themeName,
   type SystemParams,
 } from "../lib/seed";
 
@@ -59,6 +63,22 @@ function SystemInitSection({ onAction }: { onAction: (message: string) => void }
     }
   }
 
+  async function handleThemeChange(themeId: string) {
+    if (!user) return;
+    try {
+      await updateDoc(doc(getFirebaseDb(), "systemParams", "config"), {
+        uiTheme: themeId,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.staffId,
+      });
+      setParams((prev) => (prev ? { ...prev, uiTheme: themeId } : prev));
+      applyTheme(themeId);
+      onAction(`主題配色已切換為「${themeName(themeId)}」（全院統一）`);
+    } catch {
+      onAction("主題切換失敗：權限不足或網路異常");
+    }
+  }
+
   return (
     <section className="panel data-panel">
       <SectionTitle
@@ -95,12 +115,37 @@ function SystemInitSection({ onAction }: { onAction: (message: string) => void }
       ) : (
         <dl className="param-list">
           {(Object.keys(SYSTEM_PARAM_LABELS) as (keyof SystemParams)[]).map(
-            (key) => (
-              <div key={key} className="param-row">
-                <dt>{SYSTEM_PARAM_LABELS[key]}</dt>
-                <dd>{formatParamValue(params[key])}</dd>
-              </div>
-            ),
+            (key) =>
+              key === "uiTheme" ? (
+                <div key={key} className="param-row">
+                  <dt>{SYSTEM_PARAM_LABELS[key]}</dt>
+                  <dd>
+                    {isAdmin ? (
+                      <div className="select-wrap">
+                        <select
+                          value={params.uiTheme || "green-2"}
+                          onChange={(e) => void handleThemeChange(e.target.value)}
+                          aria-label="主題配色"
+                        >
+                          {UI_THEMES.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={15} />
+                      </div>
+                    ) : (
+                      themeName(params.uiTheme || "green-2")
+                    )}
+                  </dd>
+                </div>
+              ) : (
+                <div key={key} className="param-row">
+                  <dt>{SYSTEM_PARAM_LABELS[key]}</dt>
+                  <dd>{formatParamValue(params[key])}</dd>
+                </div>
+              ),
           )}
         </dl>
       )}

@@ -120,6 +120,20 @@ export interface SystemParams {
   passwordExpiryReminderDays: number;
   /** 一般人員是否可見審查員姓名 */
   showReviewerNameToStaff: boolean;
+  /** 主題配色：green-2／blue-3／teal-orange-3／purple-4（全院統一，管理員設定） */
+  uiTheme: string;
+}
+
+/** 主題配色選項（id 需與 styles.css 的 [data-theme] 對應） */
+export const UI_THEMES: { id: string; name: string }[] = [
+  { id: "green-2", name: "雅致綠（雙色）" },
+  { id: "blue-3", name: "醫療藍（三色）" },
+  { id: "teal-orange-3", name: "青橘（三色）" },
+  { id: "purple-4", name: "沉穩紫（四色）" },
+];
+
+export function themeName(id: string): string {
+  return UI_THEMES.find((t) => t.id === id)?.name ?? id;
 }
 
 /** 系統參數預設值（需求規格書 v2.1） */
@@ -135,6 +149,7 @@ export const DEFAULT_SYSTEM_PARAMS: SystemParams = {
   privacyReminderFrequency: "每次",
   passwordExpiryReminderDays: 7,
   showReviewerNameToStaff: false,
+  uiTheme: "green-2",
 };
 
 export const SYSTEM_PARAM_LABELS: Record<keyof SystemParams, string> = {
@@ -149,6 +164,7 @@ export const SYSTEM_PARAM_LABELS: Record<keyof SystemParams, string> = {
   privacyReminderFrequency: "隱私提醒頻率",
   passwordExpiryReminderDays: "密碼到期前提醒天數",
   showReviewerNameToStaff: "一般人員可見審查員姓名",
+  uiTheme: "主題配色",
 };
 
 /**
