@@ -39,7 +39,13 @@ export interface IndicatorYearSchedule {
   months: number[];
   /** 一次涵蓋幾個月（1-3，顯示用） */
   monthsPerAudit: number;
-  /** 該年度各單位每輪審查件數（v1.10.0 起：件數改在年度排程設定；key＝單位代碼） */
+  /** 該年度審查件數（v1.10.1 起：全單位共用單一值；null＝未設定） */
+  caseCount: number | null;
+  /**
+   * 該年度各單位每輪審查件數（v1.10.0 舊格式；保留欄位供舊資料相容，
+   * v1.10.1 起 UI 與產生任務皆改讀 caseCount，不再寫入此欄）
+   * key＝單位代碼
+   */
   unitCaseCounts: Record<string, number>;
   notes: string;
   updatedAt: unknown;
@@ -59,42 +65,44 @@ export function parseUnitCaseCounts(raw: unknown): Record<string, number> {
 }
 
 /**
- * 年度件數表單初值（字串 map，供數字輸入框用）。
- * 遷移貼心做法：若該年度 unitCaseCounts 為空，但分工表舊資料有 caseCount，
- * 自動帶入作預設值（僅初次開啟時，存檔後即寫入年度設定）。
+ * 防禦性解析單一審查件數（只接受 ≥1 整數，否則 null）。
  */
-export function initialUnitCaseCounts(
-  schedule: { unitCaseCounts?: Record<string, number> } | null | undefined,
-  assignment: { items: AssignmentItem[] } | null | undefined,
-): Record<string, string> {
-  const cur = schedule?.unitCaseCounts;
-  if (cur && Object.keys(cur).length > 0) {
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(cur)) out[k] = String(v);
-    return out;
-  }
-  const out: Record<string, string> = {};
-  assignment?.items.forEach((it) =>
-    it.units.forEach((u) => {
-      if (u.caseCount != null && !(u.unitId in out))
-        out[u.unitId] = String(u.caseCount);
-    }),
-  );
-  return out;
+export function parseCaseCount(raw: unknown): number | null {
+  return typeof raw === "number" && Number.isInteger(raw) && raw >= 1
+    ? raw
+    : null;
 }
 
 /**
- * 表單字串 map → 儲存用數字 map（只保留 ≥1 整數；空白或非法即省略）。
+ * 年度件數表單初值（字串，供數字輸入框用）。
+ * 遷移順序：caseCount → 舊 unitCaseCounts 第一個值 → 分工表舊 caseCount 第一個值 → ""。
+ * （v1.10.0 的每單位表格是過度設計；使用者確認全單位件數相同，v1.10.1 起改單一值。）
  */
-export function toUnitCaseCounts(
-  raw: Record<string, string>,
-): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const [k, v] of Object.entries(raw)) {
-    const t = (v ?? "").trim();
-    if (t !== "" && /^\d+$/.test(t) && Number(t) >= 1) out[k] = Number(t);
+export function initialCaseCount(
+  schedule:
+    | {
+        caseCount?: number | null;
+        unitCaseCounts?: Record<string, number>;
+      }
+    | null
+    | undefined,
+  assignment: { items: AssignmentItem[] } | null | undefined,
+): string {
+  if (schedule?.caseCount != null && schedule.caseCount >= 1)
+    return String(schedule.caseCount);
+  const ucc = schedule?.unitCaseCounts;
+  if (ucc) {
+    const first = Object.values(ucc).find(
+      (v) => typeof v === "number" && Number.isInteger(v) && v >= 1,
+    );
+    if (first != null) return String(first);
   }
-  return out;
+  for (const it of assignment?.items ?? []) {
+    for (const u of it.units) {
+      if (u.caseCount != null) return String(u.caseCount);
+    }
+  }
+  return "";
 }
 
 /** 分工表：一位審查員負責的單位＋每輪審查件數（v1.9.0） */
@@ -159,7 +167,7 @@ export interface ReviewTask {
   month: number;
   unitId: string;
   reviewerId: string;
-  /** 每輪審查件數（產生時自該年度 unitCaseCounts 快照；null＝未設定） */
+  /** 每輪審查件數（產生時自該年度單一 caseCount 快照；null＝未設定） */
   caseCount: number | null;
   /** 截止日 YYYY-MM-DD（審查月份次月＋系統參數「補審截止（次月幾日）」） */
   deadline: string;
@@ -239,8 +247,8 @@ export interface GenerateInput {
   year: number;
   months: number[];
   items: AssignmentItem[];
-  /** 該年度各單位每輪審查件數（v1.10.0；key＝單位代碼） */
-  unitCaseCounts?: Record<string, number>;
+  /** 該年度審查件數（v1.10.1 起單一值，全單位共用；null＝未設定） */
+  caseCount?: number | null;
   /** 系統參數「補審截止（次月幾日）」 */
   deadlineDay: number;
 }
@@ -248,7 +256,9 @@ export interface GenerateInput {
 /**
  * 展開全年審查任務（純函式，可單元測試）。
  * 每（月份 × 審查員 × 單位）一筆，截止日＝次月 deadlineDay 日，
- * 件數取自該年度 unitCaseCounts（未設則 null；不再讀分工表 caseCount）。
+ * 件數為該年度單一值快照（未設則 null）。
+ * 注意：重建時已完成（done）的任務由呼叫端保留（不得刪除或覆寫），
+ * 此處只負責產生新任務；只有 pending 任務會被刪除重建。
  */
 export function buildReviewTasks(
   input: GenerateInput,
@@ -263,7 +273,7 @@ export function buildReviewTasks(
           month,
           unitId: u.unitId,
           reviewerId: it.reviewerId,
-          caseCount: input.unitCaseCounts?.[u.unitId] ?? null,
+          caseCount: input.caseCount ?? null,
           deadline: deadlineFor(input.year, month, input.deadlineDay),
           status: "pending",
         });
@@ -273,11 +283,10 @@ export function buildReviewTasks(
   return tasks;
 }
 
-/** 預估全年總件數：月份數 × 各單位件數合計（未設定不計） */
+/** 預估全年總件數：任務筆數 × 單一審查件數（未設定則 0） */
 export function estimateTotalCases(
-  months: number[],
-  unitCaseCounts: Record<string, number>,
+  taskCount: number,
+  caseCount: number | null,
 ): number {
-  const perRound = Object.values(unitCaseCounts).reduce((n, v) => n + v, 0);
-  return months.length * perRound;
+  return caseCount != null ? taskCount * caseCount : 0;
 }

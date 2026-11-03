@@ -34,10 +34,10 @@ import {
   estimateTaskCount,
   estimateTotalCases,
   findDuplicateUnits,
-  initialUnitCaseCounts,
+  initialCaseCount,
   normalizeAssignmentItem,
+  parseCaseCount,
   parseUnitCaseCounts,
-  toUnitCaseCounts,
   yearScheduleDocId,
   type AssignmentItem,
   type IndicatorAssignment,
@@ -154,6 +154,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
           monthsPerAudit:
             typeof data.monthsPerAudit === "number" ? data.monthsPerAudit : 1,
           unitCaseCounts: parseUnitCaseCounts(data.unitCaseCounts),
+          caseCount: parseCaseCount(data.caseCount),
           notes: typeof data.notes === "string" ? data.notes : "",
           updatedAt: data.updatedAt,
         };
@@ -525,8 +526,6 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               indicatorId={indicator.id}
               schedules={yearSchedules.get(indicator.id) ?? []}
               assignment={assignments.get(indicator.id) ?? null}
-              units={units}
-              groupMap={groupMap}
               canEdit={canEdit}
               onAction={onAction}
               onSaved={backToList}
@@ -569,8 +568,6 @@ function YearScheduleEditor({
   indicatorId,
   schedules,
   assignment,
-  units,
-  groupMap,
   canEdit,
   onAction,
   onSaved,
@@ -578,10 +575,8 @@ function YearScheduleEditor({
 }: {
   indicatorId: string;
   schedules: IndicatorYearSchedule[];
-  /** 該指標分工表（取單位清單＋遷移預設件數用；可為 null） */
+  /** 該指標分工表（遷移舊件數預設值用；可為 null） */
   assignment: IndicatorAssignment | null;
-  units: UnitLite[];
-  groupMap: Map<string, string>;
   canEdit: boolean;
   onAction: (m: string) => void;
   onSaved: () => void;
@@ -601,48 +596,11 @@ function YearScheduleEditor({
     current?.monthsPerAudit ?? 1,
   );
   const [notes, setNotes] = useState(current?.notes ?? "");
-  /** 各單位審查件數（字串 map；v1.10.0 起在年度設定；初次開啟自動帶入分工表舊值） */
-  const [caseCounts, setCaseCounts] = useState<Record<string, string>>(() =>
-    initialUnitCaseCounts(current, assignment),
+  /** 審查件數（單一值，適用該年度所有單位；v1.10.1 起；初次開啟自動帶入舊值） */
+  const [caseCount, setCaseCount] = useState<string>(() =>
+    initialCaseCount(current, assignment),
   );
   const [saving, setSaving] = useState(false);
-
-  /** 分工表中的單位（去重，依群組分組顯示） */
-  const assignUnits = useMemo(() => {
-    const seen = new Set<string>();
-    const list: UnitLite[] = [];
-    (assignment?.items ?? []).forEach((it) =>
-      it.units.forEach((u) => {
-        if (seen.has(u.unitId)) return;
-        seen.add(u.unitId);
-        const info = units.find((x) => x.code === u.unitId);
-        list.push(
-          info ?? { code: u.unitId, name: u.unitId, groupId: "" },
-        );
-      }),
-    );
-    list.sort((a, b) =>
-      (groupMap.get(a.groupId) ?? "").localeCompare(
-        groupMap.get(b.groupId) ?? "",
-        "zh-Hant",
-      ) ||
-      a.name.localeCompare(b.name, "zh-Hant")
-    );
-    return list;
-  }, [assignment, units, groupMap]);
-
-  const assignUnitsByGroup = useMemo(() => {
-    const map = new Map<string, UnitLite[]>();
-    assignUnits.forEach((u) => {
-      const arr = map.get(u.groupId) ?? [];
-      arr.push(u);
-      map.set(u.groupId, arr);
-    });
-    return map;
-  }, [assignUnits]);
-
-  const unitName = (code: string) =>
-    units.find((u) => u.code === code)?.name ?? code;
 
   function selectYear(y: number) {
     setYear(y);
@@ -650,7 +608,7 @@ function YearScheduleEditor({
     setMonths(s?.months ?? []);
     setMonthsPerAudit(s?.monthsPerAudit ?? 1);
     setNotes(s?.notes ?? "");
-    setCaseCounts(initialUnitCaseCounts(s, assignment));
+    setCaseCount(initialCaseCount(s, assignment));
   }
 
   function toggleMonth(m: number) {
@@ -666,10 +624,10 @@ function YearScheduleEditor({
   }
 
   /** 件數輸入（僅接受 ≥1 整數或清空＝未設定） */
-  function setCaseCount(code: string, raw: string) {
+  function onCaseCountInput(raw: string) {
     const t = raw.trim();
     if (t !== "" && (!/^\d+$/.test(t) || Number(t) < 1)) return;
-    setCaseCounts((prev) => ({ ...prev, [code]: t }));
+    setCaseCount(t);
   }
 
   async function handleSave() {
@@ -687,7 +645,9 @@ function YearScheduleEditor({
           year,
           months: [...months].sort((a, b) => a - b),
           monthsPerAudit,
-          unitCaseCounts: toUnitCaseCounts(caseCounts),
+          caseCount: parseCaseCount(caseCount),
+          // v1.10.0 舊欄位保留不刪除（舊資料相容）；v1.10.1 起不再寫入新值
+          unitCaseCounts: current?.unitCaseCounts ?? {},
           notes: notes.trim(),
           updatedAt: serverTimestamp(),
         },
@@ -854,52 +814,22 @@ function YearScheduleEditor({
 
       <div className="form-field">
         <label className="field-label">
-          各單位審查件數
-          <span className="muted-text">
-            （該年度每輪各單位的審查件數；留白＝未設定）
-          </span>
+          審查件數
+          <span className="muted-text">（適用該年度所有單位；留白＝未設定）</span>
         </label>
-        {assignUnits.length === 0 ? (
-          <div className="dup-note">
-            <CircleAlert size={14} />{" "}
-            尚未設定單位／審查員，請先完成分工表再設定件數。
-            {canEdit && (
-              <button
-                className="text-button"
-                style={{ marginLeft: 8 }}
-                onClick={onGoAssignment}
-              >
-                前往設定 →
-              </button>
-            )}
-          </div>
-        ) : (
-          [...assignUnitsByGroup.entries()].map(([gid, list]) => (
-            <div key={gid} className="unit-group-block">
-              <b className="muted-text">{groupMap.get(gid) ?? gid}</b>
-              <div className="case-count-list">
-                {list.map((u) => (
-                  <label key={u.code} className="case-count-row">
-                    <span>{u.name}</span>
-                    <span className="case-count-field">
-                      <input
-                        type="number"
-                        min={1}
-                        step={1}
-                        value={caseCounts[u.code] ?? ""}
-                        placeholder="未設定"
-                        disabled={!canEdit}
-                        onChange={(e) => setCaseCount(u.code, e.target.value)}
-                        aria-label={`${unitName(u.code)}審查件數`}
-                      />
-                      件
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          ))
-        )}
+        <span className="case-count-field">
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={caseCount}
+            placeholder="未設定"
+            disabled={!canEdit}
+            onChange={(e) => onCaseCountInput(e.target.value)}
+            aria-label="審查件數"
+          />
+          件
+        </span>
       </div>
 
       <div className="form-field">
@@ -1356,7 +1286,7 @@ function GeneratePanel({
     }
     if ((existingPending ?? 0) + (existingDone ?? 0) > 0) {
       const ok = window.confirm(
-        `${indicatorId} ${year} 年已有 ${existingPending ?? 0} 筆未執行、${existingDone ?? 0} 筆已完成任務。產生排程將刪除未執行的任務後重建，已完成的會保留，確定嗎？`,
+        `${indicatorId} ${year} 年已有 ${existingPending ?? 0} 筆未執行、${existingDone ?? 0} 筆已完成任務。產生排程將刪除未執行的任務後重建；已完成的月份不會被修改（含當初的審查件數），確定嗎？`,
       );
       if (!ok) return;
     }
@@ -1403,7 +1333,7 @@ function GeneratePanel({
         year,
         months: schedule.months,
         items,
-        unitCaseCounts: schedule.unitCaseCounts ?? {},
+        caseCount: schedule.caseCount ?? null,
         deadlineDay,
       });
       newTasks.forEach((t) => {
@@ -1485,13 +1415,16 @@ function GeneratePanel({
           <div className="form-field">
             <label className="field-label">合計審查件數</label>
             <p>
-              <b>
-                {estimateTotalCases(
-                  schedule.months,
-                  schedule.unitCaseCounts ?? {},
-                )}
-              </b>{" "}
-              件<span className="muted-text">（未設定件數的單位不計）</span>
+              {schedule.caseCount != null ? (
+                <>
+                  <b>{estimateTotalCases(taskCount, schedule.caseCount)}</b> 件
+                  <span className="muted-text">
+                    （{schedule.caseCount} 件 × {taskCount} 筆任務）
+                  </span>
+                </>
+              ) : (
+                <span className="muted-text">未設定審查件數</span>
+              )}
             </p>
           </div>
           {(existingPending ?? 0) + (existingDone ?? 0) > 0 && (
