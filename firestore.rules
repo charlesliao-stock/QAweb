@@ -1,0 +1,97 @@
+rules_version = '2';
+// 護理品質指標管理系統 — Firestore Security Rules（草案 v1.0，對應需求規格書 v2.1）
+// 權限以後端自訂 claims 判斷：request.auth.token.roles（陣列）、request.auth.token.scopes（陣列）
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuth() { return request.auth != null; }
+    function roles() { return isAuth() && 'roles' in request.auth.token ? request.auth.token.roles : []; }
+    function scopes() { return isAuth() && 'scopes' in request.auth.token ? request.auth.token.scopes : []; }
+    function hasRole(r) { return r in roles(); }
+    function isAdmin() { return hasRole('sysadmin'); }
+    function isGanShi() { return hasRole('ganshi') || isAdmin(); }
+    function isSupervisor() { return hasRole('supervisor') || isGanShi(); }
+    function canAll() { return 'all' in scopes() || isAdmin() || isGanShi(); }
+    function canUnit(u) { return canAll() || ('unit:' + u) in scopes(); }
+
+    // 人員主檔：本人可讀自己的；幹事/督導/管理員依範圍
+    match /users/{id} {
+      allow read: if isAuth() && (request.auth.uid == id || isSupervisor());
+      allow write: if isAdmin();
+    }
+
+    // 單位：登入者可讀；維護限管理員
+    match /units/{id} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // 角色定義：登入者可讀；維護限管理員（動態建角色不需改程式）
+    match /roles/{id} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // 指標：登入者可讀（10 steps＋審核表唯讀開放）；建立/修改走送審，限負責人（組內）／幹事／管理員
+    match /indicators/{id} {
+      allow read: if isAuth();
+      allow create, update: if isGanShi() || hasRole('indicatorOwner');
+      allow delete: if false; // 不得刪除，停用走廢止流程
+      match /versions/{v} {
+        allow read: if isAuth();
+        allow write: if isGanShi() || hasRole('indicatorOwner');
+      }
+    }
+
+    // 排程：建立/改派/加派限幹事與管理員；讀取依範圍
+    match /schedules/{id} {
+      allow read: if isAuth() && (canAll() || canUnit(resource.data.unitCode) || request.auth.uid == resource.data.reviewerId);
+      allow create, update: if isGanShi();
+      allow delete: if false;
+    }
+
+    // 審查紀錄：審查員可寫自己的；讀取依範圍；照片 ref 隨文件權限
+    match /reviews/{id} {
+      allow read: if isAuth() && (canAll() || canUnit(resource.data.unitCode)
+                  || request.auth.uid == resource.data.reviewerId
+                  || request.auth.uid == resource.data.revieweeId);
+      allow create: if isAuth() && hasRole('reviewer');
+      allow update: if isAuth() && (request.auth.uid == resource.data.reviewerId || isGanShi());
+      allow delete: if false;
+    }
+
+    // CAPA：填寫人/護理長/督導/幹事依範圍
+    match /capa/{id} {
+      allow read: if isAuth() && (canAll() || canUnit(resource.data.unitCode));
+      allow create: if isAuth() && (hasRole('headNurse') || isSupervisor());
+      allow update: if isAuth() && (canAll() || canUnit(resource.data.unitCode));
+      allow delete: if false;
+    }
+
+    // 指引文件庫：登入者可讀；上傳限幹事/管理員/負責人
+    match /guidelineDocs/{id} {
+      allow read: if isAuth();
+      allow write: if isGanShi() || hasRole('indicatorOwner');
+    }
+
+    // 報表範本：擁有者可寫；讀取依範圍
+    match /reportTemplates/{id} {
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && request.auth.uid == resource.data.ownerId;
+    }
+
+    // 系統參數：讀取登入者可；寫入限管理員
+    match /systemParams/{id} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // 稽核軌跡：僅寫入（Functions/後端）、讀取限管理員（預設）
+    match /auditLogs/{id} {
+      allow read: if isAdmin();
+      allow create: if isAuth();
+      allow update, delete: if false;
+    }
+  }
+}
