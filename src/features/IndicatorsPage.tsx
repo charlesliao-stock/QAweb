@@ -62,6 +62,9 @@ const QUESTION_OPTION_LABELS: Record<OptionSet, string> = {
   "yes-no": "是／否",
 };
 
+/** 指標表單的三個頁籤：基本資料 / 10 Steps / 審核表 */
+type FormTab = "basic" | "steps" | "audit";
+
 interface StaffOption {
   staffId: string;
   name: string;
@@ -137,6 +140,7 @@ export function IndicatorsPage({
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState<IndicatorForm>(emptyForm);
   const [formError, setFormError] = useState("");
+  const [formTab, setFormTab] = useState<FormTab>("basic");
   const [saving, setSaving] = useState(false);
   const [hasReviewData, setHasReviewData] = useState(false);
   const [versions, setVersions] = useState<VersionRow[]>([]);
@@ -249,6 +253,7 @@ export function IndicatorsPage({
   async function openCreate() {
     setForm(emptyForm());
     setFormError("");
+    setFormTab("basic");
     setHasReviewData(false);
     setVersions([]);
     setView({ kind: "create" });
@@ -256,6 +261,7 @@ export function IndicatorsPage({
 
   async function openEdit(code: string) {
     setFormError("");
+    setFormTab("basic");
     try {
       const snap = await getDoc(doc(getFirebaseDb(), "indicators", code));
       if (!snap.exists()) {
@@ -478,28 +484,40 @@ export function IndicatorsPage({
     );
   }
 
-  function validate(): string {
-    if (!form.groupId) return "請選擇分類組別";
-    if (view.kind === "create" && !form.code.trim()) return "請填寫指標編號";
-    if (!form.name.trim()) return "請填寫指標名稱";
-    if (form.owners.length === 0) return "請選擇至少一位負責人";
+  /** 驗證表單：回傳錯誤訊息與錯誤欄位所在的頁籤（成功時訊息為空）。 */
+  function validate(): { message: string; tab: FormTab | null } {
+    if (!form.groupId) return { message: "請選擇分類組別", tab: "basic" };
+    if (view.kind === "create" && !form.code.trim())
+      return { message: "請填寫指標編號", tab: "basic" };
+    if (!form.name.trim()) return { message: "請填寫指標名稱", tab: "basic" };
+    if (form.owners.length === 0)
+      return { message: "請選擇至少一位負責人", tab: "basic" };
     const thresholds = activeThresholds();
-    if (thresholds.length === 0) return "請至少新增一筆閾值";
+    if (thresholds.length === 0)
+      return { message: "請至少新增一筆閾值", tab: "steps" };
     for (const [i, t] of thresholds.entries()) {
-      if (!t.name.trim()) return `第 ${i + 1} 筆閾值請填寫名稱`;
+      if (!t.name.trim())
+        return { message: `第 ${i + 1} 筆閾值請填寫名稱`, tab: "steps" };
       if (!Number.isFinite(t.value) || t.value < 0 || t.value > 100)
-        return `第 ${i + 1} 筆閾值須為 0～100 的數字（代表百分比）`;
+        return {
+          message: `第 ${i + 1} 筆閾值須為 0～100 的數字（代表百分比）`,
+          tab: "steps",
+        };
     }
     for (const [i, q] of form.questions.entries()) {
-      if (!q.text.trim()) return `第 ${i + 1} 題尚未填寫題目文字`;
+      if (!q.text.trim())
+        return { message: `第 ${i + 1} 題尚未填寫題目文字`, tab: "audit" };
     }
-    return "";
+    return { message: "", tab: null };
   }
 
   async function handleSave() {
-    const message = validate();
-    if (message) {
-      showFormError(message);
+    const validation = validate();
+    if (validation.message) {
+      // 錯誤欄位若不在目前頁籤，先自動切到該頁籤再顯示錯誤
+      if (validation.tab && validation.tab !== formTab)
+        setFormTab(validation.tab);
+      showFormError(validation.message);
       return;
     }
     if (!user) {
@@ -569,6 +587,7 @@ export function IndicatorsPage({
         const ref = doc(db, "indicators", code);
         const exists = await getDoc(ref);
         if (exists.exists()) {
+          setFormTab("basic");
           showFormError(`指標編號 ${code} 已存在`);
           setSaving(false);
           return;
@@ -804,8 +823,34 @@ export function IndicatorsPage({
             </div>
           )}
 
-          <SectionTitle title="基本資料" />
-          <div className="form-grid">
+          <div className="tabs" style={{ marginBottom: 12 }}>
+            <button
+              type="button"
+              className={`tab${formTab === "basic" ? " active" : ""}`}
+              onClick={() => setFormTab("basic")}
+            >
+              指標基本資料
+            </button>
+            <button
+              type="button"
+              className={`tab${formTab === "steps" ? " active" : ""}`}
+              onClick={() => setFormTab("steps")}
+            >
+              10 Steps
+            </button>
+            <button
+              type="button"
+              className={`tab${formTab === "audit" ? " active" : ""}`}
+              onClick={() => setFormTab("audit")}
+            >
+              審核表
+            </button>
+          </div>
+
+          {formTab === "basic" && (
+            <>
+              <SectionTitle title="基本資料" />
+              <div className="form-grid">
             <div className="form-field">
               <label className="field-label">分類組別 *</label>
               <div className="select-wrap">
@@ -907,8 +952,11 @@ export function IndicatorsPage({
               </div>
             </div>
           </div>
+          </>)}
 
-          <SectionTitle title="10 steps" note="全院統一標題" />
+          {formTab === "steps" && (
+            <>
+              <SectionTitle title="10 steps" note="全院統一標題" />
           {(
             [
               ["step1", 1],
@@ -1141,9 +1189,12 @@ export function IndicatorsPage({
               />
             </div>
           ))}
+          </>)}
 
-          <SectionTitle
-            title="審核表題目"
+          {formTab === "audit" && (
+            <>
+              <SectionTitle
+                title="審核表題目"
             note="每題含題目、選項組合與審核指引（審查員填寫時的判斷依據）"
             action={
               <button className="text-button" onClick={addQuestion}>
@@ -1239,6 +1290,9 @@ export function IndicatorsPage({
                   </tbody>
                 </table>
               </div>
+            </>
+          )}
+
             </>
           )}
 
