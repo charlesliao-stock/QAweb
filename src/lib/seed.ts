@@ -126,10 +126,10 @@ export interface SystemParams {
 
 /** 主題配色選項（id 需與 styles.css 的 [data-theme] 對應） */
 export const UI_THEMES: { id: string; name: string }[] = [
-  { id: "green-2", name: "雅致綠（雙色）" },
-  { id: "blue-3", name: "醫療藍（三色）" },
-  { id: "teal-orange-3", name: "青橘（三色）" },
-  { id: "purple-4", name: "沉穩紫（四色）" },
+  { id: "green-2", name: "雅致綠" },
+  { id: "blue-3", name: "醫療藍" },
+  { id: "teal-orange-3", name: "青橘" },
+  { id: "purple-4", name: "沉穩紫" },
 ];
 
 export function themeName(id: string): string {

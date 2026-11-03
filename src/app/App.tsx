@@ -36,6 +36,7 @@ import {
   type FontSizeOption,
 } from "../lib/uiPrefs";
 import { BrandMark, PAGE_COPY } from "../components/ui";
+import { VERSION_LABEL } from "../version";
 import { AdminPage } from "../features/AdminPage";
 import { AuditPage } from "../features/AuditPage";
 import { CapaPage } from "../features/CapaPage";
@@ -226,6 +227,7 @@ function LoginScreen() {
             <div className="login-foot">
               <LockKeyhole size={13} /> 連續錯誤 5 次將鎖定 15 分鐘
             </div>
+            <div className="login-version">{VERSION_LABEL}</div>
             <div className="login-demo-hint">
               展示帳號：demo／demo（展示模式，操作不會寫入資料庫）
             </div>
@@ -349,6 +351,9 @@ function Sidebar({
             >
               <LogOut size={16} />
             </button>
+          </div>
+          <div className="sidebar-version" title="系統版本">
+            {VERSION_LABEL}
           </div>
         </div>
       </aside>

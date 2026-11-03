@@ -91,7 +91,7 @@ function SystemInitSection({ onAction }: { onAction: (message: string) => void }
   }
 
   return (
-    <section className="panel data-panel" id="system-init">
+    <section className="panel" id="system-init">
       <SectionTitle
         title="系統初始化"
         note={
