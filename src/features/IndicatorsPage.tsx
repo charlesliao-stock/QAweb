@@ -20,6 +20,7 @@ import { maskName } from "../lib/mask";
 import { logAudit } from "../lib/audit";
 import {
   TEN_STEP_TITLES,
+  alignThresholds,
   emptyAuditQuestion,
   emptyTenSteps,
   mergeQuestionGroups,
@@ -105,7 +106,8 @@ interface IndicatorForm {
 
 function emptyForm(): IndicatorForm {
   const steps = emptyTenSteps();
-  steps.step5.thresholds = [{ name: "主閾值", value: NaN }];
+  // 閾值與步驟四「指標」一一對應：無指標時無閾值列，新增指標時同步產生
+  steps.step5.thresholds = [];
   return {
     groupId: "",
     code: "",
@@ -275,11 +277,17 @@ export function IndicatorsPage({
       const data = snap.data();
       const steps = normalizeTenSteps(data.tenSteps, data.steps);
       if (
+        steps.step4.subIndicators.length > 0 &&
         steps.step5.thresholds.length === 0 &&
         typeof data.threshold === "number"
       ) {
         steps.step5.thresholds = [{ name: "主閾值", value: data.threshold }];
       }
+      // 閾值與步驟四「指標」一一對應：多退少補（保留既有值）
+      steps.step5.thresholds = alignThresholds(
+        steps.step5.thresholds,
+        steps.step4.subIndicators.length,
+      );
       let groupId = typeof data.groupId === "string" ? data.groupId : "";
       if (!groupId && typeof data.group === "string" && data.group) {
         const found = [...groupMap.entries()].find(
@@ -710,7 +718,7 @@ export function IndicatorsPage({
     );
   }
 
-  // ---- 子指標 / 閾值 ----
+  // ---- 步驟四「指標」 / 步驟五「閾值」（兩者一一對應、同步增刪） ----
   function addSubIndicator() {
     setForm((prev) => ({
       ...prev,
@@ -721,6 +729,13 @@ export function IndicatorsPage({
           subIndicators: [
             ...prev.steps.step4.subIndicators,
             { name: "", numerator: "", denominator: "" },
+          ],
+        },
+        step5: {
+          ...prev.steps.step5,
+          thresholds: [
+            ...prev.steps.step5.thresholds,
+            { name: "", value: NaN },
           ],
         },
       },
@@ -753,20 +768,11 @@ export function IndicatorsPage({
             (_, i) => i !== index,
           ),
         },
-      },
-    }));
-  }
-
-  function addThreshold() {
-    setForm((prev) => ({
-      ...prev,
-      steps: {
-        ...prev.steps,
         step5: {
-          thresholds: [
-            ...prev.steps.step5.thresholds,
-            { name: "", value: NaN },
-          ],
+          ...prev.steps.step5,
+          thresholds: prev.steps.step5.thresholds.filter(
+            (_, i) => i !== index,
+          ),
         },
       },
     }));
@@ -786,24 +792,6 @@ export function IndicatorsPage({
     }));
   }
 
-  function removeThreshold(index: number) {
-    setForm((prev) => ({
-      ...prev,
-      steps: {
-        ...prev.steps,
-        step5: {
-          thresholds: prev.steps.step5.thresholds.filter((_, i) => i !== index),
-        },
-      },
-    }));
-  }
-
-  function activeThresholds(): NamedThreshold[] {
-    return form.steps.step5.thresholds.filter(
-      (t) => t.name.trim() !== "" || Number.isFinite(t.value),
-    );
-  }
-
   /** 驗證表單：回傳錯誤訊息與錯誤欄位所在的頁籤（成功時訊息為空）。 */
   function validate(): { message: string; tab: FormTab | null } {
     if (!form.groupId) return { message: "請選擇分類組別", tab: "basic" };
@@ -812,15 +800,14 @@ export function IndicatorsPage({
     if (!form.name.trim()) return { message: "請填寫指標名稱", tab: "basic" };
     if (form.owners.length === 0)
       return { message: "請選擇至少一位負責人", tab: "basic" };
-    const thresholds = activeThresholds();
-    if (thresholds.length === 0)
-      return { message: "請至少新增一筆閾值", tab: "steps" };
-    for (const [i, t] of thresholds.entries()) {
-      if (!t.name.trim())
-        return { message: `第 ${i + 1} 筆閾值請填寫名稱`, tab: "steps" };
-      if (!Number.isFinite(t.value) || t.value < 0 || t.value > 100)
+    const nIndicators = form.steps.step4.subIndicators.length;
+    if (nIndicators === 0)
+      return { message: "請在步驟四「指標」至少新增一支指標", tab: "steps" };
+    for (let i = 0; i < nIndicators; i++) {
+      const v = form.steps.step5.thresholds[i]?.value;
+      if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 100)
         return {
-          message: `第 ${i + 1} 筆閾值須為 0～100 的數字（代表百分比）`,
+          message: `指標 ${i + 1} 的閾值須為 0～100 的數字（代表百分比）`,
           tab: "steps",
         };
     }
@@ -866,9 +853,10 @@ export function IndicatorsPage({
     setSaving(true);
     try {
       const db = getFirebaseDb();
-      const thresholds = activeThresholds().map((t) => ({
-        name: t.name.trim(),
-        value: t.value,
+      // 閾值與步驟四「指標」一一對應：名稱取自指標名稱（驗證已確保每列皆為 0～100 的數字）
+      const thresholds = form.steps.step4.subIndicators.map((s, i) => ({
+        name: s.name.trim(),
+        value: form.steps.step5.thresholds[i]?.value ?? NaN,
       }));
       const steps: TenSteps = {
         step1: form.steps.step1.trim(),
@@ -1350,7 +1338,7 @@ export function IndicatorsPage({
           <div className="sub-block">
             <SectionTitle
               title="指標"
-              note="可自行新增；公式預覽為「分子／分母 ×100%」"
+              note="可自行新增；每支指標自動編號，公式呈現為「分子／分母 ×100%」"
               action={
                 <button className="text-button" onClick={addSubIndicator}>
                   <Plus size={14} /> 新增指標
@@ -1361,30 +1349,15 @@ export function IndicatorsPage({
               <p className="settings-note">尚未新增指標。</p>
             ) : (
               form.steps.step4.subIndicators.map((s, i) => (
-                <div key={i}>
-                  <div className="sub-indicator-row">
+                <div key={i} className="indicator-card">
+                  <div className="indicator-head">
+                    <span className="indicator-num">{i + 1}</span>
                     <input
                       className="text-input"
                       value={s.name}
                       placeholder="指標名稱"
                       onChange={(e) =>
                         updateSubIndicator(i, { name: e.target.value })
-                      }
-                    />
-                    <input
-                      className="text-input"
-                      value={s.numerator}
-                      placeholder="分子（自由輸入）"
-                      onChange={(e) =>
-                        updateSubIndicator(i, { numerator: e.target.value })
-                      }
-                    />
-                    <input
-                      className="text-input"
-                      value={s.denominator}
-                      placeholder="分母（自由輸入）"
-                      onChange={(e) =>
-                        updateSubIndicator(i, { denominator: e.target.value })
                       }
                     />
                     <button
@@ -1395,12 +1368,31 @@ export function IndicatorsPage({
                       <X size={15} />
                     </button>
                   </div>
-                  <div className="formula-preview">
-                    {s.name.trim() || `指標 ${i + 1}`}：
-                    <b>
-                      {s.numerator.trim() || "分子"}／
-                      {s.denominator.trim() || "分母"} ×100%
-                    </b>
+                  <div className="indicator-formula">
+                    <div className="fraction">
+                      <input
+                        className="text-input fraction-input"
+                        value={s.numerator}
+                        placeholder="分子（自由輸入）"
+                        onChange={(e) =>
+                          updateSubIndicator(i, {
+                            numerator: e.target.value,
+                          })
+                        }
+                      />
+                      <div className="fraction-bar" aria-hidden="true" />
+                      <input
+                        className="text-input fraction-input"
+                        value={s.denominator}
+                        placeholder="分母（自由輸入）"
+                        onChange={(e) =>
+                          updateSubIndicator(i, {
+                            denominator: e.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                    <span className="fraction-times">×100%</span>
                   </div>
                 </div>
               ))
@@ -1409,58 +1401,59 @@ export function IndicatorsPage({
 
           <SectionTitle
             title={`5. ${TEN_STEP_TITLES[4]}（閾值）`}
-            note="至少一筆；第一筆為主閾值，用於達標判斷"
-            action={
-              <button className="text-button" onClick={addThreshold}>
-                <Plus size={14} /> 新增閾值
-              </button>
-            }
+            note="每支指標一列、自動編號（與步驟四對應）；第一筆為主閾值，用於達標判斷"
           />
-          {form.steps.step5.thresholds.map((t, i) => (
-            <div key={i}>
-              <div className="threshold-row">
-                <input
-                  className="text-input"
-                  value={t.name}
-                  placeholder={i === 0 ? "主閾值名稱" : "閾值名稱"}
-                  onChange={(e) => updateThreshold(i, { name: e.target.value })}
-                />
-                <input
-                  className="text-input"
-                  type="number"
-                  min={0}
-                  max={100}
-                  placeholder="0～100"
-                  value={Number.isFinite(t.value) ? String(t.value) : ""}
-                  onChange={(e) =>
-                    updateThreshold(i, {
-                      value:
-                        e.target.value === "" ? NaN : Number(e.target.value),
-                    })
-                  }
-                />
-                <button
-                  className="icon-button"
-                  aria-label="刪除閾值"
-                  onClick={() => removeThreshold(i)}
-                >
-                  <X size={15} />
-                </button>
-              </div>
-              {i === 0 && (
-                <span className="main-threshold-tag">
-                  主閾值，用於達標判斷
-                </span>
-              )}
-            </div>
-          ))}
+          {form.steps.step4.subIndicators.length === 0 ? (
+            <p className="settings-note">
+              請先在步驟四新增指標，閾值會依指標自動產生對應列。
+            </p>
+          ) : (
+            form.steps.step4.subIndicators.map((s, i) => {
+              const v = form.steps.step5.thresholds[i]?.value;
+              return (
+                <div key={i}>
+                  <div className="threshold-row">
+                    <span className="threshold-num">{i + 1}</span>
+                    <span className="threshold-name">
+                      {s.name.trim() || `指標 ${i + 1}`}
+                    </span>
+                    <input
+                      className="text-input"
+                      type="number"
+                      min={0}
+                      max={100}
+                      placeholder="0～100"
+                      value={
+                        typeof v === "number" && Number.isFinite(v)
+                          ? String(v)
+                          : ""
+                      }
+                      onChange={(e) =>
+                        updateThreshold(i, {
+                          value:
+                            e.target.value === ""
+                              ? NaN
+                              : Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                  {i === 0 && (
+                    <span className="main-threshold-tag">
+                      主閾值，用於達標判斷
+                    </span>
+                  )}
+                </div>
+              );
+            })
+          )}
 
           <div className="form-field" style={{ marginTop: 14 }}>
             <label className="field-label">6. {TEN_STEP_TITLES[5]}（資料收集）</label>
           </div>
-          <div className="form-grid">
+          <div className="form-stack">
             <div className="form-field">
-              <label className="field-label">個案數</label>
+              <label className="field-label">1.個案數</label>
               <input
                 className="text-input"
                 value={form.steps.step6.caseCount}
@@ -1476,7 +1469,7 @@ export function IndicatorsPage({
               />
             </div>
             <div className="form-field">
-              <label className="field-label">審核人員</label>
+              <label className="field-label">2.審核人員</label>
               <input
                 className="text-input"
                 value={form.steps.step6.auditors}
@@ -1492,7 +1485,7 @@ export function IndicatorsPage({
               />
             </div>
             <div className="form-field">
-              <label className="field-label">審核日期</label>
+              <label className="field-label">3.審核日期</label>
               <input
                 className="text-input"
                 value={form.steps.step6.auditDate}
@@ -1508,7 +1501,7 @@ export function IndicatorsPage({
               />
             </div>
             <div className="form-field">
-              <label className="field-label">審核方式</label>
+              <label className="field-label">4.審核方式</label>
               <input
                 className="text-input"
                 value={form.steps.step6.auditMethod}

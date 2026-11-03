@@ -3253,36 +3253,99 @@ button:disabled {
   background: #fbfdfc;
   border-radius: 0 10px 10px 0;
 }
-.sub-indicator-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr 40px;
+/* 步驟四「指標」：紙本分數格式（分子上／分母下 ×100%），自動編號 */
+.indicator-card {
+  border: 1px solid var(--line, #e8edef);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  background: var(--panel-soft, #f7fafb);
+}
+.indicator-head {
+  display: flex;
+  align-items: center;
   gap: 10px;
-  align-items: start;
   margin-bottom: 10px;
 }
-.sub-indicator-row .text-input {
+.indicator-head .text-input {
+  flex: 1;
   margin-bottom: 0;
 }
-.formula-preview {
+.indicator-num {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--teal-soft, #e9f2fb);
+  color: var(--teal-deep, #175a95);
   font-size: var(--font-body);
-  color: #51615f;
-  background: #eef4f3;
-  border-radius: 8px;
-  padding: 8px 10px;
-  margin-bottom: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
-.formula-preview b {
-  color: #314447;
+.indicator-formula {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
+.fraction {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 240px;
+  max-width: 360px;
+}
+.fraction-input {
+  text-align: center;
+  margin-bottom: 0;
+}
+.fraction-bar {
+  border-top: 2px solid var(--ink, #20313a);
+  margin: 3px 0;
+}
+.fraction-times {
+  font-size: var(--font-subtitle);
+  font-weight: 700;
+  color: var(--ink, #20313a);
+  white-space: nowrap;
+}
+/* 步驟五「閾值」：每列對應步驟四的一支指標（編號一致） */
 .threshold-row {
   display: grid;
-  grid-template-columns: 1fr 160px 40px;
+  grid-template-columns: 40px 1fr 160px;
   gap: 10px;
-  align-items: start;
+  align-items: center;
   margin-bottom: 6px;
 }
 .threshold-row .text-input {
   margin-bottom: 0;
+}
+.threshold-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--teal-soft, #e9f2fb);
+  color: var(--teal-deep, #175a95);
+  font-size: var(--font-body);
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+}
+.threshold-name {
+  font-size: var(--font-body);
+  font-weight: 700;
+  color: var(--ink, #20313a);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 步驟六「資料收集」：直式排列（一欄一列） */
+.form-stack {
+  display: flex;
+  flex-direction: column;
 }
 .main-threshold-tag {
   display: inline-block;
@@ -3361,9 +3424,11 @@ button:disabled {
   max-width: 340px;
 }
 @media (max-width: 720px) {
-  .sub-indicator-row,
   .threshold-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: 32px 1fr;
+  }
+  .threshold-row .text-input {
+    grid-column: 2;
   }
   .question-group-input {
     max-width: none;

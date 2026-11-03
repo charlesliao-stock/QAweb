@@ -82,6 +82,20 @@ export interface NamedThreshold {
   value: number;
 }
 
+/**
+ * 閾值與步驟四「指標」一一對應：多退少補（保留既有值）。
+ * 步驟四增刪指標時呼叫此函式，讓步驟五的閾值列數同步。
+ * 補齊的新列 value 為 NaN（表單顯示為空）；存檔前驗證會確保皆為 0～100 的數字。
+ */
+export function alignThresholds(
+  thresholds: NamedThreshold[],
+  count: number,
+): NamedThreshold[] {
+  const list = thresholds.slice(0, count);
+  while (list.length < count) list.push({ name: "", value: NaN });
+  return list;
+}
+
 export interface TenSteps {
   step1: string;
   step2: string;
