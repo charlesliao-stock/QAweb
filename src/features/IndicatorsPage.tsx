@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Pencil, Plus, Trash2, X } from "lucide-react";
 import {
   collection,
   doc,
@@ -20,13 +20,17 @@ import { maskName } from "../lib/mask";
 import { logAudit } from "../lib/audit";
 import {
   TEN_STEP_TITLES,
+  emptyAuditQuestion,
   emptyTenSteps,
+  mergeQuestionGroups,
+  newQid,
   normalizeQuestions,
   normalizeTenSteps,
   primaryThreshold,
   type AuditQuestion,
   type NamedThreshold,
-  type OptionSet,
+  type QuestionGroup,
+  type QuestionOption,
   type SubIndicator,
   type TenSteps,
 } from "../lib/indicators";
@@ -55,11 +59,6 @@ const STATUS_PILL: Record<IndicatorStatus, string> = {
   退回: "danger",
   啟用: "success",
   停用: "warning",
-};
-
-const QUESTION_OPTION_LABELS: Record<OptionSet, string> = {
-  "yes-no-na": "是／否／不適用",
-  "yes-no": "是／否",
 };
 
 /** 指標表單的三個頁籤：基本資料 / 10 Steps / 審核表 */
@@ -99,6 +98,9 @@ interface IndicatorForm {
   status: IndicatorStatus;
   steps: TenSteps;
   questions: AuditQuestion[];
+  /** 題目分組（「啟用題目分組」開關控制；不是每一份指標都有） */
+  questionGroups: QuestionGroup[];
+  useQuestionGroups: boolean;
 }
 
 function emptyForm(): IndicatorForm {
@@ -113,6 +115,8 @@ function emptyForm(): IndicatorForm {
     status: "草稿",
     steps,
     questions: [],
+    questionGroups: [],
+    useQuestionGroups: false,
   };
 }
 
@@ -283,6 +287,23 @@ export function IndicatorsPage({
         );
         if (found) groupId = found[0];
       }
+      const nq = normalizeQuestions(data.questions);
+      const mergedGroups = mergeQuestionGroups(data.questionGroups, nq.groups);
+      const groupIds = new Set(mergedGroups.map((g) => g.id));
+      const useQuestionGroups =
+        typeof data.useQuestionGroups === "boolean"
+          ? data.useQuestionGroups
+          : nq.useGroups;
+      const questions = nq.questions.map((q) => ({
+        ...q,
+        // 分組表沒有的 groupId 視為未分組（容錯，避免題目消失）
+        groupId:
+          q.groupId && groupIds.has(q.groupId) ? q.groupId : null,
+        groupName:
+          q.groupId && groupIds.has(q.groupId)
+            ? (mergedGroups.find((g) => g.id === q.groupId)?.name ?? "")
+            : "",
+      }));
       setForm({
         groupId,
         code: snap.id,
@@ -291,7 +312,9 @@ export function IndicatorsPage({
         ownerSearch: "",
         status: STATUSES.includes(data.status) ? data.status : "草稿",
         steps,
-        questions: normalizeQuestions(data.questions),
+        questions,
+        questionGroups: mergedGroups,
+        useQuestionGroups,
       });
       const locked = await checkReviewData(snap.id);
       setHasReviewData(locked);
@@ -364,33 +387,330 @@ export function IndicatorsPage({
     return s && s.name !== staffId ? `${maskName(s.name)}（${staffId}）` : staffId;
   }
 
-  // ---- 題目 / 子指標 / 閾值 ----
-  function addQuestion() {
-    setForm((prev) => ({
-      ...prev,
-      questions: [
-        ...prev.questions,
-        { text: "", optionSet: "yes-no-na" as OptionSet, guidance: "", group: "" },
-      ],
-    }));
+  // ---- 審核表題目 / 分組 / 選項 ----
+  function groupNameOf(groupId: string | null): string {
+    if (!groupId) return "";
+    return form.questionGroups.find((g) => g.id === groupId)?.name ?? "";
   }
 
-  function updateQuestion(index: number, patch: Partial<AuditQuestion>) {
+  function addQuestion(groupId: string | null) {
+    const q = emptyAuditQuestion(groupId, groupNameOf(groupId));
+    setForm((prev) => ({ ...prev, questions: [...prev.questions, q] }));
+  }
+
+  function updateQuestion(id: string, patch: Partial<AuditQuestion>) {
     setForm((prev) => ({
       ...prev,
-      questions: prev.questions.map((q, i) =>
-        i === index ? { ...q, ...patch } : q,
+      questions: prev.questions.map((q) =>
+        q.id === id ? { ...q, ...patch } : q,
       ),
     }));
   }
 
-  function removeQuestion(index: number) {
+  function removeQuestion(id: string) {
     setForm((prev) => ({
       ...prev,
-      questions: prev.questions.filter((_, i) => i !== index),
+      questions: prev.questions.filter((q) => q.id !== id),
     }));
   }
 
+  /** 題目在所屬區段（同分組或未分組）內上／下移 */
+  function moveQuestion(id: string, dir: -1 | 1) {
+    setForm((prev) => {
+      const qs = [...prev.questions];
+      const idx = qs.findIndex((q) => q.id === id);
+      if (idx < 0) return prev;
+      const gid = qs[idx].groupId;
+      const sectionIdx: number[] = [];
+      qs.forEach((q, i) => {
+        if ((q.groupId ?? null) === (gid ?? null)) sectionIdx.push(i);
+      });
+      const pos = sectionIdx.indexOf(idx);
+      const swap = pos + dir;
+      if (swap < 0 || swap >= sectionIdx.length) return prev;
+      const j = sectionIdx[swap];
+      [qs[idx], qs[j]] = [qs[j], qs[idx]];
+      return { ...prev, questions: qs };
+    });
+  }
+
+  /** 題目跨分組移動（下拉選擇目標，含「未分組」） */
+  function moveQuestionToGroup(id: string, targetGroupId: string | null) {
+    setForm((prev) => {
+      const q = prev.questions.find((x) => x.id === id);
+      if (!q) return prev;
+      const rest = prev.questions.filter((x) => x.id !== id);
+      const gname = targetGroupId
+        ? (prev.questionGroups.find((g) => g.id === targetGroupId)?.name ?? "")
+        : "";
+      return {
+        ...prev,
+        questions: [
+          ...rest,
+          { ...q, groupId: targetGroupId, groupName: gname },
+        ],
+      };
+    });
+  }
+
+  function toggleQuestionGroups() {
+    if (!form.useQuestionGroups) {
+      setForm((prev) => ({ ...prev, useQuestionGroups: true }));
+      return;
+    }
+    const hasGroupData =
+      form.questionGroups.length > 0 ||
+      form.questions.some((q) => q.groupId !== null);
+    if (
+      hasGroupData &&
+      !window.confirm("關閉後分組將取消、題目保留為扁平清單，確定嗎？")
+    ) {
+      return;
+    }
+    setForm((prev) => ({
+      ...prev,
+      useQuestionGroups: false,
+      questionGroups: [],
+      questions: prev.questions.map((q) => ({
+        ...q,
+        groupId: null,
+        groupName: "",
+      })),
+    }));
+  }
+
+  function addQuestionGroup() {
+    const g: QuestionGroup = {
+      id: newQid(),
+      name: `分組 ${form.questionGroups.length + 1}`,
+      order: form.questionGroups.length,
+    };
+    setForm((prev) => ({
+      ...prev,
+      questionGroups: [...prev.questionGroups, g],
+    }));
+  }
+
+  function renameQuestionGroup(id: string, name: string) {
+    setForm((prev) => ({
+      ...prev,
+      questionGroups: prev.questionGroups.map((g) =>
+        g.id === id ? { ...g, name } : g,
+      ),
+      questions: prev.questions.map((q) =>
+        q.groupId === id ? { ...q, groupName: name } : q,
+      ),
+    }));
+  }
+
+  function moveQuestionGroup(id: string, dir: -1 | 1) {
+    setForm((prev) => {
+      const gs = [...prev.questionGroups].sort((a, b) => a.order - b.order);
+      const idx = gs.findIndex((g) => g.id === id);
+      const j = idx + dir;
+      if (idx < 0 || j < 0 || j >= gs.length) return prev;
+      [gs[idx], gs[j]] = [gs[j], gs[idx]];
+      return {
+        ...prev,
+        questionGroups: gs.map((g, i) => ({ ...g, order: i })),
+      };
+    });
+  }
+
+  function removeQuestionGroup(id: string) {
+    const count = form.questions.filter((q) => q.groupId === id).length;
+    if (
+      !window.confirm(
+        count > 0
+          ? `刪除此分組將一併刪除其下 ${count} 個題目，確定嗎？`
+          : "確定刪除此分組嗎？",
+      )
+    ) {
+      return;
+    }
+    setForm((prev) => ({
+      ...prev,
+      questionGroups: prev.questionGroups
+        .filter((g) => g.id !== id)
+        .map((g, i) => ({ ...g, order: i })),
+      questions: prev.questions.filter((q) => q.groupId !== id),
+    }));
+  }
+
+  // ---- 題目選項 ----
+  function addQuestionOption(qid: string) {
+    setForm((prev) => ({
+      ...prev,
+      questions: prev.questions.map((q) =>
+        q.id === qid
+          ? {
+              ...q,
+              options: [
+                ...q.options,
+                {
+                  label: "",
+                  score: q.options.length,
+                },
+              ],
+            }
+          : q,
+      ),
+    }));
+  }
+
+  function updateQuestionOption(
+    qid: string,
+    oi: number,
+    patch: Partial<QuestionOption>,
+  ) {
+    setForm((prev) => ({
+      ...prev,
+      questions: prev.questions.map((q) =>
+        q.id === qid
+          ? {
+              ...q,
+              options: q.options.map((o, i) =>
+                i === oi ? { ...o, ...patch } : o,
+              ),
+            }
+          : q,
+      ),
+    }));
+  }
+
+  function removeQuestionOption(qid: string, oi: number) {
+    setForm((prev) => ({
+      ...prev,
+      questions: prev.questions.map((q) => {
+        if (q.id !== qid || q.options.length <= 1) return q;
+        return { ...q, options: q.options.filter((_, i) => i !== oi) };
+      }),
+    }));
+  }
+
+  const sortedQuestionGroups = useMemo(
+    () =>
+      [...form.questionGroups].sort((a, b) => a.order - b.order),
+    [form.questionGroups],
+  );
+
+  /** 單一題目編輯區塊（指標項目→選項→審核指引） */
+  function renderQuestion(q: AuditQuestion) {
+    const n = form.questions.findIndex((x) => x.id === q.id) + 1;
+    const gid = q.groupId ?? null;
+    const section = form.questions.filter(
+      (x) => (x.groupId ?? null) === gid,
+    );
+    const pos = section.findIndex((x) => x.id === q.id);
+    return (
+      <div className="question-block" key={q.id}>
+        <div className="question-row">
+          <input
+            className="text-input"
+            value={q.itemText}
+            placeholder={`第 ${n} 題指標項目`}
+            onChange={(e) =>
+              updateQuestion(q.id, { itemText: e.target.value })
+            }
+          />
+          <button
+            className="icon-button"
+            aria-label="題目上移"
+            disabled={pos <= 0}
+            onClick={() => moveQuestion(q.id, -1)}
+          >
+            <ChevronUp size={15} />
+          </button>
+          <button
+            className="icon-button"
+            aria-label="題目下移"
+            disabled={pos >= section.length - 1}
+            onClick={() => moveQuestion(q.id, 1)}
+          >
+            <ChevronDown size={15} />
+          </button>
+          <button
+            className="icon-button"
+            aria-label="刪除題目"
+            onClick={() => removeQuestion(q.id)}
+          >
+            <X size={15} />
+          </button>
+        </div>
+        <div className="question-options">
+          <div className="settings-note">選項（顯示文字＋分數）</div>
+          {q.options.map((o, oi) => (
+            <div className="option-row" key={oi}>
+              <input
+                className="text-input"
+                value={o.label}
+                placeholder={`選項 ${oi + 1} 文字`}
+                onChange={(e) =>
+                  updateQuestionOption(q.id, oi, { label: e.target.value })
+                }
+              />
+              <input
+                className="text-input option-score"
+                type="number"
+                value={Number.isFinite(o.score) ? o.score : ""}
+                placeholder="分數"
+                onChange={(e) =>
+                  updateQuestionOption(q.id, oi, {
+                    score: e.target.value === "" ? NaN : Number(e.target.value),
+                  })
+                }
+              />
+              <button
+                className="icon-button"
+                aria-label="刪除選項"
+                disabled={q.options.length <= 1}
+                onClick={() => removeQuestionOption(q.id, oi)}
+              >
+                <X size={15} />
+              </button>
+            </div>
+          ))}
+          <button
+            className="text-button"
+            onClick={() => addQuestionOption(q.id)}
+          >
+            <Plus size={14} /> 新增選項
+          </button>
+        </div>
+        <textarea
+          className="text-input"
+          value={q.guidance}
+          placeholder="審核指引（審查員填寫時的判斷依據）"
+          onChange={(e) =>
+            updateQuestion(q.id, { guidance: e.target.value })
+          }
+        />
+        {form.useQuestionGroups && (
+          <div className="question-move-row">
+            <span className="settings-note">移動到：</span>
+            <div className="select-wrap">
+              <select
+                value={q.groupId ?? ""}
+                onChange={(e) =>
+                  moveQuestionToGroup(q.id, e.target.value || null)
+                }
+              >
+                <option value="">未分組</option>
+                {sortedQuestionGroups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ---- 子指標 / 閾值 ----
   function addSubIndicator() {
     setForm((prev) => ({
       ...prev,
@@ -505,8 +825,26 @@ export function IndicatorsPage({
         };
     }
     for (const [i, q] of form.questions.entries()) {
-      if (!q.text.trim())
-        return { message: `第 ${i + 1} 題尚未填寫題目文字`, tab: "audit" };
+      const where =
+        form.useQuestionGroups && q.groupName
+          ? `第 ${i + 1} 題（${q.groupName}）`
+          : `第 ${i + 1} 題`;
+      if (!q.itemText.trim())
+        return { message: `${where}尚未填寫指標項目`, tab: "audit" };
+      if (q.options.length === 0)
+        return { message: `${where}至少需要一個選項`, tab: "audit" };
+      for (const [oi, o] of q.options.entries()) {
+        if (!o.label.trim())
+          return {
+            message: `${where}第 ${oi + 1} 個選項尚未填寫文字`,
+            tab: "audit",
+          };
+        if (!Number.isFinite(o.score))
+          return {
+            message: `${where}第 ${oi + 1} 個選項分數須為數字`,
+            tab: "audit",
+          };
+      }
     }
     return { message: "", tab: null };
   }
@@ -563,12 +901,27 @@ export function IndicatorsPage({
         step9: form.steps.step9.trim(),
         step10: form.steps.step10.trim(),
       };
-      const questions = form.questions.map((q) => ({
-        text: q.text.trim(),
-        optionSet: q.optionSet,
+      const questions = form.questions.map((q, i) => ({
+        id: q.id,
+        itemText: q.itemText.trim(),
+        options: q.options.map((o) => ({
+          label: o.label.trim(),
+          score: o.score,
+        })),
         guidance: q.guidance.trim(),
-        group: q.group.trim(),
+        groupId: form.useQuestionGroups ? q.groupId : null,
+        groupName: form.useQuestionGroups ? q.groupName.trim() : "",
+        order: i,
       }));
+      const questionGroups = form.useQuestionGroups
+        ? [...form.questionGroups]
+            .sort((a, b) => a.order - b.order)
+            .map((g, i) => ({
+              id: g.id,
+              name: g.name.trim() || `分組 ${i + 1}`,
+              order: i,
+            }))
+        : [];
       const threshold = thresholds[0]?.value ?? 0;
       const base = {
         name: form.name.trim(),
@@ -578,6 +931,8 @@ export function IndicatorsPage({
         status: form.status,
         tenSteps: steps,
         questions,
+        questionGroups,
+        useQuestionGroups: form.useQuestionGroups,
         updatedAt: serverTimestamp(),
         updatedBy: user.staffId,
       };
@@ -1195,71 +1550,116 @@ export function IndicatorsPage({
             <>
               <SectionTitle
                 title="審核表題目"
-            note="每題含題目、選項組合與審核指引（審查員填寫時的判斷依據）"
-            action={
-              <button className="text-button" onClick={addQuestion}>
-                <Plus size={14} /> 新增題目
+                note="每題含指標項目、選項與審核指引（審查員填寫時的判斷依據）"
+              />
+              <button
+                type="button"
+                className={`mode-toggle${form.useQuestionGroups ? " on" : ""}`}
+                onClick={toggleQuestionGroups}
+                aria-pressed={form.useQuestionGroups}
+              >
+                <span>啟用題目分組</span>
+                <span className="toggle-track" />
               </button>
-            }
-          />
-          {form.questions.length === 0 ? (
-            <p className="settings-note">
-              尚未建立題目（未建立審核表仍可進行審查，依規格書）。
-            </p>
-          ) : (
-            form.questions.map((q, i) => (
-              <div className="question-block" key={i}>
-                <div className="question-row">
-                  <input
-                    className="text-input"
-                    value={q.text}
-                    placeholder={`第 ${i + 1} 題題目文字`}
-                    onChange={(e) => updateQuestion(i, { text: e.target.value })}
-                  />
-                  <div className="select-wrap">
-                    <select
-                      value={q.optionSet}
-                      onChange={(e) =>
-                        updateQuestion(i, {
-                          optionSet: e.target.value as OptionSet,
-                        })
-                      }
+              <p className="settings-note">
+                開啟後可建立多個分組、一個分組下可建多個題目；關閉則分組取消、題目保留為扁平清單。
+              </p>
+              {form.useQuestionGroups ? (
+                <>
+                  <div className="group-actions">
+                    <button
+                      className="text-button"
+                      onClick={addQuestionGroup}
                     >
-                      {(
-                        Object.keys(QUESTION_OPTION_LABELS) as OptionSet[]
-                      ).map((k) => (
-                        <option key={k} value={k}>
-                          {QUESTION_OPTION_LABELS[k]}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown size={15} />
+                      <Plus size={14} /> 新增分組
+                    </button>
                   </div>
-                  <button
-                    className="icon-button"
-                    aria-label="刪除題目"
-                    onClick={() => removeQuestion(i)}
-                  >
-                    <X size={15} />
-                  </button>
-                </div>
-                <textarea
-                  className="text-input"
-                  value={q.guidance}
-                  placeholder="審核指引（審查員填寫時的判斷依據）"
-                  onChange={(e) =>
-                    updateQuestion(i, { guidance: e.target.value })
-                  }
-                />
-                <input
-                  className="text-input question-group-input"
-                  value={q.group}
-                  placeholder="題組（選填，例如：確認病人、給藥前）"
-                  onChange={(e) => updateQuestion(i, { group: e.target.value })}
-                />
-              </div>
-            ))
-          )}
+                  {sortedQuestionGroups.map((g, gi) => {
+                    const qs = form.questions.filter(
+                      (x) => x.groupId === g.id,
+                    );
+                    return (
+                      <div className="question-group-block" key={g.id}>
+                        <div className="question-group-head">
+                          <input
+                            className="text-input"
+                            value={g.name}
+                            placeholder="分組名稱"
+                            onChange={(e) =>
+                              renameQuestionGroup(g.id, e.target.value)
+                            }
+                          />
+                          <span className="settings-note">{qs.length} 題</span>
+                          <button
+                            className="icon-button"
+                            aria-label="分組上移"
+                            disabled={gi === 0}
+                            onClick={() => moveQuestionGroup(g.id, -1)}
+                          >
+                            <ChevronUp size={15} />
+                          </button>
+                          <button
+                            className="icon-button"
+                            aria-label="分組下移"
+                            disabled={
+                              gi === sortedQuestionGroups.length - 1
+                            }
+                            onClick={() => moveQuestionGroup(g.id, 1)}
+                          >
+                            <ChevronDown size={15} />
+                          </button>
+                          <button
+                            className="icon-button"
+                            aria-label="刪除分組"
+                            onClick={() => removeQuestionGroup(g.id)}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                        {qs.map((q) => renderQuestion(q))}
+                        <button
+                          className="text-button"
+                          onClick={() => addQuestion(g.id)}
+                        >
+                          <Plus size={14} /> 在此分組新增題目
+                        </button>
+                      </div>
+                    );
+                  })}
+                  <div className="question-group-block">
+                    <div className="question-group-head">
+                      <b>未分組題目</b>
+                      <button
+                        className="text-button"
+                        onClick={() => addQuestion(null)}
+                      >
+                        <Plus size={14} /> 新增題目
+                      </button>
+                    </div>
+                    {form.questions
+                      .filter((x) => !x.groupId)
+                      .map((q) => renderQuestion(q))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="group-actions">
+                    <button
+                      className="text-button"
+                      onClick={() => addQuestion(null)}
+                    >
+                      <Plus size={14} /> 新增題目
+                    </button>
+                  </div>
+                  {form.questions.length === 0 ? (
+                    <p className="settings-note">
+                      尚未建立題目（未建立審核表仍可進行審查，依規格書）。
+                    </p>
+                  ) : (
+                    form.questions.map((q) => renderQuestion(q))
+                  )}
+                </>
+              )}
 
           {isEditing && versions.length > 0 && (
             <>

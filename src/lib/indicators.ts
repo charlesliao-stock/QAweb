@@ -15,6 +15,62 @@ export const TEN_STEP_TITLES = [
 
 export type OptionSet = "yes-no-na" | "yes-no";
 
+/** 審核表題目的評分選項（顯示文字＋分數，可自由增刪改） */
+export interface QuestionOption {
+  label: string;
+  score: number;
+}
+
+/** 題目分組（由「啟用題目分組」開關控制；不是每一份指標都有） */
+export interface QuestionGroup {
+  id: string;
+  name: string;
+  order: number;
+}
+
+export interface AuditQuestion {
+  id: string;
+  /** 指標項目（必填） */
+  itemText: string;
+  options: QuestionOption[];
+  /** 審核指引（多行） */
+  guidance: string;
+  /** 所屬題目分組 id；null＝未分組（扁平） */
+  groupId: string | null;
+  /** 分組名稱（冗餘儲存，讀取容錯） */
+  groupName: string;
+  /** 全域排序 */
+  order: number;
+}
+
+/** 題目 id／分組 id 產生器（前端暫用，存檔時一併寫入） */
+export function newQid(): string {
+  return `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** 新題目預設選項：0 分／1 分 */
+export function defaultQuestionOptions(): QuestionOption[] {
+  return [
+    { label: "0 分", score: 0 },
+    { label: "1 分", score: 1 },
+  ];
+}
+
+export function emptyAuditQuestion(
+  groupId: string | null,
+  groupName: string,
+): AuditQuestion {
+  return {
+    id: newQid(),
+    itemText: "",
+    options: defaultQuestionOptions(),
+    guidance: "",
+    groupId,
+    groupName,
+    order: 0,
+  };
+}
+
 export interface SubIndicator {
   name: string;
   numerator: string;
@@ -24,14 +80,6 @@ export interface SubIndicator {
 export interface NamedThreshold {
   name: string;
   value: number;
-}
-
-export interface AuditQuestion {
-  text: string;
-  optionSet: OptionSet;
-  guidance: string;
-  /** 題組／指標項目（選填；用於分段顯示，例如「確認病人」「給藥前」） */
-  group: string;
 }
 
 export interface TenSteps {
@@ -153,16 +201,130 @@ export function primaryThreshold(
   return ts.step5.thresholds[0]?.value ?? 0;
 }
 
-/** 舊題目格式（options 欄位）轉新格式 */
-export function normalizeQuestions(raw: unknown): AuditQuestion[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.map((q) => {
+function asQuestionOptions(v: unknown, optionSet?: unknown): QuestionOption[] {
+  if (Array.isArray(v)) {
+    const list = v
+      .map((o) => {
+        const r = (o ?? {}) as Record<string, unknown>;
+        const num = Number(r.score);
+        return {
+          label: asString(r.label),
+          score: Number.isFinite(num) ? num : 0,
+        };
+      })
+      .filter((o) => o.label !== "");
+    if (list.length > 0) return list;
+  }
+  // 舊格式 optionSet 轉換：是＝1 分、否／不適用＝0 分
+  const set = optionSet === "yes-no" || optionSet === "yes-no-na" ? optionSet : "yes-no-na";
+  return set === "yes-no"
+    ? [
+        { label: "是", score: 1 },
+        { label: "否", score: 0 },
+      ]
+    : [
+        { label: "是", score: 1 },
+        { label: "否", score: 0 },
+        { label: "不適用", score: 0 },
+      ];
+}
+
+export interface NormalizedQuestions {
+  questions: AuditQuestion[];
+  /** 由題目 groupId／舊 group 字串推導出的分組（供合併用） */
+  groups: QuestionGroup[];
+  /** 是否有任何題目帶分組（舊資料推斷用） */
+  useGroups: boolean;
+}
+
+/**
+ * 正規化審核表題目：
+ * - 新格式：{id, itemText, options:[{label,score}], guidance, groupId, groupName, order}
+ * - 舊格式：{text, optionSet, guidance, group} → 轉新格式；
+ *   舊 group 字串（題組名）會轉為真正的分組並啟用分組。
+ */
+export function normalizeQuestions(raw: unknown): NormalizedQuestions {
+  if (!Array.isArray(raw)) return { questions: [], groups: [], useGroups: false };
+  const groupByName = new Map<string, QuestionGroup>();
+  const questions: AuditQuestion[] = raw.map((q, i) => {
     const r = (q ?? {}) as Record<string, unknown>;
+    const isNew =
+      typeof r.itemText === "string" || Array.isArray(r.options);
+    let groupId: string | null = null;
+    let groupName = "";
+    if (isNew) {
+      groupId = typeof r.groupId === "string" && r.groupId ? r.groupId : null;
+      groupName = asString(r.groupName);
+    } else {
+      const g = asString(r.group);
+      if (g) {
+        let grp = groupByName.get(g);
+        if (!grp) {
+          grp = { id: newQid(), name: g, order: groupByName.size };
+          groupByName.set(g, grp);
+        }
+        groupId = grp.id;
+        groupName = g;
+      }
+    }
+    if (groupId && groupName && !groupByName.has(groupName)) {
+      groupByName.set(groupName, {
+        id: groupId,
+        name: groupName,
+        order: groupByName.size,
+      });
+    }
+    const ord = Number(r.order);
     return {
-      text: asString(r.text),
-      optionSet: r.optionSet === "yes-no" || r.options === "yes-no" ? "yes-no" : "yes-no-na",
+      id: asString(r.id) || newQid(),
+      itemText: isNew ? asString(r.itemText) : asString(r.text),
+      options: asQuestionOptions(r.options, r.optionSet),
       guidance: asString(r.guidance),
-      group: asString(r.group),
+      groupId,
+      groupName,
+      order: Number.isFinite(ord) ? ord : i,
     };
   });
+  questions.sort((a, b) => a.order - b.order);
+  const groups = [...groupByName.values()].sort((a, b) => a.order - b.order);
+  return {
+    questions,
+    groups,
+    useGroups: questions.some((q) => q.groupId !== null),
+  };
+}
+
+function asQuestionGroups(v: unknown): QuestionGroup[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((g, i) => {
+      const r = (g ?? {}) as Record<string, unknown>;
+      const ord = Number(r.order);
+      return {
+        id: asString(r.id) || newQid(),
+        name: asString(r.name),
+        order: Number.isFinite(ord) ? ord : i,
+      };
+    })
+    .filter((g) => g.id !== "")
+    .sort((a, b) => a.order - b.order);
+}
+
+/**
+ * 合併分組：已儲存的 questionGroups 為主（含無題目的空分組），
+ * 再補上題目中引用到但分組表沒有的（容錯）。
+ */
+export function mergeQuestionGroups(
+  stored: unknown,
+  derived: QuestionGroup[],
+): QuestionGroup[] {
+  const list = asQuestionGroups(stored);
+  const ids = new Set(list.map((g) => g.id));
+  for (const g of derived) {
+    if (!ids.has(g.id)) {
+      list.push({ ...g, order: list.length });
+      ids.add(g.id);
+    }
+  }
+  return list.sort((a, b) => a.order - b.order);
 }
