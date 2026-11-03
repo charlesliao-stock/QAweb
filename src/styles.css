@@ -3740,6 +3740,58 @@ button:disabled {
   padding: 10px 12px;
   margin-top: 12px;
 }
+/* 每輪審查件數（v1.9.0） */
+.case-count-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 16px;
+  padding-left: 4px;
+}
+.case-count-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--font-body);
+  padding: 4px 0;
+  border-bottom: 1px dashed #e5e2da;
+}
+.case-count-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-body);
+  white-space: nowrap;
+}
+.case-count-field input[type="number"] {
+  width: 76px;
+  padding: 5px 8px;
+  border: 1px solid #d8d5cc;
+  border-radius: 6px;
+  font-size: var(--font-body);
+  text-align: right;
+}
+.assign-unit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #e5e2da;
+  font-size: var(--font-body);
+}
+.assign-unit-row:last-child {
+  border-bottom: none;
+}
+:root[data-mode="dark"] .case-count-row,
+:root[data-mode="dark"] .assign-unit-row {
+  border-bottom-color: #3d4a49;
+}
+:root[data-mode="dark"] .case-count-field input[type="number"] {
+  border-color: #3d4a49;
+  background: #1c2422;
+  color: inherit;
+}
 :root[data-mode="dark"] .dup-note {
   background: #3a2f18;
   border-color: #6b5320;

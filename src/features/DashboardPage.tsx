@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleAlert, Download } from "lucide-react";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
-import { collection, getDocs, query, where } from "../lib/db";
+import {
+  collection,
+  getDocs,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+  doc,
+} from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
 import { isOverdue, type ReviewTask } from "../lib/scheduling";
@@ -61,6 +69,7 @@ export function DashboardPage({
       tsnap.docs.forEach((d) => {
         const data = d.data();
         if (data.year !== curYear || data.month !== curMonth) return;
+        const cc = data.caseCount;
         list.push({
           id: d.id,
           indicatorId: String(data.indicatorId ?? ""),
@@ -68,8 +77,13 @@ export function DashboardPage({
           month: Number(data.month ?? 0),
           unitId: String(data.unitId ?? ""),
           reviewerId: String(data.reviewerId ?? ""),
+          caseCount:
+            typeof cc === "number" && Number.isInteger(cc) && cc >= 1
+              ? cc
+              : null,
           deadline: String(data.deadline ?? ""),
           status: data.status === "done" ? "done" : "pending",
+          completedAt: data.completedAt,
           createdAt: data.createdAt,
         });
       });
@@ -92,6 +106,32 @@ export function DashboardPage({
   useEffect(() => {
     loadMyTasks();
   }, [loadMyTasks]);
+
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  /** 標記完成／改回待完成（v1.9.0） */
+  async function toggleTaskStatus(task: TaskRow) {
+    setBusyId(task.id);
+    try {
+      const db = getFirebaseDb();
+      if (task.status === "done") {
+        await updateDoc(doc(db, "reviewTasks", task.id), {
+          status: "pending",
+          completedAt: null,
+        });
+      } else {
+        await updateDoc(doc(db, "reviewTasks", task.id), {
+          status: "done",
+          completedAt: serverTimestamp(),
+        });
+      }
+      await loadMyTasks();
+    } catch {
+      onAction("更新任務狀態失敗，請檢查網路連線後再試");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   const byIndicator = useMemo(() => {
     const map = new Map<string, TaskRow[]>();
@@ -152,8 +192,13 @@ export function DashboardPage({
           <p className="settings-note">本月無指派給您的審查任務。</p>
         ) : (
           [...byIndicator.entries()].map(([indicatorId, list]) => {
-            const pending = list.filter((t) => t.status !== "done").length;
-            const done = list.length - pending;
+            const pendingList = list.filter((t) => t.status !== "done");
+            const doneList = list.filter((t) => t.status === "done");
+            const sumCases = (arr: TaskRow[]) =>
+              arr.reduce(
+                (n, t) => n + (t.caseCount != null ? t.caseCount : 0),
+                0,
+              );
             return (
               <div key={indicatorId} className="unit-group-block">
                 <div
@@ -168,7 +213,8 @@ export function DashboardPage({
                 >
                   <b>{indicatorNames.get(indicatorId) ?? indicatorId}</b>
                   <span className="muted-text">
-                    待審 {pending} 筆・已審 {done} 筆
+                    待完成 {pendingList.length} 筆（{sumCases(pendingList)}{" "}
+                    件）・已完成 {doneList.length} 筆（{sumCases(doneList)} 件）
                   </span>
                 </div>
                 <div className="table-scroll">
@@ -176,31 +222,37 @@ export function DashboardPage({
                     <thead>
                       <tr>
                         <th>受審單位</th>
+                        <th>審查件數</th>
                         <th>狀態</th>
                         <th>截止日期</th>
+                        <th>操作</th>
                       </tr>
                     </thead>
                     <tbody>
                       {list.map((t) => {
                         const overdue = isOverdue(t.deadline, t.status);
+                        const isDone = t.status === "done";
                         return (
                           <tr key={t.id}>
                             <td>{unitNames.get(t.unitId) ?? t.unitId}</td>
                             <td>
+                              {t.caseCount != null ? `${t.caseCount}件` : "—"}
+                            </td>
+                            <td>
                               <span
                                 className={
-                                  t.status === "done"
+                                  isDone
                                     ? "status-pill success"
                                     : overdue
                                       ? "status-pill danger"
                                       : "status-pill warning"
                                 }
                               >
-                                {t.status === "done"
-                                  ? "已審"
+                                {isDone
+                                  ? "已完成"
                                   : overdue
-                                    ? "逾期待審"
-                                    : "待審"}
+                                    ? "逾期未完成"
+                                    : "待完成"}
                               </span>
                             </td>
                             <td
@@ -220,6 +272,19 @@ export function DashboardPage({
                                   }}
                                 />
                               )}
+                            </td>
+                            <td>
+                              <button
+                                className="text-button"
+                                disabled={busyId === t.id}
+                                onClick={() => toggleTaskStatus(t)}
+                              >
+                                {busyId === t.id
+                                  ? "處理中…"
+                                  : isDone
+                                    ? "改回待完成"
+                                    : "標記完成"}
+                              </button>
                             </td>
                           </tr>
                         );

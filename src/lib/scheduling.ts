@@ -43,12 +43,50 @@ export interface IndicatorYearSchedule {
   updatedAt: unknown;
 }
 
-/** 分工表項目：一位審查員 → 負責單位清單 */
+/** 分工表：一位審查員負責的單位＋每輪審查件數（v1.9.0） */
+export interface AssignedUnit {
+  /** 單位代碼（units 文件 id） */
+  unitId: string;
+  /** 每輪審查件數；null＝未設定 */
+  caseCount: number | null;
+}
+
+/** 分工表項目：一位審查員 → 負責單位清單（含每輪件數） */
 export interface AssignmentItem {
   /** 審查員職編 */
   reviewerId: string;
-  /** 單位代碼（units 文件 id） */
-  unitIds: string[];
+  units: AssignedUnit[];
+}
+
+/**
+ * 分工表項目正規化（含舊格式相容）。
+ * v1.8.0 舊格式 {reviewerId, unitIds: string[]} 會自動轉為件數 null 的新格式。
+ */
+export function normalizeAssignmentItem(raw: unknown): AssignmentItem | null {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const reviewerId = typeof r.reviewerId === "string" ? r.reviewerId : "";
+  if (!reviewerId) return null;
+  let units: AssignedUnit[] = [];
+  if (Array.isArray(r.units)) {
+    units = r.units
+      .map((u) => {
+        const o = (u ?? {}) as Record<string, unknown>;
+        const unitId = typeof o.unitId === "string" ? o.unitId : "";
+        if (!unitId) return null;
+        const cc = o.caseCount;
+        const caseCount =
+          typeof cc === "number" && Number.isInteger(cc) && cc >= 1
+            ? cc
+            : null;
+        return { unitId, caseCount };
+      })
+      .filter((u): u is AssignedUnit => u !== null);
+  } else if (Array.isArray(r.unitIds)) {
+    units = (r.unitIds as unknown[])
+      .filter((u): u is string => typeof u === "string")
+      .map((unitId) => ({ unitId, caseCount: null as number | null }));
+  }
+  return { reviewerId, units };
 }
 
 /** 單位／審查員設定（每支指標一份，不分年度） */
@@ -67,9 +105,12 @@ export interface ReviewTask {
   month: number;
   unitId: string;
   reviewerId: string;
+  /** 每輪審查件數（產生時自分工表快照；null＝未設定） */
+  caseCount: number | null;
   /** 截止日 YYYY-MM-DD（審查月份次月＋系統參數「補審截止（次月幾日）」） */
   deadline: string;
   status: ReviewTaskStatus;
+  completedAt: unknown;
   createdAt: unknown;
 }
 
@@ -117,10 +158,10 @@ export function findDuplicateUnits(
 ): Map<string, string[]> {
   const map = new Map<string, string[]>();
   for (const it of items) {
-    for (const u of it.unitIds) {
-      const arr = map.get(u) ?? [];
+    for (const u of it.units) {
+      const arr = map.get(u.unitId) ?? [];
       if (!arr.includes(it.reviewerId)) arr.push(it.reviewerId);
-      map.set(u, arr);
+      map.set(u.unitId, arr);
     }
   }
   const dup = new Map<string, string[]>();
@@ -135,7 +176,7 @@ export function estimateTaskCount(
   months: number[],
   items: AssignmentItem[],
 ): number {
-  const pairs = items.reduce((n, it) => n + it.unitIds.length, 0);
+  const pairs = items.reduce((n, it) => n + it.units.length, 0);
   return months.length * pairs;
 }
 
@@ -150,21 +191,22 @@ export interface GenerateInput {
 
 /**
  * 展開全年審查任務（純函式，可單元測試）。
- * 每（月份 × 審查員 × 單位）一筆，截止日＝次月 deadlineDay 日。
+ * 每（月份 × 審查員 × 單位）一筆，截止日＝次月 deadlineDay 日，件數自分工表快照。
  */
 export function buildReviewTasks(
   input: GenerateInput,
-): Omit<ReviewTask, "createdAt">[] {
-  const tasks: Omit<ReviewTask, "createdAt">[] = [];
+): Omit<ReviewTask, "createdAt" | "completedAt">[] {
+  const tasks: Omit<ReviewTask, "createdAt" | "completedAt">[] = [];
   for (const month of input.months) {
     for (const it of input.items) {
-      for (const unitId of it.unitIds) {
+      for (const u of it.units) {
         tasks.push({
           indicatorId: input.indicatorId,
           year: input.year,
           month,
-          unitId,
+          unitId: u.unitId,
           reviewerId: it.reviewerId,
+          caseCount: u.caseCount,
           deadline: deadlineFor(input.year, month, input.deadlineDay),
           status: "pending",
         });

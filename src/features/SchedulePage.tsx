@@ -33,6 +33,7 @@ import {
   buildReviewTasks,
   estimateTaskCount,
   findDuplicateUnits,
+  normalizeAssignmentItem,
   yearScheduleDocId,
   type AssignmentItem,
   type IndicatorAssignment,
@@ -164,17 +165,8 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
         const data = d.data();
         const items: AssignmentItem[] = Array.isArray(data.items)
           ? data.items
-              .map((it: unknown) => {
-                const r = (it ?? {}) as Record<string, unknown>;
-                return {
-                  reviewerId:
-                    typeof r.reviewerId === "string" ? r.reviewerId : "",
-                  unitIds: Array.isArray(r.unitIds)
-                    ? r.unitIds.filter((u): u is string => typeof u === "string")
-                    : [],
-                };
-              })
-              .filter((it: AssignmentItem) => it.reviewerId)
+              .map(normalizeAssignmentItem)
+              .filter((it): it is AssignmentItem => it !== null)
           : [];
         const indicatorId =
           typeof data.indicatorId === "string" ? data.indicatorId : d.id;
@@ -255,7 +247,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
         years: scheds.map((s) => s.year),
         assignCount: asg ? asg.items.length : 0,
         assignUnits: asg
-          ? asg.items.reduce((n, it) => n + it.unitIds.length, 0)
+          ? asg.items.reduce((n, it) => n + it.units.length, 0)
           : 0,
       };
     });
@@ -838,11 +830,17 @@ function AssignmentEditor({
 }) {
   const [items, setItems] = useState<AssignmentItem[]>(
     initial
-      ? initial.items.map((it) => ({ ...it, unitIds: [...it.unitIds] }))
+      ? initial.items.map((it) => ({
+          reviewerId: it.reviewerId,
+          units: it.units.map((u) => ({ ...u })),
+        }))
       : [],
   );
   const [selReviewer, setSelReviewer] = useState("");
-  const [selUnits, setSelUnits] = useState<Set<string>>(new Set());
+  /** 已勾選單位 → 每輪審查件數（null＝未設定） */
+  const [selUnits, setSelUnits] = useState<Map<string, number | null>>(
+    new Map(),
+  );
   const [saving, setSaving] = useState(false);
 
   const reviewerName = (id: string) =>
@@ -867,14 +865,16 @@ function AssignmentEditor({
   function pickReviewer(id: string) {
     setSelReviewer(id);
     const existing = items.find((it) => it.reviewerId === id);
-    setSelUnits(new Set(existing?.unitIds ?? []));
+    setSelUnits(
+      new Map((existing?.units ?? []).map((u) => [u.unitId, u.caseCount])),
+    );
   }
 
   function toggleUnit(code: string) {
     setSelUnits((prev) => {
-      const next = new Set(prev);
+      const next = new Map(prev);
       if (next.has(code)) next.delete(code);
-      else next.add(code);
+      else next.set(code, null);
       return next;
     });
   }
@@ -883,12 +883,57 @@ function AssignmentEditor({
     const list = unitsByGroup.get(gid) ?? [];
     const codes = list.map((u) => u.code);
     setSelUnits((prev) => {
-      const next = new Set(prev);
+      const next = new Map(prev);
       const allChecked = codes.every((c) => next.has(c));
       if (allChecked) codes.forEach((c) => next.delete(c));
-      else codes.forEach((c) => next.add(c));
+      else codes.forEach((c) => {
+        if (!next.has(c)) next.set(c, null);
+      });
       return next;
     });
+  }
+
+  /** 已勾選單位的件數輸入（僅接受 ≥1 整數或清空＝未設定） */
+  function setSelCaseCount(code: string, raw: string) {
+    const t = raw.trim();
+    if (t !== "" && (!/^\d+$/.test(t) || Number(t) < 1)) return;
+    setSelUnits((prev) => {
+      if (!prev.has(code)) return prev;
+      const next = new Map(prev);
+      next.set(code, t === "" ? null : Number(t));
+      return next;
+    });
+  }
+
+  /** 分工總覽表內直接改件數 */
+  function setItemCaseCount(reviewerId: string, unitId: string, raw: string) {
+    const t = raw.trim();
+    if (t !== "" && (!/^\d+$/.test(t) || Number(t) < 1)) return;
+    const v = t === "" ? null : Number(t);
+    setItems((prev) =>
+      prev.map((it) =>
+        it.reviewerId === reviewerId
+          ? {
+              ...it,
+              units: it.units.map((u) =>
+                u.unitId === unitId ? { ...u, caseCount: v } : u,
+              ),
+            }
+          : it,
+      ),
+    );
+  }
+
+  function removeUnit(reviewerId: string, unitId: string) {
+    setItems((prev) =>
+      prev
+        .map((it) =>
+          it.reviewerId === reviewerId
+            ? { ...it, units: it.units.filter((u) => u.unitId !== unitId) }
+            : it,
+        )
+        .filter((it) => it.units.length > 0),
+    );
   }
 
   function applyToTable() {
@@ -900,15 +945,17 @@ function AssignmentEditor({
       onAction("請至少勾選一個單位");
       return;
     }
-    const unitIds = [...selUnits].sort();
+    const units = [...selUnits.entries()]
+      .map(([unitId, caseCount]) => ({ unitId, caseCount }))
+      .sort((a, b) => a.unitId.localeCompare(b.unitId, "zh-Hant"));
     setItems((prev) => {
       const rest = prev.filter((it) => it.reviewerId !== selReviewer);
-      return [...rest, { reviewerId: selReviewer, unitIds }].sort((a, b) =>
+      return [...rest, { reviewerId: selReviewer, units }].sort((a, b) =>
         a.reviewerId.localeCompare(b.reviewerId, "zh-Hant"),
       );
     });
     setSelReviewer("");
-    setSelUnits(new Set());
+    setSelUnits(new Map());
   }
 
   function removeItem(reviewerId: string) {
@@ -952,7 +999,7 @@ function AssignmentEditor({
       <section className="panel">
         <SectionTitle
           title="單位／審查員設定"
-          note="先選審查員，再複選其負責單位；同一單位可指派給多位審查員（會警示但不阻擋）"
+          note="先選審查員，再複選其負責單位並設定每輪審查件數；同一單位可指派給多位審查員（會警示但不阻擋）"
         />
         {reviewers.length === 0 ? (
           <p className="settings-note">
@@ -1026,6 +1073,52 @@ function AssignmentEditor({
               })}
             </div>
 
+            {selUnits.size > 0 && (
+              <div className="form-field">
+                <label className="field-label">
+                  3. 設定每輪審查件數
+                  <span className="muted-text">
+                    （每輪該單位的審查件數；留白＝未設定）
+                  </span>
+                </label>
+                <div className="case-count-list">
+                  {[...selUnits.entries()]
+                    .sort((a, b) =>
+                      unitName(a[0]).localeCompare(unitName(b[0]), "zh-Hant"),
+                    )
+                    .map(([code, count]) => (
+                      <label key={code} className="case-count-row">
+                        <span>
+                          {unitName(code)}
+                          {duplicates.has(code) && (
+                            <CircleAlert
+                              size={14}
+                              className="dup-warn"
+                              aria-label="重複指派"
+                            />
+                          )}
+                        </span>
+                        <span className="case-count-field">
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={count ?? ""}
+                            placeholder="未設定"
+                            disabled={!canEdit}
+                            onChange={(e) =>
+                              setSelCaseCount(code, e.target.value)
+                            }
+                            aria-label={`${unitName(code)}每輪審查件數`}
+                          />
+                          件
+                        </span>
+                      </label>
+                    ))}
+                </div>
+              </div>
+            )}
+
             {canEdit && (
               <div className="form-actions">
                 <button
@@ -1047,7 +1140,7 @@ function AssignmentEditor({
           note={
             items.length === 0
               ? "尚無分工資料"
-              : `${items.length} 位審查員・${items.reduce((n, it) => n + it.unitIds.length, 0)} 單位指派`
+              : `${items.length} 位審查員・${items.reduce((n, it) => n + it.units.length, 0)} 單位指派`
           }
         />
         {items.length === 0 ? (
@@ -1070,13 +1163,52 @@ function AssignmentEditor({
                       <div className="muted-text">{it.reviewerId}</div>
                     </td>
                     <td>
-                      {it.unitIds.map((u) => (
-                        <span key={u} className="chip">
-                          {unitName(u)}
-                          {duplicates.has(u) && (
-                            <CircleAlert size={13} className="dup-warn" />
+                      {it.units.map((u) => (
+                        <div key={u.unitId} className="assign-unit-row">
+                          <span>
+                            {unitName(u.unitId)}
+                            {duplicates.has(u.unitId) && (
+                              <CircleAlert
+                                size={13}
+                                className="dup-warn"
+                                aria-label="重複指派"
+                              />
+                            )}
+                          </span>
+                          {canEdit ? (
+                            <span className="case-count-field">
+                              <input
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={u.caseCount ?? ""}
+                                placeholder="未設定"
+                                onChange={(e) =>
+                                  setItemCaseCount(
+                                    it.reviewerId,
+                                    u.unitId,
+                                    e.target.value,
+                                  )
+                                }
+                                aria-label={`${unitName(u.unitId)}每輪審查件數`}
+                              />
+                              件
+                              <button
+                                className="text-button"
+                                onClick={() =>
+                                  removeUnit(it.reviewerId, u.unitId)
+                                }
+                                aria-label={`移除${unitName(u.unitId)}`}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </span>
+                          ) : (
+                            <span className="muted-text">
+                              {u.caseCount != null ? `${u.caseCount}件` : "—"}
+                            </span>
                           )}
-                        </span>
+                        </div>
                       ))}
                     </td>
                     {canEdit && (
@@ -1143,12 +1275,13 @@ function GeneratePanel({
   const [year, setYear] = useState<number>(
     years.includes(thisYear) ? thisYear : (years[0] ?? thisYear),
   );
-  const [existingCount, setExistingCount] = useState<number | null>(null);
+  const [existingPending, setExistingPending] = useState<number | null>(null);
+  const [existingDone, setExistingDone] = useState<number | null>(null);
   const [generating, setGenerating] = useState(false);
 
   const schedule = schedules.find((s) => s.year === year) ?? null;
   const items = assignment?.items ?? [];
-  const pairCount = items.reduce((n, it) => n + it.unitIds.length, 0);
+  const pairCount = items.reduce((n, it) => n + it.units.length, 0);
   const taskCount = schedule ? estimateTaskCount(schedule.months, items) : 0;
 
   const loadExisting = useCallback(async () => {
@@ -1161,9 +1294,17 @@ function GeneratePanel({
           where("year", "==", year),
         ),
       );
-      setExistingCount(snap.size);
+      let pending = 0;
+      let done = 0;
+      snap.docs.forEach((d) => {
+        if (d.data().status === "done") done += 1;
+        else pending += 1;
+      });
+      setExistingPending(pending);
+      setExistingDone(done);
     } catch {
-      setExistingCount(null);
+      setExistingPending(null);
+      setExistingDone(null);
     }
   }, [indicatorId, year]);
 
@@ -1180,9 +1321,9 @@ function GeneratePanel({
       onAction("分工表尚無資料，請先完成單位／審查員設定");
       return;
     }
-    if ((existingCount ?? 0) > 0) {
+    if ((existingPending ?? 0) + (existingDone ?? 0) > 0) {
       const ok = window.confirm(
-        `${indicatorId} ${year} 年已有 ${existingCount} 筆任務，產生排程將刪除舊任務後重建，確定嗎？`,
+        `${indicatorId} ${year} 年已有 ${existingPending ?? 0} 筆未執行、${existingDone ?? 0} 筆已完成任務。產生排程將刪除未執行的任務後重建，已完成的會保留，確定嗎？`,
       );
       if (!ok) return;
     }
@@ -1199,7 +1340,7 @@ function GeneratePanel({
         /* 讀不到參數就用預設值 */
       }
 
-      // 先刪除該年度舊任務，再展開新任務（batch 每 400 個操作 commit 一次）
+      // 只刪除該年度「未執行」的舊任務（已完成的保留），再展開新任務（batch 每 400 個操作 commit 一次）
       const oldSnap = await getDocs(
         query(
           collection(db, "reviewTasks"),
@@ -1219,6 +1360,7 @@ function GeneratePanel({
         }
       };
       oldSnap.docs.forEach((d) => {
+        if (d.data().status === "done") return; // 已完成保留
         batch.delete(d.ref);
         ops += 1;
         if (ops >= BATCH_LIMIT) flush();
@@ -1306,10 +1448,10 @@ function GeneratePanel({
               </span>
             </p>
           </div>
-          {existingCount !== null && existingCount > 0 && (
+          {(existingPending ?? 0) + (existingDone ?? 0) > 0 && (
             <p className="dup-note">
-              <CircleAlert size={14} /> 此年度已有 {existingCount}{" "}
-              筆任務，產生排程將先刪除舊任務後重建。
+              <CircleAlert size={14} /> 此年度已有 {existingPending ?? 0}{" "}
+              筆未執行、{existingDone ?? 0} 筆已完成任務；產生排程將先刪除未執行的任務後重建，已完成的會保留。
             </p>
           )}
           <div className="form-actions">
