@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { FormEvent } from "react";
 import {
   Activity,
   ArrowRight,
@@ -21,8 +22,14 @@ import {
 } from "lucide-react";
 import { DEMO_INDICATORS } from "../data/demo";
 import {
+  isFirebaseAuditModeEnabled,
   isFirebaseDemoReadEnabled,
+  readFirebaseIndicators,
   readDemoIndicators,
+  signInWithStaffId,
+  signOutFirebaseUser,
+  watchFirebaseProfile,
+  type FirebaseProfile,
   type DemoDataSource,
 } from "../lib/firebase";
 import { BrandMark, DemoBanner, PAGE_COPY } from "../components/ui";
@@ -149,9 +156,107 @@ function DemoLogin({ onEnter }: { onEnter: (role: Role) => void }) {
   );
 }
 
+function FirebaseLogin({
+  error,
+  onLogin,
+}: {
+  error: string;
+  onLogin: (profile: FirebaseProfile) => void;
+}) {
+  const [staffId, setStaffId] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      onLogin(await signInWithStaffId(staffId, password));
+    } catch (cause) {
+      setMessage(
+        cause instanceof Error ? cause.message : "登入失敗，請稍後再試。",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <main className="login-screen">
+      <div className="login-backdrop" />
+      <section className="login-card">
+        <div className="login-brand">
+          <BrandMark />
+          <span>
+            護理品質<span>管理系統</span>
+          </span>
+        </div>
+        <div className="login-eyebrow">
+          <span className="live-dot" /> Firebase Authentication
+        </div>
+        <h1>登入結果分析</h1>
+        <p className="login-lead">
+          使用既有系統帳號登入，依 Firestore Security Rules 讀取結果。
+        </p>
+        <div className="login-demo-note">
+          <ShieldCheck size={17} />
+          <span>本頁只讀取已送出的測試審查紀錄，不會寫入或修改審查資料。</span>
+        </div>
+        {(error || message) && (
+          <div className="login-error" role="alert">
+            {message || error}
+          </div>
+        )}
+        <form onSubmit={submit}>
+          <label className="field-label" htmlFor="firebase-staff-id">
+            職編
+          </label>
+          <input
+            id="firebase-staff-id"
+            className="text-input"
+            autoComplete="username"
+            value={staffId}
+            onChange={(event) => setStaffId(event.target.value)}
+            required
+          />
+          <label className="field-label" htmlFor="firebase-password">
+            密碼
+          </label>
+          <input
+            id="firebase-password"
+            className="text-input"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            required
+          />
+          <button
+            className="button button-primary login-action"
+            type="submit"
+            disabled={busy}
+          >
+            {busy ? "登入中…" : "登入並查看結果"}
+          </button>
+        </form>
+      </section>
+      <aside className="login-side-copy">
+        <span>護理品質指標管理</span>
+        <strong>
+          以審查紀錄，
+          <br />
+          追蹤季度成效。
+        </strong>
+      </aside>
+    </main>
+  );
+}
+
 function Sidebar({
   page,
   role,
+  authMode,
+  profile,
   onPage,
   onRole,
   onExit,
@@ -160,6 +265,8 @@ function Sidebar({
 }: {
   page: PageId;
   role: Role;
+  authMode: boolean;
+  profile: FirebaseProfile | null;
   onPage: (page: PageId) => void;
   onRole: (role: Role) => void;
   onExit: () => void;
@@ -201,7 +308,11 @@ function Sidebar({
         <nav className="main-nav" aria-label="主要導覽">
           {NAV_GROUPS.map((group) => ({
             ...group,
-            items: group.items.filter((item) => canView(role, item.id)),
+            items: group.items.filter(
+              (item) =>
+                canView(role, item.id) &&
+                (!authMode || item.id === "results" || item.id === "schedule"),
+            ),
           }))
             .filter((group) => group.items.length > 0)
             .map((group) => (
@@ -231,25 +342,39 @@ function Sidebar({
         <div className="sidebar-bottom">
           <div className="role-box">
             <span className="role-box-label">目前角色視角</span>
-            <div className="select-wrap role-select">
-              <select
-                value={role}
-                onChange={(event) => onRole(event.target.value as Role)}
-                aria-label="切換展示角色"
-              >
-                {ROLES.map((item) => (
-                  <option key={item}>{item}</option>
-                ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-            <small>僅供展示，不代表實際授權</small>
+            {authMode ? (
+              <div className="select-wrap role-select">
+                <span className="auth-role-label">{role}</span>
+              </div>
+            ) : (
+              <div className="select-wrap role-select">
+                <select
+                  value={role}
+                  onChange={(event) => onRole(event.target.value as Role)}
+                  aria-label="切換展示角色"
+                >
+                  {ROLES.map((item) => (
+                    <option key={item}>{item}</option>
+                  ))}
+                </select>
+                <ChevronDown size={15} />
+              </div>
+            )}
+            <small>
+              {authMode
+                ? "角色取自 Firebase users 權限資料"
+                : "僅供展示，不代表實際授權"}
+            </small>
           </div>
           <div className="profile-row">
             <div className="profile-avatar">示</div>
             <div className="profile-info">
-              <b>示範使用者</b>
-              <span>DEMO-001 · 示範單位</span>
+              <b>{profile?.name ?? "示範使用者"}</b>
+              <span>
+                {profile
+                  ? `${profile.staffId} · ${profile.unitCode || "未設定單位"}`
+                  : "DEMO-001 · 示範單位"}
+              </span>
             </div>
             <button
               className="icon-button profile-exit"
@@ -266,13 +391,79 @@ function Sidebar({
 }
 
 export default function App() {
+  const authMode = isFirebaseAuditModeEnabled();
   const [entered, setEntered] = useState(false);
-  const [role, setRole] = useState<Role>("品管執行幹事");
-  const [page, setPage] = useState<PageId>("dashboard");
+  const [demoRole, setDemoRole] = useState<Role>("品管執行幹事");
+  const [profile, setProfile] = useState<FirebaseProfile | null>(null);
+  const [authReady, setAuthReady] = useState(!authMode);
+  const [authError, setAuthError] = useState("");
+  const [dataLoadError, setDataLoadError] = useState("");
+  const [page, setPage] = useState<PageId>(authMode ? "results" : "dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [indicators, setIndicators] = useState(DEMO_INDICATORS);
   const [dataSource, setDataSource] = useState<DemoDataSource>("local");
+
+  useEffect(() => {
+    if (!authMode) return;
+    let mounted = true;
+    let unsubscribe: (() => void) | undefined;
+    watchFirebaseProfile(
+      (nextProfile) => {
+        if (!mounted) return;
+        setProfile(nextProfile);
+        setAuthReady(true);
+        if (nextProfile) setAuthError("");
+      },
+      (error) => {
+        if (mounted)
+          setAuthError(
+            error instanceof Error ? error.message : "無法載入登入帳號資料。",
+          );
+      },
+    )
+      .then((stop) => {
+        if (mounted) unsubscribe = stop;
+        else stop();
+      })
+      .catch((error: unknown) => {
+        if (mounted) {
+          setAuthReady(true);
+          setAuthError(
+            error instanceof Error
+              ? error.message
+              : "Firebase Authentication 初始化失敗。",
+          );
+        }
+      });
+    return () => {
+      mounted = false;
+      unsubscribe?.();
+    };
+  }, [authMode]);
+
+  useEffect(() => {
+    if (!authMode || !profile) return;
+    let mounted = true;
+    setIndicators([]);
+    readFirebaseIndicators()
+      .then((rows) => {
+        if (mounted) {
+          setIndicators(rows);
+          setDataSource("firebase");
+          setDataLoadError("");
+        }
+      })
+      .catch((error: unknown) => {
+        if (mounted)
+          setDataLoadError(
+            error instanceof Error ? error.message : "讀取 Firebase 指標失敗。",
+          );
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [authMode, profile]);
 
   useEffect(() => {
     if (!isFirebaseDemoReadEnabled()) return;
@@ -310,21 +501,64 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [mobileOpen]);
 
+  const role: Role =
+    authMode && profile
+      ? ((
+          [
+            "主任",
+            "副主任",
+            "督導",
+            "各組召集人",
+            "執行幹事",
+            "品管執行幹事",
+            "護理長",
+            "指標負責人",
+            "系統管理員",
+            "審查員",
+            "一般人員",
+          ] as Role[]
+        ).find((item) => profile.roles.includes(item)) ?? "一般人員")
+      : demoRole;
+
   const changeRole = (next: Role) => {
-    setRole(next);
+    if (authMode) return;
+    setDemoRole(next);
     if (!canView(next, page)) {
       setPage("dashboard");
       notify(`「${next}」視角無此頁面，已回到總覽`);
     }
   };
 
-  const view: PageId = canView(role, page) ? page : "dashboard";
+  const view: PageId = authMode
+    ? page === "schedule" || page === "results"
+      ? page
+      : "results"
+    : canView(role, page)
+      ? page
+      : "dashboard";
 
-  if (!entered)
+  if (authMode && !authReady)
+    return (
+      <main className="login-screen">
+        <section className="login-card">正在確認 Firebase 登入狀態…</section>
+      </main>
+    );
+  if (authMode && !profile)
+    return (
+      <FirebaseLogin
+        error={authError}
+        onLogin={(nextProfile) => {
+          setProfile(nextProfile);
+          setAuthError("");
+        }}
+      />
+    );
+
+  if (!authMode && !entered)
     return (
       <DemoLogin
         onEnter={(selectedRole) => {
-          setRole(selectedRole);
+          setDemoRole(selectedRole);
           setEntered(true);
         }}
       />
@@ -335,9 +569,20 @@ export default function App() {
       <Sidebar
         page={view}
         role={role}
+        authMode={authMode}
+        profile={profile}
         onPage={setPage}
         onRole={changeRole}
-        onExit={() => setEntered(false)}
+        onExit={() => {
+          if (authMode) {
+            void signOutFirebaseUser().catch((error: unknown) =>
+              setAuthError(
+                error instanceof Error ? error.message : "登出失敗。",
+              ),
+            );
+            setProfile(null);
+          } else setEntered(false);
+        }}
         mobileOpen={mobileOpen}
         onClose={() => setMobileOpen(false)}
       />
@@ -358,7 +603,7 @@ export default function App() {
           <div className="topbar-actions">
             <div className="connection-status">
               <span className="live-dot" />
-              線上展示
+              {authMode ? "Firebase 已登入" : "線上展示"}
             </div>
             <button
               className="icon-button notification-button"
@@ -369,16 +614,29 @@ export default function App() {
               <i />
             </button>
             <div className="topbar-user">
-              <span className="profile-avatar small-avatar">示</span>
+              <span className="profile-avatar small-avatar">
+                {profile?.name?.slice(0, 1) ?? "示"}
+              </span>
               <div>
-                <b>示範使用者</b>
+                <b>{profile?.name ?? "示範使用者"}</b>
                 <small>{role}</small>
               </div>
               <ChevronDown size={14} />
             </div>
           </div>
         </header>
-        <DemoBanner source={dataSource} />
+        {authMode ? (
+          <div className="demo-banner">
+            Firebase 已登入 · 指標及審查結果唯讀；年度排程設定依權限儲存
+          </div>
+        ) : (
+          <DemoBanner source={dataSource} />
+        )}
+        {dataLoadError && (
+          <div className="login-error" role="alert">
+            {dataLoadError}
+          </div>
+        )}
         <div className="page-content">
           {view === "dashboard" && (
             <DashboardPage role={role} onAction={notify} />
@@ -386,12 +644,21 @@ export default function App() {
           {view === "indicators" && (
             <IndicatorsPage indicators={indicators} onAction={notify} />
           )}
-          {view === "schedule" && <SchedulePage onAction={notify} />}
+          {view === "schedule" && (
+            <SchedulePage
+              indicators={indicators}
+              firebaseMode={authMode}
+              profile={profile}
+              onAction={notify}
+            />
+          )}
           {view === "audit" && <AuditPage onAction={notify} />}
           {view === "results" && (
             <ResultsPage
               indicators={indicators}
               role={role}
+              firebaseMode={authMode}
+              profile={profile}
               onAction={notify}
             />
           )}
@@ -420,7 +687,10 @@ export default function App() {
             { id: "results", label: "結果", icon: FileBarChart2 },
           ] as const
         )
-          .filter((item) => canView(role, item.id))
+          .filter(
+            (item) =>
+              canView(role, item.id) && (!authMode || item.id === "results"),
+          )
           .map((item) => {
             const Icon = item.icon;
             return (

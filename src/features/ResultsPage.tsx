@@ -2,17 +2,54 @@ import { ArrowRight, ChevronDown, Download } from "lucide-react";
 import { PageHeading, RagBadge, SectionTitle, ragFor } from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
 import { QuarterResults } from "./QuarterResults";
+import type { FirebaseProfile } from "../lib/firebase";
 import type { Indicator, Role } from "../types";
-
 export function ResultsPage({
   indicators,
   role,
+  firebaseMode,
+  profile,
   onAction,
 }: {
   indicators: Indicator[];
   role: Role;
+  firebaseMode: boolean;
+  profile: FirebaseProfile | null;
   onAction: (message: string) => void;
 }) {
+  if (firebaseMode) {
+    return (
+      <>
+        <PageHeading
+          page="results"
+          action={
+            <button
+              className="button button-outline"
+              onClick={() =>
+                onAction(
+                  "正式匯出尚未開放；目前結果只讀取 Firestore 測試紀錄。",
+                )
+              }
+            >
+              <Download size={16} />
+              匯出報表
+            </button>
+          }
+        />
+        <div className="results-filter">
+          <span className="filter-caption">
+            資料來源：Firestore reviewRecords · 僅顯示已送出紀錄
+          </span>
+        </div>
+        <QuarterResults
+          indicators={indicators}
+          role={role}
+          firebaseMode={true}
+          profile={profile}
+        />
+      </>
+    );
+  }
   const achieved = indicators.filter(
     (item) => item.attainment >= item.threshold,
   ).length;
@@ -138,7 +175,12 @@ export function ResultsPage({
           </div>
         </section>
       </div>
-      <QuarterResults indicators={indicators} role={role} />
+      <QuarterResults
+        indicators={indicators}
+        role={role}
+        firebaseMode={false}
+        profile={null}
+      />
       <section className="panel data-panel results-table-panel">
         <SectionTitle
           title="指標結果明細"

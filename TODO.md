@@ -3,19 +3,19 @@
 ## 已完成：展示版前端與安全界線
 - [x] 建立非正式展示版；畫面使用虛構人員、單位、指標、排程、審查與改善案件資料。登入頁明確提示不需要真實帳號或密碼，不得輸入真實職編、密碼、Email、病人資料、床號或審查資料。角色切換只展示視角，不驗證身分、不代表正式授權。
 - [x] 初版包含品質儀表板與 RAG 燈號、指標清單、審查排程、一題一卡審查、結果趨勢、群組階層／權限矩陣、CAPA 摘要與系統管理展示頁。按鈕不會寫入真實資料；尚未完成的操作會明確提示展示限制。
-- [x] Firebase 展示 adapter 預設關閉；明確啟用後只查詢 `qms_demo/indicators/records` 中 `demoOnly: true` 文件，並只顯示程式允許的欄位；不讀取既有 Firebase 專案中的其他集合。
-- [x] Firebase adapter 不含新增、修改或刪除函式；未設定、拒絕讀取或沒有展示文件時，使用本地假資料。GitHub 不含 Firebase Web 設定或任何連線值。
+- [x] 本地展示模式預設使用虛構資料；Firebase Authentication 模式可使用既有帳號登入，讀取 `indicators`、`users/{職編}`、`units`、`reviewRecords` 與 `indicatorYearSchedules`。
+- [x] 結果分析唯讀查詢已送出的 `reviewRecords`，不提供審查結果新增、修改或刪除操作；年度排程月份設定會依登入權限寫入 `indicatorYearSchedules`。
 - [x] 以手機優先 RWD 支援手機、平板與桌機；Vite production build 產生靜態網站檔案。README 說明展示限制、Firebase 環境變數、啟動方式及正式化前置條件。
 
 ## 展示模式登入與角色視角
-- [ ] 第一版採職編＋密碼的登入畫面概念；系統管理員建立帳號，初始密碼同職編，登入後寄驗證碼到個人信箱，輸入驗證碼後必須更改密碼；忘記密碼採相同的 Email 驗證及更改密碼流程。展示版不得收集或驗證真實職編、密碼或 Email，須明確標示為展示模式。
+- [x] 已串接 Firebase Authentication 職編＋密碼登入及 `users/{職編}` 權限讀取；Email 驗證碼、首次登入強制更改密碼及忘記密碼流程尚未實作。
 - [ ] 使用者可藉由勾選角色來賦予權限；一人可兼任多角色。展示版只呈現角色視角，不代表正式授權。
 - [ ] 人員離職時帳號停用；展示版不得執行真實帳號停用。
 
 ## 群組階層與角色範圍
 - [ ] 「本人、所屬單位、組別、全院」可視為群組及次群組；群組可依序建立次群組，各群組可設立多位負責人（組長）及協同負責人（執行幹事）。
 - [ ] 初期由系統管理員設定群組；組長具有設定該組成員的權限。展示版只模擬此操作，不儲存真實人員授權。
-- [ ] 護理長看自己單位；督導以上看全部，其他角色權限可在角色建立後設定。
+- [x] 結果查詢範圍初步依角色篩選：主任／副主任／督導全院；各組召集人／執行幹事依 `groupId`／`groupIds` 對應單位；護理長依 `unitCode` 限單位；審查員／一般人員只查本人紀錄。Firestore Rules 仍須負責端點授權。
 - [ ] 指標負責人的排程檢視範圍尚待討論，展示版須標示為待決，不得假設為全院。
 
 ## 指標與審查展示
@@ -32,22 +32,23 @@
 ## 排程、結果、管理與 CAPA
 - [ ] 排程可展示單筆建立、批次預排、複製上個月、改派及加派；審查員不得審查自己所屬單位；同一人同月同一指標不可重複審查；達當月次數後的加審可提示但不阻擋。
 - [ ] 結果可依指標與月／年查詢，呈現歷史結果、RAG 狀態、趨勢圖、單位比較、項目分析、管制圖及單位×月份熱力圖；展示版不得連接或輸出真實資料。
-- [x] 結果分析展示可選擇指標並切換人員／單位視角，呈現 Q1–Q4 折線、各季平均及選定季度的個別結果明細；所有人員、單位與數值均為虛構範例，不代表實際審查結果。正式版仍須接入核准的審查紀錄、樣本數與計算口徑，並依角色限制資料可見範圍。
+- [x] 結果分析可由 Firestore `reviewRecords` 依年度排程起始月份與 `monthsPerAudit` 歸期，呈現人員／單位趨勢線及期別明細；本機未啟用 Auth 時仍顯示明確標示的虛構展示值。
+- [x] 排程頁新增審查起始月份與審核月數欄位；例如 `[1,4,7,10]`、`monthsPerAudit=3` 對應 1–3、4–6、7–9、10–12 月；登入模式儲存至 `indicatorYearSchedules`。
 - [ ] 固定報表顯示閾值與學年度月份（8 月至隔年 7 月），區分已審、未審核、無排程及計畫狀態；提供 Excel／PDF 匯出介面展示。
 - [ ] 管理畫面展示人員／單位／群組／角色及系統參數；系統管理員可授予全院範圍而不需第二人覆核，展示版不得建立真實權限。
 - [ ] CAPA 可手動或依單位未達標條件開立，預設填寫人為單位護理長，可指派單位內人員，逐關審查，改善完成後須結案驗證並呈現改善前後比較。
 
 ## Firebase 與展示資料保護
-- [x] Firebase SDK 讀取預設關閉；啟用後只查詢品管 demo 專用 `qms_demo` 路徑中 `demoOnly: true` 文件，不讀取既有 Firebase 專案中的其他集合或任何非展示資料。
-- [ ] 院方確認 Firestore Security Rules 僅允許讀取無個資展示文件後，才可設定 `VITE_FIREBASE_DEMO_READS=true`；既有 Rules 不可因本展示版而修改。
-- [x] Firebase adapter 不提供新增、修改或刪除函式；所有按鈕僅改變本地展示狀態。
-- [x] Firebase 未設定、讀取遭拒或無展示資料時，使用本地假資料；不以任何方式讀取或複製既有生產資料。
-- [x] 不提交 Firebase 連線值、寄信密鑰、服務帳號或真實個人資料；正式驗證碼、Firebase Auth、Cloud Functions、Email 服務與 Security Rules 另行核准及實作。
+- [x] 本機 Auth/結果連線預設關閉；GitHub Pages workflow 明確使用已公開的 Firebase Web config 並啟用 Auth 登入，展示 `qms_demo` 讀取仍關閉。
+- [ ] 確認並驗收 Firestore Rules 對 `reviewRecords`、`indicatorYearSchedules`、`indicators`、`users`、`units` 的角色範圍；不得以客戶端篩選取代 Rules。
+- [x] 審查結果 adapter 不提供 `reviewRecords` 寫入操作；排程 adapter 僅儲存年度起始月份、審核月數與更新者資訊。
+- [x] Firebase 讀取失敗時顯示錯誤，不匿名降級或用本地假結果冒充真實查詢結果。
+- [x] 不提交服務帳戶、使用者密碼、Email 服務密鑰或真實個資；公開 Firebase Web config 與已部署 nurseboard 相同。
 - [x] 資料原則上不刪除；正式保存期間、草稿 30 天清除例外、照片保存期限及稽核資料保存政策需院方確認。展示版不保存任何真實資料。
 
 ## 工程與交付
 - [x] 以手機優先 RWD 呈現，支援手機、平板與桌機。
 - [x] 建置 GitHub 可讀取的靜態網站程式；推送時保留既有 `main` 歷史，不強制推送。展示版程式碼已在 `nursingqc-demo`；使用者已授權直接更新 `main`。
 - [x] 提供 README，說明展示模式、Firebase 環境變數、啟動方式，以及切換正式系統前必須完成的安全工作。
-- [x] 請協助編寫 GitHub Actions workflow 檔案（`.github/workflows/deploy.yml`），以便自動建置與部署到 GitHub Pages。PR 只建置檢查；`main` 更新後建置 `dist/` 並部署；workflow 不提供 Firebase 連線值，Firebase 讀取旗標維持 `false`。已完成本機 production build 與 YAML 格式檢查。
+- [x] GitHub Actions 使用 Firebase Web config 啟用 Auth 模式；`VITE_FIREBASE_DEMO_READS` 仍固定關閉。已完成本機 production build。
 - [ ] 將 GitHub Pages 發布來源從 `main` 根目錄切換為 GitHub Actions；合併 `nursingqc-demo` 後確認 Actions 部署成功並檢視公開網站。
