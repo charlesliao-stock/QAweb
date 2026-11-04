@@ -33,6 +33,7 @@ jobs:
       VITE_FIREBASE_APP_ID: "1:807521931394:web:5f5c1c51cf157bc5f0249b"
       VITE_FIREBASE_DEMO_READS: "false"
       VITE_FIREBASE_AUDIT_READS: "true"
+      VITE_FIREBASE_REVIEWER_ROLE_WRITES: "false"
     steps:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

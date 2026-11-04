@@ -641,7 +641,7 @@ export default function App() {
         {authMode ? (
           <div className="demo-banner">
             {isSystemAdminProfile(profile)
-              ? "系統管理員完整導覽已開放；結果與年度排程已接 Firebase，其餘管理頁仍為展示功能"
+              ? "系統管理員完整導覽；結果、年度排程與審查員清單可接 Firebase；授角寫入需 Rules 驗收，稽核事件、完整權限管理與 CAPA 尚未串接"
               : "Firebase 已登入 · 指標及審查結果唯讀；年度排程設定依權限儲存"}
           </div>
         ) : (
@@ -678,7 +678,11 @@ export default function App() {
             />
           )}
           {view === "groups" && (
-            <GroupsPage firebaseMode={authMode} onAction={notify} />
+            <GroupsPage
+              firebaseMode={authMode}
+              profile={profile}
+              onAction={notify}
+            />
           )}
           {view === "capa" && (
             <CapaPage firebaseMode={authMode} onAction={notify} />

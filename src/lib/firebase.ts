@@ -44,6 +44,15 @@ export type FirebaseUnitOption = {
   name: string;
   groupId: string;
 };
+export type FirebaseUserRow = {
+  staffId: string;
+  name: string;
+  roles: string[];
+  unitCode: string;
+  groupIds: string[];
+  status: string;
+};
+export type FirebaseGroupOption = { id: string; name: string };
 
 type Services = {
   app: typeof import("firebase/app");
@@ -67,6 +76,13 @@ export function isFirebaseDemoReadEnabled(): boolean {
 export function isFirebaseAuditModeEnabled(): boolean {
   return (
     firebaseConfigured() && import.meta.env.VITE_FIREBASE_AUDIT_READS === "true"
+  );
+}
+
+export function isFirebaseReviewerRoleWriteEnabled(): boolean {
+  return (
+    firebaseConfigured() &&
+    import.meta.env.VITE_FIREBASE_REVIEWER_ROLE_WRITES === "true"
   );
 }
 
@@ -215,8 +231,8 @@ export async function readFirebaseIndicators(): Promise<Indicator[]> {
   const { db, firestore } = await getServices();
   const snapshot = await firestore.getDocs(
     firestore.query(
-      firestore.collection(db, "indicators"),
-      firestore.limit(300),
+      firestore.collection(db, "users"),
+      firestore.limit(5000),
     ),
   );
   return snapshot.docs.map((item) => {
@@ -244,6 +260,85 @@ export async function readFirebaseIndicators(): Promise<Indicator[]> {
       owner: "",
       resultLabel: "符合率",
     } satisfies Indicator;
+  });
+}
+
+export async function readFirebaseUsersForReviewerManagement(): Promise<
+  FirebaseUserRow[]
+> {
+  const { db, firestore } = await getServices();
+  const snapshot = await firestore.getDocs(
+    firestore.query(firestore.collection(db, "users"), firestore.limit(1000)),
+  );
+  let groupByUnit = new Map<string, string>();
+  try {
+    const units = await firestore.getDocs(
+      firestore.query(firestore.collection(db, "units"), firestore.limit(2000)),
+    );
+    groupByUnit = new Map(
+      units.docs.flatMap((unit) => {
+        const data = unit.data();
+        const groupId = safeText(data.groupId, "");
+        if (!groupId) return [];
+        return [
+          [unit.id, groupId] as const,
+          [safeText(data.code, ""), groupId] as const,
+          [safeText(data.unitCode, ""), groupId] as const,
+        ].filter(([unitKey]) => Boolean(unitKey));
+      }),
+    );
+  } catch {
+    // Users can still be listed by their direct groupId/groupIds if unit access is restricted.
+  }
+  return snapshot.docs.map((document) => {
+    const raw = document.data();
+    const roles = Array.isArray(raw.roles)
+      ? raw.roles.filter((value): value is string => typeof value === "string")
+      : [];
+    const groupIds = Array.isArray(raw.groupIds)
+      ? raw.groupIds.filter(
+          (value): value is string => typeof value === "string",
+        )
+      : [];
+    const groupId = safeText(raw.groupId, "");
+    const unitCode = safeText(raw.unitCode, "");
+    const inferredGroupId = groupByUnit.get(unitCode) ?? "";
+    return {
+      staffId: document.id,
+      name: safeText(raw.name, document.id),
+      roles,
+      unitCode,
+      groupIds: [
+        ...new Set([...groupIds, groupId, inferredGroupId].filter(Boolean)),
+      ],
+      status: safeText(raw.status, "未設定"),
+    };
+  });
+}
+
+export async function readFirebaseGroupsForReviewerManagement(): Promise<
+  FirebaseGroupOption[]
+> {
+  const { db, firestore } = await getServices();
+  const snapshot = await firestore.getDocs(
+    firestore.query(firestore.collection(db, "groups"), firestore.limit(500)),
+  );
+  return snapshot.docs
+    .map((document) => ({
+      id: document.id,
+      name: safeText(document.data().name, document.id),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+}
+
+export async function grantReviewerRole(staffId: string): Promise<void> {
+  if (!isFirebaseReviewerRoleWriteEnabled())
+    throw new Error("審查員角色寫入尚未啟用；需先完成 Firestore Rules 驗收。");
+  const normalizedStaffId = staffId.trim();
+  if (!normalizedStaffId) throw new Error("缺少人員職編，無法授予角色。");
+  const { db, firestore } = await getServices();
+  await firestore.updateDoc(firestore.doc(db, "users", normalizedStaffId), {
+    roles: firestore.arrayUnion("審查員"),
   });
 }
 

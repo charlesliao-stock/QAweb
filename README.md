@@ -21,19 +21,19 @@ pnpm dev
 
 `.github/workflows/deploy.yml` 對 `main` 的 pull request 執行建置檢查；push 到 `main` 或在 `main` 手動執行 workflow 時，會建置 `dist/` 並部署到 GitHub Pages。GitHub repository 的 **Settings → Pages → Build and deployment → Source** 必須設定為 **GitHub Actions**。
 
-Workflow 固定將 `VITE_FIREBASE_DEMO_READS` 設為 `false`，並啟用 Firebase Auth 模式。建置使用已公開於 nurseboard 前端的 Firebase Web SDK client config；這不是服務端憑證，也不能代替 Security Rules。禁止提交服務帳戶憑證或啟用匿名結果讀取。
+Workflow 固定將 `VITE_FIREBASE_DEMO_READS` 與 `VITE_FIREBASE_REVIEWER_ROLE_WRITES` 設為 `false`，並啟用 Firebase Auth 模式。只有完成 Rules 驗收後才可明確將 role-write build flag 改為 `true`。建置使用已公開於 nurseboard 前端的 Firebase Web SDK client config；這不是服務端憑證，也不能代替 Security Rules。禁止提交服務帳戶憑證或啟用匿名結果讀取。
 
 ## Firebase Authentication 與審查結果
 
-在 Firebase 模式下，使用職編與密碼登入（登入帳號格式為 `{職編}@nurseboard.internal`），並讀取 `users/{職編}` 的姓名、角色、單位及群組欄位。結果分析僅查詢 `reviewRecords` 中指定指標、目前登入角色允許範圍與年度的已送出紀錄；需要相應 Firestore Rules 授權。年度排程設定儲存至 `indicatorYearSchedules`，欄位為 `indicatorId`、`year`、`months`、`monthsPerAudit` 及多選的 `unitIds`；舊文件未有 `unitIds` 時，畫面預選目前帳號可管理的單位。此區只負責「指標 × 年度 × 排程單位 × 月份」，不處理審查員與單位的指派；指派流程應維持獨立，且此次修改不會寫入或覆蓋該對應資料。審查結果 adapter 不提供寫入審查紀錄的函式。
+在 Firebase 模式下，使用職編與密碼登入（登入帳號格式為 `{職編}@nurseboard.internal`），並讀取 `users/{職編}` 的姓名、角色、單位及群組欄位。結果分析僅查詢 `reviewRecords` 中指定指標、目前登入角色允許範圍與年度的已送出紀錄；需要相應 Firestore Rules 授權。年度排程設定儲存至 `indicatorYearSchedules`，欄位為 `indicatorId`、`year`、`months`、`monthsPerAudit` 及多選的 `unitIds`；舊文件未有 `unitIds` 時，畫面預選目前帳號可管理的單位。審查員管理從既有 `users` 選取人員並增加 `roles: 審查員`；不建立 Auth 帳號，也不改動獨立的審查員—單位指派資料。審查結果 adapter 不提供寫入審查紀錄的函式。
 
 ```bash
 cp .env.example .env.local
 ```
 
-`.env.example` 已含公開的 Firebase Web SDK client config；本機如需測試 Auth 模式，將 `VITE_FIREBASE_AUDIT_READS` 設為 `true`。`.env.local` 不應提交到 GitHub。網站端不含管理員憑證；Firebase Web 設定不是資料保護機制。Security Rules 必須依已驗證使用者角色及查詢條件限制各集合，不可因前端隱藏或篩選而視為已完成授權。
+`.env.example` 已含公開的 Firebase Web SDK client config；本機如需測試 Auth 模式，將 `VITE_FIREBASE_AUDIT_READS` 設為 `true`。審查員角色寫入旗標 `VITE_FIREBASE_REVIEWER_ROLE_WRITES` 預設 `false`；Rules 尚未驗收前不得開啟。`.env.local` 不應提交到 GitHub。網站端不含管理員憑證；Firebase Web 設定不是資料保護機制。Security Rules 必須依已驗證使用者角色及查詢條件限制各集合，不可因前端隱藏或篩選而視為已完成授權。
 
-Firebase Auth 模式下，`系統管理員` 會優先取得完整前端導覽與全院結果查詢視角。系統管理頁目前僅為權限矩陣展示，未寫入角色/權限或查詢稽核事件；群組／審查員管理及 CAPA、任務清單亦尚未連接 Firestore。前端完整導覽不代表伺服器端已授予權限，真實角色管理需先完成受控後端與 Firestore Rules。
+Firebase Auth 模式下，`系統管理員` 會優先取得完整前端導覽與全院結果查詢視角。審查員管理頁可讀取既有 `users` 清單並提供將「審查員」加入使用者 `roles` 的操作；寫入預設關閉，需在 Rules 驗收後啟用。此 repository 沒有 Rules 檔。這個動作不建立 Firebase Auth 帳號、不指派單位，也尚未寫入稽核事件。系統管理頁的權限矩陣、稽核事件列表、群組管理、CAPA 及任務清單仍未接資料。前端完整導覽不代表伺服器端已授予權限；正式角色管理需使用受控後端／Rules 並加入不可竄改的稽核紀錄。
 
 ## 正式使用前仍需完成
 

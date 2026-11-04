@@ -9,26 +9,23 @@ import {
   Users,
 } from "lucide-react";
 import { PageHeading, SectionTitle } from "../components/ui";
+import { ReviewerManagement } from "./ReviewerManagement";
+import type { FirebaseProfile } from "../lib/firebase";
 
 export function GroupsPage({
   firebaseMode,
+  profile,
   onAction,
 }: {
   firebaseMode: boolean;
+  profile: FirebaseProfile | null;
   onAction: (message: string) => void;
 }) {
   if (firebaseMode) {
     return (
       <>
         <PageHeading page="groups" />
-        <section className="panel not-connected-state" role="status">
-          <h2>群組與審查員管理尚未串接</h2>
-          <p>
-            目前沒有 Firestore
-            人員清單、審查員新增／指派或群組權限寫入功能；不會把展示資料當成真實帳號，也不會修改
-            users 權限。
-          </p>
-        </section>
+        <ReviewerManagement profile={profile} onAction={onAction} />
       </>
     );
   }
