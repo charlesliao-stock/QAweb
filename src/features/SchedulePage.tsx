@@ -12,7 +12,9 @@ import { DEMO_SCHEDULES } from "../data/demo";
 import { PageHeading } from "../components/ui";
 import {
   readIndicatorYearSchedule,
+  readFirebaseScheduleUnits,
   saveIndicatorYearSchedule,
+  type FirebaseUnitOption,
   type FirebaseProfile,
   type IndicatorYearSchedule,
 } from "../lib/firebase";
@@ -34,6 +36,9 @@ const MONTH_NAMES = [
   "12月",
 ];
 const DEFAULT_MONTHS = [1, 4, 7, 10];
+const DEMO_UNITS: FirebaseUnitOption[] = [
+  ...new Set(DEMO_SCHEDULES.map((item) => item.unit)),
+].map((unit) => ({ id: unit, name: unit, groupId: "demo" }));
 
 function scheduleKey(indicatorId: string, year: number) {
   return `${LOCAL_KEY}:${indicatorId}:${year}`;
@@ -79,6 +84,10 @@ export function SchedulePage({
   const [indicatorId, setIndicatorId] = useState(indicators[0]?.id ?? "");
   const [months, setMonths] = useState<number[]>(DEFAULT_MONTHS);
   const [monthsPerAudit, setMonthsPerAudit] = useState(3);
+  const [availableUnits, setAvailableUnits] = useState<FirebaseUnitOption[]>(
+    [],
+  );
+  const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [configError, setConfigError] = useState("");
@@ -121,57 +130,84 @@ export function SchedulePage({
     let active = true;
     setLoading(true);
     setConfigError("");
-    if (firebaseMode) {
-      readIndicatorYearSchedule(indicator.id, year)
-        .then((saved) => {
-          if (!active) return;
-          const value = saved ?? {
-            indicatorId: indicator.id,
-            year,
-            months: DEFAULT_MONTHS,
-            monthsPerAudit: 3,
-          };
-          setMonths(value.months.length ? value.months : DEFAULT_MONTHS);
-          setMonthsPerAudit(value.monthsPerAudit || 3);
-          setConfigSource(
-            saved ? "Firestore 指標年度排程" : "尚未設定，使用預設範例",
-          );
-        })
-        .catch((cause: unknown) => {
-          if (active)
-            setConfigError(
-              cause instanceof Error ? cause.message : "讀取排程設定失敗。",
-            );
-        })
-        .finally(() => {
-          if (active) setLoading(false);
-        });
-    } else {
+    const load = async () => {
+      if (firebaseMode && !profile) throw new Error("請先登入 Firebase 帳號。");
+      const units = firebaseMode
+        ? await readFirebaseScheduleUnits(profile!)
+        : DEMO_UNITS;
+      if (!active) return;
+      setAvailableUnits(units);
+
+      if (firebaseMode) {
+        const saved = await readIndicatorYearSchedule(indicator.id, year);
+        if (!active) return;
+        const value = saved ?? {
+          indicatorId: indicator.id,
+          year,
+          months: DEFAULT_MONTHS,
+          monthsPerAudit: 3,
+        };
+        setMonths(value.months.length ? value.months : DEFAULT_MONTHS);
+        setMonthsPerAudit(value.monthsPerAudit || 3);
+        const savedUnitIds = saved?.unitIds;
+        const initialUnitIds =
+          savedUnitIds === undefined
+            ? units.map((unit) => unit.id)
+            : savedUnitIds;
+        setSelectedUnitIds(
+          initialUnitIds.filter((id) => units.some((unit) => unit.id === id)),
+        );
+        setConfigSource(
+          saved
+            ? savedUnitIds === undefined
+              ? "Firestore 舊設定（已預選可管理單位）"
+              : "Firestore 指標年度排程"
+            : "尚未設定（已預選可管理單位）",
+        );
+        return;
+      }
+
       const stored = localStorage.getItem(scheduleKey(indicator.id, year));
       if (stored) {
         try {
           const parsed = JSON.parse(stored) as {
             months?: number[];
             monthsPerAudit?: number;
+            unitIds?: string[];
           };
           setMonths(parsed.months?.length ? parsed.months : DEFAULT_MONTHS);
           setMonthsPerAudit(parsed.monthsPerAudit ?? 3);
+          const savedUnitIds = parsed.unitIds ?? units.map((unit) => unit.id);
+          setSelectedUnitIds(
+            savedUnitIds.filter((id) => units.some((unit) => unit.id === id)),
+          );
           setConfigSource("此瀏覽器的展示設定");
         } catch {
           setMonths(DEFAULT_MONTHS);
           setMonthsPerAudit(3);
+          setSelectedUnitIds(units.map((unit) => unit.id));
         }
       } else {
         setMonths(DEFAULT_MONTHS);
         setMonthsPerAudit(3);
+        setSelectedUnitIds(units.map((unit) => unit.id));
         setConfigSource("預設設定");
       }
-      setLoading(false);
-    }
+    };
+    void load()
+      .catch((cause: unknown) => {
+        if (active)
+          setConfigError(
+            cause instanceof Error ? cause.message : "讀取排程設定失敗。",
+          );
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
     return () => {
       active = false;
     };
-  }, [firebaseMode, indicator, year]);
+  }, [firebaseMode, indicator, year, profile]);
 
   const toggleMonth = (month: number) => {
     setMonths((current) =>
@@ -181,9 +217,17 @@ export function SchedulePage({
     );
   };
 
+  const toggleUnit = (unitId: string) => {
+    setSelectedUnitIds((current) =>
+      current.includes(unitId)
+        ? current.filter((item) => item !== unitId)
+        : [...current, unitId],
+    );
+  };
+
   const saveSchedule = async () => {
-    if (!indicator || !months.length) {
-      setConfigError("至少選擇一個審查起始月份。");
+    if (!indicator || !months.length || !selectedUnitIds.length) {
+      setConfigError("請至少選擇一個排程單位及一個審查起始月份。");
       return;
     }
     if (duplicateMonths.length) {
@@ -199,6 +243,7 @@ export function SchedulePage({
       year,
       months: [...months].sort((a, b) => a - b),
       monthsPerAudit,
+      unitIds: [...selectedUnitIds],
     };
     try {
       if (firebaseMode) {
@@ -212,7 +257,7 @@ export function SchedulePage({
         );
         setConfigSource("此瀏覽器的展示設定");
       }
-      onAction("審查月份與審核月數已儲存；結果分析會依此區間歸季。");
+      onAction("排程單位、審查月份與審核月數已儲存。");
     } catch (cause) {
       setConfigError(
         cause instanceof Error
@@ -247,8 +292,10 @@ export function SchedulePage({
       <section className="panel schedule-period-config">
         <div className="schedule-period-head">
           <div>
-            <h2>年度審查月份設定</h2>
-            <p>設定各期起始月份與每期涵蓋月數，結果分析會依此區間分季。</p>
+            <h2>年度排程單位與月份設定</h2>
+            <p>
+              先選擇本年度要排程的單位，再設定各期起始月份與涵蓋月數；審查員指派另行管理。
+            </p>
           </div>
           <span className="status-pill info">
             {year} 年 · {configSource}
@@ -276,6 +323,7 @@ export function SchedulePage({
               onChange={(event) =>
                 setMonthsPerAudit(Number(event.target.value))
               }
+              disabled={!canEdit || loading}
             >
               {Array.from({ length: 12 }, (_, index) => index + 1).map(
                 (count) => (
@@ -289,7 +337,7 @@ export function SchedulePage({
           <button
             className="button button-primary"
             onClick={() => void saveSchedule()}
-            disabled={saving || loading || !canEdit}
+            disabled={saving || loading || !canEdit || !selectedUnitIds.length}
           >
             {saving ? "儲存中…" : "儲存設定"}
           </button>
@@ -308,6 +356,7 @@ export function SchedulePage({
                   <input
                     type="checkbox"
                     checked={checked}
+                    disabled={!canEdit || loading}
                     onChange={() => toggleMonth(month)}
                   />
                   <span>{name}</span>
@@ -315,6 +364,68 @@ export function SchedulePage({
               );
             })}
           </div>
+        </div>
+        <div className="schedule-unit-picker">
+          <div className="schedule-unit-head">
+            <div>
+              <span className="field-label">排程單位（可多選）</span>
+              <p>
+                設定這支指標本年度要排程的單位；審查員與單位的對應分開設定，本區不會修改該指派。
+              </p>
+            </div>
+            <div className="schedule-unit-actions">
+              <button
+                type="button"
+                className="text-button"
+                onClick={() =>
+                  setSelectedUnitIds(availableUnits.map((unit) => unit.id))
+                }
+                disabled={!canEdit || loading || !availableUnits.length}
+              >
+                全選
+              </button>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setSelectedUnitIds([])}
+                disabled={!canEdit || loading || !selectedUnitIds.length}
+              >
+                清除
+              </button>
+            </div>
+          </div>
+          {availableUnits.length ? (
+            <>
+              <div className="schedule-unit-summary">
+                已選 {selectedUnitIds.length} / {availableUnits.length} 個單位
+              </div>
+              <div className="schedule-unit-grid">
+                {availableUnits.map((unit) => {
+                  const checked = selectedUnitIds.includes(unit.id);
+                  return (
+                    <label
+                      className={`schedule-unit-option${checked ? " selected" : ""}`}
+                      key={unit.id}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={!canEdit || loading}
+                        onChange={() => toggleUnit(unit.id)}
+                      />
+                      <span>{unit.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <p className="schedule-config-note">
+              {loading
+                ? "正在載入可排程單位…"
+                : "目前權限範圍內沒有可選單位；請確認 units 資料與 Firestore Rules。"}
+            </p>
+          )}
         </div>
         {configError && (
           <p className="login-error" role="alert">
@@ -346,8 +457,9 @@ export function SchedulePage({
         <section className="panel schedule-live-note">
           <ShieldCheck size={17} />
           <span>
-            年度月份設定已連接 Firestore。任務建立、指派與進度清單尚未串接
-            `reviewTasks`，因此不顯示展示用的虛構排程列。
+            單位與月份設定已寫入
+            Firestore；審查員對應單位需在獨立指派區設定，本區不會修改該指派。
+            任務建立及進度清單尚未串接 `reviewTasks`，因此不顯示虛構排程列。
           </span>
         </section>
       ) : (

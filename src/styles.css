@@ -3272,6 +3272,69 @@ button:disabled {
 .schedule-month-option input {
   accent-color: #14786f;
 }
+.schedule-unit-picker {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.schedule-unit-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.schedule-unit-head .field-label {
+  margin-bottom: 4px;
+}
+.schedule-unit-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.schedule-unit-actions {
+  display: flex;
+  gap: 12px;
+  flex: none;
+}
+.schedule-unit-summary {
+  margin-top: 12px;
+  color: #65757a;
+  font-size: 12px;
+}
+.schedule-unit-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.schedule-unit-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: #627277;
+  cursor: pointer;
+  font-size: 12px;
+}
+.schedule-unit-option.selected {
+  border-color: #9bd5ca;
+  background: #effaf7;
+  color: #14786f;
+  font-weight: 700;
+}
+.schedule-unit-option input {
+  accent-color: #14786f;
+  flex: none;
+}
+.schedule-unit-option span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .schedule-config-note {
   margin: 12px 0 0;
   color: #8a6813;
@@ -3295,6 +3358,12 @@ button:disabled {
   }
   .schedule-month-grid {
     grid-template-columns: repeat(4, minmax(58px, 1fr));
+  }
+  .schedule-unit-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .schedule-unit-head {
+    flex-direction: column;
   }
   .schedule-period-controls {
     align-items: stretch;

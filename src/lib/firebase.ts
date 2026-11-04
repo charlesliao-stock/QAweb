@@ -36,6 +36,13 @@ export type IndicatorYearSchedule = {
   year: number;
   months: number[];
   monthsPerAudit: number;
+  /** Missing means a legacy schedule that historically applied to all units. */
+  unitIds?: string[];
+};
+export type FirebaseUnitOption = {
+  id: string;
+  name: string;
+  groupId: string;
 };
 
 type Services = {
@@ -240,6 +247,108 @@ export async function readFirebaseIndicators(): Promise<Indicator[]> {
   });
 }
 
+export async function readFirebaseScheduleUnits(
+  profile: FirebaseProfile,
+): Promise<FirebaseUnitOption[]> {
+  const { db, firestore } = await getServices();
+  const units = firestore.collection(db, "units");
+  const roles = new Set(profile.roles);
+  const fullScope = ["主任", "副主任", "督導", "系統管理員"].some((role) =>
+    roles.has(role),
+  );
+  const groupScope = [
+    "各組召集人",
+    "執行幹事",
+    "品管執行幹事",
+    "指標負責人",
+  ].some((role) => roles.has(role));
+
+  if (fullScope) {
+    const snapshot = await firestore.getDocs(
+      firestore.query(units, firestore.limit(500)),
+    );
+    return normalizeFirebaseUnits(snapshot.docs);
+  }
+
+  if (groupScope) {
+    const groupIds = [
+      ...new Set([...profile.groupIds, profile.groupId].filter(Boolean)),
+    ];
+    if (!groupIds.length && profile.unitCode) {
+      const unitById = await firestore.getDoc(
+        firestore.doc(db, "units", profile.unitCode),
+      );
+      let groupId = unitById.exists()
+        ? String(unitById.data().groupId ?? "")
+        : "";
+      if (!groupId) {
+        const unitByCode = await firestore.getDocs(
+          firestore.query(
+            units,
+            firestore.where("code", "==", profile.unitCode),
+            firestore.limit(1),
+          ),
+        );
+        groupId = String(unitByCode.docs[0]?.data().groupId ?? "");
+      }
+      if (groupId) groupIds.push(groupId);
+    }
+    if (!groupIds.length)
+      throw new Error("帳號未設定組別範圍，無法載入可排程單位。");
+    if (groupIds.length > 30)
+      throw new Error("此帳號所屬組別超過 Firestore 單次查詢上限。");
+    const snapshot = await firestore.getDocs(
+      firestore.query(
+        units,
+        firestore.where("groupId", "in", groupIds),
+        firestore.limit(500),
+      ),
+    );
+    return normalizeFirebaseUnits(snapshot.docs);
+  }
+
+  if (roles.has("護理長") && profile.unitCode) {
+    const direct = await firestore.getDoc(
+      firestore.doc(db, "units", profile.unitCode),
+    );
+    const byCode = await firestore.getDocs(
+      firestore.query(
+        units,
+        firestore.where("code", "==", profile.unitCode),
+        firestore.limit(1),
+      ),
+    );
+    return normalizeFirebaseUnits([
+      ...(direct.exists() ? [direct] : []),
+      ...byCode.docs,
+    ]);
+  }
+
+  throw new Error("此帳號角色尚未設定可排程單位範圍。");
+}
+
+function normalizeFirebaseUnits(
+  documents: Array<{ id: string; data: () => Record<string, unknown> }>,
+): FirebaseUnitOption[] {
+  const byId = new Map<string, FirebaseUnitOption>();
+  for (const document of documents) {
+    const raw = document.data();
+    const id = [raw.code, raw.unitCode, document.id].find(
+      (value) => typeof value === "string" && value.trim().length > 0,
+    ) as string | undefined;
+    if (!id) continue;
+    const normalizedId = id.trim();
+    byId.set(normalizedId, {
+      id: normalizedId,
+      name: safeText(raw.name ?? raw.unitName, normalizedId),
+      groupId: safeText(raw.groupId, ""),
+    });
+  }
+  return [...byId.values()].sort((a, b) =>
+    a.name.localeCompare(b.name, "zh-Hant"),
+  );
+}
+
 export async function readReviewRecords(
   indicatorId: string,
   year: number,
@@ -428,6 +537,16 @@ export async function readIndicatorYearSchedule(
           )
           .sort((a, b) => a - b)
       : [],
+    unitIds: Array.isArray(raw.unitIds)
+      ? [
+          ...new Set(
+            raw.unitIds.filter(
+              (value): value is string =>
+                typeof value === "string" && value.trim().length > 0,
+            ),
+          ),
+        ]
+      : undefined,
     monthsPerAudit:
       typeof raw.monthsPerAudit === "number" &&
       Number.isInteger(raw.monthsPerAudit) &&
@@ -457,6 +576,7 @@ export async function saveIndicatorYearSchedule(
     year: schedule.year,
     months: [...new Set(schedule.months)].sort((a, b) => a - b),
     monthsPerAudit: schedule.monthsPerAudit,
+    unitIds: [...new Set(schedule.unitIds ?? [])],
     updatedAt: firestore.serverTimestamp(),
     updatedBy: staffId,
   };
