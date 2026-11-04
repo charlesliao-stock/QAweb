@@ -291,7 +291,7 @@ export function ReviewOverviewPage({
     <>
       <div style={{ marginBottom: 12 }}>
         <button className="button button-outline" onClick={onBack}>
-          <ArrowLeft size={15} /> 返回指標排程
+          <ArrowLeft size={15} /> 返回品管審查排程
         </button>
       </div>
       <SectionTitle

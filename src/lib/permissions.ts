@@ -63,6 +63,8 @@ export const DEFAULT_ROLE_PERMS: Record<string, RolePermissions> = {
     manageRoles: true,
   },
   指標負責人: { resultQuery: true },
+  /** 召集人（v1.16.0）：可建立／改派排程（分組限縮下一版再加） */
+  召集人: { resultQuery: true, manageSchedule: true },
 };
 
 /** 防禦性解析 roles/titles 文件的 permissions 欄位 */

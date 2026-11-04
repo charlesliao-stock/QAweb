@@ -97,6 +97,11 @@ service cloud.firestore {
       allow read: if isAuthed();
       allow write: if isGanShi();
     }
+    // 指標排程（v1.16.0）：三類別（年度／學年度／臨時）；同等嚴格度
+    match /indicatorSchedules/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
     match /indicatorAssignments/{id} {
       allow read: if isAuthed();
       allow write: if isGanShi();

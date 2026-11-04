@@ -6,6 +6,22 @@
  * reviewRecords 經由 taskId 歸屬到任務（舊格式單筆紀錄 taskId 即 doc id）。
  */
 import { requiredCases } from "./reviewProgress";
+import {
+  currentCycleKey,
+  cycleMonths,
+  toCycleKey,
+  type CycleCategory,
+} from "./cycle";
+
+/** 統計週期（沿用 cycle.ts；報表統計只用年度／學年度） */
+export type StatsCycle = "year" | "academic";
+
+/** 趨勢點：月份＋平均正確率＋顯示標籤（學年度如 "115-08"；年度如 "1月"） */
+export interface TrendPoint {
+  month: number;
+  rate: number;
+  label: string;
+}
 
 /** RAG 燈號：達標綠／未達標紅／無資料灰 */
 export type RagState = "green" | "red" | "gray";
@@ -54,24 +70,45 @@ export function ragStatus(
   return avgRate >= threshold ? "green" : "red";
 }
 
-/** 月趨勢：某指標的各月份平均正確率（只含 rate 非 null 的月份，依月份排序） */
+/**
+ * 月趨勢：某指標某週期的各月份平均正確率（只含 rate 非 null 的月份，
+ * 依週期月份順序排列）。
+ * - cycle='year'：period 為西元年字串（如 "2026"），x 軸 1–12 月
+ * - cycle='academic'：period 為民國學年字串（如 "115"），x 軸依
+ *   [8..12,1..7] 排序，標籤如 "115-08"
+ * - period 省略時取本週期（currentCycleKey）
+ */
 export function monthlyTrend(
   records: RateRecord[],
   indicatorId: string,
-): { month: number; rate: number }[] {
+  cycle: StatsCycle = "year",
+  period?: string,
+): TrendPoint[] {
+  const key = period ?? currentCycleKey(cycle);
   const byMonth = new Map<number, (number | null)[]>();
   for (const r of records) {
     if (r.indicatorId !== indicatorId) continue;
+    if (toCycleKey(r.year, r.month, cycle) !== key) continue;
     const arr = byMonth.get(r.month);
     if (arr) arr.push(r.rate);
     else byMonth.set(r.month, [r.rate]);
   }
-  const out: { month: number; rate: number }[] = [];
-  for (const [month, rates] of [...byMonth.entries()].sort(
-    (a, b) => a[0] - b[0],
-  )) {
+  const cat: CycleCategory = cycle;
+  const order = cycleMonths(cat, key);
+  const out: TrendPoint[] = [];
+  for (const month of order) {
+    const rates = byMonth.get(month);
+    if (!rates) continue;
     const avg = avgRateOf(rates);
-    if (avg != null) out.push({ month, rate: avg });
+    if (avg == null) continue;
+    out.push({
+      month,
+      rate: avg,
+      label:
+        cycle === "academic"
+          ? `${key}-${String(month).padStart(2, "0")}`
+          : `${month}月`,
+    });
   }
   return out;
 }
@@ -118,7 +155,7 @@ export interface UnitMonthRow {
   rag: RagState;
 }
 
-/** 某指標某年月的各單位列（依單位代號排序） */
+/** 某指標某年月的各單位列（依單位代號排序）；cycle 預設 'year'（曆年月） */
 export function unitMonthRows(
   tasks: AnalysisTask[],
   records: RateRecord[],
@@ -127,11 +164,42 @@ export function unitMonthRows(
   month: number,
   threshold: number,
 ): UnitMonthRow[] {
+  return unitMonthCycleRows(
+    tasks,
+    records,
+    indicatorId,
+    year,
+    month,
+    threshold,
+    "year",
+  );
+}
+
+/**
+ * 週期版單位列：cycle='academic' 時按「包含所選曆年月的學年度」歸戶
+ *（與 indicatorMonthStats 同一歸戶規則）。
+ */
+function unitMonthCycleRows(
+  tasks: AnalysisTask[],
+  records: RateRecord[],
+  indicatorId: string,
+  year: number,
+  month: number,
+  threshold: number,
+  cycle: StatsCycle,
+): UnitMonthRow[] {
+  const key =
+    cycle === "academic" ? toCycleKey(year, month, "academic") : null;
   const unitOf = new Map<string, string>(); // taskId -> unitId
   const reqOf = new Map<string, number>(); // taskId -> 應審件數
   for (const t of tasks) {
-    if (t.indicatorId !== indicatorId || t.year !== year || t.month !== month)
+    if (t.indicatorId !== indicatorId) continue;
+    if (cycle === "academic") {
+      if (toCycleKey(t.year, t.month, "academic") !== key || t.month !== month)
+        continue;
+    } else if (t.year !== year || t.month !== month) {
       continue;
+    }
     unitOf.set(t.id, t.unitId);
     reqOf.set(t.id, requiredCases(t.caseCount));
   }
@@ -187,24 +255,30 @@ export interface IndicatorMonthStat {
   rag: RagState;
 }
 
-/** 某年月的各指標達標統計 */
+/**
+ * 某（週期）月份的各指標達標統計。
+ * - cycle='year'：year／month 為曆年月（既有行為）
+ * - cycle='academic'：取「包含所選曆年月的學年度」＋該月份歸戶，
+ *   例如選 2026-01 → 學年度 114 的 1 月（含 2027-01 的任務）
+ */
 export function indicatorMonthStats(
   tasks: AnalysisTask[],
   records: RateRecord[],
   year: number,
   month: number,
   thresholds: Map<string, number>,
+  cycle: StatsCycle = "year",
 ): IndicatorMonthStat[] {
-  const ids = [
-    ...new Set(
-      tasks
-        .filter((t) => t.year === year && t.month === month)
-        .map((t) => t.indicatorId),
-    ),
-  ].sort();
+  const key =
+    cycle === "academic" ? toCycleKey(year, month, "academic") : null;
+  const inScope = (t: AnalysisTask) =>
+    cycle === "academic"
+      ? toCycleKey(t.year, t.month, "academic") === key && t.month === month
+      : t.year === year && t.month === month;
+  const ids = [...new Set(tasks.filter(inScope).map((t) => t.indicatorId))].sort();
   return ids.map((id) => {
     const threshold = thresholds.get(id) ?? 0;
-    const rows = unitMonthRows(tasks, records, id, year, month, threshold);
+    const rows = unitMonthCycleRows(tasks, records, id, year, month, threshold, cycle);
     const done = rows.filter((r) => r.complete);
     // 無閾值：只顯示正確率、不判燈（達標率不計算、燈號灰）
     if (!(threshold > 0)) {

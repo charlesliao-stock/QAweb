@@ -36,6 +36,7 @@ import {
   DEFAULT_SYSTEM_PARAMS,
   SEED_ROLES,
   SYSTEM_PARAM_LABELS,
+  SYSTEM_PARAM_SELECT_OPTIONS,
   UI_THEMES,
   runSystemSeed,
   themeName,
@@ -50,15 +51,21 @@ import {
 } from "../lib/permissions";
 import { usePermissions } from "../lib/usePermissions";
 
-function formatParamValue(value: unknown): string {
+function formatParamValue(key: keyof SystemParams, value: unknown): string {
+  const opts = SYSTEM_PARAM_SELECT_OPTIONS[key];
+  if (opts) {
+    const s = String(value ?? "");
+    return opts.find((o) => o.value === s)?.label ?? s;
+  }
   if (typeof value === "boolean") return value ? "是" : "否";
   if (typeof value === "number") return String(value);
   if (typeof value === "string") return value;
   return "—";
 }
 
-type ParamKind = "number" | "boolean" | "string";
+type ParamKind = "number" | "boolean" | "string" | "select";
 function paramKindOf(key: keyof SystemParams): ParamKind {
+  if (SYSTEM_PARAM_SELECT_OPTIONS[key]) return "select";
   const v = DEFAULT_SYSTEM_PARAMS[key];
   if (typeof v === "boolean") return "boolean";
   if (typeof v === "number") return "number";
@@ -131,7 +138,11 @@ function SystemInitSection({
       (key) => {
         if (key === "uiTheme") return;
         const v = params[key];
-        d[key] = typeof v === "boolean" ? v : String(v ?? "");
+        // 下拉欄位：舊資料缺值時退回預設值（如 statsCycle 預設 "year"）
+        const fallback = SYSTEM_PARAM_SELECT_OPTIONS[key]
+          ? DEFAULT_SYSTEM_PARAMS[key]
+          : "";
+        d[key] = typeof v === "boolean" ? v : String(v ?? fallback);
       },
     );
     setDraft(d);
@@ -151,6 +162,11 @@ function SystemInitSection({
           updates[key] = Number.isFinite(n) ? n : cur;
         } else if (typeof cur === "boolean") {
           updates[key] = d === true;
+        } else if (SYSTEM_PARAM_SELECT_OPTIONS[key]) {
+          // 下拉欄位：只接受選項內的值，否則保留原值
+          const opts = SYSTEM_PARAM_SELECT_OPTIONS[key]!;
+          const s = String(d ?? "");
+          updates[key] = opts.some((o) => o.value === s) ? s : cur;
         } else {
           updates[key] = String(d ?? "");
         }
@@ -224,7 +240,24 @@ function SystemInitSection({
                   <label className="field-label">
                     {SYSTEM_PARAM_LABELS[key]}
                   </label>
-                  {kind === "boolean" ? (
+                  {kind === "select" ? (
+                    <div className="select-wrap">
+                      <select
+                        value={typeof val === "string" ? val : ""}
+                        onChange={(e) =>
+                          setDraft((p) => ({ ...p, [key]: e.target.value }))
+                        }
+                        aria-label={SYSTEM_PARAM_LABELS[key]}
+                      >
+                        {SYSTEM_PARAM_SELECT_OPTIONS[key]!.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown size={15} />
+                    </div>
+                  ) : kind === "boolean" ? (
                     <label className="check-row">
                       <input
                         type="checkbox"
@@ -296,7 +329,7 @@ function SystemInitSection({
               ) : (
                 <div key={key} className="param-row">
                   <dt>{SYSTEM_PARAM_LABELS[key]}</dt>
-                  <dd>{formatParamValue(params[key])}</dd>
+                  <dd>{formatParamValue(key, params[key])}</dd>
                 </div>
               ),
           )}
