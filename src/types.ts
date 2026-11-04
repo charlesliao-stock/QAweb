@@ -50,7 +50,7 @@ export interface ScheduleTask {
   done: number;
   total: number;
   due: string;
-  status: "進行中" | "待開始" | "逾期補審";
+  status: "進行中" | "待開始" | "逾期補審" | "已完成";
 }
 
 export interface CapaCase {

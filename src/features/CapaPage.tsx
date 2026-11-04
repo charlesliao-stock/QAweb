@@ -12,10 +12,26 @@ import { PageHeading, SummaryCell } from "../components/ui";
 import type { CapaCase } from "../types";
 
 export function CapaPage({
+  firebaseMode,
   onAction,
 }: {
+  firebaseMode: boolean;
   onAction: (message: string) => void;
 }) {
+  if (firebaseMode) {
+    return (
+      <>
+        <PageHeading page="capa" />
+        <section className="panel not-connected-state" role="status">
+          <h2>尚未串接資料</h2>
+          <p>
+            CAPA 改善追蹤單目前沒有 Firestore
+            查詢或儲存功能，因此不會顯示或建立真實改善案件。
+          </p>
+        </section>
+      </>
+    );
+  }
   return (
     <>
       <PageHeading

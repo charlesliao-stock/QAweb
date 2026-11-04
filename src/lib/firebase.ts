@@ -357,7 +357,7 @@ export async function readReviewRecords(
   const { db, firestore } = await getServices();
   const collection = firestore.collection(db, "reviewRecords");
   const roles = new Set(profile.roles);
-  const fullHospital = ["主任", "副主任", "督導"].some((role) =>
+  const fullHospital = ["主任", "副主任", "督導", "系統管理員"].some((role) =>
     roles.has(role),
   );
   const groupScope = ["各組召集人", "執行幹事", "品管執行幹事"].some((role) =>

@@ -36,17 +36,19 @@
 ## 排程、結果、管理與 CAPA
 
 - [ ] 排程可展示單筆建立、批次預排、複製上個月、改派及加派；審查員不得審查自己所屬單位；同一人同月同一指標不可重複審查；達當月次數後的加審可提示但不阻擋。
+- [x] 展示排程狀態以 `total > 0 && done >= total` 作為「已完成」唯一條件；未完成但有進度時顯示「進行中」，無效總件數不會除以零。
 - [ ] 結果可依指標與月／年查詢，呈現歷史結果、RAG 狀態、趨勢圖、單位比較、項目分析、管制圖及單位×月份熱力圖；展示版不得連接或輸出真實資料。
 - [x] 結果分析可由 Firestore `reviewRecords` 依年度排程起始月份與 `monthsPerAudit` 歸期，呈現人員／單位趨勢線及期別明細；本機未啟用 Auth 時仍顯示明確標示的虛構展示值。
-- [x] 排程頁設定指標年度的多選單位、審查起始月份與審核月數；例如 `[1,4,7,10]`、`monthsPerAudit=3` 對應 1–3、4–6、7–9、10–12 月。單位月份設定存於 `indicatorYearSchedules.unitIds`；審查員與單位的對應維持獨立指派流程。
+- [x] 排程頁設定指標年度的多選單位、審查起始月份與審核月數；例如 `[1,4,7,10]`、`monthsPerAudit=3` 對應 1–3、4–6、7–9、10–12 月。單位月份設定存於 `indicatorYearSchedules.unitIds`；審查員與單位的對應規格分離，但指派介面/資料尚未串接。
 - [ ] 固定報表顯示閾值與學年度月份（8 月至隔年 7 月），區分已審、未審核、無排程及計畫狀態；提供 Excel／PDF 匯出介面展示。
-- [ ] 管理畫面展示人員／單位／群組／角色及系統參數；系統管理員可授予全院範圍而不需第二人覆核，展示版不得建立真實權限。
+- [ ] 管理畫面真實讀取／維護人員、角色與權限；目前頁面僅展示權限矩陣，尚未寫入 `users` 或連接稽核事件。
 - [ ] CAPA 可手動或依單位未達標條件開立，預設填寫人為單位護理長，可指派單位內人員，逐關審查，改善完成後須結案驗證並呈現改善前後比較。
+- [ ] 建立獨立審查員管理介面（組別篩選、審查員新增、欄位排序/篩選），需先確認帳號新增流程與安全後端。
 
 ## Firebase 與展示資料保護
 
 - [x] 本機 Auth/結果連線預設關閉；GitHub Pages workflow 明確使用已公開的 Firebase Web config 並啟用 Auth 登入，展示 `qms_demo` 讀取仍關閉。
-- [ ] 確認並驗收 Firestore Rules 對 `reviewRecords`、`indicatorYearSchedules`、`indicators`、`users`、`units` 的角色範圍；不得以客戶端篩選取代 Rules。
+- [ ] 確認並驗收 Firestore Rules 對 `reviewRecords`、`indicatorYearSchedules`、`indicators`、`users`、`units`、CAPA 與稽核事件的角色範圍；不得以客戶端篩選取代 Rules。
 - [x] 審查結果 adapter 不提供 `reviewRecords` 寫入操作；排程 adapter 儲存 `unitIds`、年度月份、審核月數與更新者資訊。
 - [x] Firebase 讀取失敗時顯示錯誤，不匿名降級或用本地假結果冒充真實查詢結果。
 - [x] 不提交服務帳戶、使用者密碼、Email 服務密鑰或真實個資；公開 Firebase Web config 與已部署 nurseboard 相同。

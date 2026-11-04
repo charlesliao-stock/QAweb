@@ -33,6 +33,8 @@ cp .env.example .env.local
 
 `.env.example` 已含公開的 Firebase Web SDK client config；本機如需測試 Auth 模式，將 `VITE_FIREBASE_AUDIT_READS` 設為 `true`。`.env.local` 不應提交到 GitHub。網站端不含管理員憑證；Firebase Web 設定不是資料保護機制。Security Rules 必須依已驗證使用者角色及查詢條件限制各集合，不可因前端隱藏或篩選而視為已完成授權。
 
+Firebase Auth 模式下，`系統管理員` 會優先取得完整前端導覽與全院結果查詢視角。系統管理頁目前僅為權限矩陣展示，未寫入角色/權限或查詢稽核事件；群組／審查員管理及 CAPA、任務清單亦尚未連接 Firestore。前端完整導覽不代表伺服器端已授予權限，真實角色管理需先完成受控後端與 Firestore Rules。
+
 ## 正式使用前仍需完成
 
 正式版本仍須由 Firestore Security Rules（或受控後端）強制執行完整角色範圍：主任／副主任／督導全院；各組召集人／執行幹事僅所屬組別；護理長僅所屬單位。群組角色先使用 `users.groupId`／`groupIds`，若未填則嘗試用 `users.unitCode` 對應 `units.groupId`；單位角色需提供與審查紀錄 `unitId` 對應的 `unitCode`。目前 UI 查詢範圍是額外的最小化篩選，不可單獨視為安全邊界。正式使用前仍須進行資安與流程驗收。

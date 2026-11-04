@@ -11,6 +11,10 @@ import {
 import { DEMO_SCHEDULES } from "../data/demo";
 import { PageHeading } from "../components/ui";
 import {
+  getScheduleTaskDisplayStatus,
+  getScheduleTaskProgress,
+} from "../lib/scheduleStatus";
+import {
   readIndicatorYearSchedule,
   readFirebaseScheduleUnits,
   saveIndicatorYearSchedule,
@@ -530,58 +534,61 @@ export function SchedulePage({
                   </tr>
                 </thead>
                 <tbody>
-                  {DEMO_SCHEDULES.map((task) => (
-                    <tr key={task.id}>
-                      <td>
-                        <div className="indicator-title">
-                          <b>{task.indicator}</b>
-                          <span>{task.unit}</span>
-                        </div>
-                      </td>
-                      <td>
-                        <div className="person-cell">
-                          <span className="person-avatar">
-                            {task.reviewer.slice(-1)}
-                          </span>
-                          {task.reviewer}
-                        </div>
-                      </td>
-                      <td>{task.month}</td>
-                      <td>
-                        <div className="schedule-progress">
-                          <span>
-                            {task.done} / {task.total}
-                          </span>
-                          <div className="mini-progress">
-                            <i
-                              style={{
-                                width: `${Math.round((task.done / task.total) * 100)}%`,
-                              }}
-                            />
+                  {DEMO_SCHEDULES.map((task) => {
+                    const status = getScheduleTaskDisplayStatus(task);
+                    return (
+                      <tr key={task.id}>
+                        <td>
+                          <div className="indicator-title">
+                            <b>{task.indicator}</b>
+                            <span>{task.unit}</span>
                           </div>
-                        </div>
-                      </td>
-                      <td>{task.due}</td>
-                      <td>
-                        <span
-                          className={`status-pill ${task.status === "逾期補審" ? "danger" : task.status === "待開始" ? "muted" : "info"}`}
-                        >
-                          {task.status}
-                        </span>
-                      </td>
-                      <td>
-                        <button
-                          className="icon-button"
-                          onClick={() =>
-                            onAction(`排程「${task.indicator}」僅供展示`)
-                          }
-                          aria-label="排程更多選項"
-                        >
-                          <MoreHorizontal size={17} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td>
+                          <div className="person-cell">
+                            <span className="person-avatar">
+                              {task.reviewer.slice(-1)}
+                            </span>
+                            {task.reviewer}
+                          </div>
+                        </td>
+                        <td>{task.month}</td>
+                        <td>
+                          <div className="schedule-progress">
+                            <span>
+                              {task.done} / {task.total}
+                            </span>
+                            <div className="mini-progress">
+                              <i
+                                style={{
+                                  width: `${getScheduleTaskProgress(task)}%`,
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </td>
+                        <td>{task.due}</td>
+                        <td>
+                          <span
+                            className={`status-pill ${status === "逾期補審" || status === "資料異常" ? "danger" : status === "待開始" ? "muted" : status === "已完成" ? "success" : "info"}`}
+                          >
+                            {status}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            className="icon-button"
+                            onClick={() =>
+                              onAction(`排程「${task.indicator}」僅供展示`)
+                            }
+                            aria-label="排程更多選項"
+                          >
+                            <MoreHorizontal size={17} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -37,7 +37,8 @@ export function AdminPage({
         <ShieldCheck size={17} />
         <span>
           <b>展示權限矩陣</b> ·
-          組長只管理所屬群組與下層次群組；管理員可授予全院範圍。此表不代表正式授權。
+          組長只管理所屬群組與下層次群組；管理員可授予全院範圍。此頁尚未讀取稽核事件，權限變更也不會寫入
+          Firebase。
         </span>
       </div>
       <section className="panel data-panel permission-panel">
@@ -109,7 +110,10 @@ export function AdminPage({
           <SettingRow title="資料保存政策" value="原則上不刪除" />
         </section>
         <section className="panel settings-panel">
-          <SectionTitle title="稽核軌跡" note="不可關閉的必要紀錄" />
+          <SectionTitle
+            title="稽核軌跡"
+            note="必要紀錄類別展示，尚無實際事件清單"
+          />
           <div className="audit-logs">
             {[
               "登入、登出與失敗",

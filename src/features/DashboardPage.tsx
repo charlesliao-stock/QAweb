@@ -15,6 +15,10 @@ import {
 import { DEMO_SCHEDULES, DEMO_UNITS } from "../data/demo";
 import { RagBadge, PageHeading, SectionTitle } from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
+import {
+  getScheduleTaskDisplayStatus,
+  getScheduleTaskProgress,
+} from "../lib/scheduleStatus";
 import type { Role, ScheduleTask } from "../types";
 
 export function DashboardPage({
@@ -295,7 +299,8 @@ function TaskRow({
   task: ScheduleTask;
   onAction: (message: string) => void;
 }) {
-  const pct = Math.round((task.done / task.total) * 100);
+  const pct = getScheduleTaskProgress(task);
+  const status = getScheduleTaskDisplayStatus(task);
   return (
     <div className="task-row">
       <div className="task-date">
@@ -312,9 +317,9 @@ function TaskRow({
         </div>
       </div>
       <span
-        className={`status-pill ${task.status === "逾期補審" ? "danger" : task.status === "待開始" ? "muted" : "info"}`}
+        className={`status-pill ${status === "逾期補審" || status === "資料異常" ? "danger" : status === "待開始" ? "muted" : status === "已完成" ? "success" : "info"}`}
       >
-        {task.status}
+        {status}
       </span>
       <button
         className="icon-button task-more"

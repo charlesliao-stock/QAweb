@@ -1464,6 +1464,21 @@ button:disabled {
   color: #a0aaac;
   font-size: 10px;
 }
+.not-connected-state {
+  padding: 52px 24px;
+  text-align: center;
+  color: var(--muted);
+}
+.not-connected-state h2 {
+  margin: 0 0 10px;
+  color: var(--ink);
+  font-size: 20px;
+}
+.not-connected-state p {
+  max-width: 620px;
+  margin: 0 auto;
+  line-height: 1.7;
+}
 
 .schedule-banner {
   display: flex;

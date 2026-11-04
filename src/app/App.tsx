@@ -50,6 +50,10 @@ interface NavItem {
   icon: typeof LayoutDashboard;
 }
 
+function isSystemAdminProfile(profile: FirebaseProfile | null): boolean {
+  return profile?.roles.includes("系統管理員") ?? false;
+}
+
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "工作台",
@@ -311,7 +315,10 @@ function Sidebar({
             items: group.items.filter(
               (item) =>
                 canView(role, item.id) &&
-                (!authMode || item.id === "results" || item.id === "schedule"),
+                (!authMode ||
+                  isSystemAdminProfile(profile) ||
+                  item.id === "results" ||
+                  item.id === "schedule"),
             ),
           }))
             .filter((group) => group.items.length > 0)
@@ -503,21 +510,23 @@ export default function App() {
 
   const role: Role =
     authMode && profile
-      ? ((
-          [
-            "主任",
-            "副主任",
-            "督導",
-            "各組召集人",
-            "執行幹事",
-            "品管執行幹事",
-            "護理長",
-            "指標負責人",
-            "系統管理員",
-            "審查員",
-            "一般人員",
-          ] as Role[]
-        ).find((item) => profile.roles.includes(item)) ?? "一般人員")
+      ? profile.roles.includes("系統管理員")
+        ? "系統管理員"
+        : ((
+            [
+              "主任",
+              "副主任",
+              "督導",
+              "各組召集人",
+              "執行幹事",
+              "品管執行幹事",
+              "護理長",
+              "指標負責人",
+              "系統管理員",
+              "審查員",
+              "一般人員",
+            ] as Role[]
+          ).find((item) => profile.roles.includes(item)) ?? "一般人員")
       : demoRole;
 
   const changeRole = (next: Role) => {
@@ -530,9 +539,13 @@ export default function App() {
   };
 
   const view: PageId = authMode
-    ? page === "schedule" || page === "results"
-      ? page
-      : "results"
+    ? isSystemAdminProfile(profile)
+      ? canView(role, page)
+        ? page
+        : "admin"
+      : page === "schedule" || page === "results"
+        ? page
+        : "results"
     : canView(role, page)
       ? page
       : "dashboard";
@@ -627,7 +640,9 @@ export default function App() {
         </header>
         {authMode ? (
           <div className="demo-banner">
-            Firebase 已登入 · 指標及審查結果唯讀；年度排程設定依權限儲存
+            {isSystemAdminProfile(profile)
+              ? "系統管理員完整導覽已開放；結果與年度排程已接 Firebase，其餘管理頁仍為展示功能"
+              : "Firebase 已登入 · 指標及審查結果唯讀；年度排程設定依權限儲存"}
           </div>
         ) : (
           <DemoBanner source={dataSource} />
@@ -662,8 +677,12 @@ export default function App() {
               onAction={notify}
             />
           )}
-          {view === "groups" && <GroupsPage onAction={notify} />}
-          {view === "capa" && <CapaPage onAction={notify} />}
+          {view === "groups" && (
+            <GroupsPage firebaseMode={authMode} onAction={notify} />
+          )}
+          {view === "capa" && (
+            <CapaPage firebaseMode={authMode} onAction={notify} />
+          )}
           {view === "admin" && <AdminPage onAction={notify} />}
         </div>
       </main>
@@ -689,7 +708,10 @@ export default function App() {
         )
           .filter(
             (item) =>
-              canView(role, item.id) && (!authMode || item.id === "results"),
+              canView(role, item.id) &&
+              (!authMode ||
+                isSystemAdminProfile(profile) ||
+                item.id === "results"),
           )
           .map((item) => {
             const Icon = item.icon;
