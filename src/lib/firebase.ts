@@ -69,10 +69,10 @@ export async function readDemoIndicators(): Promise<Indicator[] | null> {
         code: safeText(raw.code, "DEMO"),
         name: safeText(raw.name, "展示指標"),
         group: safeText(raw.group, "展示組別"),
-        threshold: safeNumber(raw.threshold, 90),
-        attainment: safeNumber(raw.attainment, 0),
-        audited: safeNumber(raw.audited, 0),
-        planned: safeNumber(raw.planned, 0),
+        threshold: safeNumberInRange(raw.threshold, 90, 0, 100),
+        attainment: safeNumberInRange(raw.attainment, 0, 0, 100),
+        audited: safeCount(raw.audited),
+        planned: safeCount(raw.planned),
         version: safeText(raw.version, "v1.0"),
         status,
         owner: "展示負責人",
@@ -88,6 +88,24 @@ function safeText(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length <= 100 ? value : fallback;
 }
 
-function safeNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+function safeNumberInRange(
+  value: unknown,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= minimum &&
+    value <= maximum
+    ? value
+    : fallback;
+}
+
+function safeCount(value: unknown): number {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+    ? value
+    : 0;
 }

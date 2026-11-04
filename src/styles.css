@@ -987,7 +987,8 @@ button:disabled {
 .trend-chart {
   display: block;
   width: 100%;
-  height: 152px;
+  height: auto;
+  aspect-ratio: 3 / 1;
   overflow: visible;
 }
 .chart-gridline {
@@ -1015,8 +1016,8 @@ button:disabled {
 .chart-x-labels {
   display: flex;
   justify-content: space-between;
-  color: #a2adaf;
-  font-size: 8px;
+  color: #7d898b;
+  font-size: 11px;
   padding: 0 1px;
 }
 .focus-list {
@@ -1870,7 +1871,9 @@ button:disabled {
   border: 1px solid #e4eaea;
   background: #fff;
   border-radius: 7px;
-  font-size: 9px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
 }
 .filter-chip.active {
   color: #367e74;
@@ -1879,8 +1882,8 @@ button:disabled {
 }
 .filter-caption {
   margin-left: auto;
-  color: #a0abad;
-  font-size: 8px;
+  color: #7d898b;
+  font-size: 11px;
 }
 .results-kpis {
   display: grid;
@@ -2950,5 +2953,24 @@ button:disabled {
   }
   .task-date {
     width: 28px;
+  }
+}
+
+/* Accessibility */
+:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
+}
+.select-wrap select:focus-visible {
+  outline: 2px solid #0f766e;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

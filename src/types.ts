@@ -1,11 +1,14 @@
-export type Role =
-  | "一般人員"
-  | "審查員"
-  | "護理長"
-  | "督導"
-  | "品管執行幹事"
-  | "系統管理員"
-  | "指標負責人";
+export const ROLES = [
+  "一般人員",
+  "審查員",
+  "護理長",
+  "督導",
+  "品管執行幹事",
+  "系統管理員",
+  "指標負責人",
+] as const;
+
+export type Role = (typeof ROLES)[number];
 
 export type PageId =
   | "dashboard"

@@ -168,6 +168,16 @@ export const DEMO_CAPA: CapaCase[] = [
 ];
 
 export const MONTHLY_TREND = [78, 82, 80, 85, 88, 91, 89, 93];
+export const MONTHLY_TREND_LABELS = [
+  "4月",
+  "5月",
+  "6月",
+  "7月",
+  "8月",
+  "9月",
+  "10月",
+  "11月",
+];
 
 export const DEMO_UNITS = [
   {

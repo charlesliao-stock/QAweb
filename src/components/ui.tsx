@@ -33,9 +33,16 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
     admin: { title: "系統管理", description: "角色權限與系統參數展示設定" },
   };
 
-export function ragFor(value: number, threshold: number): Rag {
+/** 黃燈區間預設為閾值下 5 個百分點；正式版應由系統參數設定。 */
+export const DEFAULT_AMBER_MARGIN = 5;
+
+export function ragFor(
+  value: number,
+  threshold: number,
+  amberMargin: number = DEFAULT_AMBER_MARGIN,
+): Rag {
   if (value >= threshold) return "green";
-  if (value >= threshold - 5) return "amber";
+  if (value >= threshold - amberMargin) return "amber";
   return "red";
 }
 

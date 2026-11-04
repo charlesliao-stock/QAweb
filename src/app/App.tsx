@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -34,19 +34,16 @@ import { GroupsPage } from "../features/GroupsPage";
 import { IndicatorsPage } from "../features/IndicatorsPage";
 import { ResultsPage } from "../features/ResultsPage";
 import { SchedulePage } from "../features/SchedulePage";
-import type { PageId, Role } from "../types";
+import { canView } from "../lib/access";
+import { ROLES, type PageId, type Role } from "../types";
 
-const ROLES: Role[] = [
-  "一般人員",
-  "審查員",
-  "護理長",
-  "督導",
-  "品管執行幹事",
-  "系統管理員",
-  "指標負責人",
-];
+interface NavItem {
+  id: PageId;
+  label: string;
+  icon: typeof LayoutDashboard;
+}
 
-const NAV_GROUPS = [
+const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "工作台",
     items: [{ id: "dashboard", label: "總覽儀表板", icon: LayoutDashboard }],
@@ -68,7 +65,7 @@ const NAV_GROUPS = [
       { id: "admin", label: "系統管理", icon: Settings2 },
     ],
   },
-] as const;
+];
 
 function DemoLogin({ onEnter }: { onEnter: (role: Role) => void }) {
   const [role, setRole] = useState<Role>("品管執行幹事");
@@ -202,7 +199,12 @@ function Sidebar({
           <ChevronDown size={14} />
         </div>
         <nav className="main-nav" aria-label="主要導覽">
-          {NAV_GROUPS.map((group) => (
+          {NAV_GROUPS.map((group) => ({
+            ...group,
+            items: group.items.filter((item) => canView(role, item.id)),
+          }))
+            .filter((group) => group.items.length > 0)
+            .map((group) => (
             <div className="nav-group" key={group.label}>
               <span className="nav-group-label">{group.label}</span>
               {group.items.map((item) => {
@@ -211,8 +213,9 @@ function Sidebar({
                   <button
                     key={item.id}
                     className={`nav-item${page === item.id ? " active" : ""}`}
+                    aria-current={page === item.id ? "page" : undefined}
                     onClick={() => {
-                      onPage(item.id as PageId);
+                      onPage(item.id);
                       onClose();
                     }}
                   >
@@ -290,10 +293,32 @@ export default function App() {
     };
   }, []);
 
-  const notify = (message: string) => {
+  const toastTimer = useRef<number | undefined>(undefined);
+  const notify = useCallback((message: string) => {
+    window.clearTimeout(toastTimer.current);
     setToast(message);
-    window.setTimeout(() => setToast(""), 2600);
+    toastTimer.current = window.setTimeout(() => setToast(""), 2600);
+  }, []);
+  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobileOpen]);
+
+  const changeRole = (next: Role) => {
+    setRole(next);
+    if (!canView(next, page)) {
+      setPage("dashboard");
+      notify(`「${next}」視角無此頁面，已回到總覽`);
+    }
   };
+
+  const view: PageId = canView(role, page) ? page : "dashboard";
 
   if (!entered)
     return (
@@ -308,10 +333,10 @@ export default function App() {
   return (
     <div className="app-shell">
       <Sidebar
-        page={page}
+        page={view}
         role={role}
         onPage={setPage}
-        onRole={setRole}
+        onRole={changeRole}
         onExit={() => setEntered(false)}
         mobileOpen={mobileOpen}
         onClose={() => setMobileOpen(false)}
@@ -328,7 +353,7 @@ export default function App() {
           <div className="topbar-crumb">
             <span>示範醫療機構</span>
             <ChevronRight size={14} />
-            <b>{PAGE_COPY[page].title}</b>
+            <b>{PAGE_COPY[view].title}</b>
           </div>
           <div className="topbar-actions">
             <div className="connection-status">
@@ -355,24 +380,24 @@ export default function App() {
         </header>
         <DemoBanner source={dataSource} />
         <div className="page-content">
-          {page === "dashboard" && (
+          {view === "dashboard" && (
             <DashboardPage role={role} onAction={notify} />
           )}
-          {page === "indicators" && (
+          {view === "indicators" && (
             <IndicatorsPage indicators={indicators} onAction={notify} />
           )}
-          {page === "schedule" && <SchedulePage onAction={notify} />}
-          {page === "audit" && <AuditPage onAction={notify} />}
-          {page === "results" && (
+          {view === "schedule" && <SchedulePage onAction={notify} />}
+          {view === "audit" && <AuditPage onAction={notify} />}
+          {view === "results" && (
             <ResultsPage indicators={indicators} onAction={notify} />
           )}
-          {page === "groups" && <GroupsPage onAction={notify} />}
-          {page === "capa" && <CapaPage onAction={notify} />}
-          {page === "admin" && <AdminPage onAction={notify} />}
+          {view === "groups" && <GroupsPage onAction={notify} />}
+          {view === "capa" && <CapaPage onAction={notify} />}
+          {view === "admin" && <AdminPage onAction={notify} />}
         </div>
       </main>
       {toast && (
-        <div className="toast-message">
+        <div className="toast-message" role="status" aria-live="polite">
           <span>
             <Check size={15} />
           </span>
@@ -383,25 +408,33 @@ export default function App() {
         </div>
       )}
       <nav className="mobile-bottom-nav" aria-label="手機主要導覽">
-        {[
-          { id: "dashboard", label: "總覽", icon: LayoutDashboard },
-          { id: "indicators", label: "指標", icon: BookOpenCheck },
-          { id: "audit", label: "審查", icon: ClipboardCheck },
-          { id: "results", label: "結果", icon: FileBarChart2 },
-          { id: "groups", label: "更多", icon: Menu },
-        ].map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.id}
-              className={page === item.id ? "active" : ""}
-              onClick={() => setPage(item.id as PageId)}
-            >
-              <Icon size={19} />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
+        {(
+          [
+            { id: "dashboard", label: "總覽", icon: LayoutDashboard },
+            { id: "indicators", label: "指標", icon: BookOpenCheck },
+            { id: "audit", label: "審查", icon: ClipboardCheck },
+            { id: "results", label: "結果", icon: FileBarChart2 },
+          ] as const
+        )
+          .filter((item) => canView(role, item.id))
+          .map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                className={page === item.id ? "active" : ""}
+                aria-current={page === item.id ? "page" : undefined}
+                onClick={() => setPage(item.id)}
+              >
+                <Icon size={19} />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        <button onClick={() => setMobileOpen(true)} aria-label="開啟完整選單">
+          <Menu size={19} />
+          <span>更多</span>
+        </button>
       </nav>
     </div>
   );

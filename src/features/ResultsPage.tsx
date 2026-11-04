@@ -1,4 +1,4 @@
-import { ArrowRight, ArrowUpRight, ChevronDown, Download } from "lucide-react";
+import { ArrowRight, ChevronDown, Download } from "lucide-react";
 import { PageHeading, RagBadge, SectionTitle, ragFor } from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
 import type { Indicator } from "../types";
@@ -13,6 +13,14 @@ export function ResultsPage({
   const achieved = indicators.filter(
     (item) => item.attainment >= item.threshold,
   ).length;
+  const notAchieved = indicators.length - achieved;
+  const averageAttainment = indicators.length
+    ? indicators.reduce((sum, item) => sum + item.attainment, 0) /
+      indicators.length
+    : 0;
+  const achievementRate = indicators.length
+    ? (achieved / indicators.length) * 100
+    : 0;
   return (
     <>
       <PageHeading
@@ -28,33 +36,27 @@ export function ResultsPage({
         }
       />
       <div className="results-filter">
-        <div className="filter-chip active">
+        <button type="button" className="filter-chip active" onClick={() => onAction("展示篩選：2026 年度")}>
           2026 年度 <ChevronDown size={14} />
-        </div>
-        <div className="filter-chip">
+        </button>
+        <button type="button" className="filter-chip" onClick={() => onAction("展示篩選：全部組別")}>
           全部組別 <ChevronDown size={14} />
-        </div>
-        <div className="filter-chip">
+        </button>
+        <button type="button" className="filter-chip" onClick={() => onAction("展示篩選：全部指標")}>
           全部指標 <ChevronDown size={14} />
-        </div>
+        </button>
         <span className="filter-caption">資料歸屬依排程月份與單位代號</span>
       </div>
       <div className="results-kpis">
         <div className="result-kpi">
-          <span>全院平均符合率</span>
-          <strong>91.8%</strong>
-          <small>
-            <ArrowUpRight size={13} />
-            較去年同期 +3.4%
-          </small>
+          <span>展示指標平均符合率</span>
+          <strong>{averageAttainment.toFixed(1)}%</strong>
+          <small>目前展示指標的算術平均，非正式全院統計</small>
         </div>
         <div className="result-kpi">
-          <span>單位平均達標率</span>
-          <strong>82.1%</strong>
-          <small>
-            <ArrowUpRight size={13} />
-            較去年同期 +1.8%
-          </small>
+          <span>達標指標比例</span>
+          <strong>{achievementRate.toFixed(1)}%</strong>
+          <small>{achieved} / {indicators.length} 項達標</small>
         </div>
         <div className="result-kpi">
           <span>達標指標</span>
@@ -62,21 +64,21 @@ export function ResultsPage({
             {achieved}
             <small> / {indicators.length}</small>
           </strong>
-          <small>本頁展示指標</small>
+          <small>依各指標閾值判定</small>
         </div>
         <div className="result-kpi">
-          <span>未達標單位</span>
+          <span>未達標指標</span>
           <strong className="red-text">
-            2<small> 個</small>
+            {notAchieved}<small> 項</small>
           </strong>
-          <small>建議啟動改善追蹤</small>
+          <small>符合率低於各自閾值</small>
         </div>
       </div>
       <div className="results-grid">
         <section className="panel trend-panel">
           <SectionTitle
             title="指標達標率趨勢"
-            note="整體平均 · 2026 年 4–11 月"
+            note="固定虛構趨勢資料 · 2026 年 4–11 月"
             action={
               <button
                 className="select-like"
@@ -101,11 +103,11 @@ export function ResultsPage({
                 <div className="bar-track">
                   <i
                     className={`bar-fill ${ragFor(item.attainment, item.threshold)}`}
-                    style={{ width: `${item.attainment}%` }}
+                    style={{ width: `${Math.max(0, Math.min(100, item.attainment))}%` }}
                   />
                   <span
                     className="threshold-marker"
-                    style={{ left: `${item.threshold}%` }}
+                    style={{ left: `${Math.max(0, Math.min(100, item.threshold))}%` }}
                   />
                 </div>
                 <small>閾值 {item.threshold}%</small>
@@ -135,8 +137,8 @@ export function ResultsPage({
                 <th>組別</th>
                 <th>閾值</th>
                 <th>符合率</th>
-                <th>達標人數</th>
-                <th>受審人數</th>
+                <th>已審人數</th>
+                <th>規劃人數</th>
                 <th>狀態</th>
               </tr>
             </thead>
@@ -152,8 +154,8 @@ export function ResultsPage({
                   <td>{item.group}</td>
                   <td>{item.threshold}%</td>
                   <td className="threshold-cell">{item.attainment}%</td>
-                  <td>{Math.round((item.audited * item.attainment) / 100)}</td>
                   <td>{item.audited}</td>
+                  <td>{item.planned}</td>
                   <td>
                     <RagBadge
                       value={item.attainment}
