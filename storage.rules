@@ -1,0 +1,20 @@
+rules_version = '2';
+// 護理品質指標管理系統 — Storage Rules（草案 v1.0）
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isAuth() { return request.auth != null; }
+
+    // 審查照片／語音：須登入；讀取範圍由 Firestore 文件權限把關，寫入限審查員上傳
+    match /reviews/{reviewId}/{kind}/{file} {
+      allow read: if isAuth();
+      allow write: if isAuth()
+                   && request.resource.size < 10 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*|audio/.*');
+    }
+    // 指引文件：登入者可讀；上傳限幹事/管理員（以自訂 claims 判斷）
+    match /guidelines/{file} {
+      allow read: if isAuth();
+      allow write: if isAuth() && 'ganshi' in request.auth.token.roles;
+    }
+  }
+}

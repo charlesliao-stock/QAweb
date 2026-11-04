@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -8,7 +7,6 @@ import {
   CalendarDays,
   Check,
   ChevronDown,
-  ChevronRight,
   ClipboardCheck,
   FileBarChart2,
   GitBranch,
@@ -16,23 +14,28 @@ import {
   LockKeyhole,
   LogOut,
   Menu,
+  Palette,
   Settings2,
-  ShieldCheck,
   X,
 } from "lucide-react";
-import { DEMO_INDICATORS } from "../data/demo";
+import { AuthProvider, useAuth } from "../lib/auth";
+import { isDemoMode } from "../lib/demoMode";
+import { doc, getDoc } from "../lib/db";
+import { getFirebaseDb } from "../lib/firebase";
+import { maskName } from "../lib/mask";
 import {
-  isFirebaseAuditModeEnabled,
-  isFirebaseDemoReadEnabled,
-  readFirebaseIndicators,
-  readDemoIndicators,
-  signInWithStaffId,
-  signOutFirebaseUser,
-  watchFirebaseProfile,
-  type FirebaseProfile,
-  type DemoDataSource,
-} from "../lib/firebase";
-import { BrandMark, DemoBanner, PAGE_COPY } from "../components/ui";
+  FONT_SIZE_LABELS,
+  applyTheme,
+  applyUiPrefs,
+  getColorMode,
+  getFontSize,
+  setColorMode,
+  setFontSize,
+  type ColorModeOption,
+  type FontSizeOption,
+} from "../lib/uiPrefs";
+import { BrandMark, PAGE_COPY } from "../components/ui";
+import { VERSION_LABEL } from "../version";
 import { AdminPage } from "../features/AdminPage";
 import { AuditPage } from "../features/AuditPage";
 import { CapaPage } from "../features/CapaPage";
@@ -41,20 +44,9 @@ import { GroupsPage } from "../features/GroupsPage";
 import { IndicatorsPage } from "../features/IndicatorsPage";
 import { ResultsPage } from "../features/ResultsPage";
 import { SchedulePage } from "../features/SchedulePage";
-import { canView } from "../lib/access";
-import { ROLES, type PageId, type Role } from "../types";
+import type { PageId, Role } from "../types";
 
-interface NavItem {
-  id: PageId;
-  label: string;
-  icon: typeof LayoutDashboard;
-}
-
-function isSystemAdminProfile(profile: FirebaseProfile | null): boolean {
-  return profile?.roles.includes("系統管理員") ?? false;
-}
-
-const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
+const NAV_GROUPS = [
   {
     label: "工作台",
     items: [{ id: "dashboard", label: "總覽儀表板", icon: LayoutDashboard }],
@@ -63,7 +55,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     label: "品質管理",
     items: [
       { id: "indicators", label: "指標管理", icon: BookOpenCheck },
-      { id: "schedule", label: "審查排程", icon: CalendarDays },
+      { id: "schedule", label: "指標排程", icon: CalendarDays },
       { id: "audit", label: "指標審查", icon: ClipboardCheck },
       { id: "results", label: "結果分析", icon: FileBarChart2 },
       { id: "capa", label: "CAPA 改善追蹤", icon: Activity },
@@ -76,10 +68,55 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { id: "admin", label: "系統管理", icon: Settings2 },
     ],
   },
+] as const;
+
+const ROLE_NAMES: Role[] = [
+  "一般人員",
+  "審查員",
+  "護理長",
+  "督導",
+  "品管執行幹事",
+  "系統管理員",
+  "指標負責人",
 ];
 
-function DemoLogin({ onEnter }: { onEnter: (role: Role) => void }) {
-  const [role, setRole] = useState<Role>("品管執行幹事");
+function LoginScreen() {
+  const { login, changePassword, needsPasswordChange } = useAuth();
+  const [staffId, setStaffId] = useState("");
+  const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submitLogin = async () => {
+    setError("");
+    setBusy(true);
+    try {
+      await login(staffId, password);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "登入失敗");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitPasswordChange = async () => {
+    setError("");
+    if (newPassword !== confirmPassword) {
+      setError("兩次輸入的新密碼不一致");
+      return;
+    }
+    setBusy(true);
+    try {
+      await changePassword(newPassword);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "密碼變更失敗");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <main className="login-screen">
       <div className="login-backdrop" />
@@ -90,49 +127,111 @@ function DemoLogin({ onEnter }: { onEnter: (role: Role) => void }) {
             護理品質<span>管理系統</span>
           </span>
         </div>
-        <div className="login-eyebrow">
-          <span className="live-dot" /> 僅供流程展示
-        </div>
-        <h1>
-          讓品質改善
-          <br />
-          <em>每一步都有依據。</em>
-        </h1>
-        <p className="login-lead">
-          檢視指標、審查進度與改善成效，從同一個工作台開始。
-        </p>
-        <div className="login-demo-note">
-          <ShieldCheck size={17} />
-          <span>
-            <strong>展示模式已啟用</strong>
-            <br />
-            不需要帳號或密碼。系統使用虛構資料，未連接正式登入。
-          </span>
-        </div>
-        <label className="field-label" htmlFor="demo-role">
-          選擇展示角色
-        </label>
-        <div className="select-wrap">
-          <select
-            id="demo-role"
-            value={role}
-            onChange={(event) => setRole(event.target.value as Role)}
-          >
-            {ROLES.map((item) => (
-              <option key={item}>{item}</option>
-            ))}
-          </select>
-          <ChevronDown size={17} />
-        </div>
-        <button
-          className="button button-primary login-action"
-          onClick={() => onEnter(role)}
-        >
-          進入展示工作台 <ArrowRight size={17} />
-        </button>
-        <div className="login-foot">
-          <LockKeyhole size={13} /> 展示流程不驗證身分，也不儲存輸入內容
-        </div>
+        {needsPasswordChange ? (
+          <>
+            <div className="login-eyebrow">
+              <span className="live-dot" /> 首次登入
+            </div>
+            <h1>
+              請先<em>變更密碼</em>
+            </h1>
+            <p className="login-lead">
+              為保障帳號安全，首次登入須設定新密碼（至少 6 個字元）。
+            </p>
+            <label className="field-label" htmlFor="new-password">
+              新密碼
+            </label>
+            <input
+              id="new-password"
+              className="text-input"
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              placeholder="請輸入新密碼"
+              autoComplete="new-password"
+            />
+            <label className="field-label" htmlFor="confirm-password">
+              確認新密碼
+            </label>
+            <input
+              id="confirm-password"
+              className="text-input"
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              placeholder="請再輸入一次新密碼"
+              autoComplete="new-password"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void submitPasswordChange();
+              }}
+            />
+            {error && <div className="login-error">{error}</div>}
+            <button
+              className="button button-primary login-action"
+              onClick={() => void submitPasswordChange()}
+              disabled={busy}
+            >
+              {busy ? "變更中…" : "變更密碼並進入"}
+              <ArrowRight size={17} />
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="login-eyebrow">
+              <span className="live-dot" /> 護理品質指標管理
+            </div>
+            <h1>
+              讓品質改善
+              <br />
+              <em>每一步都有依據。</em>
+            </h1>
+            <p className="login-lead">
+              檢視指標、審查進度與改善成效，從同一個工作台開始。
+            </p>
+            <label className="field-label" htmlFor="staff-id">
+              職編
+            </label>
+            <input
+              id="staff-id"
+              className="text-input"
+              value={staffId}
+              onChange={(event) => setStaffId(event.target.value)}
+              placeholder="請輸入職編"
+              autoComplete="username"
+            />
+            <label className="field-label" htmlFor="password">
+              密碼
+            </label>
+            <input
+              id="password"
+              className="text-input"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="請輸入密碼"
+              autoComplete="current-password"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void submitLogin();
+              }}
+            />
+            {error && <div className="login-error">{error}</div>}
+            <button
+              className="button button-primary login-action"
+              onClick={() => void submitLogin()}
+              disabled={busy}
+            >
+              {busy ? "登入中…" : "登入"}
+              <ArrowRight size={17} />
+            </button>
+            <div className="login-foot">
+              <LockKeyhole size={13} /> 連續錯誤 5 次將鎖定 15 分鐘
+            </div>
+            <div className="login-version">{VERSION_LABEL}</div>
+            <div className="login-demo-hint">
+              展示帳號：demo／demo（展示模式，操作不會寫入資料庫）
+            </div>
+          </>
+        )}
       </section>
       <aside className="login-side-copy">
         <span>護理品質指標管理</span>
@@ -160,123 +259,23 @@ function DemoLogin({ onEnter }: { onEnter: (role: Role) => void }) {
   );
 }
 
-function FirebaseLogin({
-  error,
-  onLogin,
-}: {
-  error: string;
-  onLogin: (profile: FirebaseProfile) => void;
-}) {
-  const [staffId, setStaffId] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setMessage("");
-    try {
-      onLogin(await signInWithStaffId(staffId, password));
-    } catch (cause) {
-      setMessage(
-        cause instanceof Error ? cause.message : "登入失敗，請稍後再試。",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <main className="login-screen">
-      <div className="login-backdrop" />
-      <section className="login-card">
-        <div className="login-brand">
-          <BrandMark />
-          <span>
-            護理品質<span>管理系統</span>
-          </span>
-        </div>
-        <div className="login-eyebrow">
-          <span className="live-dot" /> Firebase Authentication
-        </div>
-        <h1>登入結果分析</h1>
-        <p className="login-lead">
-          使用既有系統帳號登入，依 Firestore Security Rules 讀取結果。
-        </p>
-        <div className="login-demo-note">
-          <ShieldCheck size={17} />
-          <span>本頁只讀取已送出的測試審查紀錄，不會寫入或修改審查資料。</span>
-        </div>
-        {(error || message) && (
-          <div className="login-error" role="alert">
-            {message || error}
-          </div>
-        )}
-        <form onSubmit={submit}>
-          <label className="field-label" htmlFor="firebase-staff-id">
-            職編
-          </label>
-          <input
-            id="firebase-staff-id"
-            className="text-input"
-            autoComplete="username"
-            value={staffId}
-            onChange={(event) => setStaffId(event.target.value)}
-            required
-          />
-          <label className="field-label" htmlFor="firebase-password">
-            密碼
-          </label>
-          <input
-            id="firebase-password"
-            className="text-input"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-          />
-          <button
-            className="button button-primary login-action"
-            type="submit"
-            disabled={busy}
-          >
-            {busy ? "登入中…" : "登入並查看結果"}
-          </button>
-        </form>
-      </section>
-      <aside className="login-side-copy">
-        <span>護理品質指標管理</span>
-        <strong>
-          以審查紀錄，
-          <br />
-          追蹤季度成效。
-        </strong>
-      </aside>
-    </main>
-  );
-}
-
 function Sidebar({
   page,
-  role,
-  authMode,
-  profile,
   onPage,
-  onRole,
   onExit,
   mobileOpen,
   onClose,
 }: {
   page: PageId;
-  role: Role;
-  authMode: boolean;
-  profile: FirebaseProfile | null;
   onPage: (page: PageId) => void;
-  onRole: (role: Role) => void;
   onExit: () => void;
   mobileOpen: boolean;
   onClose: () => void;
 }) {
+  const { user } = useAuth();
+  const displayName = user?.name ?? "";
+  const staffId = user?.staffId ?? "";
+  const unitName = user?.unitName || user?.unitCode || "";
   return (
     <>
       {mobileOpen && (
@@ -301,95 +300,51 @@ function Sidebar({
             <X size={18} />
           </button>
         </div>
-        <div className="org-chip">
-          <span className="org-avatar">護</span>
-          <span>
-            <b>示範醫療機構</b>
-            <small>單院區 · 品質管理</small>
-          </span>
-          <ChevronDown size={14} />
-        </div>
         <nav className="main-nav" aria-label="主要導覽">
-          {NAV_GROUPS.map((group) => ({
-            ...group,
-            items: group.items.filter(
-              (item) =>
-                canView(role, item.id) &&
-                (!authMode ||
-                  isSystemAdminProfile(profile) ||
-                  item.id === "results" ||
-                  item.id === "schedule"),
-            ),
-          }))
-            .filter((group) => group.items.length > 0)
-            .map((group) => (
-              <div className="nav-group" key={group.label}>
-                <span className="nav-group-label">{group.label}</span>
-                {group.items.map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <button
-                      key={item.id}
-                      className={`nav-item${page === item.id ? " active" : ""}`}
-                      aria-current={page === item.id ? "page" : undefined}
-                      onClick={() => {
-                        onPage(item.id);
-                        onClose();
-                      }}
-                    >
-                      <Icon size={18} strokeWidth={1.8} />
-                      <span>{item.label}</span>
-                      {item.id === "capa" && <i className="nav-count">3</i>}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
+          {NAV_GROUPS.map((group) => (
+            <div className="nav-group" key={group.label}>
+              <span className="nav-group-label">{group.label}</span>
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    className={`nav-item${page === item.id ? " active" : ""}`}
+                    onClick={() => {
+                      onPage(item.id as PageId);
+                      onClose();
+                    }}
+                  >
+                    <Icon size={18} strokeWidth={1.8} />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="role-box">
-            <span className="role-box-label">目前角色視角</span>
-            {authMode ? (
-              <div className="select-wrap role-select">
-                <span className="auth-role-label">{role}</span>
-              </div>
-            ) : (
-              <div className="select-wrap role-select">
-                <select
-                  value={role}
-                  onChange={(event) => onRole(event.target.value as Role)}
-                  aria-label="切換展示角色"
-                >
-                  {ROLES.map((item) => (
-                    <option key={item}>{item}</option>
-                  ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            )}
-            <small>
-              {authMode
-                ? "角色取自 Firebase users 權限資料"
-                : "僅供展示，不代表實際授權"}
-            </small>
-          </div>
           <div className="profile-row">
-            <div className="profile-avatar">示</div>
+            <div className="profile-avatar">
+              {displayName.slice(0, 1) || "使"}
+            </div>
             <div className="profile-info">
-              <b>{profile?.name ?? "示範使用者"}</b>
+              <b>{displayName}</b>
               <span>
-                {profile
-                  ? `${profile.staffId} · ${profile.unitCode || "未設定單位"}`
-                  : "DEMO-001 · 示範單位"}
+                {staffId}
+                {unitName ? ` · ${unitName}` : ""}
               </span>
             </div>
             <button
               className="icon-button profile-exit"
-              aria-label="離開展示"
+              aria-label="登出"
               onClick={onExit}
             >
               <LogOut size={16} />
             </button>
+          </div>
+          <div className="sidebar-version" title="系統版本">
+            {VERSION_LABEL}
           </div>
         </div>
       </aside>
@@ -397,205 +352,121 @@ function Sidebar({
   );
 }
 
-export default function App() {
-  const authMode = isFirebaseAuditModeEnabled();
-  const [entered, setEntered] = useState(false);
-  const [demoRole, setDemoRole] = useState<Role>("品管執行幹事");
-  const [profile, setProfile] = useState<FirebaseProfile | null>(null);
-  const [authReady, setAuthReady] = useState(!authMode);
-  const [authError, setAuthError] = useState("");
-  const [dataLoadError, setDataLoadError] = useState("");
-  const [page, setPage] = useState<PageId>(authMode ? "results" : "dashboard");
+function DisplaySettings() {
+  const [open, setOpen] = useState(false);
+  const [fontSize, setFontSizeState] = useState<FontSizeOption>(getFontSize());
+  const [mode, setModeState] = useState<ColorModeOption>(getColorMode());
+
+  function pickFont(v: FontSizeOption) {
+    setFontSize(v);
+    setFontSizeState(v);
+  }
+  function toggleMode() {
+    const next: ColorModeOption = mode === "dark" ? "light" : "dark";
+    setColorMode(next);
+    setModeState(next);
+  }
+
+  return (
+    <div className="display-settings-wrap">
+      <button
+        className="icon-button"
+        aria-label="顯示設定"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Palette size={18} />
+      </button>
+      {open && (
+        <>
+          <button
+            className="display-pop-scrim"
+            aria-label="關閉顯示設定"
+            onClick={() => setOpen(false)}
+          />
+          <div className="display-pop">
+            <h4>顯示設定</h4>
+            <div className="pop-row-label">字體大小</div>
+            <div className="font-size-options">
+              {(Object.keys(FONT_SIZE_LABELS) as FontSizeOption[]).map((k) => (
+                <button
+                  key={k}
+                  className={fontSize === k ? "selected" : ""}
+                  onClick={() => pickFont(k)}
+                >
+                  {FONT_SIZE_LABELS[k]}
+                </button>
+              ))}
+            </div>
+            <div className="pop-row-label">深色模式</div>
+            <button
+              className={`mode-toggle${mode === "dark" ? " on" : ""}`}
+              onClick={toggleMode}
+            >
+              <span>{mode === "dark" ? "開" : "關"}</span>
+              <span className="toggle-track" />
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Shell() {
+  const { user, loading, needsPasswordChange, logout } = useAuth();
+  const [page, setPage] = useState<PageId>("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [toast, setToast] = useState("");
-  const [indicators, setIndicators] = useState(DEMO_INDICATORS);
-  const [dataSource, setDataSource] = useState<DemoDataSource>("local");
 
-  useEffect(() => {
-    if (!authMode) return;
-    let mounted = true;
-    let unsubscribe: (() => void) | undefined;
-    watchFirebaseProfile(
-      (nextProfile) => {
-        if (!mounted) return;
-        setProfile(nextProfile);
-        setAuthReady(true);
-        if (nextProfile) setAuthError("");
-      },
-      (error) => {
-        if (mounted)
-          setAuthError(
-            error instanceof Error ? error.message : "無法載入登入帳號資料。",
-          );
-      },
-    )
-      .then((stop) => {
-        if (mounted) unsubscribe = stop;
-        else stop();
-      })
-      .catch((error: unknown) => {
-        if (mounted) {
-          setAuthReady(true);
-          setAuthError(
-            error instanceof Error
-              ? error.message
-              : "Firebase Authentication 初始化失敗。",
-          );
-        }
-      });
-    return () => {
-      mounted = false;
-      unsubscribe?.();
-    };
-  }, [authMode]);
-
-  useEffect(() => {
-    if (!authMode || !profile) return;
-    let mounted = true;
-    setIndicators([]);
-    readFirebaseIndicators()
-      .then((rows) => {
-        if (mounted) {
-          setIndicators(rows);
-          setDataSource("firebase");
-          setDataLoadError("");
-        }
-      })
-      .catch((error: unknown) => {
-        if (mounted)
-          setDataLoadError(
-            error instanceof Error ? error.message : "讀取 Firebase 指標失敗。",
-          );
-      });
-    return () => {
-      mounted = false;
-    };
-  }, [authMode, profile]);
-
-  useEffect(() => {
-    if (!isFirebaseDemoReadEnabled()) return;
-    let mounted = true;
-    readDemoIndicators()
-      .then((rows) => {
-        if (!mounted) return;
-        if (rows) {
-          setIndicators(rows);
-          setDataSource("firebase");
-        }
-      })
-      .catch(() => {
-        if (mounted) setDataSource("firebase-unavailable");
-      });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  const toastTimer = useRef<number | undefined>(undefined);
-  const notify = useCallback((message: string) => {
-    window.clearTimeout(toastTimer.current);
+  const notify = (message: string) => {
     setToast(message);
-    toastTimer.current = window.setTimeout(() => setToast(""), 2600);
-  }, []);
-  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
-
-  useEffect(() => {
-    if (!mobileOpen) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMobileOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [mobileOpen]);
-
-  const role: Role =
-    authMode && profile
-      ? profile.roles.includes("系統管理員")
-        ? "系統管理員"
-        : ((
-            [
-              "主任",
-              "副主任",
-              "督導",
-              "各組召集人",
-              "執行幹事",
-              "品管執行幹事",
-              "護理長",
-              "指標負責人",
-              "系統管理員",
-              "審查員",
-              "一般人員",
-            ] as Role[]
-          ).find((item) => profile.roles.includes(item)) ?? "一般人員")
-      : demoRole;
-
-  const changeRole = (next: Role) => {
-    if (authMode) return;
-    setDemoRole(next);
-    if (!canView(next, page)) {
-      setPage("dashboard");
-      notify(`「${next}」視角無此頁面，已回到總覽`);
-    }
+    window.setTimeout(() => setToast(""), 2600);
   };
 
-  const view: PageId = authMode
-    ? isSystemAdminProfile(profile)
-      ? canView(role, page)
-        ? page
-        : "admin"
-      : page === "schedule" || page === "results"
-        ? page
-        : "results"
-    : canView(role, page)
-      ? page
-      : "dashboard";
+  // 個人顯示設定（本機）＋ 全院主題配色（系統參數）
+  useEffect(() => {
+    applyUiPrefs();
+    getDoc(doc(getFirebaseDb(), "systemParams", "config"))
+      .then((snap) => {
+        const t = snap.exists()
+          ? (snap.data() as { uiTheme?: unknown }).uiTheme
+          : undefined;
+        applyTheme(typeof t === "string" ? t : "green-2");
+      })
+      .catch(() => applyTheme("green-2"));
+  }, []);
 
-  if (authMode && !authReady)
+  if (loading) {
     return (
       <main className="login-screen">
-        <section className="login-card">正在確認 Firebase 登入狀態…</section>
+        <div className="login-backdrop" />
+        <section className="login-card">
+          <div className="login-brand">
+            <BrandMark />
+            <span>
+              護理品質<span>管理系統</span>
+            </span>
+          </div>
+          <p className="login-lead">載入中…</p>
+        </section>
       </main>
     );
-  if (authMode && !profile)
-    return (
-      <FirebaseLogin
-        error={authError}
-        onLogin={(nextProfile) => {
-          setProfile(nextProfile);
-          setAuthError("");
-        }}
-      />
-    );
+  }
 
-  if (!authMode && !entered)
-    return (
-      <DemoLogin
-        onEnter={(selectedRole) => {
-          setDemoRole(selectedRole);
-          setEntered(true);
-        }}
-      />
-    );
+  if (!user || needsPasswordChange) {
+    return <LoginScreen />;
+  }
+
+  const primaryRole: Role = ROLE_NAMES.includes(user.roles[0] as Role)
+    ? (user.roles[0] as Role)
+    : "一般人員";
 
   return (
     <div className="app-shell">
       <Sidebar
-        page={view}
-        role={role}
-        authMode={authMode}
-        profile={profile}
+        page={page}
         onPage={setPage}
-        onRole={changeRole}
-        onExit={() => {
-          if (authMode) {
-            void signOutFirebaseUser().catch((error: unknown) =>
-              setAuthError(
-                error instanceof Error ? error.message : "登出失敗。",
-              ),
-            );
-            setProfile(null);
-          } else setEntered(false);
-        }}
+        onExit={() => void logout()}
         mobileOpen={mobileOpen}
         onClose={() => setMobileOpen(false)}
       />
@@ -609,89 +480,45 @@ export default function App() {
             <Menu size={20} />
           </button>
           <div className="topbar-crumb">
-            <span>示範醫療機構</span>
-            <ChevronRight size={14} />
-            <b>{PAGE_COPY[view].title}</b>
+            <b>{PAGE_COPY[page].title}</b>
+            {isDemoMode() && <span className="demo-pill">展示模式</span>}
           </div>
           <div className="topbar-actions">
-            <div className="connection-status">
-              <span className="live-dot" />
-              {authMode ? "Firebase 已登入" : "線上展示"}
-            </div>
+            <DisplaySettings />
             <button
               className="icon-button notification-button"
               aria-label="通知"
-              onClick={() => notify("目前沒有新的展示通知")}
+              onClick={() => notify("目前沒有新通知")}
             >
               <Bell size={18} />
-              <i />
             </button>
             <div className="topbar-user">
               <span className="profile-avatar small-avatar">
-                {profile?.name?.slice(0, 1) ?? "示"}
+                {user.name.slice(0, 1)}
               </span>
               <div>
-                <b>{profile?.name ?? "示範使用者"}</b>
-                <small>{role}</small>
+                <b>{maskName(user.name)}</b>
+                <small>{primaryRole}</small>
               </div>
               <ChevronDown size={14} />
             </div>
           </div>
         </header>
-        {authMode ? (
-          <div className="demo-banner">
-            {isSystemAdminProfile(profile)
-              ? "系統管理員完整導覽；結果、年度排程與審查員清單可接 Firebase；授角寫入需 Rules 驗收，稽核事件、完整權限管理與 CAPA 尚未串接"
-              : "Firebase 已登入 · 指標及審查結果唯讀；年度排程設定依權限儲存"}
-          </div>
-        ) : (
-          <DemoBanner source={dataSource} />
-        )}
-        {dataLoadError && (
-          <div className="login-error" role="alert">
-            {dataLoadError}
-          </div>
-        )}
         <div className="page-content">
-          {view === "dashboard" && (
-            <DashboardPage role={role} onAction={notify} />
+          {page === "dashboard" && (
+            <DashboardPage role={primaryRole} onAction={notify} />
           )}
-          {view === "indicators" && (
-            <IndicatorsPage indicators={indicators} onAction={notify} />
-          )}
-          {view === "schedule" && (
-            <SchedulePage
-              indicators={indicators}
-              firebaseMode={authMode}
-              profile={profile}
-              onAction={notify}
-            />
-          )}
-          {view === "audit" && <AuditPage onAction={notify} />}
-          {view === "results" && (
-            <ResultsPage
-              indicators={indicators}
-              role={role}
-              firebaseMode={authMode}
-              profile={profile}
-              onAction={notify}
-            />
-          )}
-          {view === "groups" && (
-            <GroupsPage
-              firebaseMode={authMode}
-              profile={profile}
-              onAction={notify}
-            />
-          )}
-          {view === "capa" && (
-            <CapaPage firebaseMode={authMode} onAction={notify} />
-          )}
-          {view === "admin" && <AdminPage onAction={notify} />}
+          {page === "indicators" && <IndicatorsPage onAction={notify} />}
+          {page === "schedule" && <SchedulePage onAction={notify} />}
+          {page === "audit" && <AuditPage onAction={notify} />}
+          {page === "results" && <ResultsPage onAction={notify} />}
+          {page === "groups" && <GroupsPage onAction={notify} />}
+          {page === "capa" && <CapaPage onAction={notify} />}
+          {page === "admin" && <AdminPage onAction={notify} />}
         </div>
       </main>
       {toast && (
-        <div className="toast-message" role="status" aria-live="polite">
+        <div className="toast-message">
           <span>
             <Check size={15} />
           </span>
@@ -702,40 +529,34 @@ export default function App() {
         </div>
       )}
       <nav className="mobile-bottom-nav" aria-label="手機主要導覽">
-        {(
-          [
-            { id: "dashboard", label: "總覽", icon: LayoutDashboard },
-            { id: "indicators", label: "指標", icon: BookOpenCheck },
-            { id: "audit", label: "審查", icon: ClipboardCheck },
-            { id: "results", label: "結果", icon: FileBarChart2 },
-          ] as const
-        )
-          .filter(
-            (item) =>
-              canView(role, item.id) &&
-              (!authMode ||
-                isSystemAdminProfile(profile) ||
-                item.id === "results"),
-          )
-          .map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                className={page === item.id ? "active" : ""}
-                aria-current={page === item.id ? "page" : undefined}
-                onClick={() => setPage(item.id)}
-              >
-                <Icon size={19} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        <button onClick={() => setMobileOpen(true)} aria-label="開啟完整選單">
-          <Menu size={19} />
-          <span>更多</span>
-        </button>
+        {[
+          { id: "dashboard", label: "總覽", icon: LayoutDashboard },
+          { id: "indicators", label: "指標", icon: BookOpenCheck },
+          { id: "audit", label: "審查", icon: ClipboardCheck },
+          { id: "results", label: "結果", icon: FileBarChart2 },
+          { id: "groups", label: "更多", icon: Menu },
+        ].map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.id}
+              className={page === item.id ? "active" : ""}
+              onClick={() => setPage(item.id as PageId)}
+            >
+              <Icon size={19} />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
       </nav>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <Shell />
+    </AuthProvider>
   );
 }

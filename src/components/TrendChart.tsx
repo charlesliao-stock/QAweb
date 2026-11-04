@@ -1,44 +1,53 @@
-import { MONTHLY_TREND, MONTHLY_TREND_LABELS } from "../data/demo";
-
-const W = 600;
-const H = 200;
-const LEFT = 42;
-const RIGHT = 567;
-const TOP = 30;
-const BOTTOM = 158;
-
+/**
+ * SVG 折線趨勢圖（純展示，無外部依賴）。
+ * v1.13.0：x 座標依點數動態分布、y 軸為 0–100 線性、支援可選 x 軸標籤。
+ */
 export function TrendChart({
-  values = MONTHLY_TREND,
-  labels = MONTHLY_TREND_LABELS,
+  values = [],
+  labels = [],
+  legend = "整體達標率",
+  currentLabel = "本月",
 }: {
   values?: number[];
+  /** x 軸標籤（例如月份），數量對齊 values */
   labels?: string[];
+  legend?: string;
+  currentLabel?: string;
 }) {
-  if (values.length === 0) return null;
-  const lo = Math.floor((Math.min(...values) - 2) / 10) * 10;
-  const hi = Math.max(lo + 10, Math.ceil(Math.max(...values) / 10) * 10);
-  const step = values.length > 1 ? (RIGHT - LEFT) / (values.length - 1) : 0;
-  const xAt = (i: number) => LEFT + i * step;
-  const yAt = (v: number) => BOTTOM - ((v - lo) / (hi - lo)) * (BOTTOM - TOP);
-  const points = values.map((v, i) => `${xAt(i)},${yAt(v)}`).join(" ");
-  const last = values[values.length - 1];
-  const gridYs = [0, 1, 2, 3].map((n) => TOP + (n * (BOTTOM - TOP)) / 3);
+  if (values.length === 0) {
+    return (
+      <div className="trend-chart-wrap">
+        <div className="chart-empty">尚無趨勢資料</div>
+      </div>
+    );
+  }
+  const n = values.length;
+  const x0 = 42;
+  const x1 = 567;
+  const step = n > 1 ? (x1 - x0) / (n - 1) : 0;
+  const clamp = (v: number) => Math.max(0, Math.min(100, v));
+  const xOf = (i: number) => x0 + i * step;
+  const yOf = (v: number) => 170 - clamp(v) * 1.35;
+  const pts = values.map((v, i) => ({ x: xOf(i), y: yOf(v) }));
+  const line = pts.map((p) => `${p.x},${p.y}`).join(" ");
+  const latest = values[n - 1] ?? 0;
   return (
     <div className="trend-chart-wrap">
       <div className="chart-legend">
         <span>
           <i className="legend-line" />
-          整體達標率
+          {legend}
         </span>
         <span className="chart-current">
-          本月 <b>{last}%</b>
+          {currentLabel} <b>{latest}%</b>
         </span>
       </div>
       <svg
         className="trend-chart"
-        viewBox={`0 0 ${W} ${H}`}
+        viewBox="0 0 600 200"
+        preserveAspectRatio="none"
         role="img"
-        aria-label={`近 ${values.length} 個月達標率趨勢圖，最新為 ${last}%`}
+        aria-label="趨勢圖"
       >
         <defs>
           <linearGradient id="areaFill" x1="0" x2="0" y1="0" y2="1">
@@ -46,7 +55,7 @@ export function TrendChart({
             <stop offset="100%" stopColor="#0f766e" stopOpacity="0" />
           </linearGradient>
         </defs>
-        {gridYs.map((y) => (
+        {[35, 75, 115, 155].map((y) => (
           <line
             key={y}
             x1="35"
@@ -57,29 +66,38 @@ export function TrendChart({
           />
         ))}
         <path
-          d={`M${xAt(0)},${BOTTOM + 12} L${points.split(" ").join(" L")} L${xAt(values.length - 1)},${BOTTOM + 12} Z`}
+          d={`M${x0},170 L${line.replaceAll(" ", " L")} L${x1},170 L${x0},170 Z`}
           fill="url(#areaFill)"
         />
-        <polyline points={points} className="chart-line" />
-        {values.map((value, index) => (
+        <polyline points={line} className="chart-line" />
+        {pts.map((p, index) => (
           <circle
             key={index}
-            cx={xAt(index)}
-            cy={yAt(value)}
+            cx={p.x}
+            cy={p.y}
             r="4"
             className={
-              index === values.length - 1 ? "chart-dot latest" : "chart-dot"
+              index === n - 1 ? "chart-dot latest" : "chart-dot"
             }
           >
-            <title>{`${labels[index] ?? ""} ${value}%`}</title>
+            <title>{values[index]}%</title>
           </circle>
         ))}
+        {labels.map(
+          (lb, index) =>
+            index < n && (
+              <text
+                key={index}
+                x={xOf(index)}
+                y={190}
+                textAnchor="middle"
+                className="chart-label"
+              >
+                {lb}
+              </text>
+            ),
+        )}
       </svg>
-      <div className="chart-x-labels">
-        {labels.map((month) => (
-          <span key={month}>{month}</span>
-        ))}
-      </div>
     </div>
   );
 }

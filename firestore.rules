@@ -1,0 +1,129 @@
+rules_version = '2';
+// 護理品質指標管理系統 — Firestore Security Rules（第一階段：Spark 方案 v1.3）
+// 權限以 users/{職編} 文件的 roles 欄位判斷（第二階段改 custom claims）。
+// 登入 email 格式為 {職編}@nurseboard.internal，規則從 token email 取職編。
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthed() {
+      return request.auth != null;
+    }
+
+    // 從登入 token 的 email 取職編（admin@nurseboard.internal → admin）
+    function staffId() {
+      return isAuthed() && request.auth.token.email is string
+        ? request.auth.token.email.split('@')[0]
+        : '';
+    }
+
+    // 登入者自己的人員文件 roles（第二階段改 claims 後此函式可刪）
+    function myRoles() {
+      return get(/databases/$(database)/documents/users/$(staffId())).data.get('roles', []);
+    }
+
+    function hasRole(r) {
+      return isAuthed() && r in myRoles();
+    }
+
+    function isAdmin() {
+      return hasRole('系統管理員');
+    }
+
+    function isGanShi() {
+      return hasRole('品管執行幹事') || isAdmin();
+    }
+
+    // 人員主檔：本人可讀寫自己（不可改 roles/status）；管理員全權
+    // 幹事可查人員清單（建指標選負責人用），但不可新增/刪除
+    match /users/{id} {
+      allow get: if isAuthed() && (id == staffId() || isAdmin());
+      allow list: if isAdmin() || isGanShi();
+      allow create: if isAdmin();
+      allow update: if isAuthed() && (isAdmin() || (id == staffId()
+        && request.resource.data.get('roles', []) == resource.data.get('roles', [])
+        && request.resource.data.get('status', '') == resource.data.get('status', '')));
+      allow delete: if isAdmin();
+    }
+
+    // 系統參數：登入可讀，管理員可寫
+    match /systemParams/{id} {
+      allow read: if isAuthed();
+      allow write: if isAdmin();
+    }
+
+    // 稽核軌跡：僅允許新增（append-only），查詢限管理員
+    match /auditLogs/{id} {
+      allow get, list: if isAdmin();
+      allow create: if isAuthed();
+      allow update, delete: if false;
+    }
+
+    // 主檔與設定類：登入可讀，幹事以上可寫
+    match /units/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+    match /groups/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+    match /titles/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+    match /roles/{id} {
+      allow read: if isAuthed();
+      allow write: if isAdmin();
+    }
+    match /indicators/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+    match /indicators/{id}/versions/{vid} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+    match /guidelineDocs/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+
+    // 指標排程（v1.8.0）：主檔與設定類登入可讀、幹事以上可寫
+    match /reviewReviewers/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+    match /indicatorYearSchedules/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+    match /indicatorAssignments/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+
+    // 指標排程（v1.8.0）：審查任務為業務資料，第一階段登入者可讀寫
+    match /reviewTasks/{id} {
+      allow read, write: if isAuthed();
+    }
+
+    // 審查執行紀錄（v1.10.0）：業務資料，第一階段登入者可讀寫
+    match /reviewRecords/{id} {
+      allow read, write: if isAuthed();
+    }
+
+    // 業務資料：第一階段登入者可讀寫（第二階段按單位/角色收緊）
+    match /schedules/{id} {
+      allow read, write: if isAuthed();
+    }
+    match /reviews/{id} {
+      allow read, write: if isAuthed();
+    }
+    match /capa/{id} {
+      allow read, write: if isAuthed();
+    }
+    match /reportTemplates/{id} {
+      allow read, write: if isAuthed();
+    }
+  }
+}

@@ -1,25 +1,33 @@
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CircleAlert, Download } from "lucide-react";
+import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import {
-  Activity,
-  ArrowDownRight,
-  ArrowRight,
-  ArrowUpRight,
-  ChevronDown,
-  CircleHelp,
-  ClipboardCheck,
-  Clock3,
-  Download,
-  Gauge,
-  MoreHorizontal,
-} from "lucide-react";
-import { DEMO_SCHEDULES, DEMO_UNITS } from "../data/demo";
-import { RagBadge, PageHeading, SectionTitle } from "../components/ui";
-import { TrendChart } from "../components/TrendChart";
+  collection,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+} from "../lib/db";
+import { getFirebaseDb } from "../lib/firebase";
+import { useAuth } from "../lib/auth";
+import { isOverdue, type ReviewTask } from "../lib/scheduling";
 import {
-  getScheduleTaskDisplayStatus,
-  getScheduleTaskProgress,
-} from "../lib/scheduleStatus";
-import type { Role, ScheduleTask } from "../types";
+  progressLabel,
+  taskTab,
+} from "../lib/reviewProgress";
+import {
+  ReviewExecutePage,
+  type ExecuteTarget,
+} from "./ReviewExecutePage";
+import type { Role } from "../types";
+
+interface TaskRow extends ReviewTask {
+  id: string;
+  /** 該單位完成數（該 task 的 reviewRecords 筆數；舊格式單筆算 1 件） */
+  doneCount: number;
+}
 
 export function DashboardPage({
   role,
@@ -28,7 +36,158 @@ export function DashboardPage({
   role: Role;
   onAction: (message: string) => void;
 }) {
+  const { user } = useAuth();
   const isIndividual = role === "一般人員";
+
+  // ---- YYYY/MM 我的審查（v1.11.0：待完成／已完成雙頁籤） ----
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const curMonth = now.getMonth() + 1;
+  const [tasks, setTasks] = useState<TaskRow[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [tab, setTab] = useState<"pending" | "done">("pending");
+  const [indicatorNames, setIndicatorNames] = useState<Map<string, string>>(
+    new Map(),
+  );
+
+  const loadMyTasks = useCallback(async () => {
+    const staffId = user?.staffId;
+    if (!staffId) return;
+    setTasksLoading(true);
+    try {
+      const db = getFirebaseDb();
+      const [tsnap, isnap, rsnap] = await Promise.all([
+        getDocs(
+          query(collection(db, "reviewTasks"), where("reviewerId", "==", staffId)),
+        ),
+        getDocs(collection(db, "indicators")),
+        getDocs(
+          query(
+            collection(db, "reviewRecords"),
+            where("reviewerId", "==", staffId),
+          ),
+        ),
+      ]);
+      const inm = new Map<string, string>();
+      isnap.docs.forEach((d) => {
+        const n = d.data().name;
+        inm.set(d.id, typeof n === "string" ? n : d.id);
+      });
+      setIndicatorNames(inm);
+      // 逐件完成數：taskId → reviewRecords 筆數（v1.11.0 起數據來自實際審查結果）
+      const countMap = new Map<string, number>();
+      rsnap.docs.forEach((d) => {
+        const data = d.data();
+        if (
+          Number(data.year) !== curYear ||
+          Number(data.month) !== curMonth
+        )
+          return;
+        const tid =
+          typeof data.taskId === "string" ? data.taskId : d.id;
+        countMap.set(tid, (countMap.get(tid) ?? 0) + 1);
+      });
+      const list: TaskRow[] = [];
+      tsnap.docs.forEach((d) => {
+        const data = d.data();
+        if (data.year !== curYear || data.month !== curMonth) return;
+        const cc = data.caseCount;
+        list.push({
+          id: d.id,
+          indicatorId: String(data.indicatorId ?? ""),
+          year: Number(data.year ?? 0),
+          month: Number(data.month ?? 0),
+          unitId: String(data.unitId ?? ""),
+          reviewerId: String(data.reviewerId ?? ""),
+          caseCount:
+            typeof cc === "number" && Number.isInteger(cc) && cc >= 1
+              ? cc
+              : null,
+          deadline: String(data.deadline ?? ""),
+          status: data.status === "done" ? "done" : "pending",
+          completedAt: data.completedAt,
+          createdAt: data.createdAt,
+          doneCount: countMap.get(d.id) ?? 0,
+        });
+      });
+      list.sort((a, b) => {
+        const c = (inm.get(a.indicatorId) ?? a.indicatorId).localeCompare(
+          inm.get(b.indicatorId) ?? b.indicatorId,
+          "zh-Hant",
+        );
+        if (c !== 0) return c;
+        return a.unitId.localeCompare(b.unitId, "zh-Hant");
+      });
+      // 狀態自動校正（v1.12.2）：舊版殘留的 status 與計數不符時寫回修正
+      //（例如 v1.10.x 單筆提交把 status 寫成 done，逐件制後 1/3 會誤入已完成頁籤）
+      list.forEach((t) => {
+        const shouldBeDone = taskTab(t.doneCount, t.caseCount) === "done";
+        const shouldBeStatus = shouldBeDone ? "done" : "pending";
+        if (t.status !== shouldBeStatus) {
+          const patch: Record<string, unknown> = { status: shouldBeStatus };
+          if (shouldBeDone && !t.completedAt) {
+            patch.completedAt = serverTimestamp();
+          }
+          updateDoc(doc(db, "reviewTasks", t.id), patch).catch(() => {
+            /* 校正失敗不阻擋顯示，下次載入再試 */
+          });
+          t.status = shouldBeStatus;
+        }
+      });
+      setTasks(list);
+    } catch {
+      // 讀不到就顯示空狀態，不阻擋儀表板
+      setTasks([]);
+    } finally {
+      setTasksLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.staffId]);
+
+  useEffect(() => {
+    loadMyTasks();
+  }, [loadMyTasks]);
+
+  /** 審查表單執行目標（v1.11.0）：task＝審查表單；records＝查詢逐件結果 */
+  const [executing, setExecuting] = useState<ExecuteTarget | null>(null);
+
+  /** 頁籤分類（v1.12.2）：純粹以「完成數 ≧ 應審件數」計數判斷，不看 task.status */
+  const isDone = useCallback(
+    (t: TaskRow) => taskTab(t.doneCount, t.caseCount) === "done",
+    [],
+  );
+
+  const pendingTasks = useMemo(
+    () => tasks.filter((t) => !isDone(t)),
+    [tasks, isDone],
+  );
+  const doneTasks = useMemo(
+    () => tasks.filter((t) => isDone(t)),
+    [tasks, isDone],
+  );
+  const shown = tab === "pending" ? pendingTasks : doneTasks;
+
+  const overdueOf = useCallback(
+    (t: TaskRow) => isOverdue(t.deadline, isDone(t) ? "done" : "pending"),
+    [isDone],
+  );
+
+  // 審查表單／查詢執行中 → 顯示執行頁（返回時重讀任務）
+  if (executing) {
+    return (
+      <ReviewExecutePage
+        target={executing}
+        onBack={() => {
+          setExecuting(null);
+          void loadMyTasks();
+        }}
+        onAction={onAction}
+      />
+    );
+  }
+
+  const ymTitle = `${curYear}/${String(curMonth).padStart(2, "0")} 我的審查`;
+
   return (
     <>
       <PageHeading
@@ -36,11 +195,7 @@ export function DashboardPage({
         action={
           <button
             className="button button-outline"
-            onClick={() =>
-              onAction(
-                "展示報表已準備，未連接正式資料。請勿匯出展示資料作正式用途。",
-              )
-            }
+            onClick={() => onAction("資料串接完成後才能匯出摘要")}
           >
             <Download size={16} />
             匯出摘要
@@ -49,19 +204,13 @@ export function DashboardPage({
       />
       <div className="dashboard-welcome">
         <div>
-          <span className="welcome-kicker">
-            QUALITY SNAPSHOT <span>·</span> 2026.11
-          </span>
+          <span className="welcome-kicker">QUALITY SNAPSHOT</span>
           <h2>
             {isIndividual
               ? "照顧品質，從每一次查核累積"
-              : "本月品質查核，進度穩定推進"}
+              : "本月品質查核進度總覽"}
           </h2>
-          <p>
-            {isIndividual
-              ? "以下為展示用的個人品質摘要，不代表正式稽核結果。"
-              : "各項指標持續追蹤中，以下為目前的展示資料摘要。"}
-          </p>
+          <p>指標進度、審查任務與單位達標狀況，將在資料串接後顯示。</p>
         </div>
         <div className="welcome-art" aria-hidden="true">
           <div className="art-ring ring-one" />
@@ -75,259 +224,159 @@ export function DashboardPage({
           <div className="art-dot dot-c" />
         </div>
       </div>
-      <div className="kpi-grid">
-        <MetricCard
-          title={isIndividual ? "個人符合率" : "本月完成率"}
-          value={isIndividual ? "94.2%" : "86.4%"}
-          detail={isIndividual ? "高於指標閾值 4.2%" : "比上月增加 5.8%"}
-          change="+5.8%"
-          tone="teal"
-          icon={<ClipboardCheck size={19} />}
-          trend="up"
-        />
-        <MetricCard
-          title={isIndividual ? "已完成審查" : "單位達標率"}
-          value={isIndividual ? "12" : "82.1%"}
-          detail={isIndividual ? "本年度完成項目" : "高於全院閾值 2.1%"}
-          change="+2.1%"
-          tone="blue"
-          icon={<Gauge size={19} />}
-          trend="up"
-        />
-        <MetricCard
-          title={isIndividual ? "待檢視結果" : "待完成任務"}
-          value={isIndividual ? "3" : "24"}
-          detail={isIndividual ? "本月新完成的稽核" : "分布於 8 個示範單位"}
-          change="需追蹤"
-          tone="amber"
-          icon={<Clock3 size={19} />}
-          trend="flat"
-        />
-        <MetricCard
-          title={isIndividual ? "近期改善項目" : "異常單位"}
-          value={isIndividual ? "1" : "2"}
-          detail={isIndividual ? "已有改善追蹤" : "未達閾值，請留意"}
-          change="查看明細"
-          tone="rose"
-          icon={<Activity size={19} />}
-          trend="down"
-        />
-      </div>
-      <div className="dashboard-grid">
-        <section className="panel trend-panel">
-          <SectionTitle
-            title="品質指標趨勢"
-            note="近 8 個月整體達標率"
-            action={
-              <button
-                className="select-like"
-                onClick={() => onAction("展示期間：2026 年 4 月至 11 月")}
-              >
-                <span>近 8 個月</span>
-                <ChevronDown size={14} />
-              </button>
-            }
-          />
-          <TrendChart />
-        </section>
-        <section className="panel focus-panel">
-          <SectionTitle
-            title="需要關注"
-            note="依閾值與排程狀態彙整"
-            action={
-              <button
-                className="text-button"
-                onClick={() => onAction("已開啟展示提醒清單")}
-              >
-                全部 <ArrowRight size={14} />
-              </button>
-            }
-          />
-          <div className="focus-list">
-            <FocusItem
-              icon="!"
-              tone="red"
-              title="跌倒預防正確率"
-              meta="示範急診單位 · 低於閾值 8%"
-              value="87%"
-            />
-            <FocusItem
-              icon="↗"
-              tone="amber"
-              title="給藥安全正確率"
-              meta="示範內科病房 · 尚差 3% 達標"
-              value="92%"
-            />
-            <FocusItem
-              icon="◷"
-              tone="blue"
-              title="排程即將到期"
-              meta="本月 4 項任務將於 5 日內到期"
-              value="4 項"
-            />
-          </div>
-        </section>
-        <section className="panel unit-panel">
-          <SectionTitle
-            title="單位達標概況"
-            note="示範單位 · 當月受審進度"
-            action={
-              <button
-                className="text-button"
-                onClick={() => onAction("單位清單僅含展示資料")}
-              >
-                查看單位 <ArrowRight size={14} />
-              </button>
-            }
-          />
-          <div className="unit-table">
-            <div className="unit-table-head">
-              <span>單位</span>
-              <span>進度</span>
-              <span>達標率</span>
-              <span>狀態</span>
-            </div>
-            {DEMO_UNITS.map((unit) => (
-              <div className="unit-table-row" key={unit.name}>
-                <span className="unit-name">
-                  <span className={`table-status status-${unit.status}`} />
-                  {unit.name}
-                </span>
-                <span className="unit-count">{unit.count}</span>
-                <span className="unit-score">{unit.score}%</span>
-                <RagBadge value={unit.score} threshold={90} compact />
-              </div>
-            ))}
-          </div>
-        </section>
-        <section className="panel task-panel">
-          <SectionTitle
-            title="近期審查任務"
-            note="展示排程 · 2026 年 11 月"
-            action={
-              <button
-                className="text-button"
-                onClick={() => onAction("已開啟全部展示排程")}
-              >
-                全部任務 <ArrowRight size={14} />
-              </button>
-            }
-          />
-          <div className="task-list">
-            {DEMO_SCHEDULES.slice(0, 3).map((task) => (
-              <TaskRow key={task.id} task={task} onAction={onAction} />
-            ))}
-          </div>
-        </section>
-      </div>
-      <div className="dashboard-footnote">
-        <CircleHelp size={14} />{" "}
-        顯示數據為虛構展示資料；達標計算依指標閾值判定，正式統計需由品管確認。
-      </div>
-    </>
-  );
-}
 
-function MetricCard({
-  title,
-  value,
-  detail,
-  change,
-  tone,
-  icon,
-  trend,
-}: {
-  title: string;
-  value: string;
-  detail: string;
-  change: string;
-  tone: string;
-  icon: ReactNode;
-  trend: "up" | "down" | "flat";
-}) {
-  return (
-    <article className="metric-card">
-      <div className="metric-top">
-        <span>{title}</span>
-        <span className={`metric-icon ${tone}`}>{icon}</span>
-      </div>
-      <strong>{value}</strong>
-      <div className="metric-bottom">
-        <span>{detail}</span>
-        <span className={`metric-change ${trend}`}>
-          {trend === "down" ? (
-            <ArrowDownRight size={13} />
-          ) : trend === "up" ? (
-            <ArrowUpRight size={13} />
-          ) : null}
-          {change}
-        </span>
-      </div>
-    </article>
-  );
-}
-
-function FocusItem({
-  icon,
-  tone,
-  title,
-  meta,
-  value,
-}: {
-  icon: string;
-  tone: string;
-  title: string;
-  meta: string;
-  value: string;
-}) {
-  return (
-    <div className="focus-item">
-      <span className={`focus-icon ${tone}`}>{icon}</span>
-      <div className="focus-copy">
-        <b>{title}</b>
-        <span>{meta}</span>
-      </div>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function TaskRow({
-  task,
-  onAction,
-}: {
-  task: ScheduleTask;
-  onAction: (message: string) => void;
-}) {
-  const pct = getScheduleTaskProgress(task);
-  const status = getScheduleTaskDisplayStatus(task);
-  return (
-    <div className="task-row">
-      <div className="task-date">
-        <b>{task.due.split("/")[0]}</b>
-        <span>{task.due.split("/")[1]} 月</span>
-      </div>
-      <div className="task-copy">
-        <b>{task.indicator}</b>
-        <span>
-          {task.unit} · {task.reviewer}
-        </span>
-        <div className="task-progress">
-          <i style={{ width: `${pct}%` }} />
+      {/* YYYY/MM 我的審查（v1.11.0：待完成／已完成雙頁籤） */}
+      <section className="panel my-review">
+        <SectionTitle title={ymTitle} note={`共 ${tasks.length} 筆任務`} />
+        <div className="tabs" style={{ marginBottom: 12 }} role="tablist">
+          <button
+            className={`tab${tab === "pending" ? " active" : ""}`}
+            role="tab"
+            aria-selected={tab === "pending"}
+            onClick={() => setTab("pending")}
+          >
+            待完成 <span>{pendingTasks.length}</span>
+          </button>
+          <button
+            className={`tab${tab === "done" ? " active" : ""}`}
+            role="tab"
+            aria-selected={tab === "done"}
+            onClick={() => setTab("done")}
+          >
+            已完成 <span>{doneTasks.length}</span>
+          </button>
         </div>
-      </div>
-      <span
-        className={`status-pill ${status === "逾期補審" || status === "資料異常" ? "danger" : status === "待開始" ? "muted" : status === "已完成" ? "success" : "info"}`}
-      >
-        {status}
-      </span>
-      <button
-        className="icon-button task-more"
-        aria-label="開啟展示任務"
-        onClick={() => onAction(`展示任務：${task.indicator}`)}
-      >
-        <MoreHorizontal size={17} />
-      </button>
-    </div>
+        {tasksLoading ? (
+          <p className="settings-note">讀取中…</p>
+        ) : shown.length === 0 ? (
+          <p className="settings-note">
+            {tab === "pending" ? "待完成任務已全數完成。" : "尚無已完成任務。"}
+          </p>
+        ) : (
+          <>
+            <div className="table-scroll task-table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>指標名稱</th>
+                    <th>審查單位</th>
+                    <th>完成/應審件數</th>
+                    <th>截止日期</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((t) => {
+                    const done = isDone(t);
+                    const overdue = overdueOf(t);
+                    return (
+                      <tr key={t.id}>
+                        <td>{indicatorNames.get(t.indicatorId) ?? t.indicatorId}</td>
+                        <td>{t.unitId}</td>
+                        <td>{progressLabel(t.doneCount, t.caseCount)}</td>
+                        <td
+                          style={
+                            overdue
+                              ? { color: "#b3372f", fontWeight: 600 }
+                              : undefined
+                          }
+                        >
+                          {t.deadline}
+                          {overdue && (
+                            <>
+                              {" "}
+                              <span className="status-pill danger">
+                                逾期未完成
+                              </span>
+                              <CircleAlert
+                                size={14}
+                                style={{
+                                  verticalAlign: "-2px",
+                                  marginLeft: 4,
+                                }}
+                              />
+                            </>
+                          )}
+                        </td>
+                        <td>
+                          <button
+                            className="text-button"
+                            onClick={() =>
+                              setExecuting(
+                                done
+                                  ? { mode: "records", taskId: t.id }
+                                  : { mode: "task", taskId: t.id },
+                              )
+                            }
+                          >
+                            {done ? "查詢" : "審查"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {/* 手機卡片（v1.10.2：≤640px 顯示，寬螢幕隱藏） */}
+            <div className="task-cards">
+              {shown.map((t) => {
+                const done = isDone(t);
+                const overdue = overdueOf(t);
+                return (
+                  <div key={t.id} className="task-card">
+                    <div className="task-card-top">
+                      <b>{indicatorNames.get(t.indicatorId) ?? t.indicatorId}</b>
+                      <span
+                        className={`status-pill${overdue ? " danger" : done ? " success" : " warning"}`}
+                      >
+                        {overdue ? "逾期未完成" : done ? "已完成" : "待完成"}
+                      </span>
+                    </div>
+                    <div className="task-card-meta">
+                      <span>審查單位：{t.unitId}</span>
+                      <span>
+                        完成/應審：{progressLabel(t.doneCount, t.caseCount)}
+                      </span>
+                      <span
+                        className={overdue ? "overdue-text" : undefined}
+                      >
+                        截止：{t.deadline}
+                        {overdue && (
+                          <CircleAlert
+                            size={14}
+                            style={{
+                              verticalAlign: "-2px",
+                              marginLeft: 4,
+                            }}
+                          />
+                        )}
+                      </span>
+                    </div>
+                    <button
+                      className="button button-primary task-card-btn"
+                      onClick={() =>
+                        setExecuting(
+                          done
+                            ? { mode: "records", taskId: t.id }
+                            : { mode: "task", taskId: t.id },
+                        )
+                      }
+                    >
+                      {done ? "查詢" : "審查"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </section>
+
+      <EmptyState
+        title="尚未串接資料"
+        description="儀表板數據將在指標、排程與審查紀錄串接完成後顯示。"
+      />
+    </>
   );
 }
