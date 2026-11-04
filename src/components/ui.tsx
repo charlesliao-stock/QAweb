@@ -16,7 +16,10 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
       title: "指標排程",
       description: "設定指標年度審查月份、分工表並產生全年審查任務",
     },
-    audit: { title: "指標審查", description: "以一題一卡方式完成現場稽核" },
+    audit: {
+      title: "指標審查",
+      description: "依指標檢視各單位、各輪次的審查進度與紀錄",
+    },
     results: {
       title: "結果分析",
       description: "追蹤各項品質指標的趨勢與達標狀況",
@@ -30,6 +33,10 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
       description: "追蹤改善措施、成效驗證與結案",
     },
     admin: { title: "系統管理", description: "角色權限與系統參數展示設定" },
+    reviewers: {
+      title: "審查員管理",
+      description: "檢視審查員名單、依組別篩選並授予審查員角色",
+    },
   };
 
 export function ragFor(value: number, threshold: number): Rag {

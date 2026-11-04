@@ -7,13 +7,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Download } from "lucide-react";
 import { collection, getDocs, query, where } from "../lib/db";
-import { getFirebaseDb } from "../lib/firebase";
+import { getFirebaseDb, toFirebaseProfile } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
 import { usePermissions } from "../lib/usePermissions";
+import { isDemoMode } from "../lib/demoMode";
 import { primaryThreshold } from "../lib/indicators";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
 import { ReviewExecutePage } from "./ReviewExecutePage";
+import { QuarterResults } from "./QuarterResults";
+import type { Indicator as LegacyIndicator, Role } from "../types";
 import {
   filterByScope,
   indicatorMonthStats,
@@ -67,6 +70,7 @@ export function ResultsPage({
   const [selMonth, setSelMonth] = useState(now.getMonth() + 1);
   const [loading, setLoading] = useState(true);
   const [viewingTaskId, setViewingTaskId] = useState<string | null>(null);
+  const [tab, setTab] = useState<"overview" | "quarterly">("overview");
 
   const scope: DataScope = useMemo(() => {
     const roles = user?.roles ?? [];
@@ -202,6 +206,45 @@ export function ResultsPage({
     [indicators],
   );
 
+  // 季度分析 tab：把新版指標對應到舊版 Indicator 形狀
+  const primaryRole: Role = useMemo(() => {
+    const first = user?.roles?.[0];
+    const known: Role[] = [
+      "一般人員",
+      "審查員",
+      "護理長",
+      "主任",
+      "副主任",
+      "督導",
+      "各組召集人",
+      "執行幹事",
+      "品管執行幹事",
+      "系統管理員",
+      "指標負責人",
+    ];
+    return first && (known as string[]).includes(first)
+      ? (first as Role)
+      : "一般人員";
+  }, [user]);
+  const quarterlyIndicators: LegacyIndicator[] = useMemo(
+    () =>
+      indicators.map((i) => ({
+        id: i.id,
+        code: i.id,
+        name: i.name,
+        group: "未分類",
+        threshold: i.threshold,
+        attainment: 0,
+        audited: 0,
+        planned: 0,
+        version: "",
+        status: "啟用" as const,
+        owner: "",
+        resultLabel: "符合率",
+      })),
+    [indicators],
+  );
+
   if (!can("resultQuery")) {
     return (
       <>
@@ -243,7 +286,37 @@ export function ResultsPage({
         }
       />
 
-      <div className="results-filters">
+      <div className="results-tabs" role="tablist" aria-label="結果分析檢視">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "overview"}
+          className={tab === "overview" ? "active" : ""}
+          onClick={() => setTab("overview")}
+        >
+          分析總覽
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "quarterly"}
+          className={tab === "quarterly" ? "active" : ""}
+          onClick={() => setTab("quarterly")}
+        >
+          季度分析
+        </button>
+      </div>
+
+      {tab === "quarterly" ? (
+        <QuarterResults
+          indicators={quarterlyIndicators}
+          role={primaryRole}
+          firebaseMode={!isDemoMode()}
+          profile={toFirebaseProfile(user)}
+        />
+      ) : (
+        <>
+          <div className="results-filters">
         <label className="field-label">
           指標
           <div className="select-wrap">
@@ -467,6 +540,8 @@ export function ResultsPage({
               </>
             )}
           </section>
+        </>
+      )}
         </>
       )}
     </div>

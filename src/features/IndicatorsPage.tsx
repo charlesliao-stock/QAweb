@@ -245,7 +245,7 @@ export function IndicatorsPage({
     try {
       const snap = await getDocs(
         query(
-          collection(getFirebaseDb(), "reviews"),
+          collection(getFirebaseDb(), "reviewRecords"),
           where("indicatorId", "==", code),
           limit(1),
         ),
