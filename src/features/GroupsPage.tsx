@@ -96,6 +96,8 @@ interface UserForm {
   phone: string;
   roles: string[];
   mustChangePassword: boolean;
+  /** 督導負責的群組 id（v1.15.0：督導儀表板轄區用） */
+  districtGroupIds: string[];
 }
 
 interface PreviewRow {
@@ -135,6 +137,7 @@ function emptyUserForm(): UserForm {
     phone: "",
     roles: [],
     mustChangePassword: true,
+    districtGroupIds: [],
   };
 }
 
@@ -1030,6 +1033,7 @@ export function GroupsPage({
       phone: "",
       roles: [...row.roles],
       mustChangePassword: true,
+      districtGroupIds: [],
     });
     setUserError("");
     void (async () => {
@@ -1042,6 +1046,9 @@ export function GroupsPage({
             hireDate: typeof data.hireDate === "string" ? data.hireDate : "",
             email: typeof data.email === "string" ? data.email : "",
             phone: typeof data.phone === "string" ? data.phone : "",
+            districtGroupIds: Array.isArray(data.districtGroupIds)
+              ? data.districtGroupIds.map(String)
+              : [],
           }));
         }
       } catch {
@@ -1086,6 +1093,7 @@ export function GroupsPage({
         email: userForm.email.trim(),
         phone: userForm.phone.trim(),
         roles: userForm.roles,
+        districtGroupIds: userForm.districtGroupIds,
         ...auditFields(user.staffId, false),
       };
       if (view.kind === "create") {
@@ -2089,6 +2097,35 @@ export function GroupsPage({
                     onChange={() => toggleRole(r.name)}
                   />
                   <span>{r.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          <SectionTitle
+            title="督導轄區群組"
+            note="只有督導需要填寫：勾選其負責的群組，督導儀表板依此顯示轄區單位"
+          />
+          {groups.length === 0 ? (
+            <p className="settings-note">尚無群組資料。</p>
+          ) : (
+            <div className="form-grid">
+              {groups.map((g) => (
+                <label className="check-row" key={g.id}>
+                  <input
+                    type="checkbox"
+                    checked={userForm.districtGroupIds.includes(g.id)}
+                    onChange={() =>
+                      setUserForm((prev) => ({
+                        ...prev,
+                        districtGroupIds:
+                          prev.districtGroupIds.includes(g.id)
+                            ? prev.districtGroupIds.filter((x) => x !== g.id)
+                            : [...prev.districtGroupIds, g.id],
+                      }))
+                    }
+                  />
+                  <span>{g.name}</span>
                 </label>
               ))}
             </div>

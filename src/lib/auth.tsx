@@ -31,6 +31,8 @@ export interface StaffProfile {
   /** 職稱名稱（v1.12.0：權限交集判斷用；""＝未設定） */
   title: string;
   roles: string[];
+  /** 督導負責的群組 id（v1.15.0：督導儀表板轄區用） */
+  districtGroupIds: string[];
   mustChangePassword: boolean;
 }
 
@@ -54,6 +56,7 @@ const DEMO_USER: StaffProfile = {
   unitName: "",
   title: "督導",
   roles: ["系統管理員"],
+  districtGroupIds: [],
   mustChangePassword: false,
 };
 
@@ -99,6 +102,9 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
     throw new Error("此帳號已停用，請聯絡系統管理員");
   }
   const roles = Array.isArray(raw.roles) ? raw.roles.map(String) : [];
+  const districtGroupIds = Array.isArray(raw.districtGroupIds)
+    ? raw.districtGroupIds.map(String)
+    : [];
   return {
     staffId,
     name: typeof raw.name === "string" ? raw.name : staffId,
@@ -106,6 +112,7 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
     unitName: typeof raw.unitName === "string" ? raw.unitName : "",
     title: typeof raw.title === "string" ? raw.title : "",
     roles,
+    districtGroupIds,
     mustChangePassword: raw.mustChangePassword === true,
   };
 }

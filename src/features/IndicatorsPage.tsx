@@ -102,6 +102,8 @@ interface IndicatorForm {
   /** 題目分組（「啟用題目分組」開關控制；不是每一份指標都有） */
   questionGroups: QuestionGroup[];
   useQuestionGroups: boolean;
+  /** 需要病人床號（v1.15.0）：審查表單顯示床號欄位且列為必填 */
+  requireBedNo: boolean;
 }
 
 function emptyForm(): IndicatorForm {
@@ -119,6 +121,7 @@ function emptyForm(): IndicatorForm {
     questions: [],
     questionGroups: [],
     useQuestionGroups: false,
+    requireBedNo: false,
   };
 }
 
@@ -323,6 +326,7 @@ export function IndicatorsPage({
         questions,
         questionGroups: mergedGroups,
         useQuestionGroups,
+        requireBedNo: data.requireBedNo === true,
       });
       const locked = await checkReviewData(snap.id);
       setHasReviewData(locked);
@@ -921,6 +925,7 @@ export function IndicatorsPage({
         questions,
         questionGroups,
         useQuestionGroups: form.useQuestionGroups,
+        requireBedNo: form.requireBedNo,
         updatedAt: serverTimestamp(),
         updatedBy: user.staffId,
       };
@@ -1557,6 +1562,24 @@ export function IndicatorsPage({
               <p className="settings-note">
                 開啟後可建立多個分組、一個分組下可建多個題目；關閉則分組取消、題目保留為扁平清單。
               </p>
+              <label className="check-row" style={{ marginTop: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={form.requireBedNo}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      requireBedNo: e.target.checked,
+                    }))
+                  }
+                />
+                <span>
+                  需要病人床號
+                  <span className="muted-text">
+                    （勾選後，審查表單會顯示「病人床號」欄位並列為必填）
+                  </span>
+                </span>
+              </label>
               {form.useQuestionGroups ? (
                 <>
                   <div className="group-actions">

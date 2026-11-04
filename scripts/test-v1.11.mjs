@@ -51,7 +51,7 @@ t("nextCaseSeq(5)＝6", rp.nextCaseSeq(5) === 6);
 /* ---- 雙頁籤分類 ---- */
 t("達標→done 頁籤", rp.taskTab(30, 30, false) === "done");
 t("未達標→pending 頁籤", rp.taskTab(5, 30, false) === "pending");
-t("舊流程已 done 相容→done 頁籤", rp.taskTab(0, null, true) === "done");
+t("0 件未完成→pending 頁籤（v1.12.2 起 legacyDone 參數已移除）", rp.taskTab(0, null) === "pending");
 t("caseCount null 且 1 件→done 頁籤", rp.taskTab(1, null, false) === "done");
 t("progressLabel 12/30", rp.progressLabel(12, 30) === "12/30");
 t("progressLabel 0/1", rp.progressLabel(0, null) === "0/1");

@@ -273,12 +273,12 @@ t("progressLabel(1,3)＝1/3", rp.progressLabel(1, 3) === "1/3");
   t("canDo 先判斷 isAdmin bypass", up.includes("isAdmin || can("));
 }
 
-/* ---- v1.12.2：Dashboard 狀態自動校正＋純計數（靜態檢查） ---- */
+/* ---- v1.12.2：Dashboard 狀態自動校正＋純計數（靜態檢查；v1.15.0 起邏輯搬到 useDashboardData.ts） ---- */
 {
-  const dash = readFileSync("src/features/DashboardPage.tsx", "utf8");
-  t("Dashboard 載入時校正 status", dash.includes("狀態自動校正"));
+  const dash = readFileSync("src/features/dashboard/useDashboardData.ts", "utf8");
+  t("Dashboard 載入時校正 status", dash.includes("狀態自動校正") || dash.includes("自動校正"));
   t("isDone 不再傳 legacyDone", !dash.includes('t.status === "done")'));
-  t("校正寫回 reviewTasks", dash.includes('updateDoc(doc(db, "reviewTasks"'));
+  t("校正寫回 reviewTasks", dash.includes('"reviewTasks", t.id') || dash.includes('updateDoc(doc(db, "reviewTasks"'));
 }
 
 /* ---- v1.12.2：審查員頁籤 UI（靜態檢查） ---- */

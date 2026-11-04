@@ -158,7 +158,40 @@ export interface IndicatorAssignment {
   updatedAt: unknown;
 }
 
-export type ReviewTaskStatus = "pending" | "done";
+export type ReviewTaskStatus = "pending" | "done" | "locked";
+
+/** 解鎖申請（v1.15.0 新增集合 unlockRequests） */
+export interface UnlockRequest {
+  taskId: string;
+  indicatorId: string;
+  unitId: string;
+  year: number;
+  month: number;
+  requestedBy: string;
+  requestedByName: string;
+  reason: string;
+  status: "pending" | "approved" | "rejected";
+  handledBy?: string;
+  handledAt?: unknown;
+  createdAt?: unknown;
+}
+
+/** 解鎖申請 doc id：taskId__unlock_<隨機>（一任務可多次申請，以時間區分） */
+export function unlockRequestDocId(taskId: string): string {
+  return `${taskId}__unlock_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/**
+ * 是否應鎖定（v1.15.0）：今天已超過截止日（次月10日，吃系統參數快照的 deadline）
+ * 且任務未完成 → locked。純函式可單元測試。
+ */
+export function shouldLockTask(
+  deadline: string,
+  status: ReviewTaskStatus,
+  today: string = todayStr(),
+): boolean {
+  return status !== "done" && status !== "locked" && deadline < today;
+}
 
 /** 審查任務（由「產生排程」展開：年度 months × 分工表配對） */
 export interface ReviewTask {

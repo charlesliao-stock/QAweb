@@ -10,6 +10,8 @@ export interface ReviewAnswer {
   optionLabel: string;
   /** 該選項分數 */
   score: number;
+  /** 該題備註（v1.15.0 新增，選填） */
+  note?: string;
 }
 
 export interface ReviewRecord {
@@ -27,6 +29,12 @@ export interface ReviewRecord {
   reviewerEmpNo: string;
   /** 審查人員姓名（v1.11.0 新增，快照） */
   reviewerName: string;
+  /** 受審人員職編（v1.15.0 新增，必填） */
+  reviewedPersonEmpNo: string;
+  /** 受審人員姓名（v1.15.0 新增，快照） */
+  reviewedPersonName: string;
+  /** 病人床號（v1.15.0 新增；僅指標 requireBedNo 時必填） */
+  bedNo: string;
   answers: ReviewAnswer[];
   totalScore: number;
   maxScore: number;
