@@ -4037,3 +4037,57 @@ button:disabled {
 :root[data-mode="dark"] .task-card-meta {
   color: #9aa5a4;
 }
+
+/* ============ 結果分析頁（v1.13.0） ============ */
+.results-filters {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.results-filters .field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 150px;
+}
+.results-filters .select-wrap {
+  min-width: 150px;
+}
+.rag-badge.rag-gray i {
+  background: #9aa5a4;
+}
+.trend-chart .chart-label {
+  font-size: 11px;
+  fill: #8a9493;
+}
+.button-sm {
+  padding: 6px 12px;
+  font-size: var(--font-small);
+}
+.button-block {
+  width: 100%;
+  margin-top: 8px;
+}
+/* 預設（寬螢幕）：顯示表格，隱藏卡片；窄螢幕（≤640px）反之（沿用 .my-review 模式） */
+.results-page .task-cards {
+  display: none;
+}
+@media (max-width: 640px) {
+  .results-page .task-table-wrap {
+    display: none;
+  }
+  .results-page .task-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .results-filters .field-label,
+  .results-filters .select-wrap {
+    min-width: 0;
+    flex: 1 1 45%;
+  }
+}
+:root[data-mode="dark"] .trend-chart .chart-label {
+  fill: #7d8a89;
+}
