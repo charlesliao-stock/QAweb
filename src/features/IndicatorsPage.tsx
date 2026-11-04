@@ -21,14 +21,18 @@ import { logAudit } from "../lib/audit";
 import {
   TEN_STEP_TITLES,
   alignThresholds,
+  compareIndicatorRows,
+  displayThreshold,
   emptyAuditQuestion,
   emptyTenSteps,
+  filterIndicators,
   mergeQuestionGroups,
   newQid,
   normalizeQuestions,
   normalizeTenSteps,
   primaryThreshold,
   type AuditQuestion,
+  type IndicatorSortKey,
   type NamedThreshold,
   type QuestionGroup,
   type QuestionOption,
@@ -77,6 +81,8 @@ interface IndicatorRow {
   groupId: string;
   owners: string[];
   mainThreshold: number;
+  /** 基本資料閾值（v1.15.1）；null＝未填，清單顯示時 fallback 主閾值 */
+  basicThreshold: number | null;
   status: IndicatorStatus;
   version: string;
 }
@@ -94,6 +100,8 @@ interface IndicatorForm {
   groupId: string;
   code: string;
   name: string;
+  /** 基本資料閾值（v1.15.1，選填；""＝未填） */
+  basicThreshold: number | "";
   owners: string[];
   ownerSearch: string;
   status: IndicatorStatus;
@@ -114,6 +122,7 @@ function emptyForm(): IndicatorForm {
     groupId: "",
     code: "",
     name: "",
+    basicThreshold: "",
     owners: [],
     ownerSearch: "",
     status: "草稿",
@@ -147,6 +156,9 @@ export function IndicatorsPage({
   >({ kind: "list" });
   const [rows, setRows] = useState<IndicatorRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchKw, setSearchKw] = useState("");
+  const [sortKey, setSortKey] = useState<IndicatorSortKey>("code");
+  const [sortDir, setSortDir] = useState<1 | -1>(1);
   const [form, setForm] = useState<IndicatorForm>(emptyForm);
   const [formError, setFormError] = useState("");
   const [formTab, setFormTab] = useState<FormTab>("basic");
@@ -215,6 +227,8 @@ export function IndicatorsPage({
           groupId: typeof data.groupId === "string" ? data.groupId : "",
           owners: Array.isArray(data.owners) ? data.owners.map(String) : [],
           mainThreshold: primaryThreshold(data),
+          basicThreshold:
+            typeof data.basicThreshold === "number" ? data.basicThreshold : null,
           status: STATUSES.includes(data.status) ? data.status : "草稿",
           version: typeof data.version === "string" ? data.version : "v1.0",
         };
@@ -227,6 +241,25 @@ export function IndicatorsPage({
       setLoading(false);
     }
   }, [onAction]);
+
+  /** 清單排序切換（沿用審查員頁籤 ▲▼ 模式） */
+  function toggleSort(key: IndicatorSortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 1 ? -1 : 1));
+    } else {
+      setSortKey(key);
+      setSortDir(1);
+    }
+  }
+
+  /** 搜尋（編號＋名稱）＋排序後的清單列 */
+  const visibleRows = useMemo(() => {
+    const filtered = filterIndicators(rows, searchKw);
+    const groupNameOf = (id: string) => groupMap.get(id) || "";
+    return [...filtered].sort((a, b) =>
+      compareIndicatorRows(a, b, sortKey, sortDir, groupNameOf),
+    );
+  }, [rows, searchKw, sortKey, sortDir, groupMap]);
 
   useEffect(() => {
     loadMeta();
@@ -319,6 +352,8 @@ export function IndicatorsPage({
         groupId,
         code: snap.id,
         name: typeof data.name === "string" ? data.name : "",
+        basicThreshold:
+          typeof data.basicThreshold === "number" ? data.basicThreshold : "",
         owners: Array.isArray(data.owners) ? data.owners.map(String) : [],
         ownerSearch: "",
         status: STATUSES.includes(data.status) ? data.status : "草稿",
@@ -920,6 +955,7 @@ export function IndicatorsPage({
         groupId: form.groupId,
         owners: form.owners,
         threshold,
+        basicThreshold: form.basicThreshold === "" ? null : form.basicThreshold,
         status: form.status,
         tenSteps: steps,
         questions,
@@ -1070,10 +1106,20 @@ export function IndicatorsPage({
         page="indicators"
         action={
           view.kind === "list" ? (
-            <button className="button button-primary" onClick={openCreate}>
-              <Plus size={16} />
-              新增指標
-            </button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                className="text-input"
+                placeholder="搜尋編號／名稱"
+                aria-label="搜尋指標"
+                value={searchKw}
+                onChange={(e) => setSearchKw(e.target.value)}
+                style={{ width: 190 }}
+              />
+              <button className="button button-primary" onClick={openCreate}>
+                <Plus size={16} />
+                新增指標
+              </button>
+            </div>
           ) : (
             <button
               className="button button-outline"
@@ -1102,18 +1148,79 @@ export function IndicatorsPage({
               <table className="permission-table">
                 <thead>
                   <tr>
-                    <th>編號</th>
-                    <th>名稱</th>
-                    <th>組別</th>
+                    <th>
+                      <button
+                        type="button"
+                        className="th-sort"
+                        onClick={() => toggleSort("code")}
+                        title="依編號排序"
+                      >
+                        編號
+                        {sortKey === "code" && (sortDir === 1 ? " ▲" : " ▼")}
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        type="button"
+                        className="th-sort"
+                        onClick={() => toggleSort("name")}
+                        title="依名稱排序"
+                      >
+                        名稱
+                        {sortKey === "name" && (sortDir === 1 ? " ▲" : " ▼")}
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        type="button"
+                        className="th-sort"
+                        onClick={() => toggleSort("group")}
+                        title="依組別排序"
+                      >
+                        組別
+                        {sortKey === "group" && (sortDir === 1 ? " ▲" : " ▼")}
+                      </button>
+                    </th>
                     <th>負責人</th>
-                    <th>主閾值</th>
-                    <th>版本</th>
-                    <th>狀態</th>
+                    <th>
+                      <button
+                        type="button"
+                        className="th-sort"
+                        onClick={() => toggleSort("threshold")}
+                        title="依閾值排序"
+                      >
+                        閾值
+                        {sortKey === "threshold" &&
+                          (sortDir === 1 ? " ▲" : " ▼")}
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        type="button"
+                        className="th-sort"
+                        onClick={() => toggleSort("version")}
+                        title="依版本排序"
+                      >
+                        版本
+                        {sortKey === "version" && (sortDir === 1 ? " ▲" : " ▼")}
+                      </button>
+                    </th>
+                    <th>
+                      <button
+                        type="button"
+                        className="th-sort"
+                        onClick={() => toggleSort("status")}
+                        title="依狀態排序"
+                      >
+                        狀態
+                        {sortKey === "status" && (sortDir === 1 ? " ▲" : " ▼")}
+                      </button>
+                    </th>
                     <th>操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => (
+                  {visibleRows.map((row) => (
                     <tr key={row.code}>
                       <td>
                         <b>{row.code}</b>
@@ -1125,7 +1232,10 @@ export function IndicatorsPage({
                           ? row.owners.map(ownerLabel).join("、")
                           : "—"}
                       </td>
-                      <td>{row.mainThreshold}%</td>
+                      <td>
+                        {displayThreshold(row.basicThreshold, row.mainThreshold)}
+                        %
+                      </td>
                       <td>{row.version}</td>
                       <td>
                         <span className={`status-pill ${STATUS_PILL[row.status]}`}>
@@ -1233,6 +1343,30 @@ export function IndicatorsPage({
                 value={form.name}
                 placeholder="例如 手部衛生遵從率"
                 onChange={(e) => setField("name", e.target.value)}
+              />
+            </div>
+            <div className="form-field">
+              <label className="field-label">
+                閾值（%，選填；留空則清單顯示主閾值）
+              </label>
+              <input
+                className="text-input"
+                type="number"
+                min={0}
+                max={100}
+                placeholder="0～100"
+                value={
+                  typeof form.basicThreshold === "number" &&
+                  Number.isFinite(form.basicThreshold)
+                    ? String(form.basicThreshold)
+                    : ""
+                }
+                onChange={(e) =>
+                  setField(
+                    "basicThreshold",
+                    e.target.value === "" ? "" : Number(e.target.value),
+                  )
+                }
               />
             </div>
             <div className="form-field" style={{ gridColumn: "1 / -1" }}>
