@@ -1992,6 +1992,198 @@ button:disabled {
 .results-table-panel > .section-title {
   padding: 0 17px;
 }
+.quarter-panel {
+  margin-bottom: 14px;
+  padding: 18px 20px;
+}
+.quarter-toolbar {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  margin: 14px 0;
+}
+.quarter-control {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 220px;
+  color: #7d898b;
+  font-size: 10px;
+}
+.quarter-control select {
+  min-height: 36px;
+  max-width: 100%;
+  padding: 0 10px;
+  color: #4c6266;
+  background: #fff;
+  border: 1px solid #e4eaea;
+  border-radius: 7px;
+  font: inherit;
+}
+.quarter-mode {
+  display: flex;
+  padding: 3px;
+  border: 1px solid #e4eaea;
+  border-radius: 8px;
+  background: #f7f9f9;
+}
+.quarter-mode button {
+  min-height: 29px;
+  padding: 0 12px;
+  color: #738184;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.quarter-mode button.active {
+  color: #246f66;
+  background: #fff;
+  box-shadow: 0 1px 4px #183d3517;
+}
+.quarter-select {
+  min-width: 130px;
+  margin-left: auto;
+}
+.quarter-summary {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) repeat(3, minmax(110px, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.quarter-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #edf0f0;
+  border-radius: 8px;
+  background: #fbfcfc;
+}
+.quarter-summary span {
+  color: #8d9a9d;
+  font-size: 9px;
+}
+.quarter-summary strong {
+  overflow: hidden;
+  color: #435a5e;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quarter-chart-wrap {
+  padding: 9px 10px 0;
+  border: 1px solid #edf0f0;
+  border-radius: 9px;
+  background: #fff;
+}
+.quarter-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px 16px;
+  min-height: 25px;
+  color: #68797c;
+  font-size: 9px;
+}
+.quarter-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.quarter-chart-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.quarter-chart-legend .threshold-legend i {
+  width: 14px;
+  height: 0;
+  border-top: 2px dashed #bd715f;
+  border-radius: 0;
+}
+.quarter-chart-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+.quarter-chart {
+  display: block;
+  width: 100%;
+  min-width: 520px;
+  height: 220px;
+}
+.quarter-gridline {
+  stroke: #edf1f1;
+  stroke-width: 1;
+}
+.quarter-threshold-line {
+  stroke: #bd715f;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 5;
+  opacity: .7;
+}
+.quarter-axis-label {
+  fill: #93a0a2;
+  font-family: inherit;
+  font-size: 10px;
+}
+.quarter-detail-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 18px 0 8px;
+}
+.quarter-detail-heading h3 {
+  margin: 0 0 4px;
+  color: #435a5e;
+  font-size: 12px;
+}
+.quarter-detail-heading span,
+.quarter-disclaimer {
+  color: #8d9a9d;
+  font-size: 9px;
+}
+.quarter-table {
+  min-width: 760px;
+}
+.quarter-result {
+  display: inline-block;
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+}
+.quarter-result.met {
+  color: #287763;
+  background: #eaf5f0;
+}
+.quarter-result.below {
+  color: #a65343;
+  background: #fbefec;
+}
+.quarter-spark-values {
+  white-space: nowrap;
+}
+.quarter-spark-values span {
+  display: inline-block;
+  margin-right: 9px;
+  color: #829093;
+}
+.quarter-spark-values span.selected {
+  color: #176e65;
+  font-weight: 700;
+}
+.quarter-disclaimer {
+  margin: 10px 0 0;
+  line-height: 1.7;
+}
+.quarter-empty {
+  color: #8d9a9d;
+  font-size: 11px;
+}
 
 .group-layout {
   display: grid;
@@ -2838,6 +3030,50 @@ button:disabled {
   }
   .filter-caption {
     display: none;
+  }
+  .quarter-panel {
+    padding: 14px 12px;
+  }
+  .quarter-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .quarter-control,
+  .quarter-select {
+    min-width: 0;
+    width: 100%;
+    margin-left: 0;
+  }
+  .quarter-mode {
+    align-self: flex-start;
+  }
+  .quarter-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+  .quarter-summary > div {
+    padding: 8px;
+  }
+  .quarter-summary strong {
+    font-size: 11px;
+  }
+  .quarter-chart-wrap {
+    padding: 8px 6px 0;
+  }
+  .quarter-chart {
+    height: 190px;
+  }
+  .quarter-detail-heading {
+    align-items: flex-start;
+  }
+  .quarter-detail-heading span,
+  .quarter-disclaimer {
+    font-size: 8px;
+    line-height: 1.6;
+  }
+  .quarter-table {
+    min-width: 680px;
   }
   .result-kpi {
     padding: 12px;

@@ -205,28 +205,28 @@ function Sidebar({
           }))
             .filter((group) => group.items.length > 0)
             .map((group) => (
-            <div className="nav-group" key={group.label}>
-              <span className="nav-group-label">{group.label}</span>
-              {group.items.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={item.id}
-                    className={`nav-item${page === item.id ? " active" : ""}`}
-                    aria-current={page === item.id ? "page" : undefined}
-                    onClick={() => {
-                      onPage(item.id);
-                      onClose();
-                    }}
-                  >
-                    <Icon size={18} strokeWidth={1.8} />
-                    <span>{item.label}</span>
-                    {item.id === "capa" && <i className="nav-count">3</i>}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+              <div className="nav-group" key={group.label}>
+                <span className="nav-group-label">{group.label}</span>
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      className={`nav-item${page === item.id ? " active" : ""}`}
+                      aria-current={page === item.id ? "page" : undefined}
+                      onClick={() => {
+                        onPage(item.id);
+                        onClose();
+                      }}
+                    >
+                      <Icon size={18} strokeWidth={1.8} />
+                      <span>{item.label}</span>
+                      {item.id === "capa" && <i className="nav-count">3</i>}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
         </nav>
         <div className="sidebar-bottom">
           <div className="role-box">
@@ -389,7 +389,11 @@ export default function App() {
           {view === "schedule" && <SchedulePage onAction={notify} />}
           {view === "audit" && <AuditPage onAction={notify} />}
           {view === "results" && (
-            <ResultsPage indicators={indicators} onAction={notify} />
+            <ResultsPage
+              indicators={indicators}
+              role={role}
+              onAction={notify}
+            />
           )}
           {view === "groups" && <GroupsPage onAction={notify} />}
           {view === "capa" && <CapaPage onAction={notify} />}

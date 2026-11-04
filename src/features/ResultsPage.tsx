@@ -1,13 +1,16 @@
 import { ArrowRight, ChevronDown, Download } from "lucide-react";
 import { PageHeading, RagBadge, SectionTitle, ragFor } from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
-import type { Indicator } from "../types";
+import { QuarterResults } from "./QuarterResults";
+import type { Indicator, Role } from "../types";
 
 export function ResultsPage({
   indicators,
+  role,
   onAction,
 }: {
   indicators: Indicator[];
+  role: Role;
   onAction: (message: string) => void;
 }) {
   const achieved = indicators.filter(
@@ -36,13 +39,25 @@ export function ResultsPage({
         }
       />
       <div className="results-filter">
-        <button type="button" className="filter-chip active" onClick={() => onAction("展示篩選：2026 年度")}>
+        <button
+          type="button"
+          className="filter-chip active"
+          onClick={() => onAction("展示篩選：2026 年度")}
+        >
           2026 年度 <ChevronDown size={14} />
         </button>
-        <button type="button" className="filter-chip" onClick={() => onAction("展示篩選：全部組別")}>
+        <button
+          type="button"
+          className="filter-chip"
+          onClick={() => onAction("展示篩選：全部組別")}
+        >
           全部組別 <ChevronDown size={14} />
         </button>
-        <button type="button" className="filter-chip" onClick={() => onAction("展示篩選：全部指標")}>
+        <button
+          type="button"
+          className="filter-chip"
+          onClick={() => onAction("展示篩選：全部指標")}
+        >
           全部指標 <ChevronDown size={14} />
         </button>
         <span className="filter-caption">資料歸屬依排程月份與單位代號</span>
@@ -56,7 +71,9 @@ export function ResultsPage({
         <div className="result-kpi">
           <span>達標指標比例</span>
           <strong>{achievementRate.toFixed(1)}%</strong>
-          <small>{achieved} / {indicators.length} 項達標</small>
+          <small>
+            {achieved} / {indicators.length} 項達標
+          </small>
         </div>
         <div className="result-kpi">
           <span>達標指標</span>
@@ -69,7 +86,8 @@ export function ResultsPage({
         <div className="result-kpi">
           <span>未達標指標</span>
           <strong className="red-text">
-            {notAchieved}<small> 項</small>
+            {notAchieved}
+            <small> 項</small>
           </strong>
           <small>符合率低於各自閾值</small>
         </div>
@@ -103,11 +121,15 @@ export function ResultsPage({
                 <div className="bar-track">
                   <i
                     className={`bar-fill ${ragFor(item.attainment, item.threshold)}`}
-                    style={{ width: `${Math.max(0, Math.min(100, item.attainment))}%` }}
+                    style={{
+                      width: `${Math.max(0, Math.min(100, item.attainment))}%`,
+                    }}
                   />
                   <span
                     className="threshold-marker"
-                    style={{ left: `${Math.max(0, Math.min(100, item.threshold))}%` }}
+                    style={{
+                      left: `${Math.max(0, Math.min(100, item.threshold))}%`,
+                    }}
                   />
                 </div>
                 <small>閾值 {item.threshold}%</small>
@@ -116,6 +138,7 @@ export function ResultsPage({
           </div>
         </section>
       </div>
+      <QuarterResults indicators={indicators} role={role} />
       <section className="panel data-panel results-table-panel">
         <SectionTitle
           title="指標結果明細"
