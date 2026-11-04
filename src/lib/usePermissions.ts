@@ -1,8 +1,9 @@
 /**
- * 權限 hook（v1.12.0：交集語義）。
+ * 權限 hook（v1.12.1：移轉語義）。
  * 載入 roles＋titles 集合，提供 can(permKey)：
- * （多重角色取聯集有該權限）AND（職稱有該權限）；
- * 無角色或無職稱者視為無該權限。
+ * - 無角色／無職稱（人員沒填）→ 無權限
+ * - 職稱從未設定過權限（titles 文件無 permissions 欄位）→ 只看角色聯集
+ * - 職稱曾儲存過權限矩陣 → 嚴格交集（角色聯集 AND 職稱）
  */
 import { useCallback, useEffect, useState } from "react";
 import { collection, getDocs } from "./db";
@@ -22,10 +23,14 @@ export function usePermissions() {
   // 先以預設基線提供判斷，Firestore 讀回後再疊加自訂值（避免載入中閃爍）
   const [rolePerms, setRolePerms] =
     useState<Record<string, RolePermissions>>(DEFAULT_ROLE_PERMS);
-  // 職稱權限：無程式預設值，缺＝無權限（v1.12.0 定案）
+  // 職稱權限：無程式預設值；另追蹤各職稱是否「曾儲存過」權限矩陣
+  //（permissions 欄位存在才算設定過，有別於明確存成全 false）
   const [titlePerms, setTitlePerms] = useState<Record<string, RolePermissions>>(
     {},
   );
+  const [titleConfigured, setTitleConfigured] = useState<
+    Record<string, boolean>
+  >({});
 
   useEffect(() => {
     let cancelled = false;
@@ -48,14 +53,20 @@ export function usePermissions() {
         });
         setRolePerms(rp);
         const tp: Record<string, RolePermissions> = {};
+        const tc: Record<string, boolean> = {};
         tsnap.docs.forEach((d) => {
           const data = d.data() as Record<string, unknown>;
           const name = typeof data.name === "string" ? data.name : d.id;
           const parsed = parsePermissions(data.permissions);
           // 同名職稱（例：群組/單位層級的「執行幹事」）取聯集
           tp[name] = { ...(tp[name] ?? {}), ...parsed };
+          // 任一同名文件曾存過 permissions 欄位即視為已設定
+          if (data.permissions !== undefined && data.permissions !== null) {
+            tc[name] = true;
+          }
         });
         setTitlePerms(tp);
+        setTitleConfigured(tc);
       })
       .catch(() => {
         /* 讀不到就沿用預設基線 */
@@ -70,10 +81,10 @@ export function usePermissions() {
     : undefined;
 
   const canDo = useCallback(
-    (key: PermKey) => can(permUser, key, rolePerms, titlePerms),
+    (key: PermKey) => can(permUser, key, rolePerms, titlePerms, titleConfigured),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [user?.roles, user?.title, rolePerms, titlePerms],
+    [user?.roles, user?.title, rolePerms, titlePerms, titleConfigured],
   );
 
-  return { can: canDo, rolePerms, titlePerms };
+  return { can: canDo, rolePerms, titlePerms, titleConfigured };
 }

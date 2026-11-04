@@ -321,6 +321,8 @@ interface TitleRow {
   name: string;
   level: string;
   permissions: Record<PermKey, boolean>;
+  /** 該職稱是否曾儲存過權限矩陣（titles 文件有 permissions 欄位） */
+  permConfigured: boolean;
 }
 
 function permCell(perms: Record<PermKey, boolean>, key: PermKey): boolean {
@@ -378,6 +380,8 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
                 ...emptyPermissions(),
                 ...parsePermissions(data.permissions),
               },
+              permConfigured:
+                data.permissions !== undefined && data.permissions !== null,
             };
           })
           .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant")),
@@ -509,8 +513,11 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
   async function toggleTitlePerm(row: TitleRow, key: PermKey) {
     if (!user) return;
     const next = { ...row.permissions, [key]: !permCell(row.permissions, key) };
+    // 一旦儲存過矩陣，該職稱即視為已設定（改走嚴格交集）
     setTitles((prev) =>
-      prev.map((t) => (t.id === row.id ? { ...t, permissions: next } : t)),
+      prev.map((t) =>
+        t.id === row.id ? { ...t, permissions: next, permConfigured: true } : t,
+      ),
     );
     try {
       await updateDoc(doc(getFirebaseDb(), "titles", row.id), {
@@ -525,7 +532,12 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
   }
 
   function permMatrix<
-    T extends { id: string; name: string; permissions: Record<PermKey, boolean> },
+    T extends {
+      id: string;
+      name: string;
+      permissions: Record<PermKey, boolean>;
+      permConfigured?: boolean;
+    },
   >(rows: T[], onToggle: (row: T, key: PermKey) => void) {
     return (
       <div className="table-scroll">
@@ -543,6 +555,14 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
               <tr key={r.id}>
                 <td>
                   <b>{r.name}</b>
+                  {r.permConfigured === false && (
+                    <span
+                      className="status-pill warning"
+                      style={{ marginLeft: 6 }}
+                    >
+                      尚未設定
+                    </span>
+                  )}
                 </td>
                 {PERM_KEYS.map((k) => (
                   <td key={k} style={{ textAlign: "center" }}>
@@ -672,7 +692,7 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
       <section className="panel data-panel">
         <SectionTitle
           title="職稱功能權限"
-          note="與角色取交集：角色與職稱都要有該權限才生效（無職稱者視為無權限）"
+          note="尚未設定的職稱只看角色權限；儲存後改為角色＋職稱都要有才生效（無職稱者視為無權限）"
         />
         {loading ? (
           <p className="settings-note">讀取中…</p>
@@ -681,7 +701,14 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
             尚無職稱，請先到「人員管理 → 職稱」新增。
           </p>
         ) : (
-          permMatrix(titles, toggleTitlePerm)
+          <>
+            {titles.some((t) => !t.permConfigured) && (
+              <p className="settings-note" style={{ marginBottom: 8 }}>
+                未設定前只看角色權限；儲存後改為角色＋職稱都要有。
+              </p>
+            )}
+            {permMatrix(titles, toggleTitlePerm)}
+          </>
         )}
       </section>
     </>

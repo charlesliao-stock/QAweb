@@ -1,7 +1,8 @@
 /**
- * v1.12.0 測試：用 esbuild 把純函式 lib 打包後在 node 跑斷言。
- * 涵蓋：權限 can() 多重角色取聯集、角色預設權限全無、審查員自動連動、
- *       稽核搜尋過濾、10 steps 標題單一來源、單位只顯示代號（靜態檢查）。
+ * v1.12.1 測試：用 esbuild 把純函式 lib 打包後在 node 跑斷言。
+ * 涵蓋：權限 can() 移轉語義（職稱未設定→只看角色聯集；設定過→嚴格交集）、
+ *       角色預設權限全無、審查員自動連動、稽核搜尋過濾、
+ *       10 steps 標題單一來源、單位只顯示代號（靜態檢查）。
  * 執行：node scripts/test-v1.12.mjs
  */
 import { buildSync } from "esbuild";
@@ -99,7 +100,7 @@ t(
   }) === false,
 );
 
-/* ---- can() 交集語義：(角色聯集有) AND (職稱有) ---- */
+/* ---- can() 移轉語義（v1.12.1）：職稱未設定→只看角色；設定過→嚴格交集 ---- */
 {
   const RP = {
     審查員: { editSubmitted: true },
@@ -108,39 +109,70 @@ t(
   const TP = {
     護理師: { editSubmitted: true },
     督導: { manageRoles: true },
+    // 明確儲存成全 false（曾設定過，有別於從未設定）
+    契約護理師: {
+      resultQuery: false,
+      viewPhotos: false,
+      manageSchedule: false,
+      editSubmitted: false,
+      manageRoles: false,
+    },
   };
+  // 已設定過權限矩陣的職稱 → 嚴格交集
+  const TC = { 護理師: true, 督導: true, 契約護理師: true };
   t(
     "交集：角色有＋職稱無 → false",
-    pm.can({ roles: ["審查員"], title: "督導" }, "editSubmitted", RP, TP) === false,
+    pm.can({ roles: ["審查員"], title: "督導" }, "editSubmitted", RP, TP, TC) === false,
   );
   t(
     "交集：角色無＋職稱有 → false",
-    pm.can({ roles: ["一般人員"], title: "護理師" }, "editSubmitted", RP, TP) === false,
+    pm.can({ roles: ["一般人員"], title: "護理師" }, "editSubmitted", RP, TP, TC) === false,
   );
   t(
     "交集：兩邊都有 → true",
-    pm.can({ roles: ["審查員"], title: "護理師" }, "editSubmitted", RP, TP) === true,
+    pm.can({ roles: ["審查員"], title: "護理師" }, "editSubmitted", RP, TP, TC) === true,
   );
   t(
     "交集：多重角色任一有＋職稱有 → true",
-    pm.can({ roles: ["一般人員", "審查員"], title: "護理師" }, "editSubmitted", RP, TP) === true,
+    pm.can({ roles: ["一般人員", "審查員"], title: "護理師" }, "editSubmitted", RP, TP, TC) === true,
   );
   t(
     "交集：無角色 → false",
-    pm.can({ roles: [], title: "護理師" }, "editSubmitted", RP, TP) === false,
+    pm.can({ roles: [], title: "護理師" }, "editSubmitted", RP, TP, TC) === false,
   );
   t(
-    "交集：無職稱 → false",
-    pm.can({ roles: ["審查員"], title: "" }, "editSubmitted", RP, TP) === false,
+    "交集：無職稱（人員沒填）→ false",
+    pm.can({ roles: ["審查員"], title: "" }, "editSubmitted", RP, TP, TC) === false,
   );
-  t("交集：null 使用者 → false", pm.can(null, "editSubmitted", RP, TP) === false);
-  t(
-    "交集：職稱不在表中 → false",
-    pm.can({ roles: ["審查員"], title: "不存在" }, "editSubmitted", RP, TP) === false,
-  );
+  t("交集：null 使用者 → false", pm.can(null, "editSubmitted", RP, TP, TC) === false);
   t(
     "交集：角色退回預設＋職稱有 → true",
-    pm.can({ roles: ["系統管理員"], title: "督導" }, "manageRoles", {}, TP) === true,
+    pm.can({ roles: ["系統管理員"], title: "督導" }, "manageRoles", {}, TP, TC) === true,
+  );
+  // 未設定過的職稱 → 移轉期只看角色聯集
+  t(
+    "移轉：職稱未設定＋角色有 → true（只看角色）",
+    pm.can({ roles: ["審查員"], title: "護理師" }, "editSubmitted", RP, TP, {}) === true,
+  );
+  t(
+    "移轉：職稱未設定＋角色無 → false",
+    pm.can({ roles: ["一般人員"], title: "護理師" }, "editSubmitted", RP, TP, {}) === false,
+  );
+  t(
+    "移轉：職稱不在已設定表中 → 只看角色（角色有→true）",
+    pm.can({ roles: ["審查員"], title: "不存在" }, "editSubmitted", RP, TP, TC) === true,
+  );
+  t(
+    "移轉：職稱明確全 false（曾設定）→ false，不因角色有而放行",
+    pm.can({ roles: ["審查員"], title: "契約護理師" }, "editSubmitted", RP, TP, TC) === false,
+  );
+  t(
+    "移轉：省略第 5 參數時視為全部未設定（只看角色）",
+    pm.can({ roles: ["審查員"], title: "督導" }, "editSubmitted", RP, TP) === true,
+  );
+  t(
+    "移轉：無職稱者即使角色有→仍 false（與職稱未設定區分）",
+    pm.can({ roles: ["審查員"], title: "" }, "editSubmitted", RP, TP, {}) === false,
   );
 }
 

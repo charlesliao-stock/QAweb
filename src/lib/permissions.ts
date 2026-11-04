@@ -1,7 +1,10 @@
 /**
- * 權限模型（v1.12.0）：角色 × 功能鍵 → bool，多重角色取聯集。
+ * 權限模型（v1.12.1：移轉語義）。
  * 角色定義存於 Firestore `roles` 集合（permissions 欄位）；
- * 職稱（titles）的 permissions 欄位目前只儲存、不接入判斷（待使用者定案最終規則）。
+ * 職稱（titles）的 permissions 欄位採移轉語義：
+ *   欄位不存在／null（從未設定過）→ 只看角色聯集；
+ *   欄位存在（即使全 false，代表曾儲存過矩陣）→ 嚴格交集（角色聯集 AND 職稱）。
+ * 目的：避免上線第一天所有人被交集鎖死（既有職稱都沒設定過權限）。
  */
 
 /** 5 個功能權限鍵（沿用系統管理頁原 5 列矩陣） */
@@ -99,21 +102,27 @@ export interface PermUser {
 }
 
 /**
- * 單一權限判斷（純函式，v1.12.0 定案：交集語義）。
- * （多重角色取聯集有該權限）AND（職稱有該權限）；
- * 無角色或無職稱者視為無該權限。
- * titlePermsByName：職稱名稱 → 該職稱的權限表（Firestore titles 集合；
- * 無預設值，缺＝無權限）。
+ * 單一權限判斷（純函式，v1.12.1：移轉語義）。
+ * - 無角色，或無職稱（人員沒填職稱，title === ""）→ 視為無該權限
+ * - 職稱「從未設定過權限」（titles 文件無 permissions 欄位／null，
+ *   即 titleConfigured[title] 非 true）→ 移轉期：只看角色聯集
+ * - 職稱「曾儲存過權限矩陣」（欄位存在，即使全 false）→ 嚴格交集：
+ *   （多重角色取聯集有該權限）AND（職稱有該權限）
+ *
+ * titlePermsByName：職稱名稱 → 該職稱的權限表（Firestore titles 集合）；
+ * titleConfigured：職稱名稱 → 是否曾儲存過權限矩陣（缺鍵＝未設定；
+ *   整個參數省略時視為全部未設定＝只看角色）。
  */
 export function can(
   user: PermUser | null | undefined,
   permKey: PermKey,
   rolePerms: Record<string, RolePermissions>,
   titlePermsByName: Record<string, RolePermissions>,
+  titleConfigured?: Record<string, boolean>,
 ): boolean {
   if (!user || user.roles.length === 0) return false;
   if (!user.title) return false;
-  const tp = titlePermsByName[user.title];
-  if (tp?.[permKey] !== true) return false;
-  return canByRoles(user.roles, permKey, rolePerms);
+  if (!canByRoles(user.roles, permKey, rolePerms)) return false;
+  if (titleConfigured?.[user.title] !== true) return true;
+  return titlePermsByName[user.title]?.[permKey] === true;
 }
