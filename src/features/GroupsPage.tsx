@@ -2151,7 +2151,7 @@ export function GroupsPage({
         <section className="panel">
           <SectionTitle
             title="審查員"
-            note="依指標分類組別設定審查員名單，供「指標排程」的單位／審查員設定選用"
+            note="依指標分類組別設定審查員名單，供「品管審查排程」的單位／審查員設定選用"
           />
           <div
             style={{

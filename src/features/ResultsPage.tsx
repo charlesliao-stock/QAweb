@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Download } from "lucide-react";
-import { collection, getDocs, query, where } from "../lib/db";
+import { collection, doc, getDoc, getDocs, query, where } from "../lib/db";
 import { getFirebaseDb, toFirebaseProfile } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
 import { usePermissions } from "../lib/usePermissions";
@@ -26,7 +26,9 @@ import {
   type DataScope,
   type RagState,
   type RateRecord,
+  type StatsCycle,
 } from "../lib/resultAnalysis";
+import { academicYearOf } from "../lib/cycle";
 
 interface IndicatorOpt {
   id: string;
@@ -71,6 +73,23 @@ export function ResultsPage({
   const [loading, setLoading] = useState(true);
   const [viewingTaskId, setViewingTaskId] = useState<string | null>(null);
   const [tab, setTab] = useState<"overview" | "quarterly">("overview");
+  /** 統計週期（系統參數 systemParams.statsCycle；缺值預設 'year'） */
+  const [statsCycle, setStatsCycle] = useState<StatsCycle>("year");
+
+  // 統計週期：讀系統參數（沿用既有 systemParams/config 讀法）
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDoc(
+          doc(getFirebaseDb(), "systemParams", "config"),
+        );
+        const v = snap.data()?.statsCycle;
+        setStatsCycle(v === "academic" ? "academic" : "year");
+      } catch {
+        setStatsCycle("year");
+      }
+    })();
+  }, []);
 
   const scope: DataScope = useMemo(() => {
     const roles = user?.roles ?? [];
@@ -180,14 +199,33 @@ export function ResultsPage({
     [indicators],
   );
   const selInd = indicators.find((i) => i.id === selIndicator);
+  /** 趨勢的週期鍵：年度＝西元年；學年度＝包含所選曆年月的學年度 */
+  const trendPeriod = useMemo(
+    () =>
+      statsCycle === "academic"
+        ? String(academicYearOf(new Date(selYear, selMonth - 1, 1)))
+        : String(selYear),
+    [statsCycle, selYear, selMonth],
+  );
+  const trendScopeLabel =
+    statsCycle === "academic"
+      ? `${trendPeriod}學年度各月份平均正確率`
+      : `${selYear}年各月份平均正確率`;
   const trend = useMemo(
-    () => monthlyTrend(scoped.records, selIndicator),
-    [scoped, selIndicator],
+    () => monthlyTrend(scoped.records, selIndicator, statsCycle, trendPeriod),
+    [scoped, selIndicator, statsCycle, trendPeriod],
   );
   const stats = useMemo(
     () =>
-      indicatorMonthStats(scoped.tasks, scoped.records, selYear, selMonth, thresholds),
-    [scoped, selYear, selMonth, thresholds],
+      indicatorMonthStats(
+        scoped.tasks,
+        scoped.records,
+        selYear,
+        selMonth,
+        thresholds,
+        statsCycle,
+      ),
+    [scoped, selYear, selMonth, thresholds, statsCycle],
   );
   const rows = useMemo(
     () =>
@@ -269,7 +307,7 @@ export function ResultsPage({
   }
 
   const trendValues = trend.map((t) => t.rate);
-  const trendLabels = trend.map((t) => `${t.month}月`);
+  const trendLabels = trend.map((t) => t.label);
 
   return (
     <div className="results-page">
@@ -374,11 +412,7 @@ export function ResultsPage({
           <section className="panel">
             <SectionTitle
               title="指標趨勢"
-              note={
-                selInd
-                  ? `${selInd.name}・${selYear}年各月份平均正確率`
-                  : undefined
-              }
+              note={selInd ? `${selInd.name}・${trendScopeLabel}` : undefined}
             />
             {trend.length === 0 ? (
               <div className="chart-empty">尚無趨勢資料</div>
@@ -387,7 +421,7 @@ export function ResultsPage({
                 values={trendValues}
                 labels={trendLabels}
                 legend="平均正確率"
-                currentLabel={`${trend[trend.length - 1].month}月`}
+                currentLabel={trend[trend.length - 1].label}
               />
             )}
           </section>
@@ -395,7 +429,7 @@ export function ResultsPage({
           <section className="panel">
             <SectionTitle
               title="達標統計"
-              note={`${selYear}年${selMonth}月・達標率＝達標單位數 ÷ 已完成單位數`}
+              note={`${statsCycle === "academic" ? `${trendPeriod}學年度・${selMonth}月` : `${selYear}年${selMonth}月`}・達標率＝達標單位數 ÷ 已完成單位數`}
             />
             {stats.length === 0 ? (
               <EmptyState

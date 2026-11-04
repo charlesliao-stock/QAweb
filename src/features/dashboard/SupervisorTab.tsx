@@ -5,10 +5,11 @@
 import { useMemo } from "react";
 import { SectionTitle } from "../../components/ui";
 import {
+  cycleMonthLabel,
   declineAlerts,
   unitMonthAvgs,
 } from "../../lib/dashboardStats";
-import { avgRateOf, ragStatus } from "../../lib/resultAnalysis";
+import { avgRateOf, ragStatus, type StatsCycle } from "../../lib/resultAnalysis";
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
 
@@ -19,9 +20,12 @@ function ymOf(year: number, month: number): string {
 export function SupervisorTab({
   data,
   districtGroupIds,
+  cycle = "year",
 }: {
   data: DashboardData;
   districtGroupIds: string[];
+  /** 統計週期（系統參數；預設曆年） */
+  cycle?: StatsCycle;
 }) {
   const now = new Date();
   const curYear = now.getFullYear();
@@ -67,9 +71,9 @@ export function SupervisorTab({
     });
   }, [data, districtUnits, curYear, curMonth]);
 
-  // 連續下滑／未達標警訊（近三個月）
+  // 連續下滑／未達標警訊（近三個週期月）
   const alerts = useMemo(() => {
-    const yms: [string, string, string] = [0, 1, 2].map((k) => {
+    const calYms = [0, 1, 2].map((k) => {
       let y = curYear;
       let m = curMonth - k;
       while (m <= 0) {
@@ -77,12 +81,17 @@ export function SupervisorTab({
         y -= 1;
       }
       return ymOf(y, m);
-    }).reverse() as [string, string, string];
-    const rows = unitMonthAvgs(data.records, yms).filter((r) =>
+    }).reverse();
+    // declineAlerts 吃的 yms 需與 unitMonthAvgs 輸出的 ym 標籤同格式
+    const yms = calYms.map((s) => {
+      const [y, m] = s.split("-").map(Number);
+      return cycleMonthLabel(y, m, cycle);
+    }) as [string, string, string];
+    const rows = unitMonthAvgs(data.records, calYms, cycle).filter((r) =>
       districtUnitIds.has(r.unitId),
     );
     return declineAlerts(rows, yms, 90);
-  }, [data, districtUnitIds, curYear, curMonth]);
+  }, [data, districtUnitIds, curYear, curMonth, cycle]);
 
   if (districtGroupIds.length === 0) {
     return (

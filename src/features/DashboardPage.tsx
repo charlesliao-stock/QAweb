@@ -3,10 +3,12 @@
  * 依登入者職稱／角色決定顯示哪些變體（主任＞督導＞護理長＞執行幹事＞
  * 召集人＞審查員＞護理師；系統管理員七種全開），預設停在優先序最高者。
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download } from "lucide-react";
 import { PageHeading } from "../components/ui";
 import { useAuth } from "../lib/auth";
+import { getFirebaseDb } from "../lib/firebase";
+import { doc, getDoc } from "../lib/db";
 import {
   getDashboardVariants,
   VARIANT_LABELS,
@@ -24,6 +26,7 @@ import { OfficerTab } from "./dashboard/OfficerTab";
 import { ConvenerTab } from "./dashboard/ConvenerTab";
 import { SupervisorTab } from "./dashboard/SupervisorTab";
 import { DirectorTab } from "./dashboard/DirectorTab";
+import type { StatsCycle } from "../lib/resultAnalysis";
 
 export function DashboardPage({
   onAction,
@@ -34,6 +37,22 @@ export function DashboardPage({
   const data = useDashboardData();
   const [executing, setExecuting] = useState<ExecuteTarget | null>(null);
   const [vtab, setVtab] = useState<DashboardVariant | null>(null);
+  /** 統計週期（系統參數 systemParams.statsCycle；缺值預設 'year'） */
+  const [statsCycle, setStatsCycle] = useState<StatsCycle>("year");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDoc(
+          doc(getFirebaseDb(), "systemParams", "config"),
+        );
+        const v = snap.data()?.statsCycle;
+        setStatsCycle(v === "academic" ? "academic" : "year");
+      } catch {
+        setStatsCycle("year");
+      }
+    })();
+  }, []);
 
   const variants = useMemo(
     () =>
@@ -145,6 +164,7 @@ export function DashboardPage({
             <SupervisorTab
               data={data}
               districtGroupIds={user?.districtGroupIds ?? []}
+              cycle={statsCycle}
             />
           )}
           {active === "director" && <DirectorTab data={data} />}

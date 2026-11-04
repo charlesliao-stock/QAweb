@@ -3,25 +3,39 @@
  * 涵蓋：逐件累計／完成判斷、雙頁籤分類、查詢列表（schema 相容）。
  * 執行：node scripts/test-v1.11.mjs
  */
-import { buildSync } from "esbuild";
+import { build } from "esbuild";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { pathToFileURL } from "url";
 
 const dir = mkdtempSync(join(tmpdir(), "qatest-"));
+/* v1.16 起 scheduling.ts 接入 ./db（firebase）做寫入持久化；純函式測試不需要它，
+ * 用 stub 擋掉以免把 firebase/firestore（含 grpc）拖進 node bundle。 */
+const stubPlugin = {
+  name: "stub-db-audit",
+  setup(build) {
+    build.onResolve({ filter: /^\.\/(db|audit)$/ }, (args) => ({ path: args.path, namespace: "stub" }));
+    build.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
+      contents:
+        "export const collection=()=>{throw new Error('stub')};export const deleteDoc=async()=>{};export const doc=()=>{throw new Error('stub')};export const getDoc=async()=>({exists:()=>false});export const getDocs=async()=>({docs:[]});export const query=()=>({});export const serverTimestamp=()=>null;export const setDoc=async()=>{};export const where=()=>({});export const writeBatch=()=>({set(){},delete(){},commit:async()=>{}});export const logAudit=async()=>{};",
+      loader: "js",
+    }));
+  },
+};
 for (const [src, out] of [
   ["src/lib/reviewProgress.ts", "rp.mjs"],
   ["src/lib/reviewRecords.ts", "rr.mjs"],
   ["src/lib/scheduling.ts", "sch.mjs"],
 ]) {
-  buildSync({
+  await build({
     entryPoints: [src],
     bundle: true,
     format: "esm",
     platform: "node",
     outfile: join(dir, out),
     logLevel: "silent",
+    plugins: [stubPlugin],
   });
 }
 const rp = await import(pathToFileURL(join(dir, "rp.mjs")).href);

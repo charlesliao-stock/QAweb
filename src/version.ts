@@ -9,8 +9,8 @@
  *
  * 顯示位置：側邊欄底部（登入後）＋ 登入頁頁尾。
  */
-export const VERSION = "1.15.1";
-export const BUILD_DATE = "2026-11-04";
+export const VERSION = "1.16.0";
+export const BUILD_DATE = "2026-11-05";
 
 /** 畫面顯示用字串，例如「v1.4.0（2026-11-03）」 */
 export const VERSION_LABEL = `v${VERSION}（${BUILD_DATE}）`;

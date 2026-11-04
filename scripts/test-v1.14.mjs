@@ -119,8 +119,8 @@ t("IndicatorsPage 無舊 reviews 集合引用", !ind.includes('"reviews"'));
 
 /* ---- 版本號 ---- */
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-t("package.json 版號 1.15.0", pkg.version === "1.15.0");
-t("version.ts 版號 1.15.0", src("version.ts").includes('VERSION = "1.15.0"'));
+t("package.json 版號 1.16.0", pkg.version === "1.16.0");
+t("version.ts 版號 1.16.0", src("version.ts").includes('VERSION = "1.16.0"'));
 
 /* ---- 4 檔存在 ---- */
 for (const f of [

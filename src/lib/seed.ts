@@ -112,6 +112,8 @@ export interface SystemParams {
   showReviewerNameToStaff: boolean;
   /** 主題配色：green-2／blue-3／teal-orange-3／purple-4（全院統一，管理員設定） */
   uiTheme: string;
+  /** 統計週期：報表統計跟隨的週期（'year'＝曆年 1–12 月；'academic'＝學年度 8 月制） */
+  statsCycle: "year" | "academic";
 }
 
 /** 主題配色選項（id 需與 styles.css 的 [data-theme] 對應） */
@@ -140,6 +142,23 @@ export const DEFAULT_SYSTEM_PARAMS: SystemParams = {
   passwordExpiryReminderDays: 7,
   showReviewerNameToStaff: false,
   uiTheme: "green-2",
+  statsCycle: "year",
+};
+
+/** 統計週期下拉選項 */
+export const STATS_CYCLE_OPTIONS: { value: "year" | "academic"; label: string }[] = [
+  { value: "year", label: "年度" },
+  { value: "academic", label: "學年度" },
+];
+
+/**
+ * 系統參數中需渲染為下拉選單的欄位 → 選項清單（參數編輯器讀此表）。
+ * 未列出的欄位沿用舊規則：boolean→勾選框、number→數字框、string→文字框。
+ */
+export const SYSTEM_PARAM_SELECT_OPTIONS: Partial<
+  Record<keyof SystemParams, { value: string; label: string }[]>
+> = {
+  statsCycle: STATS_CYCLE_OPTIONS,
 };
 
 export const SYSTEM_PARAM_LABELS: Record<keyof SystemParams, string> = {
@@ -155,6 +174,7 @@ export const SYSTEM_PARAM_LABELS: Record<keyof SystemParams, string> = {
   passwordExpiryReminderDays: "密碼到期前提醒天數",
   showReviewerNameToStaff: "一般人員可見審查員姓名",
   uiTheme: "主題配色",
+  statsCycle: "統計週期",
 };
 
 /**

@@ -3,8 +3,9 @@
  * 純函式：個人趨勢／常犯缺失／48h 通報／落後燈號／柏拉圖／下滑警訊／雷達矩陣，
  * 可單元測試。
  */
-import { avgRateOf, type RagState } from "./resultAnalysis";
+import { avgRateOf, type RagState, type StatsCycle } from "./resultAnalysis";
 import { requiredCases } from "./reviewProgress";
+import { toCycleKey } from "./cycle";
 import { todayStr } from "./scheduling";
 
 /** 儀表板用的任務列（已含完成數） */
@@ -213,29 +214,53 @@ export function paretoTop3(
 }
 
 /* ---------- 督導／主任：單位月份平均 ---------- */
+/**
+ * 週期月標籤：cycle='year' → "2026-08"；'academic' → "115-08"
+ *（toCycleKey 的學年度鍵＋月份）。
+ */
+export function cycleMonthLabel(
+  year: number,
+  month: number,
+  cycle: StatsCycle,
+): string {
+  if (cycle === "academic") {
+    return `${toCycleKey(year, month, "academic")}-${String(month).padStart(2, "0")}`;
+  }
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
 export interface UnitMonth {
   unitId: string;
-  /** YYYY-MM */
+  /** 年度 "YYYY-MM"／學年度 "115-08"（依 cycle） */
   ym: string;
   avg: number | null;
 }
+/**
+ * 各單位各週期月的平均正確率。
+ * yms 仍傳曆年月字串 "YYYY-MM"（與呼叫端既有寫法相容）；
+ * 輸出的 ym 依 cycle 轉為週期標籤。
+ */
 export function unitMonthAvgs(
   records: DashRecord[],
   yms: string[],
+  cycle: StatsCycle = "year",
 ): UnitMonth[] {
   const ymSet = new Set(yms);
   const map = new Map<string, (number | null)[]>();
+  const labelOf = new Map<string, string>(); // 曆年月 → 輸出標籤
   for (const r of records) {
-    const ym = `${r.year}-${String(r.month).padStart(2, "0")}`;
-    if (!ymSet.has(ym)) continue;
-    const key = `${r.unitId}||${ym}`;
+    const cal = `${r.year}-${String(r.month).padStart(2, "0")}`;
+    if (!ymSet.has(cal)) continue;
+    if (!labelOf.has(cal))
+      labelOf.set(cal, cycleMonthLabel(r.year, r.month, cycle));
+    const key = `${r.unitId}||${cal}`;
     const arr = map.get(key);
     if (arr) arr.push(r.rate);
     else map.set(key, [r.rate]);
   }
   return [...map.entries()].map(([key, rates]) => {
-    const [unitId, ym] = key.split("||");
-    return { unitId, ym, avg: avgRateOf(rates) };
+    const [unitId, cal] = key.split("||");
+    return { unitId, ym: labelOf.get(cal) ?? cal, avg: avgRateOf(rates) };
   });
 }
 
@@ -245,8 +270,9 @@ export interface DeclineAlert {
   detail: string;
 }
 /**
- * 連續兩個月下滑（m-2 > m-1 > m，皆有數值）或最新月未達標（avg < threshold）。
- * yms 需為連續三個月（由舊到新）。
+ * 連續三個週期月下滑（m-2 > m-1 > m，皆有數值）或最新月未達標（avg < threshold）。
+ * yms 需為連續三個週期月（由舊到新），其格式需與 rows 的 ym 一致
+ *（年度 "YYYY-MM"／學年度 "115-08"，見 cycleMonthLabel）。
  */
 export function declineAlerts(
   rows: UnitMonth[],
@@ -269,7 +295,7 @@ export function declineAlerts(
       out.push({
         unitId,
         kind: "decline",
-        detail: `連續三個月下滑（${a}% → ${b}% → ${c}%）`,
+        detail: `連續三個週期月下滑（${a}% → ${b}% → ${c}%）`,
       });
     } else if (c != null && c < threshold) {
       out.push({ unitId, kind: "below", detail: `最新月平均 ${c}% 未達 ${threshold}%` });
