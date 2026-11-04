@@ -215,6 +215,92 @@ export function primaryThreshold(
   return ts.step5.thresholds[0]?.value ?? 0;
 }
 
+/** 指標清單列（搜尋／排序／閾值顯示共用） */
+export interface IndicatorListRow {
+  code: string;
+  name: string;
+  groupId: string;
+  status: string;
+  version: string;
+  mainThreshold: number;
+  /** 基本資料閾值；null＝未填 */
+  basicThreshold: number | null;
+}
+
+/**
+ * 清單「閾值」欄顯示值：基本資料閾值優先；
+ * 為空則 fallback 主閾值（僅顯示，不寫回）。
+ */
+export function displayThreshold(
+  basicThreshold: number | null | undefined,
+  mainThreshold: number,
+): number {
+  return typeof basicThreshold === "number" ? basicThreshold : mainThreshold;
+}
+
+export function indicatorDisplayThreshold(row: IndicatorListRow): number {
+  return displayThreshold(row.basicThreshold, row.mainThreshold);
+}
+
+/** 指標清單搜尋過濾：範圍＝指標編號＋指標名稱 */
+export function filterIndicators<T extends { code: string; name: string }>(
+  rows: T[],
+  keyword: string,
+): T[] {
+  const kw = keyword.trim().toLowerCase();
+  if (!kw) return rows;
+  return rows.filter(
+    (r) =>
+      r.code.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw),
+  );
+}
+
+/** 指標清單可排序欄位 */
+export type IndicatorSortKey =
+  | "code"
+  | "name"
+  | "group"
+  | "threshold"
+  | "status"
+  | "version";
+
+export function indicatorSortValue(
+  row: IndicatorListRow,
+  key: IndicatorSortKey,
+  groupName: string,
+): string | number {
+  switch (key) {
+    case "code":
+      return row.code;
+    case "name":
+      return row.name;
+    case "group":
+      return groupName;
+    case "threshold":
+      return indicatorDisplayThreshold(row);
+    case "status":
+      return row.status;
+    case "version":
+      return row.version;
+  }
+}
+
+export function compareIndicatorRows(
+  a: IndicatorListRow,
+  b: IndicatorListRow,
+  key: IndicatorSortKey,
+  dir: 1 | -1,
+  groupNameOf: (groupId: string) => string,
+): number {
+  const va = indicatorSortValue(a, key, groupNameOf(a.groupId));
+  const vb = indicatorSortValue(b, key, groupNameOf(b.groupId));
+  const c =
+    typeof va === "number" && typeof vb === "number"
+      ? va - vb
+      : String(va).localeCompare(String(vb), "zh-Hant");
+  return dir === 1 ? c : -c;
+}
+
 function asQuestionOptions(v: unknown, optionSet?: unknown): QuestionOption[] {
   if (Array.isArray(v)) {
     const list = v
