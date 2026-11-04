@@ -2,7 +2,11 @@ export type Role =
   | "一般人員"
   | "審查員"
   | "護理長"
+  | "主任"
+  | "副主任"
   | "督導"
+  | "各組召集人"
+  | "執行幹事"
   | "品管執行幹事"
   | "系統管理員"
   | "指標負責人";
@@ -15,7 +19,8 @@ export type PageId =
   | "results"
   | "groups"
   | "capa"
-  | "admin";
+  | "admin"
+  | "reviewers";
 
 export type Rag = "green" | "amber" | "red";
 
@@ -44,15 +49,4 @@ export interface ScheduleTask {
   total: number;
   due: string;
   status: "進行中" | "待開始" | "逾期補審";
-}
-
-export interface CapaCase {
-  id: string;
-  title: string;
-  unit: string;
-  owner: string;
-  due: string;
-  progress: number;
-  stage: string;
-  status: "改善中" | "待驗證" | "逾期";
 }
