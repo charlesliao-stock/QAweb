@@ -35,14 +35,13 @@ export function nextCaseSeq(existingCount: number): number {
 }
 
 /**
- * 頁籤分類（v1.11.0）：完成數達標 → done；否則 pending。
- * legacyDone＝舊流程已標 done 的任務（相容，維持在已完成頁籤）。
+ * 頁籤分類（v1.12.2）：純粹以計數判斷——完成數 ≧ 應審件數 → done；否則 pending。
+ * 不再參考 task.status：舊版（v1.10.x）單筆提交會把 status 寫成 done，
+ * 逐件制後殘留的 done 會讓 1/3 這種任務誤入已完成頁籤。
  */
 export function taskTab(
   doneCount: number,
   caseCount: number | null,
-  legacyDone: boolean,
 ): "done" | "pending" {
-  if (legacyDone) return "done";
   return isTaskComplete(doneCount, caseCount) ? "done" : "pending";
 }

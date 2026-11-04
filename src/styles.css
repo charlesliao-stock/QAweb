@@ -1438,6 +1438,22 @@ button:disabled {
   font-weight: 600;
   white-space: nowrap;
 }
+/* 可點擊排序的表頭按鈕（v1.12.2：審查員名單） */
+.th-sort {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.th-sort:hover {
+  color: var(--color-primary, #0e7c7b);
+  text-decoration: underline;
+}
 .data-table td {
   padding: 13px 18px;
   color: #748286;

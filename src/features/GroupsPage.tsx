@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   Download,
@@ -444,6 +444,33 @@ export function GroupsPage({
   const [reviewers, setReviewers] = useState<ReviewerRow[]>([]);
   const [reviewersLoading, setReviewersLoading] = useState(false);
   const [reviewerSearch, setReviewerSearch] = useState("");
+  // 審查員名單：排序（v1.12.2，點標題切換）＋姓名關鍵字篩選
+  const [reviewerSortKey, setReviewerSortKey] = useState<"staffId" | "name">(
+    "staffId",
+  );
+  const [reviewerSortDir, setReviewerSortDir] = useState<1 | -1>(1);
+  const [reviewerFilter, setReviewerFilter] = useState("");
+  const toggleReviewerSort = (key: "staffId" | "name") => {
+    if (reviewerSortKey === key) {
+      setReviewerSortDir((d) => (d === 1 ? -1 : 1));
+    } else {
+      setReviewerSortKey(key);
+      setReviewerSortDir(1);
+    }
+  };
+  const filteredReviewers = useMemo(() => {
+    const kw = reviewerFilter.trim().toLowerCase();
+    const rows = kw
+      ? reviewers.filter((r) => r.name.toLowerCase().includes(kw))
+      : [...reviewers];
+    rows.sort((a, b) => {
+      const av = reviewerSortKey === "name" ? a.name : a.personId;
+      const bv = reviewerSortKey === "name" ? b.name : b.personId;
+      const c = av.localeCompare(bv, "zh-Hant");
+      return reviewerSortDir === 1 ? c : -c;
+    });
+    return rows;
+  }, [reviewers, reviewerFilter, reviewerSortKey, reviewerSortDir]);
   const [reviewerSaving, setReviewerSaving] = useState(false);
 
   const loadRoles = useCallback(async () => {
@@ -2089,13 +2116,27 @@ export function GroupsPage({
             title="審查員"
             note="依指標分類組別設定審查員名單，供「指標排程」的單位／審查員設定選用"
           />
-          <div className="form-field" style={{ maxWidth: 320 }}>
-            <label className="field-label">組別</label>
-            <div className="select-wrap">
-              <select
-                value={reviewerGroupId}
-                onChange={(e) => setReviewerGroupId(e.target.value)}
-              >
+          <div
+            style={{
+              display: "flex",
+              gap: 16,
+              flexWrap: "wrap",
+              alignItems: "flex-end",
+            }}
+          >
+            <div
+              className="form-field"
+              style={{ maxWidth: 320, flex: "1 1 220px", marginBottom: 0 }}
+            >
+              <label className="field-label">組別</label>
+              <div className="select-wrap">
+                <select
+                  value={reviewerGroupId}
+                  onChange={(e) => {
+                    setReviewerGroupId(e.target.value);
+                    setReviewerFilter("");
+                  }}
+                >
                 <option value="">請選擇組別</option>
                 <option value={UNCATEGORIZED_GROUP_ID}>未分類</option>
                 {groups.map((g) => (
@@ -2106,73 +2147,31 @@ export function GroupsPage({
               </select>
               <ChevronDown size={15} />
             </div>
+            </div>
+            {canManageMaster && (
+              <div
+                className="form-field"
+                style={{ maxWidth: 320, flex: "1 1 220px", marginBottom: 0 }}
+              >
+                <label className="field-label">加入審查員</label>
+                <input
+                  className="text-input"
+                  placeholder="輸入職編或姓名搜尋"
+                  value={reviewerSearch}
+                  onChange={(e) => setReviewerSearch(e.target.value)}
+                />
+                <p className="settings-note" style={{ marginTop: 4 }}>
+                  從在職人員中搜尋（職編／姓名）
+                </p>
+              </div>
+            )}
           </div>
 
-          {!reviewerGroupId ? (
-            <p className="settings-note">請先選擇組別。</p>
-          ) : reviewersLoading ? (
-            <p className="settings-note">讀取中…</p>
-          ) : (
-            <>
-              {reviewers.length === 0 ? (
-                <p className="settings-note">
-                  此組別尚無審查員
-                  {canManageMaster ? "，請由下方加入。" : "。"}
-                </p>
-              ) : (
-                <div className="table-scroll">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>職編</th>
-                        <th>姓名</th>
-                        <th>所屬單位</th>
-                        {canManageMaster && <th>操作</th>}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reviewers.map((r) => (
-                        <tr key={r.personId}>
-                          <td>{r.personId}</td>
-                          <td>{r.name ? maskName(r.name) : "—"}</td>
-                          <td>{r.unitCode || "—"}</td>
-                          {canManageMaster && (
-                            <td>
-                              <button
-                                className="text-button"
-                                onClick={() => handleReviewerRemove(r.personId)}
-                              >
-                                <Trash2 size={13} /> 移除
-                              </button>
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {canManageMaster && (
-                <>
-                  <SectionTitle
-                    title="加入審查員"
-                    note="從在職人員中搜尋（職編／姓名）"
-                  />
-                  <div className="form-field" style={{ maxWidth: 320 }}>
-                    <input
-                      className="text-input"
-                      placeholder="輸入職編或姓名搜尋"
-                      value={reviewerSearch}
-                      onChange={(e) => setReviewerSearch(e.target.value)}
-                    />
-                  </div>
-                  {reviewerSearch.trim() === "" ? (
-                    <p className="settings-note">
-                      輸入關鍵字後，從下方結果加入。
-                    </p>
-                  ) : (
-                    (() => {
+              {canManageMaster &&
+                reviewerSearch.trim() !== "" &&
+                reviewerGroupId &&
+                !reviewersLoading &&
+                (() => {
                       const kw = reviewerSearch.trim().toLowerCase();
                       const existed = new Set(
                         reviewers.map((r) => r.personId),
@@ -2222,10 +2221,84 @@ export function GroupsPage({
                           </table>
                         </div>
                       );
-                    })()
-                  )}
-                </>
+                })()}
+
+          {!reviewerGroupId ? (
+            <p className="settings-note">請先選擇組別。</p>
+          ) : reviewersLoading ? (
+            <p className="settings-note">讀取中…</p>
+          ) : (
+            <>
+              <div className="form-field" style={{ maxWidth: 320 }}>
+                <input
+                  className="text-input"
+                  placeholder="依姓名篩選名單"
+                  value={reviewerFilter}
+                  onChange={(e) => setReviewerFilter(e.target.value)}
+                />
+              </div>
+              {filteredReviewers.length === 0 ? (
+                <p className="settings-note">
+                  {reviewers.length === 0
+                    ? `此組別尚無審查員${canManageMaster ? "，請由上方加入。" : "。"}`
+                    : "無符合篩選條件的審查員。"}
+                </p>
+              ) : (
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>
+                          <button
+                            type="button"
+                            className="th-sort"
+                            onClick={() => toggleReviewerSort("staffId")}
+                            title="依職編排序"
+                          >
+                            職編
+                            {reviewerSortKey === "staffId" &&
+                              (reviewerSortDir === 1 ? " ▲" : " ▼")}
+                          </button>
+                        </th>
+                        <th>
+                          <button
+                            type="button"
+                            className="th-sort"
+                            onClick={() => toggleReviewerSort("name")}
+                            title="依姓名排序"
+                          >
+                            姓名
+                            {reviewerSortKey === "name" &&
+                              (reviewerSortDir === 1 ? " ▲" : " ▼")}
+                          </button>
+                        </th>
+                        <th>所屬單位</th>
+                        {canManageMaster && <th>操作</th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredReviewers.map((r) => (
+                        <tr key={r.personId}>
+                          <td>{r.personId}</td>
+                          <td>{r.name ? maskName(r.name) : "—"}</td>
+                          <td>{r.unitCode || "—"}</td>
+                          {canManageMaster && (
+                            <td>
+                              <button
+                                className="text-button"
+                                onClick={() => handleReviewerRemove(r.personId)}
+                              >
+                                <Trash2 size={13} /> 移除
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
+
             </>
           )}
         </section>

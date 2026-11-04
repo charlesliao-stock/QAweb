@@ -3,8 +3,11 @@ import { CircleAlert, Download } from "lucide-react";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import {
   collection,
+  doc,
   getDocs,
   query,
+  serverTimestamp,
+  updateDoc,
   where,
 } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
@@ -115,6 +118,22 @@ export function DashboardPage({
         if (c !== 0) return c;
         return a.unitId.localeCompare(b.unitId, "zh-Hant");
       });
+      // 狀態自動校正（v1.12.2）：舊版殘留的 status 與計數不符時寫回修正
+      //（例如 v1.10.x 單筆提交把 status 寫成 done，逐件制後 1/3 會誤入已完成頁籤）
+      list.forEach((t) => {
+        const shouldBeDone = taskTab(t.doneCount, t.caseCount) === "done";
+        const shouldBeStatus = shouldBeDone ? "done" : "pending";
+        if (t.status !== shouldBeStatus) {
+          const patch: Record<string, unknown> = { status: shouldBeStatus };
+          if (shouldBeDone && !t.completedAt) {
+            patch.completedAt = serverTimestamp();
+          }
+          updateDoc(doc(db, "reviewTasks", t.id), patch).catch(() => {
+            /* 校正失敗不阻擋顯示，下次載入再試 */
+          });
+          t.status = shouldBeStatus;
+        }
+      });
       setTasks(list);
     } catch {
       // 讀不到就顯示空狀態，不阻擋儀表板
@@ -132,9 +151,9 @@ export function DashboardPage({
   /** 審查表單執行目標（v1.11.0）：task＝審查表單；records＝查詢逐件結果 */
   const [executing, setExecuting] = useState<ExecuteTarget | null>(null);
 
-  /** 頁籤分類（v1.11.0）：完成數 ≧ 應審件數 → 已完成 */
+  /** 頁籤分類（v1.12.2）：純粹以「完成數 ≧ 應審件數」計數判斷，不看 task.status */
   const isDone = useCallback(
-    (t: TaskRow) => taskTab(t.doneCount, t.caseCount, t.status === "done") === "done",
+    (t: TaskRow) => taskTab(t.doneCount, t.caseCount) === "done",
     [],
   );
 
