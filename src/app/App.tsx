@@ -511,9 +511,7 @@ function Shell() {
           </div>
         </header>
         <div className="page-content">
-          {page === "dashboard" && (
-            <DashboardPage role={primaryRole} onAction={notify} />
-          )}
+          {page === "dashboard" && <DashboardPage onAction={notify} />}
           {page === "indicators" && <IndicatorsPage onAction={notify} />}
           {page === "schedule" && <SchedulePage onAction={notify} />}
           {page === "audit" && <AuditPage onAction={notify} />}

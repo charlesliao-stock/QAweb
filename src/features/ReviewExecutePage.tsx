@@ -52,6 +52,9 @@ interface CaseRecordRow {
   reviewDate: string;
   reviewerEmpNo: string;
   reviewerName: string;
+  reviewedPersonEmpNo: string;
+  reviewedPersonName: string;
+  bedNo: string;
   answers: ReviewAnswer[];
   totalScore: number;
   maxScore: number;
@@ -64,6 +67,14 @@ interface PersonOption {
   staffId: string;
   name: string;
   status: string;
+  unitCode: string;
+}
+
+/** 解鎖申請列 */
+interface UnlockRow {
+  id: string;
+  status: string;
+  reason: string;
 }
 
 function toErrorMessage(error: unknown): string {
@@ -90,6 +101,7 @@ function fmtTs(ts: unknown): string {
 
 function taskFromDoc(id: string, data: Record<string, unknown>): TaskFull {
   const cc = data.caseCount;
+  const st = String(data.status ?? "pending");
   return {
     id,
     indicatorId: String(data.indicatorId ?? ""),
@@ -100,7 +112,7 @@ function taskFromDoc(id: string, data: Record<string, unknown>): TaskFull {
     caseCount:
       typeof cc === "number" && Number.isInteger(cc) && cc >= 1 ? cc : null,
     deadline: String(data.deadline ?? ""),
-    status: data.status === "done" ? "done" : "pending",
+    status: st === "done" ? "done" : st === "locked" ? "locked" : "pending",
     completedAt: data.completedAt,
     createdAt: data.createdAt,
   };
@@ -120,6 +132,7 @@ export function ReviewExecutePage({
 
   const [loading, setLoading] = useState(true);
   const [indicatorName, setIndicatorName] = useState("");
+  const [requireBedNo, setRequireBedNo] = useState(false);
   const [questions, setQuestions] = useState<AuditQuestion[]>([]);
   const [task, setTask] = useState<TaskFull | null>(null);
   const [records, setRecords] = useState<CaseRecordRow[]>([]);
@@ -133,6 +146,16 @@ export function ReviewExecutePage({
   const [showSugg, setShowSugg] = useState(false);
   const [usersList, setUsersList] = useState<PersonOption[]>([]);
 
+  /** 受審人員（v1.15.0：必填，同單位在職人員搜尋） */
+  const [personEmpNo, setPersonEmpNo] = useState("");
+  const [personName, setPersonName] = useState("");
+  const [personQuery, setPersonQuery] = useState("");
+  const [showPersonSugg, setShowPersonSugg] = useState(false);
+  /** 病人床號（v1.15.0：指標 requireBedNo 時必填） */
+  const [bedNo, setBedNo] = useState("");
+  /** questionId → 備註（v1.15.0：選填） */
+  const [notes, setNotes] = useState<Record<string, string>>({});
+
   /** questionId → 選中的選項 index */
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -140,6 +163,10 @@ export function ReviewExecutePage({
   const [allDone, setAllDone] = useState(false);
   /** records 模式下正在編輯的單件（null＝列表） */
   const [editingId, setEditingId] = useState<string | null>(null);
+  /** 解鎖申請（v1.15.0） */
+  const [unlockRows, setUnlockRows] = useState<UnlockRow[]>([]);
+  const [unlockReason, setUnlockReason] = useState("");
+  const [unlocking, setUnlocking] = useState(false);
 
   const doneCount = records.length;
 
@@ -162,6 +189,15 @@ export function ReviewExecutePage({
             typeof data.reviewerEmpNo === "string" ? data.reviewerEmpNo : "",
           reviewerName:
             typeof data.reviewerName === "string" ? data.reviewerName : "",
+          reviewedPersonEmpNo:
+            typeof data.reviewedPersonEmpNo === "string"
+              ? data.reviewedPersonEmpNo
+              : "",
+          reviewedPersonName:
+            typeof data.reviewedPersonName === "string"
+              ? data.reviewedPersonName
+              : "",
+          bedNo: typeof data.bedNo === "string" ? data.bedNo : "",
           answers: Array.isArray(data.answers)
             ? (data.answers as ReviewAnswer[])
             : [],
@@ -183,18 +219,25 @@ export function ReviewExecutePage({
   /* ---------- 單件答案預填（編輯用） ---------- */
   function prefillRecord(rec: CaseRecordRow, qs: AuditQuestion[]) {
     const next: Record<string, number> = {};
+    const nextNotes: Record<string, string> = {};
     rec.answers.forEach((a) => {
       const q = qs.find((x) => x.id === a.questionId);
       if (!q) return;
       let idx = q.options.findIndex((o) => o.label === a.optionLabel);
       if (idx < 0) idx = q.options.findIndex((o) => o.score === a.score);
       if (idx >= 0) next[q.id] = idx;
+      if (a.note) nextNotes[a.questionId] = a.note;
     });
     setAnswers(next);
+    setNotes(nextNotes);
     setReviewDate(rec.reviewDate || todayStr());
     setReviewerEmpNo(rec.reviewerEmpNo);
     setReviewerName(rec.reviewerName);
     setReviewerQuery("");
+    setPersonEmpNo(rec.reviewedPersonEmpNo);
+    setPersonName(rec.reviewedPersonName);
+    setPersonQuery("");
+    setBedNo(rec.bedNo);
   }
 
   /* ---------- 初始載入 ---------- */
@@ -205,7 +248,7 @@ export function ReviewExecutePage({
       setLoadError("");
       try {
         const db = getFirebaseDb();
-        // 人員清單（審查人員搜尋用）
+        // 人員清單（審查人員／受審人員搜尋用）
         try {
           const psnap = await getDocs(collection(db, "users"));
           const list: PersonOption[] = [];
@@ -215,6 +258,8 @@ export function ReviewExecutePage({
               staffId: d.id,
               name: typeof data.name === "string" ? data.name : d.id,
               status: typeof data.status === "string" ? data.status : "",
+              unitCode:
+                typeof data.unitCode === "string" ? data.unitCode : "",
             });
           });
           list.sort((a, b) => {
@@ -245,6 +290,7 @@ export function ReviewExecutePage({
           setIndicatorName(
             typeof idata.name === "string" ? idata.name : t.indicatorId,
           );
+          setRequireBedNo(idata.requireBedNo === true);
         }
         const nq = normalizeQuestions(idata.questions);
         if (cancelled) return;
@@ -254,6 +300,30 @@ export function ReviewExecutePage({
         const recs = await loadCaseRecords(t.id);
         if (cancelled) return;
         setRecords(recs);
+        // 解鎖申請（v1.15.0）
+        try {
+          const usnap = await getDocs(
+            query(
+              collection(db, "unlockRequests"),
+              where("taskId", "==", t.id),
+            ),
+          );
+          if (!cancelled) {
+            const urows: UnlockRow[] = [];
+            usnap.docs.forEach((d) => {
+              const ud = d.data() as Record<string, unknown>;
+              urows.push({
+                id: d.id,
+                status:
+                  typeof ud.status === "string" ? ud.status : "pending",
+                reason: typeof ud.reason === "string" ? ud.reason : "",
+              });
+            });
+            setUnlockRows(urows);
+          }
+        } catch {
+          /* 讀不到不阻擋 */
+        }
         // 預設審查人員＝登入者本人
         if (!cancelled && !reviewerEmpNo) {
           setReviewerEmpNo(staffId);
@@ -302,9 +372,79 @@ export function ReviewExecutePage({
     setShowSugg(false);
   }
 
+  /* ---------- 受審人員搜尋（v1.15.0：同單位在職人員，必填） ---------- */
+  const personSugg = useMemo(() => {
+    const q = personQuery.trim();
+    if (q === "") return [];
+    const unitId = task?.unitId ?? "";
+    return usersList
+      .filter(
+        (u) =>
+          (unitId === "" || u.unitCode === unitId) &&
+          (u.staffId.includes(q) || u.name.includes(q)),
+      )
+      .sort((a, b) => {
+        const sa = a.status === "在職" ? 0 : 1;
+        const sb = b.status === "在職" ? 0 : 1;
+        return sa - sb || a.staffId.localeCompare(b.staffId);
+      })
+      .slice(0, 8);
+  }, [personQuery, usersList, task?.unitId]);
+
+  function selectPerson(u: PersonOption) {
+    setPersonEmpNo(u.staffId);
+    setPersonName(u.name);
+    setPersonQuery("");
+    setShowPersonSugg(false);
+  }
+
+  /* ---------- 申請解鎖（v1.15.0） ---------- */
+  const hasPendingUnlock = unlockRows.some((r) => r.status === "pending");
+  async function handleUnlockRequest() {
+    if (!task || !unlockReason.trim()) {
+      onAction("請填寫申請原因");
+      return;
+    }
+    setUnlocking(true);
+    try {
+      const db = getFirebaseDb();
+      const ref = doc(
+        db,
+        "unlockRequests",
+        `${task.id}__unlock_${Date.now().toString(36)}`,
+      );
+      await setDoc(ref, {
+        taskId: task.id,
+        indicatorId: task.indicatorId,
+        unitId: task.unitId,
+        year: task.year,
+        month: task.month,
+        requestedBy: staffId,
+        requestedByName: user?.name ?? staffId,
+        reason: unlockReason.trim(),
+        status: "pending",
+        createdAt: serverTimestamp(),
+      });
+      setUnlockRows((prev) => [
+        ...prev,
+        { id: ref.id, status: "pending", reason: unlockReason.trim() },
+      ]);
+      setUnlockReason("");
+      onAction("已送出解鎖申請，待執行幹事審核");
+    } catch (error) {
+      onAction(`申請失敗：${toErrorMessage(error)}`);
+    } finally {
+      setUnlocking(false);
+    }
+  }
+
   /* ---------- 送出（逐件新增 or 單件更新） ---------- */
   async function handleSubmit() {
     if (!task) return;
+    if (task.status === "locked") {
+      onAction("任務已鎖定，請先申請解鎖");
+      return;
+    }
     const firstMissing = questions.find((q) => answers[q.id] == null);
     if (firstMissing) {
       onAction(`第 ${questions.indexOf(firstMissing) + 1} 題尚未作答`);
@@ -317,16 +457,26 @@ export function ReviewExecutePage({
       onAction("請填寫審查人員職編");
       return;
     }
+    if (!personEmpNo.trim()) {
+      onAction("請選擇受審人員");
+      return;
+    }
+    if (requireBedNo && !bedNo.trim()) {
+      onAction("請填寫病人床號");
+      return;
+    }
     setSubmitting(true);
     try {
       const db = getFirebaseDb();
       const answerList: ReviewAnswer[] = questions.map((q) => {
         const opt = q.options[answers[q.id]];
+        const note = (notes[q.id] ?? "").trim();
         return {
           questionId: q.id,
           itemText: q.itemText,
           optionLabel: opt.label,
           score: opt.score,
+          ...(note ? { note } : {}),
         };
       });
       const { totalScore, maxScore, rate } = computeReviewScore(
@@ -350,6 +500,9 @@ export function ReviewExecutePage({
           reviewDate,
           reviewerEmpNo: reviewerEmpNo.trim(),
           reviewerName: reviewerName.trim(),
+          reviewedPersonEmpNo: personEmpNo.trim(),
+          reviewedPersonName: personName.trim(),
+          bedNo: bedNo.trim(),
         });
         const recs = await loadCaseRecords(task.id);
         setRecords(recs);
@@ -374,6 +527,9 @@ export function ReviewExecutePage({
           reviewDate,
           reviewerEmpNo: reviewerEmpNo.trim(),
           reviewerName: reviewerName.trim(),
+          reviewedPersonEmpNo: personEmpNo.trim(),
+          reviewedPersonName: personName.trim(),
+          bedNo: bedNo.trim(),
           answers: answerList,
           totalScore,
           maxScore,
@@ -390,7 +546,12 @@ export function ReviewExecutePage({
           setAllDone(true);
         }
         setRecords(await loadCaseRecords(taskId));
-        setAnswers({}); // 清空答案，保留日期／人員，繼續下一件
+        setAnswers({}); // 清空答案，保留日期／審查人員，繼續下一件
+        setNotes({});
+        setPersonEmpNo("");
+        setPersonName("");
+        setPersonQuery("");
+        setBedNo("");
         onAction(
           `已送出第 ${seq} 件（共需 ${req} 件）${rate != null ? `，正確率 ${rate}%` : ""}`,
         );
@@ -451,6 +612,8 @@ export function ReviewExecutePage({
                     <th>件次</th>
                     <th>審查日期</th>
                     <th>審查人員</th>
+                    <th>受審人員</th>
+                    <th>床號</th>
                     <th>得分／正確率</th>
                     <th>送出時間</th>
                     <th>操作</th>
@@ -469,26 +632,72 @@ export function ReviewExecutePage({
                           : "—"}
                       </td>
                       <td>
+                        {r.reviewedPersonEmpNo
+                          ? `${r.reviewedPersonEmpNo}／${maskName(r.reviewedPersonName || r.reviewedPersonEmpNo)}`
+                          : "—"}
+                      </td>
+                      <td>{r.bedNo || "—"}</td>
+                      <td>
                         {r.totalScore}/{r.maxScore}
                         {r.rate != null ? `（${r.rate}%）` : ""}
                       </td>
                       <td>{fmtTs(r.submittedAt) || "—"}</td>
                       <td>
-                        <button
-                          className="text-button"
-                          onClick={() => {
-                            prefillRecord(r, questions);
-                            setEditingId(r.id);
-                          }}
-                        >
-                          <Pencil size={13} style={{ verticalAlign: "-2px" }} />{" "}
-                          編輯
-                        </button>
+                        {task.status === "locked" ? (
+                          <span className="muted-text">已鎖定</span>
+                        ) : (
+                          <button
+                            className="text-button"
+                            onClick={() => {
+                              prefillRecord(r, questions);
+                              setEditingId(r.id);
+                            }}
+                          >
+                            <Pencil size={13} style={{ verticalAlign: "-2px" }} />{" "}
+                            編輯
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </section>
+      ) : task.status === "locked" && !editingId ? (
+        /* ============ 逾期鎖定：不可填寫，可申請解鎖 ============ */
+        <section className="panel" style={{ borderColor: "#e0a3a3" }}>
+          <p style={{ marginTop: 0 }}>
+            <b>🔒 此任務已逾期鎖定</b>
+            <span className="muted-text">（截止日期 {task.deadline}）</span>
+          </p>
+          <p className="settings-note">
+            鎖定後不可再送出審查結果。如需補登，請填寫原因申請解鎖，待執行幹事審核。
+          </p>
+          {hasPendingUnlock ? (
+            <p>
+              <span className="status-pill warning">已送出申請，待審核</span>
+            </p>
+          ) : (
+            <div className="form-field" style={{ maxWidth: 480 }}>
+              <label className="field-label">申請原因</label>
+              <textarea
+                className="text-input"
+                rows={3}
+                placeholder="請說明需要解鎖補登的原因"
+                value={unlockReason}
+                onChange={(e) => setUnlockReason(e.target.value)}
+              />
+              <div className="form-actions" style={{ marginTop: 12 }}>
+                <button
+                  className="button button-primary"
+                  disabled={unlocking}
+                  onClick={handleUnlockRequest}
+                >
+                  {unlocking ? "送出中…" : "申請解鎖"}
+                </button>
+              </div>
             </div>
           )}
         </section>
@@ -595,6 +804,77 @@ export function ReviewExecutePage({
                   </>
                 )}
               </div>
+              <div className="form-field" style={{ position: "relative" }}>
+                <label className="field-label">
+                  受審人員 <span style={{ color: "#b3372f" }}>*</span>
+                </label>
+                {personEmpNo ? (
+                  <p style={{ margin: "12px 0" }}>
+                    <b>
+                      {personEmpNo}／{maskName(personName || personEmpNo)}
+                    </b>{" "}
+                    <button
+                      className="text-button"
+                      onClick={() => {
+                        setPersonEmpNo("");
+                        setPersonName("");
+                        setPersonQuery("");
+                        setShowPersonSugg(true);
+                      }}
+                    >
+                      更換
+                    </button>
+                  </p>
+                ) : (
+                  <>
+                    <input
+                      type="text"
+                      className="text-input"
+                      placeholder={`輸入職編或姓名搜尋（${task.unitId}同單位）`}
+                      value={personQuery}
+                      onChange={(e) => {
+                        setPersonQuery(e.target.value);
+                        setShowPersonSugg(true);
+                      }}
+                      onFocus={() => setShowPersonSugg(true)}
+                      aria-label="受審人員搜尋"
+                    />
+                    {showPersonSugg && personSugg.length > 0 && (
+                      <ul className="sugg-list">
+                        {personSugg.map((u) => (
+                          <li key={u.staffId}>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => selectPerson(u)}
+                            >
+                              {u.staffId}／{maskName(u.name)}
+                              {u.status && u.status !== "在職" && (
+                                <span className="muted-text">（{u.status}）</span>
+                              )}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </div>
+              {requireBedNo && (
+                <div className="form-field">
+                  <label className="field-label">
+                    病人床號 <span style={{ color: "#b3372f" }}>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="text-input"
+                    placeholder="請輸入病人床號"
+                    value={bedNo}
+                    onChange={(e) => setBedNo(e.target.value)}
+                    aria-label="病人床號"
+                  />
+                </div>
+              )}
             </div>
           </section>
 
@@ -667,6 +947,21 @@ export function ReviewExecutePage({
                             </p>
                           </details>
                         )}
+                      </div>
+                      <div className="q-note">
+                        <input
+                          type="text"
+                          className="text-input"
+                          placeholder="備註（選填）"
+                          value={notes[q.id] ?? ""}
+                          onChange={(e) =>
+                            setNotes((prev) => ({
+                              ...prev,
+                              [q.id]: e.target.value,
+                            }))
+                          }
+                          aria-label={`第 ${qi + 1} 題備註`}
+                        />
                       </div>
                     </div>
                   );

@@ -112,6 +112,17 @@ service cloud.firestore {
       allow read, write: if isAuthed();
     }
 
+    // 解鎖申請（v1.15.0）：登入者可讀；申請人（requestedBy＝本人職編）可建立；
+    // 執行幹事以上可審核更新；刪除限管理員
+    match /unlockRequests/{id} {
+      allow get, list: if isAuthed();
+      allow create: if isAuthed()
+        && request.resource.data.get('requestedBy', '') == staffId()
+        && request.resource.data.get('status', '') == 'pending';
+      allow update: if isGanShi();
+      allow delete: if isAdmin();
+    }
+
     // 業務資料：第一階段登入者可讀寫（第二階段按單位/角色收緊）
     match /schedules/{id} {
       allow read, write: if isAuthed();
