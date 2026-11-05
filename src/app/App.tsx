@@ -2,11 +2,9 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   ArrowRight,
-  Bell,
   BookOpenCheck,
   CalendarDays,
   Check,
-  ChevronDown,
   ClipboardCheck,
   FileBarChart2,
   GitBranch,
@@ -14,27 +12,17 @@ import {
   LockKeyhole,
   LogOut,
   Menu,
-  Palette,
   Settings2,
   X,
 } from "lucide-react";
 import { AuthProvider, useAuth } from "../lib/auth";
-import { isDemoMode } from "../lib/demoMode";
 import { doc, getDoc } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
-import { maskName } from "../lib/mask";
 import {
-  FONT_SIZE_LABELS,
   applyTheme,
   applyUiPrefs,
-  getColorMode,
-  getFontSize,
-  setColorMode,
-  setFontSize,
-  type ColorModeOption,
-  type FontSizeOption,
 } from "../lib/uiPrefs";
-import { BrandMark, PAGE_COPY } from "../components/ui";
+import { BrandMark } from "../components/ui";
 import { VERSION_LABEL } from "../version";
 import { AdminPage } from "../features/AdminPage";
 import { AuditPage } from "../features/AuditPage";
@@ -44,7 +32,7 @@ import { GroupsPage } from "../features/GroupsPage";
 import { IndicatorsPage } from "../features/IndicatorsPage";
 import { ResultsPage } from "../features/ResultsPage";
 import { SchedulePage } from "../features/SchedulePage";
-import type { PageId, Role } from "../types";
+import type { PageId } from "../types";
 
 const NAV_GROUPS = [
   {
@@ -69,23 +57,6 @@ const NAV_GROUPS = [
     ],
   },
 ] as const;
-
-const ROLE_NAMES: Role[] = [
-  "一般人員",
-  "審查員",
-  "護理長",
-  "督導",
-  "品管執行幹事",
-  "系統管理員",
-  "指標負責人",
-  // v1.21：新角色
-  "品管組召集人",
-  "品管組執行幹事",
-  "品管組審查員",
-  "單位召集人",
-  "單位執行幹事",
-  "單位審查員",
-];
 
 function LoginScreen() {
   const { login, changePassword, needsPasswordChange } = useAuth();
@@ -359,66 +330,6 @@ function Sidebar({
   );
 }
 
-function DisplaySettings() {
-  const [open, setOpen] = useState(false);
-  const [fontSize, setFontSizeState] = useState<FontSizeOption>(getFontSize());
-  const [mode, setModeState] = useState<ColorModeOption>(getColorMode());
-
-  function pickFont(v: FontSizeOption) {
-    setFontSize(v);
-    setFontSizeState(v);
-  }
-  function toggleMode() {
-    const next: ColorModeOption = mode === "dark" ? "light" : "dark";
-    setColorMode(next);
-    setModeState(next);
-  }
-
-  return (
-    <div className="display-settings-wrap">
-      <button
-        className="icon-button"
-        aria-label="顯示設定"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Palette size={18} />
-      </button>
-      {open && (
-        <>
-          <button
-            className="display-pop-scrim"
-            aria-label="關閉顯示設定"
-            onClick={() => setOpen(false)}
-          />
-          <div className="display-pop">
-            <h4>顯示設定</h4>
-            <div className="pop-row-label">字體大小</div>
-            <div className="font-size-options">
-              {(Object.keys(FONT_SIZE_LABELS) as FontSizeOption[]).map((k) => (
-                <button
-                  key={k}
-                  className={fontSize === k ? "selected" : ""}
-                  onClick={() => pickFont(k)}
-                >
-                  {FONT_SIZE_LABELS[k]}
-                </button>
-              ))}
-            </div>
-            <div className="pop-row-label">深色模式</div>
-            <button
-              className={`mode-toggle${mode === "dark" ? " on" : ""}`}
-              onClick={toggleMode}
-            >
-              <span>{mode === "dark" ? "開" : "關"}</span>
-              <span className="toggle-track" />
-            </button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
 function Shell() {
   const { user, loading, needsPasswordChange, logout } = useAuth();
   const [page, setPage] = useState<PageId>("dashboard");
@@ -464,10 +375,6 @@ function Shell() {
     return <LoginScreen />;
   }
 
-  const primaryRole: Role = ROLE_NAMES.includes(user.roles[0] as Role)
-    ? (user.roles[0] as Role)
-    : "一般人員";
-
   return (
     <div className="app-shell">
       <Sidebar
@@ -478,7 +385,7 @@ function Shell() {
         onClose={() => setMobileOpen(false)}
       />
       <main className="main-area">
-        <header className="topbar">
+        <div className="page-content">
           <button
             className="mobile-menu icon-button"
             aria-label="開啟選單"
@@ -486,32 +393,6 @@ function Shell() {
           >
             <Menu size={20} />
           </button>
-          <div className="topbar-crumb">
-            <b>{PAGE_COPY[page].title}</b>
-            {isDemoMode() && <span className="demo-pill">展示模式</span>}
-          </div>
-          <div className="topbar-actions">
-            <DisplaySettings />
-            <button
-              className="icon-button notification-button"
-              aria-label="通知"
-              onClick={() => notify("目前沒有新通知")}
-            >
-              <Bell size={18} />
-            </button>
-            <div className="topbar-user">
-              <span className="profile-avatar small-avatar">
-                {user.name.slice(0, 1)}
-              </span>
-              <div>
-                <b>{maskName(user.name)}</b>
-                <small>{primaryRole}</small>
-              </div>
-              <ChevronDown size={14} />
-            </div>
-          </div>
-        </header>
-        <div className="page-content">
           {page === "dashboard" && <DashboardPage onAction={notify} />}
           {page === "indicators" && <IndicatorsPage onAction={notify} />}
           {page === "schedule" && <SchedulePage onAction={notify} />}

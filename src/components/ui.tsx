@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Check, ChevronRight, Inbox } from "lucide-react";
+import { Check, Inbox } from "lucide-react";
 import type { PageId, Rag } from "../types";
 
 export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
@@ -104,9 +104,6 @@ export function PageHeading({
   return (
     <div className="page-heading">
       <div>
-        <div className="breadcrumb">
-          品質管理 <ChevronRight size={13} /> <span>{copy.title}</span>
-        </div>
         <h1>{copy.title}</h1>
         <p>{copy.description}</p>
       </div>
