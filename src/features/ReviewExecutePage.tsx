@@ -21,6 +21,7 @@ import {
   optionLabelsOf,
   type AuditQuestion,
 } from "../lib/indicators";
+import { ReviewQuestionList } from "./ReviewQuestionList";
 import {
   computeOptionSetScore,
   type ReviewAnswer,
@@ -903,82 +904,18 @@ export function ReviewExecutePage({
             />
           ) : (
             <>
-              {/* 題目：桌機/平板一題一行；手機堆疊（v1.11.0） */}
-              <section className="panel">
-                {questions.map((q, qi) => {
-                  const sel = answers[q.id];
-                  const missing = sel == null;
-                  return (
-                    <div
-                      key={q.id}
-                      id={`req-q-${q.id}`}
-                      className="review-qrow"
-                    >
-                      {showQuestionGroups && q.groupName ? (
-                        <div className="q-group">{q.groupName}</div>
-                      ) : null}
-                      <div className="q-text">
-                        <b>
-                          {qi + 1}. {q.itemText || `（第 ${qi + 1} 題）`}
-                        </b>
-                        {missing && (
-                          <span
-                            className="status-pill warning"
-                            style={{ marginLeft: 8 }}
-                          >
-                            尚未作答
-                          </span>
-                        )}
-                      </div>
-                      <div
-                        className="radio-group"
-                        role="radiogroup"
-                        aria-label={q.itemText}
-                      >
-                        {optionLabelsOf(q.optionSet).map((label, oi) => (
-                          <label
-                            key={oi}
-                            className={`check-row${sel === oi ? " checked" : ""}`}
-                          >
-                            <input
-                              type="radio"
-                              name={`q-${q.id}`}
-                              checked={sel === oi}
-                              onChange={() => chooseAnswer(q.id, oi)}
-                            />
-                            <span>{label}</span>
-                          </label>
-                        ))}
-                      </div>
-                      <div className="q-guidance">
-                        {q.guidance.trim() !== "" && (
-                          <details className="guidance-details">
-                            <summary>指引</summary>
-                            <p style={{ whiteSpace: "pre-wrap" }}>
-                              {q.guidance}
-                            </p>
-                          </details>
-                        )}
-                      </div>
-                      <div className="q-note">
-                        <input
-                          type="text"
-                          className="text-input"
-                          placeholder="備註（選填）"
-                          value={notes[q.id] ?? ""}
-                          onChange={(e) =>
-                            setNotes((prev) => ({
-                              ...prev,
-                              [q.id]: e.target.value,
-                            }))
-                          }
-                          aria-label={`第 ${qi + 1} 題備註`}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </section>
+              {/* 題目：一個組別一個方框；題目左、選項中、備註右；指引可收合（v1.24） */}
+              <ReviewQuestionList
+                mode="edit"
+                questions={questions}
+                showGroups={showQuestionGroups}
+                answers={answers}
+                notes={notes}
+                onAnswer={chooseAnswer}
+                onNote={(qid, text) =>
+                  setNotes((prev) => ({ ...prev, [qid]: text }))
+                }
+              />
 
               <div className="form-actions" style={{ marginBottom: 24 }}>
                 <button

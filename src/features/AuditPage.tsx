@@ -13,7 +13,7 @@
  * v1.20：只顯示包含本月區間的指標（今天不在任何區間內就不列）；
  * 表頭篩選列移除，改為清單上方篩選區（組別／指標／關鍵字）。
  */
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   ArrowUpDown,
   ChevronDown,
@@ -60,7 +60,13 @@ import {
   type IntervalProgress,
   type ReviewInterval,
 } from "../lib/reviewActive";
+import {
+  normalizeQuestions,
+  type AuditQuestion,
+} from "../lib/indicators";
+import type { ReviewAnswer } from "../lib/reviewRecords";
 import { ReviewExecutePage, type ExecuteTarget } from "./ReviewExecutePage";
+import { ReviewQuestionList } from "./ReviewQuestionList";
 
 interface IndicatorLite {
   id: string;
@@ -177,6 +183,17 @@ export function AuditPage({
   const [selIndicator, setSelIndicator] = useState("");
   const [keyword, setKeyword] = useState("");
   const [viewRow, setViewRow] = useState<ActiveRow | null>(null);
+  /** 檢視 modal：該指標題目（逐題明細分組＋指引用；v1.24） */
+  const [viewQuestions, setViewQuestions] = useState<AuditQuestion[]>([]);
+  const [viewShowGroups, setViewShowGroups] = useState(false);
+  /** 檢視 modal：展開明細的紀錄 id 與其逐題作答 */
+  const [expandedRecordId, setExpandedRecordId] = useState<string | null>(
+    null,
+  );
+  const [expandedAnswers, setExpandedAnswers] = useState<ReviewAnswer[] | null>(
+    null,
+  );
+  const [expandedLoading, setExpandedLoading] = useState(false);
   const [execRow, setExecRow] = useState<ActiveRow | null>(null);
   const [execUnit, setExecUnit] = useState("");
   const [execMonth, setExecMonth] = useState("");
@@ -440,6 +457,62 @@ export function AuditPage({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.staffId]);
+
+  /* ---------- 檢視 modal：載入該指標題目（逐題明細分組＋指引用；v1.24） ---------- */
+  useEffect(() => {
+    setExpandedRecordId(null);
+    setExpandedAnswers(null);
+    if (!viewRow) {
+      setViewQuestions([]);
+      setViewShowGroups(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const db = getFirebaseDb();
+        const snap = await getDoc(doc(db, "indicators", viewRow.indicatorId));
+        if (cancelled || !snap.exists()) return;
+        const v = snap.data() as Record<string, unknown>;
+        setViewQuestions(normalizeQuestions(v.questions).questions);
+        setViewShowGroups(v.useQuestionGroups === true);
+      } catch {
+        if (!cancelled) {
+          setViewQuestions([]);
+          setViewShowGroups(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [viewRow]);
+
+  /** 檢視 modal：展開／收起單筆紀錄的逐題明細（選項＋備註） */
+  async function toggleRecordDetail(rec: RecordRow) {
+    if (expandedRecordId === rec.id) {
+      setExpandedRecordId(null);
+      setExpandedAnswers(null);
+      return;
+    }
+    setExpandedRecordId(rec.id);
+    setExpandedAnswers(null);
+    setExpandedLoading(true);
+    try {
+      const db = getFirebaseDb();
+      const snap = await getDoc(doc(db, "reviewRecords", rec.id));
+      const v = snap.exists()
+        ? (snap.data() as Record<string, unknown>)
+        : {};
+      setExpandedAnswers(
+        Array.isArray(v.answers) ? (v.answers as ReviewAnswer[]) : [],
+      );
+    } catch {
+      setExpandedAnswers([]);
+    } finally {
+      setExpandedLoading(false);
+    }
+  }
 
   // 篩選區選項：組別＝清單內的組別；指標＝清單內的指標（隨組別連動）
   const groupOptions = useMemo(() => {
@@ -846,20 +919,53 @@ export function AuditPage({
                       <th>審查人員</th>
                       <th>受審人員</th>
                       <th>正確率</th>
+                      <th>明細</th>
                     </tr>
                   </thead>
                   <tbody>
                     {viewRow.records.map((r) => (
-                      <tr key={r.id}>
-                        <td>
-                          {r.year}年{r.month}月
-                        </td>
-                        <td>{viewRow.unitNameOf(r.unitId)}</td>
-                        <td>{r.reviewDate || "—"}</td>
-                        <td>{maskName(r.reviewerName) || "—"}</td>
-                        <td>{maskName(r.reviewedPersonName) || "—"}</td>
-                        <td>{r.rate == null ? "—" : `${r.rate}%`}</td>
-                      </tr>
+                      <Fragment key={r.id}>
+                        <tr>
+                          <td>
+                            {r.year}年{r.month}月
+                          </td>
+                          <td>{viewRow.unitNameOf(r.unitId)}</td>
+                          <td>{r.reviewDate || "—"}</td>
+                          <td>{maskName(r.reviewerName) || "—"}</td>
+                          <td>{maskName(r.reviewedPersonName) || "—"}</td>
+                          <td>{r.rate == null ? "—" : `${r.rate}%`}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => toggleRecordDetail(r)}
+                              aria-expanded={expandedRecordId === r.id}
+                            >
+                              {expandedRecordId === r.id ? "▾ 收起" : "▸ 明細"}
+                            </button>
+                          </td>
+                        </tr>
+                        {expandedRecordId === r.id ? (
+                          <tr>
+                            <td colSpan={7}>
+                              {expandedLoading || expandedAnswers == null ? (
+                                <p className="muted-text">載入明細中…</p>
+                              ) : expandedAnswers.length === 0 ? (
+                                <p className="muted-text">
+                                  此筆紀錄沒有逐題作答資料。
+                                </p>
+                              ) : (
+                                <ReviewQuestionList
+                                  mode="view"
+                                  questions={viewQuestions}
+                                  showGroups={viewShowGroups}
+                                  answers={expandedAnswers}
+                                />
+                              )}
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>
