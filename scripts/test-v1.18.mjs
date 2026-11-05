@@ -21,14 +21,16 @@ import {
   YEAR_FILTER_OPTIONS, yearOptionLabel, periodForFilter,
   autoSelectMonths, parseFrequency, parseIntervalMonths,
   frequencyLabel, intervalLabel, scheduleSetupComplete,
-  FREQUENCY_OPTIONS, INTERVAL_OPTIONS,
+  intervalMonthsForFrequency,
+  FREQUENCY_OPTIONS,
 } from "${ROOT}/src/lib/scheduling";
 import { schedulePillState, mergeItemsWithUnits } from "${ROOT}/src/features/SchedulePage";
 export {
   YEAR_FILTER_OPTIONS, yearOptionLabel, periodForFilter,
   autoSelectMonths, parseFrequency, parseIntervalMonths,
   frequencyLabel, intervalLabel, scheduleSetupComplete,
-  FREQUENCY_OPTIONS, INTERVAL_OPTIONS,
+  intervalMonthsForFrequency,
+  FREQUENCY_OPTIONS,
   schedulePillState, mergeItemsWithUnits,
 };
 `;
@@ -74,45 +76,50 @@ assert("年度 2026→「2026」", L.periodForFilter("year", 2026) === "2026");
 assert("學年度 2026→「115」", L.periodForFilter("academic", 2026) === "115");
 assert("學年度 2033→「122」", L.periodForFilter("academic", 2033) === "122");
 
-/* ---------- 3. 頻次／區間自動預選月份 ---------- */
+/* ---------- 3. 頻次自動預選月份（v1.20：12 個月依頻次平分） ---------- */
 assert(
-  "4次/年＋3個月＋年度→[1,4,7,10]",
-  eq(L.autoSelectMonths(4, 3, YEAR_ORDER), [1, 4, 7, 10]),
+  "4次/年＋年度→[1,4,7,10]",
+  eq(L.autoSelectMonths(4, YEAR_ORDER), [1, 4, 7, 10]),
 );
 assert(
-  "3次/年＋4個月＋年度→[1,5,9]",
-  eq(L.autoSelectMonths(3, 4, YEAR_ORDER), [1, 5, 9]),
+  "3次/年＋年度→[1,5,9]",
+  eq(L.autoSelectMonths(3, YEAR_ORDER), [1, 5, 9]),
 );
 assert(
-  "2次/年＋2個月＋年度→[1,3]",
-  eq(L.autoSelectMonths(2, 2, YEAR_ORDER), [1, 3]),
+  "2次/年＋年度→[1,7]",
+  eq(L.autoSelectMonths(2, YEAR_ORDER), [1, 7]),
 );
 assert(
-  "4次/年＋3個月＋學年度→[2,5,8,11]",
-  eq(L.autoSelectMonths(4, 3, ACAD_ORDER), [2, 5, 8, 11]),
+  "4次/年＋學年度→[2,5,8,11]",
+  eq(L.autoSelectMonths(4, ACAD_ORDER), [2, 5, 8, 11]),
 );
 assert(
-  "3次/年＋2個月＋學年度→[8,10,12]",
-  eq(L.autoSelectMonths(3, 2, ACAD_ORDER), [8, 10, 12]),
+  "3次/年＋學年度→[4,8,12]",
+  eq(L.autoSelectMonths(3, ACAD_ORDER), [4, 8, 12]),
 );
 assert(
-  "2次/年＋4個月＋學年度→[8,12]",
-  eq(L.autoSelectMonths(2, 4, ACAD_ORDER), [8, 12]),
+  "2次/年＋學年度→[2,8]",
+  eq(L.autoSelectMonths(2, ACAD_ORDER), [2, 8]),
 );
 
 /* ---------- 4. 頻次／區間解析與標籤 ---------- */
 assert("parseFrequency(4)＝4", L.parseFrequency(4) === 4);
 assert("parseFrequency(5)＝null", L.parseFrequency(5) === null);
 assert("parseFrequency('4')＝null", L.parseFrequency("4") === null);
-assert("parseIntervalMonths(2)＝2", L.parseIntervalMonths(2) === 2);
+assert("parseIntervalMonths(2)＝2（舊資料相容）", L.parseIntervalMonths(2) === 2);
+assert("parseIntervalMonths(6)＝6（v1.20 衍生值）", L.parseIntervalMonths(6) === 6);
 assert("parseIntervalMonths(1)＝null", L.parseIntervalMonths(1) === null);
+assert("parseIntervalMonths(5)＝null", L.parseIntervalMonths(5) === null);
 assert("frequencyLabel(4)＝4次/年", L.frequencyLabel(4) === "4次/年");
 assert("intervalLabel(3)＝3個月", L.intervalLabel(3) === "3個月");
+assert("intervalLabel(6)＝6個月", L.intervalLabel(6) === "6個月");
 assert(
   "頻次選項 [2,3,4]",
   eq(L.FREQUENCY_OPTIONS, [2, 3, 4]),
 );
-assert("區間選項 [2,3,4]", eq(L.INTERVAL_OPTIONS, [2, 3, 4]));
+assert("區間衍生：2次→6個月", L.intervalMonthsForFrequency(2) === 6);
+assert("區間衍生：3次→4個月", L.intervalMonthsForFrequency(3) === 4);
+assert("區間衍生：4次→3個月", L.intervalMonthsForFrequency(4) === 3);
 
 /* ---------- 5. 設定完成判定 ---------- */
 const fullSched = { unitIds: ["u1"], months: [1, 4], caseCount: 5 };

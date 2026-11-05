@@ -29,15 +29,22 @@ export const QUICK_MONTHS: Record<2 | 3 | 4, number[]> = {
 
 /** 審查頻次：一年幾次（v1.18 排程設定下拉） */
 export type ReviewFrequency = 2 | 3 | 4;
-/** 審查區間：每次審查連續涵蓋幾個月（v1.18 排程設定下拉） */
-export type ReviewInterval = 2 | 3 | 4;
+/**
+ * 審查區間：每次審查連續涵蓋幾個月。
+ * v1.18 由下拉選 2／3／4；v1.20 起由頻次衍生（12／頻次：2次→6、3次→4、4次→3），
+ * 舊資料可能存 2，解析時一併接受。
+ */
+export type ReviewInterval = 2 | 3 | 4 | 6;
 
 export const FREQUENCY_OPTIONS: ReviewFrequency[] = [2, 3, 4];
-export const INTERVAL_OPTIONS: ReviewInterval[] = [2, 3, 4];
 
-/** 預設審查頻次／區間（v1.18：季審） */
+/** 預設審查頻次（v1.18：季審） */
 export const DEFAULT_FREQUENCY: ReviewFrequency = 4;
-export const DEFAULT_INTERVAL: ReviewInterval = 3;
+
+/** 頻次 → 每次間隔月數（12 個月平分；v1.20） */
+export function intervalMonthsForFrequency(f: ReviewFrequency): ReviewInterval {
+  return (12 / f) as ReviewInterval;
+}
 
 export function frequencyLabel(f: ReviewFrequency): string {
   return `${f}次/年`;
@@ -51,9 +58,9 @@ export function parseFrequency(raw: unknown): ReviewFrequency | null {
   return raw === 2 || raw === 3 || raw === 4 ? raw : null;
 }
 
-/** 防禦性解析區間（只接受 2／3／4） */
+/** 防禦性解析區間（接受 2／3／4／6；6 為 v1.20 頻次衍生值） */
 export function parseIntervalMonths(raw: unknown): ReviewInterval | null {
-  return raw === 2 || raw === 3 || raw === 4 ? raw : null;
+  return raw === 2 || raw === 3 || raw === 4 || raw === 6 ? raw : null;
 }
 
 /** 年份篩選選項：2024～2033（v1.18） */
@@ -79,20 +86,21 @@ export function periodForFilter(
 }
 
 /**
- * 依頻次＋區間自動預選起始月份（v1.18，純函式）。
- * 從週期月份序列第 0 個起，每隔 intervalMonths 取一個，共 frequency 個。
- * 年度：[1..12] 從 1 月起；學年度：[8..12,1..7] 從 8 月起。
- * 例：4次/年＋3個月＋年度 → [1,4,7,10]；＋學年度 → [2,5,8,11]。
+ * 依頻次自動預選起始月份（v1.20，純函式）：12 個月依頻次平分。
+ * 從週期月份序列第 0 個起，每隔 12／頻次 取一個，共 frequency 個。
+ * 年度：[1..12] 從 1 月起（2次→[1,7]、3次→[1,5,9]、4次→[1,4,7,10]）；
+ * 學年度：[8..12,1..7] 從 8 月起（2次→[8,2]、3次→[8,12,4]、4次→[8,11,2,5]）。
+ * 回傳依曆月排序（1–12）。
  */
 export function autoSelectMonths(
   frequency: ReviewFrequency,
-  intervalMonths: ReviewInterval,
   monthOrder: number[],
 ): number[] {
   if (monthOrder.length === 0) return [];
+  const step = 12 / frequency;
   const out: number[] = [];
   for (let i = 0; i < frequency; i++) {
-    out.push(monthOrder[(i * intervalMonths) % monthOrder.length]);
+    out.push(monthOrder[(i * step) % monthOrder.length]);
   }
   return [...new Set(out)].sort((a, b) => a - b);
 }

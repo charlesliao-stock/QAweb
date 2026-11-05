@@ -49,14 +49,13 @@ import {
   buildTasksFromSchedule,
   createTempSchedule,
   DEFAULT_FREQUENCY,
-  DEFAULT_INTERVAL,
   deleteSchedule,
   findDuplicateUnits,
   FREQUENCY_OPTIONS,
   frequencyLabel,
   getSchedule,
-  INTERVAL_OPTIONS,
   intervalLabel,
+  intervalMonthsForFrequency,
   listSchedules,
   normalizeAssignmentItem,
   parseCaseCount,
@@ -70,7 +69,6 @@ import {
   type IndicatorAssignment,
   type IndicatorSchedule,
   type ReviewFrequency,
-  type ReviewInterval,
 } from "../lib/scheduling";
 
 function toErrorMessage(error: unknown): string {
@@ -160,12 +158,6 @@ type View =
 
 const PILL_OK = "status-pill success";
 const PILL_NONE = "status-pill muted";
-
-const TASK_STATUS_LABEL: Record<string, string> = {
-  pending: "未執行",
-  done: "已完成",
-  locked: "已鎖定",
-};
 
 /* ================= 純函式（UI 判定邏輯，可單元測試） ================= */
 
@@ -293,10 +285,12 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
   const [deadlineDay, setDeadlineDay] = useState(10);
 
   // 篩選（v1.18）：年份／年別（鎖定系統統計週期）／組別／關鍵字／顯示加審
+  // v1.20：組別旁新增指標下拉（依組別連動）
   const [filterYear, setFilterYear] = useState(() => new Date().getFullYear());
   const [statsCycle, setStatsCycle] = useState<"year" | "academic">("year");
   const [showTemp, setShowTemp] = useState(false);
   const [filterGroup, setFilterGroup] = useState("");
+  const [filterIndicator, setFilterIndicator] = useState("");
   const [filterKeyword, setFilterKeyword] = useState("");
 
   const [generatingKey, setGeneratingKey] = useState<string | null>(null);
@@ -473,10 +467,19 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
   const cycle: "year" | "academic" = statsCycle;
   const period = periodForFilter(cycle, filterYear);
 
+  // v1.20：指標下拉選項＝啟用指標，依已選組別連動
+  const indicatorOptions = useMemo(() => {
+    let inds = indicators.filter((i) => i.status === "啟用");
+    if (filterGroup) inds = inds.filter((i) => i.groupId === filterGroup);
+    return inds;
+  }, [indicators, filterGroup]);
+
   // ---------- 主畫面列：一列＝（啟用指標×當期）；無排程也列出以便建立 ----------
   const rows: RowItem[] = useMemo(() => {
     let inds = indicators.filter((i) => i.status === "啟用");
     if (filterGroup) inds = inds.filter((i) => i.groupId === filterGroup);
+    if (filterIndicator)
+      inds = inds.filter((i) => i.id === filterIndicator);
     const kw = filterKeyword.trim().toLowerCase();
     if (kw)
       inds = inds.filter(
@@ -684,12 +687,39 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               <div className="select-wrap">
                 <select
                   value={filterGroup}
-                  onChange={(e) => setFilterGroup(e.target.value)}
+                  onChange={(e) => {
+                    const g = e.target.value;
+                    setFilterGroup(g);
+                    // 組別切換後，已選指標若不在該組別內則重置
+                    if (filterIndicator && g) {
+                      const ind = indicators.find(
+                        (i) => i.id === filterIndicator,
+                      );
+                      if (!ind || ind.groupId !== g) setFilterIndicator("");
+                    }
+                  }}
                 >
                   <option value="">全部組別</option>
                   {[...groupMap.entries()].map(([id, name]) => (
                     <option key={id} value={id}>
                       {name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={15} />
+              </div>
+            </div>
+            <div className="form-field" style={{ maxWidth: 260 }}>
+              <label className="field-label">指標篩選</label>
+              <div className="select-wrap">
+                <select
+                  value={filterIndicator}
+                  onChange={(e) => setFilterIndicator(e.target.value)}
+                >
+                  <option value="">全部指標</option>
+                  {indicatorOptions.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.name}（{i.id}）
                     </option>
                   ))}
                 </select>
@@ -872,67 +902,102 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                           )}
                         </td>
                         <td>
-                          {!!sched && !isTemp && (
-                            <>
-                              <div style={{ marginBottom: 4 }}>
-                                <span className={hasTasks ? PILL_OK : PILL_NONE}>
-                                  {hasTasks ? (
-                                    <>
-                                      <CircleCheck size={13} /> 已排程
-                                    </>
-                                  ) : (
-                                    <>
-                                      <CircleDashed size={13} /> 未排程
-                                    </>
-                                  )}
-                                </span>
-                              </div>
-                              <button
-                                className="button button-outline button-sm"
-                                disabled={
-                                  !canGenerate || generatingKey === r.key
-                                }
-                                title={
-                                  !canEdit
-                                    ? "需排程建立／改派權限"
-                                    : !schedDone
-                                      ? "請先完成排程／單位設定（單位、月份、件數皆需設定）"
-                                      : !asgDone
-                                        ? "請先完成審查員／單位設定（分工表至少一筆）"
-                                        : "依排程展開審查任務"
-                                }
-                                onClick={() => handleGenerate(r)}
-                              >
-                                <CalendarPlus size={14} />{" "}
-                                {generatingKey === r.key
-                                  ? "產生中…"
-                                  : "產生排程"}
-                              </button>{" "}
-                            </>
-                          )}
-                          {!isTemp && canEdit && (
-                            <>
-                              <button
-                                className="button button-outline button-sm"
-                                onClick={() => setAddAuditRow(r)}
-                                title="建立臨時加審排程"
-                              >
-                                <Plus size={14} /> 加審
-                              </button>
-                              <div className="muted-text">
-                                臨時 {tempCount} 筆
-                              </div>
-                            </>
-                          )}{" "}
-                          {!!sched && (
-                            <button
-                              className="text-button"
-                              onClick={() => setDetailRow(r)}
-                              title="查閱設定內容與任務"
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: 10,
+                              alignItems: "flex-start",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                gap: 2,
+                              }}
                             >
-                              <Eye size={14} /> 查閱
-                            </button>
-                          )}
+                              {!!sched && !isTemp && (
+                                <>
+                                  <button
+                                    className="button button-outline button-sm"
+                                    disabled={
+                                      !canGenerate || generatingKey === r.key
+                                    }
+                                    title={
+                                      !canEdit
+                                        ? "需排程建立／改派權限"
+                                        : !schedDone
+                                          ? "請先完成排程／單位設定（單位、月份、件數皆需設定）"
+                                          : !asgDone
+                                            ? "請先完成審查員／單位設定（分工表至少一筆）"
+                                            : "依排程展開審查任務"
+                                    }
+                                    onClick={() => handleGenerate(r)}
+                                  >
+                                    <CalendarPlus size={14} />{" "}
+                                    {generatingKey === r.key
+                                      ? "產生中…"
+                                      : "產生排程"}
+                                  </button>
+                                  <span
+                                    className={hasTasks ? PILL_OK : PILL_NONE}
+                                  >
+                                    {hasTasks ? (
+                                      <>
+                                        <CircleCheck size={13} /> 已排程
+                                      </>
+                                    ) : (
+                                      <>
+                                        <CircleDashed size={13} /> 未排程
+                                      </>
+                                    )}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                gap: 2,
+                              }}
+                            >
+                              {!isTemp && canEdit && (
+                                <>
+                                  <button
+                                    className="button button-outline button-sm"
+                                    onClick={() => setAddAuditRow(r)}
+                                    title="建立臨時加審排程"
+                                  >
+                                    <Plus size={14} /> 加審
+                                  </button>
+                                  <div className="muted-text">
+                                    臨時 {tempCount} 筆
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                gap: 2,
+                              }}
+                            >
+                              {!!sched && (
+                                <button
+                                  className="button button-outline button-sm"
+                                  onClick={() => setDetailRow(r)}
+                                  title="查閱設定內容"
+                                >
+                                  <Eye size={14} /> 查閱
+                                </button>
+                              )}
+                            </div>
+                          </div>
                         </td>
                         <td className="muted-text">
                           {sched ? (
@@ -1065,17 +1130,20 @@ function Modal({
   title,
   note,
   onClose,
+  wide,
   children,
 }: {
   title: string;
   note?: string;
   onClose: () => void;
+  /** v1.20：寬版（查閱視窗 2 倍寬） */
+  wide?: boolean;
   children: ReactNode;
 }) {
   return (
     <div className="reviewer-modal-backdrop" onClick={onClose}>
       <div
-        className="reviewer-modal panel"
+        className={`reviewer-modal panel${wide ? " wide" : ""}`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -1429,8 +1497,6 @@ function ScheduleEditor({
   const [months, setMonths] = useState<number[]>([]);
   const [frequency, setFrequency] =
     useState<ReviewFrequency>(DEFAULT_FREQUENCY);
-  const [intervalMonths, setIntervalMonths] =
-    useState<ReviewInterval>(DEFAULT_INTERVAL);
   const caseCount = useCaseCountInput();
   const [unitIds, setUnitIds] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
@@ -1461,17 +1527,13 @@ function ScheduleEditor({
         if (cancelled) return;
         setExists(!!s);
         if (s) {
-          // 編輯舊排程：保留原月份，不強制重算（v1.18）
+          // 編輯舊排程：保留原月份，不強制重算（v1.18）；改頻次才重算
           setMonths(s.months);
           setFrequency(s.frequency ?? DEFAULT_FREQUENCY);
-          setIntervalMonths(s.intervalMonths ?? DEFAULT_INTERVAL);
         } else {
-          // 新排程：依預設頻次＋區間自動預選月份
-          setMonths(
-            autoSelectMonths(DEFAULT_FREQUENCY, DEFAULT_INTERVAL, monthOrder),
-          );
+          // 新排程：依預設頻次自動預選月份（12 個月平分）
+          setMonths(autoSelectMonths(DEFAULT_FREQUENCY, monthOrder));
           setFrequency(DEFAULT_FREQUENCY);
-          setIntervalMonths(DEFAULT_INTERVAL);
         }
         caseCount.setValue(s?.caseCount != null ? String(s.caseCount) : "");
         setUnitIds(s?.unitIds ?? []);
@@ -1489,21 +1551,16 @@ function ScheduleEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indicatorId, category, period]);
 
-  /** 切換頻次／區間下拉 → 重新依規則預選月份（覆蓋手動勾選） */
+  /** 切換頻次下拉 → 重新依規則預選月份（覆蓋手動勾選） */
   function handleFrequencyChange(f: ReviewFrequency) {
     setFrequency(f);
-    setMonths(autoSelectMonths(f, intervalMonths, monthOrder));
-  }
-  function handleIntervalChange(m: ReviewInterval) {
-    setIntervalMonths(m);
-    setMonths(autoSelectMonths(frequency, m, monthOrder));
+    setMonths(autoSelectMonths(f, monthOrder));
   }
 
   function handleCopyPrev() {
     if (!prev) return;
     setMonths([...prev.months]);
     if (prev.frequency) setFrequency(prev.frequency);
-    if (prev.intervalMonths) setIntervalMonths(prev.intervalMonths);
     caseCount.setValue(prev.caseCount != null ? String(prev.caseCount) : "");
     setUnitIds([...prev.unitIds]);
     setNotes(prev.notes);
@@ -1537,7 +1594,8 @@ function ScheduleEditor({
           periodLabel: periodLabel(category, period),
           months: [...months].sort((a, b) => a - b),
           frequency,
-          intervalMonths,
+          // v1.20：區間由頻次衍生（12／頻次），供進度計算沿用
+          intervalMonths: intervalMonthsForFrequency(frequency),
           refYear: null,
           caseCount: parseCaseCount(cc),
           unitIds: [...unitIds],
@@ -1625,7 +1683,7 @@ function ScheduleEditor({
                   disabled={!canEdit || !prev}
                   title={
                     prev
-                      ? `帶入 ${prev.periodLabel} 的頻次／區間／月份／件數／單位／備註`
+                      ? `帶入 ${prev.periodLabel} 的頻次／月份／件數／單位／備註`
                       : "前一期無排程資料"
                   }
                   onClick={handleCopyPrev}
@@ -1673,26 +1731,14 @@ function ScheduleEditor({
               </div>
               <div className="form-field" style={{ maxWidth: 200 }}>
                 <label className="field-label">審查區間</label>
-                <div className="select-wrap">
-                  <select
-                    value={intervalMonths}
-                    disabled={!canEdit}
-                    onChange={(e) =>
-                      handleIntervalChange(Number(e.target.value) as ReviewInterval)
-                    }
-                  >
-                    {INTERVAL_OPTIONS.map((m) => (
-                      <option key={m} value={m}>
-                        {intervalLabel(m)}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
+                <p className="settings-note" style={{ margin: 0 }}>
+                  每次間隔 {intervalMonthsForFrequency(frequency)} 個月
+                </p>
               </div>
             </div>
             <p className="settings-note">
-              審查區間＝每次審查連續涵蓋的月數（例：4次/年＋3個月 → 1–3月、4–6月、7–9月、10–12月）。
+              審查頻次將 12 個月平分（例：4次/年 → 1、4、7、10月；2次/年 →
+              1、7月）；區間為每次審查連續涵蓋的月數。
             </p>
 
             <div className="form-field">
@@ -1704,11 +1750,9 @@ function ScheduleEditor({
                 <button
                   className="button button-outline button-sm"
                   disabled={!canEdit}
-                  onClick={() =>
-                    setMonths(autoSelectMonths(frequency, intervalMonths, monthOrder))
-                  }
+                  onClick={() => setMonths(autoSelectMonths(frequency, monthOrder))}
                 >
-                  依頻次／區間預選
+                  依頻次預選
                 </button>
                 <button
                   className="button button-outline button-sm"
@@ -1732,7 +1776,7 @@ function ScheduleEditor({
                 disabled={!canEdit}
               />
               <p className="settings-note">
-                切換審查頻次／區間會依規則重新預選月份（覆蓋手動勾選），之後可再手動調整。
+                切換審查頻次會依規則重新預選月份（覆蓋手動勾選），之後可再手動調整。
                 {category === "academic" &&
                   "學年度月份依 8 月制順序排列（8–12 月為前一年曆年、1–7 月為後一年曆年）。"}
               </p>
@@ -2451,6 +2495,7 @@ function ScheduleDetailModal({
       title={`查閱：${row.name}`}
       note={`${isTemp ? "臨時" : categoryLabel(row.category)}・${sched.periodLabel}${sched.selfReview ? "・自審" : ""}`}
       onClose={onClose}
+      wide
     >
       <SectionTitle title="排程／單位設定" />
       <div className="table-scroll">
@@ -2523,10 +2568,12 @@ function ScheduleDetailModal({
 
       <SectionTitle
         title="審查員／單位設定"
-        note={isTemp ? "臨時排程不存分工表，審核員見任務清單" : undefined}
+        note={isTemp ? "臨時排程不存分工表" : undefined}
       />
       {isTemp ? (
-        tempReviewers.length === 0 ? (
+        loading ? (
+          <p className="settings-note">讀取中…</p>
+        ) : tempReviewers.length === 0 ? (
           <p className="settings-note">尚無任務</p>
         ) : (
           <p>
@@ -2567,50 +2614,6 @@ function ScheduleDetailModal({
         <p className="settings-note">尚未設定分工表</p>
       )}
 
-      <SectionTitle
-        title="已產生任務"
-        note={loading ? "讀取中…" : `${tasks.length} 筆`}
-      />
-      <p className="settings-note">
-        依指標編號＋排程曆年月查出（任務未記錄所屬排程 id；同指標同時段的其他排程任務可能一併列出）。
-      </p>
-      {loading ? (
-        <p className="settings-note">讀取中…</p>
-      ) : tasks.length === 0 ? (
-        <EmptyState title="尚無任務" description="此排程尚未產生任務。" />
-      ) : (
-        <div className="table-scroll">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>曆年月</th>
-                <th>受審單位</th>
-                <th>審核員</th>
-                <th>件數</th>
-                <th>狀態</th>
-                <th>截止日</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tasks.map((t, i) => (
-                <tr key={i}>
-                  <td>
-                    {t.year}年{t.month}月
-                  </td>
-                  <td>
-                    {unitNameOf(t.unitId)}
-                    <div className="muted-text">{t.unitId}</div>
-                  </td>
-                  <td>{maskName(usersMap.get(t.reviewerId) ?? t.reviewerId)}</td>
-                  <td>{t.caseCount != null ? `${t.caseCount} 件` : "—"}</td>
-                  <td>{TASK_STATUS_LABEL[t.status] ?? t.status}</td>
-                  <td>{t.deadline || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
       <div className="form-actions">
         <button className="button button-outline" onClick={onClose}>
           關閉

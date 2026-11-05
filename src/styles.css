@@ -4438,6 +4438,10 @@ button:disabled {
 .reviewer-modal.batch-modal {
   width: min(1180px, 100%);
 }
+/* v1.20：查閱視窗 2 倍寬（原 560px → 1120px） */
+.reviewer-modal.wide {
+  width: min(1120px, 100%);
+}
 .field-error {
   color: #b91c1c;
   font-size: 12px;
