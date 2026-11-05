@@ -6,7 +6,16 @@ import {
   useRef,
   useState,
 } from "react";
-import { ChevronDown, ChevronUp, Pencil, Plus, Trash2, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Download,
+  Pencil,
+  Plus,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 import {
   collection,
   doc,
@@ -48,6 +57,18 @@ import {
   type SubIndicator,
   type TenSteps,
 } from "../lib/indicators";
+import {
+  auditTemplateRows,
+  basicTemplateRows,
+  normalizeSheetRows,
+  parseAuditSheet,
+  parseBasicSheet,
+  parseCSV,
+  toCSV,
+  validateAuditRows,
+  validateBasicRows,
+} from "../lib/import";
+import * as XLSX from "xlsx";
 
 export type IndicatorStatus =
   | "草稿"
@@ -1927,6 +1948,52 @@ function emptyBatchRow(): BatchRow {
   };
 }
 
+/** 讀取匯入檔（.xlsx/.xls 走 SheetJS；.csv 走自寫解析）為字串陣列（v1.20） */
+async function readSheetFile(file: File): Promise<string[][]> {
+  if (/\.xlsx?$/i.test(file.name)) {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws) return [];
+    const aoa = XLSX.utils.sheet_to_json<unknown[]>(ws, {
+      header: 1,
+      defval: "",
+    });
+    return normalizeSheetRows(aoa);
+  }
+  const text = await file.text();
+  return parseCSV(text);
+}
+
+/** 下載 CSV（UTF-8 BOM，Excel 可直接開啟） */
+function downloadCsvFile(rows: string[][], filename: string) {
+  const blob = new Blob(["\uFEFF" + toCSV(rows)], {
+    type: "text/csv;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** 下載 .xlsx 範本（失敗時退回 .csv） */
+function downloadTemplate(
+  rows: string[][],
+  sheetName: string,
+  baseName: string,
+) {
+  try {
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    XLSX.writeFile(wb, `${baseName}.xlsx`);
+  } catch {
+    downloadCsvFile(rows, `${baseName}.csv`);
+  }
+}
+
 function BatchAddDialog({
   groupMap,
   staffMap,
@@ -1948,6 +2015,155 @@ function BatchAddDialog({
 }) {
   const [rows, setRows] = useState<BatchRow[]>(() => [emptyBatchRow()]);
   const [saving, setSaving] = useState(false);
+
+  // v1.20：匯入（基本資料／審核表，Excel／CSV）＋範本下載
+  const [importSummary, setImportSummary] = useState<string | null>(null);
+  const [importErrors, setImportErrors] = useState<string[]>([]);
+  const basicFileRef = useRef<HTMLInputElement>(null);
+  const auditFileRef = useRef<HTMLInputElement>(null);
+
+  /** 組別名稱（或代號）→組別 id（匯入驗證用） */
+  const groupByName = useMemo(() => {
+    const m = new Map<string, string>();
+    groupMap.forEach((name, id) => {
+      if (!m.has(name)) m.set(name, id);
+      if (!m.has(id)) m.set(id, id);
+    });
+    return m;
+  }, [groupMap]);
+
+  async function handleImportBasic(file: File) {
+    setImportSummary(null);
+    setImportErrors([]);
+    try {
+      const sheet = await readSheetFile(file);
+      const { headerErrors, data } = parseBasicSheet(sheet);
+      if (headerErrors.length > 0) {
+        setImportErrors(headerErrors);
+        onAction("基本資料匯入失敗：標題列不符，請下載範本對照");
+        return;
+      }
+      if (data.length === 0) {
+        setImportErrors(["檔案內無資料列"]);
+        return;
+      }
+      const codeSet = new Set<string>([...existingCodes]);
+      rows.forEach((r) => {
+        const c = r.code.trim();
+        if (c) codeSet.add(c);
+      });
+      const results = validateBasicRows(data, {
+        groupByName,
+        existingCodes: codeSet,
+        staffHas: (id) => staffMap.has(id),
+        staffLoaded,
+      });
+      const ok = results.filter((r) => r.ok && r.values);
+      const bad = results.filter((r) => !r.ok);
+      if (ok.length > 0) {
+        setRows((prev) => [
+          ...prev,
+          ...ok.map((r) => {
+            const v = r.values!;
+            const row = emptyBatchRow();
+            row.groupId = v.groupId;
+            row.code = v.code;
+            row.name = v.name;
+            row.threshold = v.threshold;
+            row.owners = v.owners;
+            return row;
+          }),
+        ]);
+      }
+      setImportErrors(
+        bad.map((r) => `第 ${r.lineNo} 列：${r.errors.join("；")}`),
+      );
+      const msg = `基本資料匯入：成功 ${ok.length} 列、失敗 ${bad.length} 列`;
+      setImportSummary(msg);
+      onAction(msg);
+    } catch (error) {
+      setImportErrors([`讀取檔案失敗：${toErrorMessage(error)}`]);
+    }
+  }
+
+  async function handleImportAudit(file: File) {
+    setImportSummary(null);
+    setImportErrors([]);
+    try {
+      const sheet = await readSheetFile(file);
+      const { headerErrors, data } = parseAuditSheet(sheet);
+      if (headerErrors.length > 0) {
+        setImportErrors(headerErrors);
+        onAction("審核表匯入失敗：標題列不符，請下載範本對照");
+        return;
+      }
+      if (data.length === 0) {
+        setImportErrors(["檔案內無資料列"]);
+        return;
+      }
+      const batchCodes = new Set(
+        rows.map((r) => r.code.trim()).filter((c) => c !== ""),
+      );
+      const results = validateAuditRows(data, { batchCodes });
+      const ok = results.filter((r) => r.ok && r.values);
+      const bad = results.filter((r) => !r.ok);
+      if (ok.length > 0) {
+        setRows((prev) => {
+          const next = prev.map((r) => ({
+            ...r,
+            audit: {
+              ...r.audit,
+              questions: [...r.audit.questions],
+              questionGroups: [...r.audit.questionGroups],
+            },
+          }));
+          for (const res of ok) {
+            const v = res.values!;
+            const idx = next.findIndex((r) => r.code.trim() === v.code);
+            if (idx < 0) continue;
+            const row = next[idx];
+            let groupId: string | null = null;
+            let groupName = "";
+            if (v.groupName) {
+              const existing = row.audit.questionGroups.find(
+                (g) => g.name.trim() === v.groupName,
+              );
+              if (existing) {
+                groupId = existing.id;
+                groupName = existing.name;
+              } else {
+                const g = {
+                  id: newQid(),
+                  name: v.groupName,
+                  order: row.audit.questionGroups.length,
+                };
+                row.audit.questionGroups = [...row.audit.questionGroups, g];
+                groupId = g.id;
+                groupName = g.name;
+              }
+              row.audit.useQuestionGroups = true;
+            }
+            const q = emptyAuditQuestion(groupId, groupName);
+            q.itemText = v.itemText;
+            q.optionSet = v.optionSet;
+            q.guidance = v.guidance;
+            q.order = row.audit.questions.length;
+            row.audit.questions = [...row.audit.questions, q];
+            row.showAudit = true;
+          }
+          return next;
+        });
+      }
+      setImportErrors(
+        bad.map((r) => `第 ${r.lineNo} 列：${r.errors.join("；")}`),
+      );
+      const msg = `審核表匯入：成功 ${ok.length} 題、失敗 ${bad.length} 題`;
+      setImportSummary(msg);
+      onAction(msg);
+    } catch (error) {
+      setImportErrors([`讀取檔案失敗：${toErrorMessage(error)}`]);
+    }
+  }
 
   function updateRow(
     key: string,
@@ -2112,7 +2328,8 @@ function BatchAddDialog({
           <div>
             <h2>批次新增指標</h2>
             <p>
-              每列一支指標（基本資料必填）；可展開「審核表」逐列編輯題目。存檔前會整批驗證，有誤整批退回。
+              每列一支指標（基本資料必填）；可展開「審核表」逐列編輯題目。存檔前會整批驗證，有誤整批退回。亦可由下方按鈕匯入
+              Excel／CSV（基本資料與審核表分開匯入，皆提供範本）。
             </p>
           </div>
           <button
@@ -2130,8 +2347,78 @@ function BatchAddDialog({
           >
             <Plus size={14} /> 新增一列
           </button>
+          <button
+            className="button button-outline button-sm"
+            onClick={() => basicFileRef.current?.click()}
+          >
+            <Upload size={14} /> 匯入基本資料
+          </button>
+          <button
+            className="button button-outline button-sm"
+            onClick={() =>
+              downloadTemplate(
+                basicTemplateRows(),
+                "基本資料",
+                "指標基本資料範本",
+              )
+            }
+          >
+            <Download size={14} /> 下載基本資料範本
+          </button>
+          <button
+            className="button button-outline button-sm"
+            onClick={() => auditFileRef.current?.click()}
+          >
+            <Upload size={14} /> 匯入審核表
+          </button>
+          <button
+            className="button button-outline button-sm"
+            onClick={() =>
+              downloadTemplate(auditTemplateRows(), "審核表", "指標審核表範本")
+            }
+          >
+            <Download size={14} /> 下載審核表範本
+          </button>
           <span className="muted-text">共 {rows.length} 列</span>
+          <input
+            ref={basicFileRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            style={{ display: "none" }}
+            aria-label="匯入基本資料檔案"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) void handleImportBasic(f);
+            }}
+          />
+          <input
+            ref={auditFileRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            style={{ display: "none" }}
+            aria-label="匯入審核表檔案"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) void handleImportAudit(f);
+            }}
+          />
         </div>
+        {importSummary && (
+          <p className="settings-note" role="status">
+            {importSummary}
+          </p>
+        )}
+        {importErrors.length > 0 && (
+          <div style={{ maxHeight: 160, overflow: "auto", marginBottom: 8 }}>
+            {importErrors.map((msg, i) => (
+              <div key={i} className="field-error">
+                {msg}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="table-scroll">
           <table className="permission-table">
             <thead>

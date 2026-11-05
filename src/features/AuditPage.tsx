@@ -9,9 +9,18 @@
  * - 督導／副主任／主任、系統管理員：全部
  * 尚未結束＝今天≤最後區間結束月（含當月）且進度未達 100%
  * （進度改以審查紀錄計算，不依賴任務表）。
+ * v1.20：只顯示包含本月區間的指標（今天不在任何區間內就不列）；
+ * 表頭篩選列移除，改為清單上方篩選區（組別／指標／關鍵字）。
  */
 import { useEffect, useMemo, useState } from "react";
-import { ArrowUpDown, ClipboardCheck, Eye, ShieldCheck, X } from "lucide-react";
+import {
+  ArrowUpDown,
+  ChevronDown,
+  ClipboardCheck,
+  Eye,
+  ShieldCheck,
+  X,
+} from "lucide-react";
 import {
   collection,
   doc,
@@ -31,8 +40,9 @@ import {
   type IndicatorSchedule,
 } from "../lib/scheduling";
 import {
+  auditRowMatches,
   computeIntervalProgress,
-  currentInterval,
+  containingInterval,
   intervalDisplay,
   isProgressComplete,
   recordYearMonth,
@@ -176,9 +186,10 @@ export function AuditPage({
   const [rows, setRows] = useState<ActiveRow[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>("group");
   const [sortDir, setSortDir] = useState<1 | -1>(1);
-  const [fGroup, setFGroup] = useState("");
-  const [fName, setFName] = useState("");
-  const [fInterval, setFInterval] = useState("");
+  // v1.20：清單上方篩選區（組別／指標／關鍵字）；表頭篩選列移除
+  const [selGroup, setSelGroup] = useState("");
+  const [selIndicator, setSelIndicator] = useState("");
+  const [keyword, setKeyword] = useState("");
   const [viewRow, setViewRow] = useState<ActiveRow | null>(null);
   const [execRow, setExecRow] = useState<ActiveRow | null>(null);
   const [execUnit, setExecUnit] = useState("");
@@ -309,8 +320,9 @@ export function AuditPage({
             visible = true;
           }
           if (!visible) continue;
-          const iv = currentInterval(schedLike(s), today);
-          if (!iv) continue; // 已過最後區間結束月
+          // v1.20：只顯示包含本月區間的指標（今天不在任何區間內就不列）
+          const iv = containingInterval(schedLike(s), today);
+          if (!iv) continue;
           cands.push({ sched: s, assigned: [...new Set(assigned)] });
         }
         if (cancelled) return;
@@ -366,7 +378,7 @@ export function AuditPage({
         for (const { sched: s, assigned } of cands) {
           const ind = indicators.get(s.indicatorId);
           if (!ind) continue;
-          const iv = currentInterval(schedLike(s), today);
+          const iv = containingInterval(schedLike(s), today);
           if (!iv) continue;
           const keys = new Set(iv.allMonths.map(ymKey));
           const inRecords = (recordsByIndicator.get(s.indicatorId) ?? []).filter(
@@ -419,17 +431,32 @@ export function AuditPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.staffId]);
 
+  // 篩選區選項：組別＝清單內的組別；指標＝清單內的指標（隨組別連動）
+  const groupOptions = useMemo(() => {
+    const m = new Map<string, string>();
+    rows.forEach((r) => {
+      if (!m.has(r.groupId)) m.set(r.groupId, r.groupName);
+    });
+    return [...m.entries()];
+  }, [rows]);
+  const indicatorOptions = useMemo(() => {
+    const list = selGroup
+      ? rows.filter((r) => r.groupId === selGroup)
+      : rows;
+    const m = new Map<string, string>();
+    list.forEach((r) => {
+      if (!m.has(r.indicatorId)) m.set(r.indicatorId, r.indicatorName);
+    });
+    return [...m.entries()];
+  }, [rows, selGroup]);
+
   const filtered = useMemo(() => {
-    const g = fGroup.trim().toLowerCase();
-    const n = fName.trim().toLowerCase();
-    const iv = fInterval.trim().toLowerCase();
-    const list = rows.filter(
-      (r) =>
-        (!g || r.groupName.toLowerCase().includes(g)) &&
-        (!n ||
-          r.indicatorName.toLowerCase().includes(n) ||
-          r.indicatorId.toLowerCase().includes(n)) &&
-        (!iv || r.intervalLabel.toLowerCase().includes(iv)),
+    const list = rows.filter((r) =>
+      auditRowMatches(r, {
+        groupId: selGroup,
+        indicatorId: selIndicator,
+        keyword,
+      }),
     );
     const dir = sortDir;
     const val = (r: ActiveRow): number | string => {
@@ -458,7 +485,7 @@ export function AuditPage({
           a.indicatorName.localeCompare(b.indicatorName, "zh-Hant");
       return c * dir;
     });
-  }, [rows, fGroup, fName, fInterval, sortKey, sortDir]);
+  }, [rows, selGroup, selIndicator, keyword, sortKey, sortDir]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === 1 ? -1 : 1));
@@ -569,8 +596,63 @@ export function AuditPage({
       <section className="panel">
         <SectionTitle
           title="進行中的審查排程"
-          note="依您的身分列出有排程且尚未結束的指標；點標題可排序"
+          note="依您的身分列出有排程且尚未結束的指標（只顯示包含本月區間者）；點標題可排序"
         />
+        <div className="filter-bar">
+          <div className="form-field" style={{ maxWidth: 200 }}>
+            <label className="field-label">組別篩選</label>
+            <div className="select-wrap">
+              <select
+                value={selGroup}
+                onChange={(e) => {
+                  const g = e.target.value;
+                  setSelGroup(g);
+                  if (selIndicator && g) {
+                    const ok = rows.some(
+                      (r) =>
+                        r.indicatorId === selIndicator && r.groupId === g,
+                    );
+                    if (!ok) setSelIndicator("");
+                  }
+                }}
+              >
+                <option value="">全部組別</option>
+                {groupOptions.map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+          <div className="form-field" style={{ maxWidth: 280 }}>
+            <label className="field-label">指標篩選</label>
+            <div className="select-wrap">
+              <select
+                value={selIndicator}
+                onChange={(e) => setSelIndicator(e.target.value)}
+              >
+                <option value="">全部指標</option>
+                {indicatorOptions.map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}（{id}）
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+          <div className="form-field" style={{ maxWidth: 260 }}>
+            <label className="field-label">指標關鍵字</label>
+            <input
+              className="text-input"
+              placeholder="指標名稱或編號"
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+            />
+          </div>
+        </div>
         {loading ? (
           <p className="muted-text" role="status">
             載入中…
@@ -580,6 +662,8 @@ export function AuditPage({
             title="目前沒有進行中的審查排程"
             description="可能尚無排程、排程皆已結束，或您的身分沒有被指派審查項目。"
           />
+        ) : filtered.length === 0 ? (
+          <p className="muted-text">沒有符合篩選條件的指標。</p>
         ) : (
           <div className="table-scroll">
             <table className="data-table">
@@ -591,35 +675,6 @@ export function AuditPage({
                   <SortTh label="審核進度（人次）" k="person" />
                   <SortTh label="審核進度（單位次）" k="unit" />
                   <th>操作</th>
-                </tr>
-                <tr className="filter-row">
-                  <th>
-                    <input
-                      value={fGroup}
-                      onChange={(e) => setFGroup(e.target.value)}
-                      placeholder="篩選組別"
-                      aria-label="篩選組別"
-                    />
-                  </th>
-                  <th>
-                    <input
-                      value={fName}
-                      onChange={(e) => setFName(e.target.value)}
-                      placeholder="篩選指標"
-                      aria-label="篩選指標"
-                    />
-                  </th>
-                  <th>
-                    <input
-                      value={fInterval}
-                      onChange={(e) => setFInterval(e.target.value)}
-                      placeholder="篩選區間"
-                      aria-label="篩選區間"
-                    />
-                  </th>
-                  <th />
-                  <th />
-                  <th />
                 </tr>
               </thead>
               <tbody>

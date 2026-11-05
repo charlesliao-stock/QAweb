@@ -160,6 +160,49 @@ export function currentInterval(
   return null;
 }
 
+/**
+ * 包含今天的區間（v1.20 品管審查清單用）：今天（本月）落在某個區間內才回傳，
+ * 不像 currentInterval 會在空隙取下一個、或在區間前取第一個。
+ */
+export function containingInterval(
+  sched: ScheduleLike,
+  today: Date = new Date(),
+): ReviewInterval | null {
+  const ivs = scheduleIntervals(sched, today);
+  if (ivs.length === 0) return null;
+  const t: CalendarYM = {
+    year: today.getFullYear(),
+    month: today.getMonth() + 1,
+  };
+  for (const iv of ivs) {
+    if (cmpYM(iv.start, t) <= 0 && cmpYM(t, iv.end) <= 0) return iv;
+  }
+  return null;
+}
+
+/** 品管審查清單篩選（v1.20）：組別／指標／關鍵字三者疊加 */
+export interface AuditRowLike {
+  groupId: string;
+  indicatorId: string;
+  indicatorName: string;
+}
+
+export function auditRowMatches(
+  row: AuditRowLike,
+  f: { groupId: string; indicatorId: string; keyword: string },
+): boolean {
+  if (f.groupId && row.groupId !== f.groupId) return false;
+  if (f.indicatorId && row.indicatorId !== f.indicatorId) return false;
+  const kw = f.keyword.trim().toLowerCase();
+  if (
+    kw &&
+    !row.indicatorName.toLowerCase().includes(kw) &&
+    !row.indicatorId.toLowerCase().includes(kw)
+  )
+    return false;
+  return true;
+}
+
 /** 排程最後一個區間的結束月（曆年月）；無區間 → null */
 export function scheduleLastEnd(
   sched: ScheduleLike,
