@@ -5,10 +5,10 @@
  */
 
 export type AnalysisCycle = "year" | "academic";
-export type AnalysisInterval = "quarter" | "year";
+export type AnalysisInterval = "month" | "quarter" | "year";
 export type QuarterSub = 1 | 2 | 3 | 4;
 export type YearSub = "half" | "full";
-export type AnalysisSub = QuarterSub | YearSub;
+export type AnalysisSub = QuarterSub | YearSub | "all";
 
 export interface CalendarMonth {
   year: number;
@@ -131,21 +131,49 @@ function columnFromMonths(months: CalendarMonth[]): AnalysisPeriodColumn {
 
 /**
  * 期間欄展開：
+ * - 月＋全部：每一年 12 欄＝1-12 月（學年按學年起算 8 月→隔年 7 月，曆月不變）
  * - 季＋第 N 季：每一年一欄＝該年的第 N 季
+ * - 季＋全部：每一年 4 欄＝第一～四季
  * - 年＋半年：每一年兩欄＝上半年與下半年
  * - 年＋一年：每一年一欄＝全年
+ * - 年＋全部：每一年 3 欄＝上半年→下半年→全年
  */
 export function expandAnalysisColumns(p: AnalysisPeriod): AnalysisPeriodColumn[] {
   const count = Math.max(1, Math.floor(p.yearCount) || 1);
   const years = Array.from({ length: count }, (_, i) => p.startYear + i);
   const out: AnalysisPeriodColumn[] = [];
+  if (p.interval === "month") {
+    // 月只有「全部」：每年 12 個單月欄（學年＝8 月起算，見 fullYearMonths 順序）
+    for (const y of years) {
+      for (const spec of fullYearMonths(p.cycle)) {
+        out.push(columnFromMonths(toMonths([spec], y)));
+      }
+    }
+    return out;
+  }
   if (p.interval === "quarter") {
+    if (p.sub === "all") {
+      for (const y of years) {
+        for (const q of [1, 2, 3, 4] as QuarterSub[]) {
+          out.push(columnFromMonths(toMonths(quarterMonths(p.cycle, q), y)));
+        }
+      }
+      return out;
+    }
     const q =
       typeof p.sub === "number" && p.sub >= 1 && p.sub <= 4
         ? (p.sub as QuarterSub)
         : 1;
     for (const y of years) {
       out.push(columnFromMonths(toMonths(quarterMonths(p.cycle, q), y)));
+    }
+    return out;
+  }
+  if (p.sub === "all") {
+    for (const y of years) {
+      out.push(columnFromMonths(toMonths(halfYearMonths(p.cycle, 1), y)));
+      out.push(columnFromMonths(toMonths(halfYearMonths(p.cycle, 2), y)));
+      out.push(columnFromMonths(toMonths(fullYearMonths(p.cycle), y)));
     }
     return out;
   }

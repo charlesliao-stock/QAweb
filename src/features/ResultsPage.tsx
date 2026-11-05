@@ -1,8 +1,8 @@
 /**
  * 結果分析頁（v1.25.0：取代舊畫面）。
  * 四個頁籤：組別分析、單位分析、指標分析、結果匯入。
- * 期間模型：年別／年份（起算年）／年數（往後數）／區間（季／年）／子選項
- * （季→第一～四季；年→半年／一年），矩陣欄＝期間欄。
+ * 期間模型：年別／年份（起算年）／年數（往後數）／區間（月／季／年）／子選項
+ * （月→只有全部；季→第一～四季／全部；年→半年／一年／全部），矩陣欄＝期間欄。
  * 達閾值＝紀錄 rate ≥ 指標閾值（紀錄無自帶達標旗標，一律以當前閾值計算；
  * 匯入紀錄同樣計入）；人次率＝合併計算，單位彙總率＝各單位率平均。
  * 權限：can("resultQuery")；資料範圍：管理員全部、審查員只看負責單位、
@@ -54,6 +54,7 @@ import {
   type AnalysisCycle,
   type AnalysisInterval,
   type AnalysisPeriodColumn,
+  type AnalysisSub,
   type QuarterSub,
   type YearSub,
 } from "../lib/analysisPeriod";
@@ -175,7 +176,7 @@ export function ResultsPage({
   const [startYear, setStartYear] = useState(now.getFullYear());
   const [yearCount, setYearCount] = useState(1);
   const [interval, setInterval] = useState<AnalysisInterval>("quarter");
-  const [sub, setSub] = useState<QuarterSub | YearSub>(
+  const [sub, setSub] = useState<AnalysisSub>(
     currentQuarterSub("year"),
   );
   // 組別分析
@@ -474,11 +475,17 @@ export function ResultsPage({
   const periodDesc = useMemo(() => {
     const cycleLabel = cycle === "academic" ? "學年度" : "年度";
     const subLabel =
-      interval === "quarter"
-        ? QUARTER_LABELS[sub as QuarterSub]
-        : sub === "half"
-          ? "半年"
-          : "一年";
+      sub === "all"
+        ? interval === "month"
+          ? "月・全部"
+          : interval === "quarter"
+            ? "季・全部"
+            : "年・全部"
+        : interval === "quarter"
+          ? QUARTER_LABELS[sub as QuarterSub]
+          : sub === "half"
+            ? "半年"
+            : "一年";
     return `${cycleLabel} ${startYear} 起 ${yearCount} 年・${subLabel}`;
   }, [cycle, startYear, yearCount, interval, sub]);
 
@@ -490,7 +497,14 @@ export function ResultsPage({
   function handleIntervalChange(v: string) {
     const iv = v as AnalysisInterval;
     setInterval(iv);
-    setSub(iv === "quarter" ? currentQuarterSub(cycle) : "full");
+    // 區間切換時期間重設為預設值：月→全部；季→當前所在的季；年→一年
+    setSub(
+      iv === "month"
+        ? "all"
+        : iv === "quarter"
+          ? currentQuarterSub(cycle)
+          : "full",
+    );
   }
 
   /** 單格達閾值率（人次＝合併；單位＝各單位率平均） */
@@ -684,28 +698,42 @@ export function ResultsPage({
             value={interval}
             onChange={handleIntervalChange}
             options={[
+              { value: "month", label: "月" },
               { value: "quarter", label: "季" },
               { value: "year", label: "年" },
             ]}
           />
-          {interval === "quarter" ? (
+          {interval === "month" ? (
+            <SelectField
+              label="期間"
+              value={sub}
+              onChange={() => setSub("all")}
+              options={[{ value: "all", label: "全部" }]}
+            />
+          ) : interval === "quarter" ? (
             <SelectField
               label="季"
               value={sub}
-              onChange={(v) => setSub(Number(v) as QuarterSub)}
-              options={([1, 2, 3, 4] as QuarterSub[]).map((q) => ({
-                value: q,
-                label: QUARTER_LABELS[q],
-              }))}
+              onChange={(v) =>
+                setSub(v === "all" ? "all" : (Number(v) as QuarterSub))
+              }
+              options={[
+                ...([1, 2, 3, 4] as QuarterSub[]).map((q) => ({
+                  value: q,
+                  label: QUARTER_LABELS[q],
+                })),
+                { value: "all", label: "全部" },
+              ]}
             />
           ) : (
             <SelectField
               label="期間"
               value={sub}
-              onChange={(v) => setSub(v as YearSub)}
+              onChange={(v) => setSub(v as YearSub | "all")}
               options={[
                 { value: "half", label: "半年" },
                 { value: "full", label: "一年" },
+                { value: "all", label: "全部" },
               ]}
             />
           )}
