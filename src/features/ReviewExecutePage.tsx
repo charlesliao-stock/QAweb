@@ -134,6 +134,8 @@ export function ReviewExecutePage({
 
   const [loading, setLoading] = useState(true);
   const [indicatorName, setIndicatorName] = useState("");
+  /** 該指標是否開啟題目分組顯示（v1.22：關閉時不顯示分組名） */
+  const [showQuestionGroups, setShowQuestionGroups] = useState(false);
   const [requireBedNo, setRequireBedNo] = useState(false);
   /** 需要受審人員資料（v1.17）：false 時隱藏「職編」欄位；缺值視為 true（相容舊資料） */
   const [requireReviewee, setRequireReviewee] = useState(true);
@@ -306,6 +308,8 @@ export function ReviewExecutePage({
           setRequireBedNo(idata.requireBedNo === true);
           // v1.17：缺值視為 true（舊資料維持顯示職編欄）
           setRequireReviewee(idata.requireReviewee !== false);
+          // v1.22：分組名只在該指標開啟題目分組時顯示
+          setShowQuestionGroups(idata.useQuestionGroups === true);
         }
         const nq = normalizeQuestions(idata.questions);
         if (cancelled) return;
@@ -910,7 +914,9 @@ export function ReviewExecutePage({
                       id={`req-q-${q.id}`}
                       className="review-qrow"
                     >
-                      <div className="q-group">{q.groupName || ""}</div>
+                      {showQuestionGroups && q.groupName ? (
+                        <div className="q-group">{q.groupName}</div>
+                      ) : null}
                       <div className="q-text">
                         <b>
                           {qi + 1}. {q.itemText || `（第 ${qi + 1} 題）`}

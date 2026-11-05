@@ -38,18 +38,26 @@ import {
   TEN_STEP_TITLES,
   alignThresholds,
   compareIndicatorRows,
+  createQuestionGroup,
   displayThreshold,
   emptyAuditQuestion,
   emptyTenSteps,
   filterIndicators,
+  hasAuditQuestionFor,
   indicatorCodeOf,
   indicatorDocId,
+  isBasicCompleteFor,
+  meetsEnableConditions,
   mergeQuestionGroups,
+  moveQuestionInList,
+  moveQuestionToGroupInList,
   newQid,
   normalizeQuestions,
   normalizeTenSteps,
   parseIndicatorDocId,
   primaryThreshold,
+  removeQuestionGroupFromList,
+  renameQuestionGroupInList,
   validateBasicThreshold,
   OPTION_SET_LABELS,
   type AuditQuestion,
@@ -319,78 +327,51 @@ function AuditFormEditor({
 
   /** 題目在所屬區段（同分組或未分組）內上／下移 */
   function moveQuestion(id: string, dir: -1 | 1) {
-    const qs = [...value.questions];
-    const idx = qs.findIndex((q) => q.id === id);
-    if (idx < 0) return;
-    const gid = qs[idx].groupId;
-    const sectionIdx: number[] = [];
-    qs.forEach((q, i) => {
-      if ((q.groupId ?? null) === (gid ?? null)) sectionIdx.push(i);
-    });
-    const pos = sectionIdx.indexOf(idx);
-    const swap = pos + dir;
-    if (swap < 0 || swap >= sectionIdx.length) return;
-    const j = sectionIdx[swap];
-    [qs[idx], qs[j]] = [qs[j], qs[idx]];
-    onChange({ questions: qs });
+    onChange({ questions: moveQuestionInList(value.questions, id, dir) });
   }
 
   /** 題目跨分組移動（下拉選擇目標，含「未分組」） */
   function moveQuestionToGroup(id: string, targetGroupId: string | null) {
-    const q = value.questions.find((x) => x.id === id);
-    if (!q) return;
-    const rest = value.questions.filter((x) => x.id !== id);
-    const gname = targetGroupId
-      ? (value.questionGroups.find((g) => g.id === targetGroupId)?.name ?? "")
-      : "";
     onChange({
-      questions: [...rest, { ...q, groupId: targetGroupId, groupName: gname }],
+      questions: moveQuestionToGroupInList(
+        value.questions,
+        value.questionGroups,
+        id,
+        targetGroupId,
+      ),
     });
   }
 
+  /**
+   * 題目分組開關（v1.22）：關閉僅隱藏分組顯示，分組資訊（questionGroups
+   * 與題目歸屬）完整保留，重開後恢復；不刪除任何資料。
+   */
   function toggleQuestionGroups() {
-    if (!value.useQuestionGroups) {
-      onChange({ useQuestionGroups: true });
-      return;
-    }
-    const hasGroupData =
-      value.questionGroups.length > 0 ||
-      value.questions.some((q) => q.groupId !== null);
-    if (
-      hasGroupData &&
-      !window.confirm("關閉後分組將取消、題目保留為扁平清單，確定嗎？")
-    ) {
-      return;
-    }
-    onChange({
-      useQuestionGroups: false,
-      questionGroups: [],
-      questions: value.questions.map((q) => ({
-        ...q,
-        groupId: null,
-        groupName: "",
-      })),
-    });
+    onChange({ useQuestionGroups: !value.useQuestionGroups });
   }
 
+  /**
+   * 新增分組（v1.22）：只新增一個新分組。未分組題目只是「無分組題目」的
+   * 虛擬顯示區，不是真正的 QuestionGroup，此處不產生額外的未分組群組。
+   */
   function addQuestionGroup() {
-    const g: QuestionGroup = {
-      id: newQid(),
-      name: `分組 ${value.questionGroups.length + 1}`,
-      order: value.questionGroups.length,
-    };
-    onChange({ questionGroups: [...value.questionGroups, g] });
+    onChange({
+      questionGroups: [
+        ...value.questionGroups,
+        createQuestionGroup(value.questionGroups),
+      ],
+    });
   }
 
   function renameQuestionGroup(id: string, name: string) {
-    onChange({
-      questionGroups: value.questionGroups.map((g) =>
-        g.id === id ? { ...g, name } : g,
+    onChange(
+      renameQuestionGroupInList(
+        value.questionGroups,
+        value.questions,
+        id,
+        name,
       ),
-      questions: value.questions.map((q) =>
-        q.groupId === id ? { ...q, groupName: name } : q,
-      ),
-    });
+    );
   }
 
   function moveQuestionGroup(id: string, dir: -1 | 1) {
@@ -402,23 +383,27 @@ function AuditFormEditor({
     onChange({ questionGroups: gs.map((g, i) => ({ ...g, order: i })) });
   }
 
+  /**
+   * 刪除分組（v1.22）：其下題目移回「未分組」，題目本身不刪除。
+   */
   function removeQuestionGroup(id: string) {
     const count = value.questions.filter((q) => q.groupId === id).length;
     if (
       !window.confirm(
         count > 0
-          ? `刪除此分組將一併刪除其下 ${count} 個題目，確定嗎？`
+          ? `刪除此分組後，其下 ${count} 個題目將移回「未分組」，確定嗎？`
           : "確定刪除此分組嗎？",
       )
     ) {
       return;
     }
-    onChange({
-      questionGroups: value.questionGroups
-        .filter((g) => g.id !== id)
-        .map((g, i) => ({ ...g, order: i })),
-      questions: value.questions.filter((q) => q.groupId !== id),
-    });
+    onChange(
+      removeQuestionGroupFromList(
+        value.questionGroups,
+        value.questions,
+        id,
+      ),
+    );
   }
 
   const sortedQuestionGroups = useMemo(
@@ -567,7 +552,7 @@ function AuditFormEditor({
         <span className="toggle-track" />
       </button>
       <p className="settings-note">
-        開啟後可建立多個分組、一個分組下可建多個題目；關閉則分組取消、題目保留為扁平清單。
+        開啟後可建立多個分組、一個分組下可建多個題目；關閉僅隱藏分組顯示，分組與題目歸屬保留，重新開啟後恢復。
       </p>
       <label className="check-row" style={{ marginTop: 8 }}>
         <input
@@ -648,23 +633,42 @@ function AuditFormEditor({
               </div>
             );
           })}
-          <div className="question-group-block">
-            <div className="question-group-head">
-              <b>未分組題目</b>
-              <button className="text-button" onClick={() => addQuestion(null)}>
+          {/*
+            未分組題目（v1.22）：只是「無分組題目」的虛擬顯示區，不是真正的
+            QuestionGroup——僅在有未分組題目時渲染、與真分組區分樣式、不顯示
+            刪除按鈕；「新增題目」移至表格下方。
+          */}
+          {value.questions.filter((x) => !x.groupId).length > 0 && (
+            <div className="question-group-block ungrouped">
+              <div className="question-group-head">
+                <b>未分組題目</b>
+                <span className="settings-note">（虛擬顯示區，非分組）</span>
+                <span className="settings-note">
+                  {value.questions.filter((x) => !x.groupId).length} 題
+                </span>
+              </div>
+              {renderQuestionTable(value.questions.filter((x) => !x.groupId))}
+              <button
+                className="text-button"
+                onClick={() => addQuestion(null)}
+              >
                 <Plus size={14} /> 新增題目
               </button>
             </div>
-            {renderQuestionTable(value.questions.filter((x) => !x.groupId))}
-          </div>
+          )}
+          {value.questions.filter((x) => !x.groupId).length === 0 && (
+            <div className="group-actions">
+              <button
+                className="text-button"
+                onClick={() => addQuestion(null)}
+              >
+                <Plus size={14} /> 新增未分組題目
+              </button>
+            </div>
+          )}
         </>
       ) : (
         <>
-          <div className="group-actions">
-            <button className="text-button" onClick={() => addQuestion(null)}>
-              <Plus size={14} /> 新增題目
-            </button>
-          </div>
           {value.questions.length === 0 ? (
             <p className="settings-note">
               尚未建立題目（未建立審核表仍可進行審查，依規格書）。
@@ -672,6 +676,11 @@ function AuditFormEditor({
           ) : (
             renderQuestionTable(value.questions)
           )}
+          <div className="group-actions">
+            <button className="text-button" onClick={() => addQuestion(null)}>
+              <Plus size={14} /> 新增題目
+            </button>
+          </div>
         </>
       )}
     </>
@@ -698,6 +707,11 @@ export function IndicatorsPage({
   const [formTab, setFormTab] = useState<FormTab>("basic");
   const [saving, setSaving] = useState(false);
   const [hasReviewData, setHasReviewData] = useState(false);
+  /**
+   * 載入時是否已符合啟用條件（v1.22）：單筆儲存後若「新符合」啟用條件
+   * 才提示是否啟用；新指標視為不符合。
+   */
+  const [wasEnableEligible, setWasEnableEligible] = useState(false);
   const [versions, setVersions] = useState<VersionRow[]>([]);
   const [batchOpen, setBatchOpen] = useState(false);
   const [groupMap, setGroupMap] = useState<Map<string, string>>(new Map());
@@ -846,6 +860,7 @@ export function IndicatorsPage({
     setFormError("");
     setFormTab("basic");
     setHasReviewData(false);
+    setWasEnableEligible(false);
     setVersions([]);
     setView({ kind: "create" });
   }
@@ -913,6 +928,23 @@ export function IndicatorsPage({
         // v1.17：舊資料缺值視為 false（不主動回寫，下次存檔才寫入）
         requireReviewee: data.requireReviewee === true,
       });
+      // v1.22：記下載入時是否已符合啟用條件，供儲存後「新符合」提示判定
+      setWasEnableEligible(
+        meetsEnableConditions(
+          {
+            groupId,
+            code: indicatorCodeOf(snap.id),
+            name: typeof data.name === "string" ? data.name : "",
+            basicThreshold:
+              typeof data.basicThreshold === "number"
+                ? data.basicThreshold
+                : "",
+            owners: Array.isArray(data.owners) ? data.owners.map(String) : [],
+          },
+          questions,
+          false,
+        ),
+      );
       const locked = await checkReviewData(snap.id);
       setHasReviewData(locked);
       try {
@@ -1024,17 +1056,21 @@ export function IndicatorsPage({
 
   /** 基本資料六欄是否皆有效（狀態「啟用」的前置條件之一） */
   function isBasicComplete(): boolean {
-    if (!form.groupId) return false;
-    if (view.kind === "create" && !form.code.trim()) return false;
-    if (!form.name.trim()) return false;
-    if (validateBasicThreshold(form.basicThreshold) !== "") return false;
-    if (form.owners.length === 0) return false;
-    return true;
+    return isBasicCompleteFor(
+      {
+        groupId: form.groupId,
+        code: form.code,
+        name: form.name,
+        basicThreshold: form.basicThreshold,
+        owners: form.owners,
+      },
+      view.kind === "create",
+    );
   }
 
   /** 審核表是否至少一題（有題目文字；「啟用」的前置條件之二） */
   function hasAuditQuestion(): boolean {
-    return form.questions.some((q) => q.itemText.trim() !== "");
+    return hasAuditQuestionFor(form.questions);
   }
 
   /** 是否可切到「啟用」：基本資料六欄全填＋審核表至少一題 */
@@ -1126,24 +1162,23 @@ export function IndicatorsPage({
         step9: form.steps.step9.trim(),
         step10: form.steps.step10.trim(),
       };
+      // v1.22：分組資訊一律保存（分組開關關閉僅隱藏顯示，不刪除資料）
       const questions = form.questions.map((q, i) => ({
         id: q.id,
         itemText: q.itemText.trim(),
         optionSet: q.optionSet,
         guidance: q.guidance.trim(),
-        groupId: form.useQuestionGroups ? q.groupId : null,
-        groupName: form.useQuestionGroups ? q.groupName.trim() : "",
+        groupId: q.groupId,
+        groupName: q.groupName.trim(),
         order: i,
       }));
-      const questionGroups = form.useQuestionGroups
-        ? [...form.questionGroups]
-            .sort((a, b) => a.order - b.order)
-            .map((g, i) => ({
-              id: g.id,
-              name: g.name.trim() || `分組 ${i + 1}`,
-              order: i,
-            }))
-        : [];
+      const questionGroups = [...form.questionGroups]
+        .sort((a, b) => a.order - b.order)
+        .map((g, i) => ({
+          id: g.id,
+          name: g.name.trim() || `分組 ${i + 1}`,
+          order: i,
+        }));
       // v1.17：頂層 threshold 改寫基本資料閾值（必填，驗證已確保為數字）
       const basicThreshold =
         typeof form.basicThreshold === "number" ? form.basicThreshold : 0;
@@ -1164,10 +1199,12 @@ export function IndicatorsPage({
         updatedBy: user.staffId,
       };
 
+      let savedDocId = "";
       if (view.kind === "create") {
         const code = form.code.trim();
         // v1.21：文件 ID＝`${groupId}__${code}`；code 另存欄位供顯示
         const docId = indicatorDocId(form.groupId, code);
+        savedDocId = docId;
         const ref = doc(db, "indicators", docId);
         const exists = await getDoc(ref);
         if (exists.exists()) {
@@ -1211,6 +1248,7 @@ export function IndicatorsPage({
           setSaving(false);
           return;
         }
+        savedDocId = docId;
         if (hasReviewData) {
           const ok = window.confirm(
             "此指標已有審查資料（含草稿），依版本控管規則將以新版本儲存，原版本保留。確定繼續？",
@@ -1259,6 +1297,32 @@ export function IndicatorsPage({
           });
         }
       }
+      // v1.22：儲存後自動提示啟用（僅單筆表單）——僅在「新符合」啟用條件
+      // （儲存前不符合、儲存後符合）且狀態非「啟用」時提示一次；已符合者
+      // 再次儲存不再提示。
+      const nowEligible = canEnable();
+      if (!wasEnableEligible && nowEligible && form.status !== "啟用") {
+        const ok = window.confirm(
+          "基本資料與審核表皆已完成，是否將此指標設為啟用？",
+        );
+        if (ok && savedDocId) {
+          await updateDoc(doc(db, "indicators", savedDocId), {
+            status: "啟用",
+            updatedAt: serverTimestamp(),
+            updatedBy: user.staffId,
+          });
+          logAudit(db, {
+            actor: user.staffId,
+            actorName: user.name,
+            action: "啟用指標",
+            targetType: "indicator",
+            targetId: savedDocId,
+            detail: form.name.trim(),
+          });
+          onAction(`已將指標 ${form.code.trim()} 設為啟用`);
+        }
+      }
+      setWasEnableEligible(nowEligible);
       setView({ kind: "list" });
       await loadList();
     } catch (error) {
@@ -2103,10 +2167,17 @@ function BatchAddDialog({
         setImportErrors(["檔案內無資料列"]);
         return;
       }
-      const batchCodes = new Set(
-        rows.map((r) => r.code.trim()).filter((c) => c !== ""),
-      );
-      const results = validateAuditRows(data, { batchCodes });
+      // v1.22：以「組別＋編號」對應批次表格中的列
+      const batchByCode = new Map<string, string[]>();
+      for (const r of rows) {
+        const code = r.code.trim();
+        if (!code) continue;
+        const gname = groupMap.get(r.groupId) || "";
+        const list = batchByCode.get(code) ?? [];
+        if (gname && !list.includes(gname)) list.push(gname);
+        batchByCode.set(code, list);
+      }
+      const results = validateAuditRows(data, { batchByCode });
       const ok = results.filter((r) => r.ok && r.values);
       const bad = results.filter((r) => !r.ok);
       if (ok.length > 0) {
@@ -2121,7 +2192,11 @@ function BatchAddDialog({
           }));
           for (const res of ok) {
             const v = res.values!;
-            const idx = next.findIndex((r) => r.code.trim() === v.code);
+            const idx = next.findIndex(
+              (r) =>
+                r.code.trim() === v.code &&
+                groupMap.get(r.groupId) === v.indicatorGroup,
+            );
             if (idx < 0) continue;
             const row = next[idx];
             let groupId: string | null = null;
@@ -2251,24 +2326,23 @@ function BatchAddDialog({
           throw new Error(`指標編號 ${code} 在此組別已存在`);
         const basicThreshold =
           typeof r.threshold === "number" ? r.threshold : 0;
+        // v1.22：分組資訊一律保存（分組開關關閉僅隱藏顯示，不刪除資料）
         const questions = r.audit.questions.map((q, i) => ({
           id: q.id,
           itemText: q.itemText.trim(),
           optionSet: q.optionSet,
           guidance: q.guidance.trim(),
-          groupId: r.audit.useQuestionGroups ? q.groupId : null,
-          groupName: r.audit.useQuestionGroups ? q.groupName.trim() : "",
+          groupId: q.groupId,
+          groupName: q.groupName.trim(),
           order: i,
         }));
-        const questionGroups = r.audit.useQuestionGroups
-          ? [...r.audit.questionGroups]
-              .sort((a, b) => a.order - b.order)
-              .map((g, i) => ({
-                id: g.id,
-                name: g.name.trim() || `分組 ${i + 1}`,
-                order: i,
-              }))
-          : [];
+        const questionGroups = [...r.audit.questionGroups]
+          .sort((a, b) => a.order - b.order)
+          .map((g, i) => ({
+            id: g.id,
+            name: g.name.trim() || `分組 ${i + 1}`,
+            order: i,
+          }));
         const steps = emptyTenSteps();
         steps.step5.thresholds = [];
         await setDoc(ref, {

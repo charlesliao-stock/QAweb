@@ -60,9 +60,9 @@ export function newQid(): string {
   return `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** 新題目預設選項集：是／否／不適用（v1.17） */
+/** 新題目預設選項集：是／否（v1.22；舊資料缺值仍由 asOptionSet 視為是／否／不適用） */
 export function defaultOptionSet(): OptionSet {
-  return "yes-no-na";
+  return "yes-no";
 }
 
 export function emptyAuditQuestion(
@@ -78,6 +78,132 @@ export function emptyAuditQuestion(
     groupName,
     order: 0,
   };
+}
+
+/* ================= 審核表分組純函式（v1.22；供編輯器與測試共用） ================= */
+
+/**
+ * 新增分組：只產生一個新分組。未分組題目只是「無分組題目」的虛擬顯示區，
+ * 不是真正的 QuestionGroup，不得在此產生額外的未分組群組。
+ */
+export function createQuestionGroup(
+  existing: QuestionGroup[],
+): QuestionGroup {
+  return {
+    id: newQid(),
+    name: `分組 ${existing.length + 1}`,
+    order: existing.length,
+  };
+}
+
+/** 分組改名：同步更新分組表與其下題目的 groupName */
+export function renameQuestionGroupInList(
+  groups: QuestionGroup[],
+  questions: AuditQuestion[],
+  id: string,
+  name: string,
+): { questionGroups: QuestionGroup[]; questions: AuditQuestion[] } {
+  return {
+    questionGroups: groups.map((g) => (g.id === id ? { ...g, name } : g)),
+    questions: questions.map((q) =>
+      q.groupId === id ? { ...q, groupName: name } : q,
+    ),
+  };
+}
+
+/** 題目在所屬區段（同分組或未分組）內上／下移 */
+export function moveQuestionInList(
+  questions: AuditQuestion[],
+  id: string,
+  dir: -1 | 1,
+): AuditQuestion[] {
+  const qs = [...questions];
+  const idx = qs.findIndex((q) => q.id === id);
+  if (idx < 0) return qs;
+  const gid = qs[idx].groupId;
+  const sectionIdx: number[] = [];
+  qs.forEach((q, i) => {
+    if ((q.groupId ?? null) === (gid ?? null)) sectionIdx.push(i);
+  });
+  const pos = sectionIdx.indexOf(idx);
+  const swap = pos + dir;
+  if (swap < 0 || swap >= sectionIdx.length) return qs;
+  const j = sectionIdx[swap];
+  [qs[idx], qs[j]] = [qs[j], qs[idx]];
+  return qs;
+}
+
+/** 題目跨分組移動（目標含 null＝未分組；移入目標分組尾端） */
+export function moveQuestionToGroupInList(
+  questions: AuditQuestion[],
+  groups: QuestionGroup[],
+  id: string,
+  targetGroupId: string | null,
+): AuditQuestion[] {
+  const q = questions.find((x) => x.id === id);
+  if (!q) return questions;
+  const rest = questions.filter((x) => x.id !== id);
+  const gname = targetGroupId
+    ? (groups.find((g) => g.id === targetGroupId)?.name ?? "")
+    : "";
+  return [...rest, { ...q, groupId: targetGroupId, groupName: gname }];
+}
+
+/**
+ * 刪除分組：其下題目移回未分組（groupId／groupName 清空，題目本身不刪除），
+ * 其餘分組重排 order。
+ */
+export function removeQuestionGroupFromList(
+  groups: QuestionGroup[],
+  questions: AuditQuestion[],
+  id: string,
+): { questionGroups: QuestionGroup[]; questions: AuditQuestion[] } {
+  return {
+    questionGroups: groups
+      .filter((g) => g.id !== id)
+      .map((g, i) => ({ ...g, order: i })),
+    questions: questions.map((q) =>
+      q.groupId === id ? { ...q, groupId: null, groupName: "" } : q,
+    ),
+  };
+}
+
+/* ================= 啟用前置條件純函式（v1.22；供儲存後啟用提示共用） ================= */
+
+/** 基本資料六欄輸入（啟用前置條件之一） */
+export interface BasicCompleteInput {
+  groupId: string;
+  code: string;
+  name: string;
+  basicThreshold: number | "";
+  owners: string[];
+}
+
+/** 基本資料六欄是否皆有效 */
+export function isBasicCompleteFor(
+  b: BasicCompleteInput,
+  isCreate: boolean,
+): boolean {
+  if (!b.groupId) return false;
+  if (isCreate && !b.code.trim()) return false;
+  if (!b.name.trim()) return false;
+  if (validateBasicThreshold(b.basicThreshold) !== "") return false;
+  if (b.owners.length === 0) return false;
+  return true;
+}
+
+/** 審核表是否至少一題（有題目文字） */
+export function hasAuditQuestionFor(questions: AuditQuestion[]): boolean {
+  return questions.some((q) => q.itemText.trim() !== "");
+}
+
+/** 是否符合啟用條件：基本資料六欄全填有效＋審核表至少一題 */
+export function meetsEnableConditions(
+  b: BasicCompleteInput,
+  questions: AuditQuestion[],
+  isCreate: boolean,
+): boolean {
+  return isBasicCompleteFor(b, isCreate) && hasAuditQuestionFor(questions);
 }
 
 export interface SubIndicator {

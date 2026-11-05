@@ -3451,6 +3451,11 @@ button:disabled {
   margin-bottom: 16px;
   background: var(--panel-soft, #f7fafb);
 }
+/* 未分組題目：虛擬顯示區（非真正分組），以虛線邊框與真分組區分 */
+.question-group-block.ungrouped {
+  border-style: dashed;
+  background: transparent;
+}
 .question-group-head {
   display: flex;
   align-items: center;
