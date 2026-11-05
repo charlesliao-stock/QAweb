@@ -141,6 +141,8 @@ interface RowItem {
   name: string;
   groupId: string;
   groupName: string;
+  /** 指標狀態（v1.17.0 補強：非「啟用」不得產生排程／加審） */
+  status: string;
   category: CycleCategory;
   /** 年度／學年度的週期鍵；臨時列為該排程的 period（尚無排程則 ""） */
   period: string;
@@ -468,6 +470,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               name: ind.name,
               groupId: ind.groupId,
               groupName,
+              status: ind.status,
               category: cat,
               period: "",
               schedule: null,
@@ -480,6 +483,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                 name: ind.name,
                 groupId: ind.groupId,
                 groupName,
+                status: ind.status,
                 category: cat,
                 period: s.period,
                 schedule: s,
@@ -504,6 +508,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             name: ind.name,
             groupId: ind.groupId,
             groupName,
+            status: ind.status,
             category: cat,
             period: p,
             schedule: s,
@@ -741,6 +746,9 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                     const canGenerate =
                       canEdit && !!sched && schedDone && asgDone;
                     const isTemp = r.category === "temp";
+                    // v1.17.0 補強：只有「啟用」的指標能產生排程／加審（查閱不受限）
+                    const indicatorActive = r.status === "啟用";
+                    const inactiveHint = "需先將指標設為啟用才能排程";
                     return (
                       <tr key={r.key}>
                         <td>{r.groupName}</td>
@@ -868,16 +876,20 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                               <button
                                 className="button button-outline button-sm"
                                 disabled={
-                                  !canGenerate || generatingKey === r.key
+                                  !indicatorActive ||
+                                  !canGenerate ||
+                                  generatingKey === r.key
                                 }
                                 title={
-                                  !canEdit
-                                    ? "需排程建立／改派權限"
-                                    : !schedDone
-                                      ? "請先完成排程／單位設定"
-                                      : !asgDone
-                                        ? "請先完成單位／審查員設定"
-                                        : "依排程展開審查任務"
+                                  !indicatorActive
+                                    ? inactiveHint
+                                    : !canEdit
+                                      ? "需排程建立／改派權限"
+                                      : !schedDone
+                                        ? "請先完成排程／單位設定"
+                                        : !asgDone
+                                          ? "請先完成單位／審查員設定"
+                                          : "依排程展開審查任務"
                                 }
                                 onClick={() => handleGenerate(r)}
                               >
@@ -891,8 +903,13 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                           {!isTemp && canEdit && (
                             <button
                               className="button button-outline button-sm"
+                              disabled={!indicatorActive}
                               onClick={() => setAddAuditRow(r)}
-                              title="建立臨時加審排程"
+                              title={
+                                !indicatorActive
+                                  ? inactiveHint
+                                  : "建立臨時加審排程"
+                              }
                             >
                               <Plus size={14} /> 加審
                             </button>
