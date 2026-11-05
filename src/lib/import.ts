@@ -120,6 +120,7 @@ const BASIC_HEADER_MAP: Record<string, string> = {
 };
 
 const AUDIT_HEADER_MAP: Record<string, string> = {
+  組別: "indicatorGroup",
   指標編號: "code",
   編號: "code",
   題目: "itemText",
@@ -271,6 +272,8 @@ export function validateBasicRows(
 
 export interface AuditImportRowInput {
   lineNo: number;
+  /** 指標所屬組別名稱（v1.22：與編號一併對應批次表格中的列） */
+  indicatorGroup: string;
   code: string;
   itemText: string;
   optionSetRaw: string;
@@ -283,6 +286,7 @@ export interface AuditImportRowResult {
   ok: boolean;
   errors: string[];
   values: {
+    indicatorGroup: string;
     code: string;
     itemText: string;
     optionSet: OptionSet;
@@ -291,7 +295,7 @@ export interface AuditImportRowResult {
   } | null;
 }
 
-/** 審核表匯入檔：第一列標題列 → 資料列。 */
+/** 審核表匯入檔：第一列標題列 → 資料列（v1.22 欄位順序：組別、指標編號、分組、題目、選項、審核指引）。 */
 export function parseAuditSheet(rows: string[][]): {
   headerErrors: string[];
   data: AuditImportRowInput[];
@@ -299,10 +303,10 @@ export function parseAuditSheet(rows: string[][]): {
   if (rows.length === 0)
     return { headerErrors: ["檔案為空，請使用範本格式"], data: [] };
   const { col } = mapHeaders(rows[0], AUDIT_HEADER_MAP);
-  const required = ["code", "itemText", "optionSetRaw"];
+  const required = ["indicatorGroup", "code", "itemText", "optionSetRaw"];
   const missingRequired = required.filter((k) => col[k] === undefined);
   if (missingRequired.length > 0) {
-    const labels = ["指標編號", "題目", "選項"];
+    const labels = ["組別", "指標編號", "題目", "選項"];
     return {
       headerErrors: [
         `缺少欄位：${missingRequired
@@ -317,6 +321,7 @@ export function parseAuditSheet(rows: string[][]): {
     const r = rows[i];
     const get = (k: string) => r[col[k]] ?? "";
     if (
+      get("indicatorGroup") === "" &&
       get("code") === "" &&
       get("itemText") === "" &&
       get("optionSetRaw") === "" &&
@@ -326,6 +331,7 @@ export function parseAuditSheet(rows: string[][]): {
       continue;
     data.push({
       lineNo: i + 1,
+      indicatorGroup: get("indicatorGroup"),
       code: get("code"),
       itemText: get("itemText"),
       optionSetRaw: get("optionSetRaw"),
@@ -336,17 +342,30 @@ export function parseAuditSheet(rows: string[][]): {
   return { headerErrors: [], data };
 }
 
-/** 逐列驗證審核表（編號須對應批次表格中的列、題目必填、選項二選一）。 */
+/**
+ * 逐列驗證審核表（v1.22：以「組別＋編號」對應批次表格中的列、題目必填、
+ * 選項二選一）。batchByCode：編號 → 批次表格中該編號的組別名稱清單。
+ */
 export function validateAuditRows(
   data: AuditImportRowInput[],
-  ctx: { batchCodes: Set<string> },
+  ctx: { batchByCode: Map<string, string[]> },
 ): AuditImportRowResult[] {
   return data.map((r) => {
     const errors: string[] = [];
     const code = r.code.trim();
+    const indicatorGroup = r.indicatorGroup.trim();
     if (!code) errors.push("指標編號未填");
-    else if (!ctx.batchCodes.has(code))
+    else if (!ctx.batchByCode.has(code)) {
       errors.push(`編號 ${code} 不在批次表格中`);
+    } else if (!indicatorGroup) {
+      errors.push("組別未填");
+    } else if (!ctx.batchByCode.get(code)!.includes(indicatorGroup)) {
+      errors.push(
+        `編號 ${code} 在批次表格中的組別為「${ctx.batchByCode
+          .get(code)!
+          .join("、")}」，與檔案組別「${indicatorGroup}」不符`,
+      );
+    }
     if (!r.itemText.trim()) errors.push("題目未填");
     const optionSet = parseOptionSetLabel(r.optionSetRaw);
     if (!optionSet) errors.push("選項須填「是/否」或「是/否/不適用」");
@@ -357,6 +376,7 @@ export function validateAuditRows(
       ok: true,
       errors: [],
       values: {
+        indicatorGroup,
         code,
         itemText: r.itemText.trim(),
         optionSet,
@@ -385,10 +405,11 @@ export function basicTemplateRows(): string[][] {
 }
 
 export const AUDIT_TEMPLATE_HEADERS = [
+  "組別",
   "指標編號",
+  "分組",
   "題目",
   "選項",
-  "分組",
   "審核指引",
 ];
 
@@ -396,10 +417,11 @@ export function auditTemplateRows(): string[][] {
   return [
     AUDIT_TEMPLATE_HEADERS,
     [
+      "病房組",
       "QI-001",
+      "執行前",
       "接觸病人前執行手部衛生",
       "是/否/不適用",
-      "執行前",
       "查核接觸病人前是否執行手部衛生",
     ],
   ];
