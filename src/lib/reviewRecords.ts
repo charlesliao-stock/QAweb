@@ -1,5 +1,7 @@
 /** 審查執行紀錄（v1.10.0 新增；v1.11.0 起改為逐件：一 task 可有多筆） */
 
+import type { AuditQuestion } from "./indicators";
+
 /** 單題作答快照 */
 export interface ReviewAnswer {
   /** 題目 id（指標審核表題目） */
@@ -85,4 +87,72 @@ export function computeOptionSetScore(
   const rate =
     maxScore > 0 ? Math.round((totalScore / maxScore) * 1000) / 10 : null;
   return { totalScore, maxScore, rate };
+}
+
+/* ================= 檢視用逐題明細純函式（v1.24） ================= */
+
+/** 檢視用逐題明細列：以作答快照為準，對照指標題目取分組與指引 */
+export interface ReviewViewRow {
+  questionId: string;
+  /** 全域題號（依指標題目順序；快照無對應題目時為 0，不顯示編號） */
+  num: number;
+  itemText: string;
+  optionLabel: string;
+  /** 每題備註（選填；快照的 note） */
+  note: string;
+  guidance: string;
+  groupId: string | null;
+  groupName: string;
+}
+
+/** 檢視用分組區段：一個組別一段；未分組／無對應題目者自成一段 */
+export interface ReviewViewSection {
+  groupId: string | null;
+  groupName: string;
+  rows: ReviewViewRow[];
+}
+
+/**
+ * 由作答快照解析檢視用分組明細（v1.24，純函式）：
+ * - 按指標題目順序排列；分組與指引以當前指標題目為準
+ * - 快照無對應題目（題目已刪）者排在最後、歸入未分組，題目文字取快照
+ * - showGroups=false 時全部為一段、不顯示分組
+ */
+export function resolveReviewViewSections(
+  questions: AuditQuestion[],
+  answers: ReviewAnswer[],
+  showGroups: boolean,
+): ReviewViewSection[] {
+  if (answers.length === 0) return [];
+  const numById = new Map(questions.map((q, i) => [q.id, i + 1]));
+  const qById = new Map(questions.map((q) => [q.id, q]));
+  const rows: ReviewViewRow[] = answers.map((a) => {
+    const q = qById.get(a.questionId);
+    return {
+      questionId: a.questionId,
+      num: numById.get(a.questionId) ?? 0,
+      itemText: a.itemText,
+      optionLabel: a.optionLabel,
+      note: (a.note ?? "").trim(),
+      guidance: q?.guidance ?? "",
+      groupId: showGroups ? (q?.groupId ?? null) : null,
+      groupName:
+        showGroups && q?.groupId ? q.groupName || "未命名分組" : "",
+    };
+  });
+  // 有對應題號者依題號排，無對應者排最後（維持作答順序）
+  rows.sort((a, b) => (a.num || Infinity) - (b.num || Infinity));
+  const sections: ReviewViewSection[] = [];
+  const byKey = new Map<string, ReviewViewSection>();
+  for (const r of rows) {
+    const key = r.groupId ?? "";
+    let sec = byKey.get(key);
+    if (!sec) {
+      sec = { groupId: r.groupId, groupName: r.groupName, rows: [] };
+      byKey.set(key, sec);
+      sections.push(sec);
+    }
+    sec.rows.push(r);
+  }
+  return sections;
 }

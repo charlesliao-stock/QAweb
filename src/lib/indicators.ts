@@ -168,6 +168,50 @@ export function removeQuestionGroupFromList(
   };
 }
 
+/* ================= 審查畫面分組區段純函式（v1.24；供審查執行頁與檢視共用） ================= */
+
+/** 審查畫面的一個分組方框：一個組別一段；未分組題目自成一段、不掛組別名稱 */
+export interface QuestionSection {
+  /** 分組 id；null＝未分組 */
+  groupId: string | null;
+  /** 分組名稱；未分組為 "" */
+  groupName: string;
+  questions: AuditQuestion[];
+}
+
+/**
+ * 依題目順序切分分組區段（v1.24）：
+ * - 同一分組的題目合併為一段（以首次出現順序排列）
+ * - 未分組題目合併為一段（不掛組別名稱）
+ * - showGroups=false 時全部題目為一段、不顯示分組
+ */
+export function groupQuestionsIntoSections(
+  questions: AuditQuestion[],
+  showGroups: boolean,
+): QuestionSection[] {
+  if (questions.length === 0) return [];
+  if (!showGroups) {
+    return [{ groupId: null, groupName: "", questions: [...questions] }];
+  }
+  const sections: QuestionSection[] = [];
+  const byKey = new Map<string, QuestionSection>();
+  for (const q of questions) {
+    const key = q.groupId ?? "";
+    let sec = byKey.get(key);
+    if (!sec) {
+      sec = {
+        groupId: q.groupId ?? null,
+        groupName: q.groupId ? q.groupName || "未命名分組" : "",
+        questions: [],
+      };
+      byKey.set(key, sec);
+      sections.push(sec);
+    }
+    sec.questions.push(q);
+  }
+  return sections;
+}
+
 /* ================= 啟用前置條件純函式（v1.22；供儲存後啟用提示共用） ================= */
 
 /** 基本資料六欄輸入（啟用前置條件之一） */

@@ -3962,62 +3962,138 @@ button:disabled {
   color: #9aa5a4;
 }
 
-/* ---------- 審查表單：桌機/平板一題一行（v1.11.0） ---------- */
-.review-qrow {
-  display: grid;
-  grid-template-columns: 130px minmax(0, 1fr) minmax(0, 1.15fr) 92px;
-  gap: 12px;
-  align-items: start;
+/* ---------- 審查表單：一個組別一個方框（v1.24） ---------- */
+.review-group-label {
+  font-weight: 700;
+  font-size: var(--font-subtitle);
+  margin: 0 0 6px 2px;
+}
+.review-group-box {
   border: 1px solid #e2e8e7;
   border-radius: 10px;
-  padding: 12px 14px;
   background: #fbfdfd;
-  margin-bottom: 10px;
+  padding: 4px 14px;
+  margin-bottom: 16px;
 }
-.review-qrow:last-child {
+.review-group-box:last-child {
   margin-bottom: 0;
 }
-.review-qrow .q-group {
-  font-size: var(--font-small);
-  color: #5b6b6a;
-  padding-top: 3px;
-  overflow-wrap: anywhere;
+/* 每題一行：題目左、選項中、備註右；指引在整行下方展開（寬度與整行相同） */
+.review-qrow {
+  padding: 12px 0;
+  border-bottom: 1px solid #e8efee;
+}
+.review-qrow:last-child {
+  border-bottom: none;
+}
+.review-qrow .q-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(180px, 240px);
+  gap: 12px;
+  align-items: start;
 }
 .review-qrow .q-text {
   font-size: var(--font-body);
   padding-top: 2px;
   overflow-wrap: anywhere;
 }
+.review-qrow .q-text-btn {
+  display: inline;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.review-qrow .q-text-btn:hover {
+  background: #eef4f3;
+}
+.review-qrow .q-caret {
+  display: inline-block;
+  margin-right: 4px;
+  color: #5b6b6a;
+}
+.review-qrow .q-options {
+  padding-top: 2px;
+}
 .review-qrow .radio-group {
+  flex-direction: row;
+  flex-wrap: wrap;
   gap: 6px;
 }
 .review-qrow .check-row {
   padding: 8px 10px;
 }
-.review-qrow .q-guidance .guidance-details {
-  margin-top: 0;
-  border-top: none;
-  padding-top: 0;
+.review-qrow .q-note {
+  padding-top: 2px;
 }
-.review-qrow .q-guidance .guidance-details summary {
-  font-size: var(--font-small);
+.review-qrow .q-note .text-input {
+  width: 100%;
 }
-:root[data-mode="dark"] .review-qrow {
+.review-qrow .q-option-result {
+  display: inline-block;
+  padding: 6px 12px;
+  border: 1px solid #cfdad8;
+  border-radius: 999px;
+  background: #f2f7f6;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.review-qrow .q-note-text {
+  display: block;
+  padding-top: 6px;
+  overflow-wrap: anywhere;
+  color: #44514f;
+}
+.review-qrow .q-guidance {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #f2f7f6;
+  border: 1px dashed #cfdad8;
+  border-radius: 8px;
+  color: #44514f;
+  font-size: var(--font-body);
+}
+.review-qrow .q-guidance p {
+  margin: 0;
+}
+:root[data-mode="dark"] .review-group-box {
   background: #202726;
   border-color: #3d4a49;
 }
-:root[data-mode="dark"] .review-qrow .q-group {
+:root[data-mode="dark"] .review-qrow {
+  border-bottom-color: #3d4a49;
+}
+:root[data-mode="dark"] .review-qrow .q-text-btn:hover {
+  background: #2b3534;
+}
+:root[data-mode="dark"] .review-qrow .q-caret {
   color: #9aa5a4;
 }
-/* 手機（≤640px）：題組＋題目在上、選項在下、審核指引最下（v1.11.0） */
+:root[data-mode="dark"] .review-qrow .q-guidance {
+  background: #262f2e;
+  border-color: #3d4a49;
+  color: #c3cdcc;
+}
+:root[data-mode="dark"] .review-qrow .q-option-result {
+  background: #262f2e;
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .review-qrow .q-note-text {
+  color: #c3cdcc;
+}
+/* 手機（≤640px）：題目、選項、備註依序堆疊；指引仍在整行下方（v1.24） */
 @media (max-width: 640px) {
-  .review-qrow {
+  .review-qrow .q-main {
     grid-template-columns: 1fr;
     gap: 8px;
   }
-  .review-qrow .q-group {
-    padding-top: 0;
-    font-weight: 700;
+  .review-group-box {
+    padding: 4px 12px;
   }
 }
 
