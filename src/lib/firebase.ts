@@ -14,6 +14,11 @@ import {
   updateDoc,
   where,
 } from "./db";
+import {
+  isConvenerRole,
+  isOfficerRole,
+  isReviewerRole,
+} from "./roleIdentity";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY ?? "",
@@ -151,11 +156,11 @@ export async function readReviewRecords(
   const fullHospital = ["主任", "副主任", "督導", "系統管理員"].some((role) =>
     roles.has(role),
   );
-  const groupScope = ["各組召集人", "執行幹事", "品管執行幹事"].some((role) =>
-    roles.has(role),
-  );
+  // v1.21：召集人／執行幹事新舊並認（組級＋單位級皆以所屬群組計範圍）
+  const groupScope =
+    isConvenerRole(profile.roles) || isOfficerRole(profile.roles);
   const unitScope = roles.has("護理長");
-  const ownScope = roles.has("審查員") || roles.has("一般人員");
+  const ownScope = isReviewerRole(profile.roles) || roles.has("一般人員");
 
   // 單一 where 避免複合索引，年份與範圍在前端過濾（沿用 v1.13.0 模式）
   const snapshot = await getDocs(

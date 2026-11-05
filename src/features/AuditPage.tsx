@@ -2,10 +2,11 @@
  * 品管審查（v1.19.0 改寫）：依權限列出「有排程且尚未結束」的指標排程。
  * 取代舊的指標審查總覽入口（選指標→各單位各輪次）。
  *
- * 角色範圍（多重身分取聯集）：
- * - 審查員：分工表中被指派的項目
+ * 角色範圍（多重身分取聯集；v1.21 新舊並認）：
+ * - 審查員（舊／品管組／單位）：分工表中被指派的項目
  * - 單位護理長／單位執行幹事：自審排程（selfReview）且受審單位含本人單位
- * - 各組召集人／執行幹事：本人群組（users.groupIds）的指標排程
+ * - 召集人／執行幹事（舊／品管組／單位）：擔任該角色的群組
+ *   （memberships 為主，舊 groupIds fallback；單位級以其單位所屬群組計）
  * - 督導／副主任／主任、系統管理員：全部
  * 尚未結束＝今天≤最後區間結束月（含當月）且進度未達 100%
  * （進度改以審查紀錄計算，不依賴任務表）。
@@ -39,6 +40,15 @@ import {
   parseIndicatorSchedule,
   type IndicatorSchedule,
 } from "../lib/scheduling";
+import {
+  CONVENER_ROLES,
+  OFFICER_ROLES,
+  groupsForRoles,
+  isConvenerRole,
+  isOfficerRole,
+  isReviewerRole,
+  parseMemberships,
+} from "../lib/roleIdentity";
 import {
   auditRowMatches,
   computeIntervalProgress,
@@ -238,11 +248,16 @@ export function AuditPage({
           );
         });
         const unitName = new Map<string, string>();
+        const unitGroup = new Map<string, string>();
         uSnap.docs.forEach((d) => {
           const v = d.data() as Record<string, unknown>;
           unitName.set(
             d.id,
             typeof v.name === "string" && v.name ? v.name : d.id,
+          );
+          unitGroup.set(
+            d.id,
+            typeof v.groupId === "string" ? v.groupId : "",
           );
         });
         const unitNameOf = (code: string): string =>
@@ -278,16 +293,27 @@ export function AuditPage({
             )
           : [];
 
-        // ---- 角色範圍（多重身分取聯集） ----
+        // ---- 角色範圍（多重身分取聯集；v1.21 新舊並認） ----
         const roles = user.roles ?? [];
         const title = user.title ?? "";
         const isAdmin = roles.includes("系統管理員");
         const isSenior = title.includes("主任") || title.includes("督導");
-        const isReviewer = roles.includes("審查員");
+        const isReviewer = isReviewerRole(roles);
         const isHeadNurse =
-          title.includes("護理長") || title.includes("執行幹事");
-        const isConvener = roles.some(
-          (r) => r.includes("召集人") || r.includes("執行幹事"),
+          title.includes("護理長") ||
+          title.includes("執行幹事") ||
+          roles.includes("單位執行幹事");
+        const isConvener = isConvenerRole(roles) || isOfficerRole(roles);
+        // 召集人／執行幹事的群組範圍：memberships 為主，舊 groupIds＋roles fallback；
+        // 單位級角色以其單位所屬群組計
+        const memberships = parseMemberships(meData.memberships, {
+          roles,
+          groupIds: myGroupIds,
+        });
+        const myConvenerGroupIds = groupsForRoles(
+          memberships,
+          [...CONVENER_ROLES, ...OFFICER_ROLES],
+          user.unitCode ? unitGroup.get(user.unitCode) : undefined,
         );
 
         interface Cand {
@@ -316,7 +342,11 @@ export function AuditPage({
           ) {
             visible = true;
           }
-          if (isConvener && ind.groupId && myGroupIds.includes(ind.groupId)) {
+          if (
+            isConvener &&
+            ind.groupId &&
+            myConvenerGroupIds.includes(ind.groupId)
+          ) {
             visible = true;
           }
           if (!visible) continue;

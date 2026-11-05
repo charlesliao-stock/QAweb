@@ -238,6 +238,9 @@ export function effectiveThreshold(
 
 /** 指標清單列（搜尋／排序／閾值顯示共用） */
 export interface IndicatorListRow {
+  /** Firestore 文件 ID（v1.21：`${groupId}__${code}` 複合 ID） */
+  id: string;
+  /** 指標編號（組別內唯一；顯示層只顯示此值） */
   code: string;
   name: string;
   groupId: string;
@@ -246,6 +249,28 @@ export interface IndicatorListRow {
   mainThreshold: number;
   /** 基本資料閾值；null＝未填 */
   basicThreshold: number | null;
+}
+
+/**
+ * 指標文件 ID（v1.21.0）：`${groupId}__${code}`，組別＋編號唯一。
+ * 不同組別可使用相同編號；顯示層仍只顯示 code。
+ */
+export function indicatorDocId(groupId: string, code: string): string {
+  return `${groupId.trim()}__${code.trim()}`;
+}
+
+/** 解析複合文件 ID；非複合格式回傳 null（舊測試資料或手動建立的文件） */
+export function parseIndicatorDocId(
+  id: string,
+): { groupId: string; code: string } | null {
+  const i = id.indexOf("__");
+  if (i <= 0 || i >= id.length - 2) return null;
+  return { groupId: id.slice(0, i), code: id.slice(i + 2) };
+}
+
+/** 由文件 ID 取顯示用編號：複合 ID 取 code；舊格式回傳原 ID */
+export function indicatorCodeOf(id: string): string {
+  return parseIndicatorDocId(id)?.code ?? id;
 }
 
 /**

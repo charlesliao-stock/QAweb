@@ -96,6 +96,18 @@ t(
   pm.canByRoles(["系統管理員"], "manageRoles", {}) === true,
 );
 t(
+  "canByRoles 新角色預設：品管組召集人有排程權",
+  pm.canByRoles(["品管組召集人"], "manageSchedule", {}) === true,
+);
+t(
+  "canByRoles 新角色預設：品管組審查員無排程權",
+  pm.canByRoles(["品管組審查員"], "manageSchedule", {}) === false,
+);
+t(
+  "canByRoles 新角色預設：單位執行幹事無排程權",
+  pm.canByRoles(["單位執行幹事"], "manageSchedule", {}) === false,
+);
+t(
   "canByRoles Firestore 明確 false 蓋掉預設 true",
   pm.canByRoles(["審查員"], "editSubmitted", {
     審查員: { editSubmitted: false },
@@ -281,13 +293,17 @@ t("progressLabel(1,3)＝1/3", rp.progressLabel(1, 3) === "1/3");
   t("校正寫回 reviewTasks", dash.includes('"reviewTasks", t.id') || dash.includes('updateDoc(doc(db, "reviewTasks"'));
 }
 
-/* ---- v1.12.2：審查員頁籤 UI（靜態檢查） ---- */
+/* ---- v1.21：審查員頁籤已刪除，改為角色管理（靜態檢查） ---- */
 {
   const grp = readFileSync("src/features/GroupsPage.tsx", "utf8");
-  t("審查員有排序狀態", grp.includes("toggleReviewerSort"));
-  t("審查員有姓名篩選", grp.includes("reviewerFilter"));
-  t("審查員用 filteredReviewers 渲染", grp.includes("filteredReviewers.map"));
-  t("加入審查員搜尋框在組別旁（同一 flex 列）", grp.includes("加入審查員") && grp.includes('alignItems: "flex-end"'));
+  t("審查員頁籤已刪除", !grp.includes('tab === "reviewers"'));
+  t("角色管理頁籤存在", grp.includes('tab === "roles"'));
+  t("角色成員全選＋批次移除", grp.includes("MemberChecklist"));
+  t("角色刪除會從人員移除", grp.includes("handleRoleDelete"));
+  t("人員表單用 memberships 配對列", grp.includes("memberships"));
+  t("單位成員面板限系統管理員（rules：users 寫入限管理員）", grp.includes("managingUnitCode && isAdmin"));
+  t("職稱成員面板限系統管理員", grp.includes("managingTitleName && isAdmin"));
+  t("種子寫入限系統管理員（rules：roles 寫入限管理員）", grp.includes("僅管理員執行"));
   const css = readFileSync("src/styles.css", "utf8");
   t("th-sort 樣式存在", css.includes(".th-sort"));
 }

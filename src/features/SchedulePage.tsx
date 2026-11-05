@@ -32,6 +32,8 @@ import {
 } from "../lib/db";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
+import { indicatorCodeOf } from "../lib/indicators";
+import { hasSchedulePermission } from "../lib/roleIdentity";
 import { usePermissions } from "../lib/usePermissions";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
@@ -108,6 +110,8 @@ function scheduleCalendarMonths(
 
 interface IndicatorLite {
   id: string;
+  /** 顯示用編號（由複合文件 ID 解析；v1.21） */
+  code: string;
   name: string;
   groupId: string;
   /** 指標狀態（v1.17：排程選擇器只列「啟用」） */
@@ -135,6 +139,8 @@ interface ReviewerLite {
 interface RowItem {
   key: string;
   indicatorId: string;
+  /** 顯示用編號（v1.21：不顯示複合 ID） */
+  code: string;
   name: string;
   groupId: string;
   groupName: string;
@@ -256,7 +262,9 @@ export function defaultAddAuditReviewers(
 export function SchedulePage({ onAction }: { onAction: (message: string) => void }) {
   const { can } = usePermissions();
   const { user } = useAuth();
-  const canEdit = can("manageSchedule");
+  // v1.21：排程權限＝權限矩陣 manageSchedule 或組級召集人／執行幹事（新舊並認）
+  const canEdit =
+    can("manageSchedule") || hasSchedulePermission(user?.roles ?? []);
   const actor = useMemo(
     () => ({ id: user?.staffId ?? "", name: user?.name ?? "" }),
     [user],
@@ -354,6 +362,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
           const data = d.data();
           return {
             id: d.id,
+            code: indicatorCodeOf(d.id),
             name: typeof data.name === "string" ? data.name : "",
             groupId: typeof data.groupId === "string" ? data.groupId : "",
             status: typeof data.status === "string" ? data.status : "",
@@ -499,6 +508,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
       out.push({
         key: `${ind.id}||${cycle}||${period}`,
         indicatorId: ind.id,
+        code: ind.code,
         name: ind.name,
         groupId: ind.groupId,
         groupName,
@@ -515,6 +525,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
           out.push({
             key: `${ind.id}||temp||${t.period}`,
             indicatorId: ind.id,
+            code: ind.code,
             name: ind.name,
             groupId: ind.groupId,
             groupName,
@@ -809,7 +820,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                             </>
                           )}
                         </td>
-                        <td className="muted-text">{r.indicatorId}</td>
+                        <td className="muted-text">{r.code}</td>
                         <td>
                           <b>{r.name}</b>
                         </td>

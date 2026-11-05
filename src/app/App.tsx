@@ -16,11 +16,9 @@ import {
   Menu,
   Palette,
   Settings2,
-  Users,
   X,
 } from "lucide-react";
 import { AuthProvider, useAuth } from "../lib/auth";
-import { usePermissions } from "../lib/usePermissions";
 import { isDemoMode } from "../lib/demoMode";
 import { doc, getDoc } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
@@ -36,7 +34,7 @@ import {
   type ColorModeOption,
   type FontSizeOption,
 } from "../lib/uiPrefs";
-import { BrandMark, EmptyState, PAGE_COPY } from "../components/ui";
+import { BrandMark, PAGE_COPY } from "../components/ui";
 import { VERSION_LABEL } from "../version";
 import { AdminPage } from "../features/AdminPage";
 import { AuditPage } from "../features/AuditPage";
@@ -45,9 +43,7 @@ import { DashboardPage } from "../features/DashboardPage";
 import { GroupsPage } from "../features/GroupsPage";
 import { IndicatorsPage } from "../features/IndicatorsPage";
 import { ResultsPage } from "../features/ResultsPage";
-import { ReviewerManagement } from "../features/ReviewerManagement";
 import { SchedulePage } from "../features/SchedulePage";
-import { toFirebaseProfile } from "../lib/firebase";
 import type { PageId, Role } from "../types";
 
 const NAV_GROUPS = [
@@ -69,7 +65,6 @@ const NAV_GROUPS = [
     label: "組織與設定",
     items: [
       { id: "groups", label: "群組與人員", icon: GitBranch },
-      { id: "reviewers", label: "審查員管理", icon: Users },
       { id: "admin", label: "系統管理", icon: Settings2 },
     ],
   },
@@ -83,6 +78,13 @@ const ROLE_NAMES: Role[] = [
   "品管執行幹事",
   "系統管理員",
   "指標負責人",
+  // v1.21：新角色
+  "品管組召集人",
+  "品管組執行幹事",
+  "品管組審查員",
+  "單位召集人",
+  "單位執行幹事",
+  "單位審查員",
 ];
 
 function LoginScreen() {
@@ -419,7 +421,6 @@ function DisplaySettings() {
 
 function Shell() {
   const { user, loading, needsPasswordChange, logout } = useAuth();
-  const { can } = usePermissions();
   const [page, setPage] = useState<PageId>("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [toast, setToast] = useState("");
@@ -517,18 +518,6 @@ function Shell() {
           {page === "audit" && <AuditPage onAction={notify} />}
           {page === "results" && <ResultsPage onAction={notify} />}
           {page === "groups" && <GroupsPage onAction={notify} />}
-          {page === "reviewers" &&
-            (can("manageRoles") ? (
-              <ReviewerManagement
-                profile={toFirebaseProfile(user)}
-                onAction={notify}
-              />
-            ) : (
-              <EmptyState
-                title="沒有權限"
-                description="審查員管理需要「管理角色與權限」權限，請聯絡系統管理員。"
-              />
-            ))}
           {page === "capa" && <CapaPage onAction={notify} />}
           {page === "admin" && <AdminPage onAction={notify} />}
         </div>

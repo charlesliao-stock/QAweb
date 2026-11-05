@@ -211,7 +211,11 @@ export function parseBasicSheet(rows: string[][]): {
   return { headerErrors: [], data };
 }
 
-/** 逐列驗證基本資料（組別名稱須存在、編號不重複、閾值規則、職編須存在）。 */
+/**
+ * 逐列驗證基本資料（組別名稱須存在、編號不重複、閾值規則、職編須存在）。
+ * v1.21：編號唯一改為 (groupId, code)（複合文件 ID），existingCodes 為
+ * 複合 ID 集合；不同組別同編號不再報錯。
+ */
 export function validateBasicRows(
   data: BasicImportRowInput[],
   ctx: {
@@ -228,10 +232,13 @@ export function validateBasicRows(
     let groupId = ctx.groupByName.get(groupName) ?? "";
     if (!groupId) errors.push(`組別「${groupName || "（空白）"}」不存在`);
     const code = r.code.trim();
+    const compositeKey = `${groupId}__${code}`;
     if (!code) errors.push("編號未填");
-    else if (seen.has(code)) errors.push(`編號 ${code} 在檔案內重複`);
-    else if (ctx.existingCodes.has(code)) errors.push(`編號 ${code} 已存在`);
-    seen.add(code);
+    else if (seen.has(compositeKey))
+      errors.push(`編號 ${code} 在組別「${groupName}」內重複`);
+    else if (ctx.existingCodes.has(compositeKey))
+      errors.push(`編號 ${code} 在組別「${groupName}」內已存在`);
+    seen.add(compositeKey);
     if (!r.name.trim()) errors.push("指標名稱未填");
     let threshold = 0;
     const thRaw = r.thresholdRaw.trim();
@@ -394,6 +401,213 @@ export function auditTemplateRows(): string[][] {
       "是/否/不適用",
       "執行前",
       "查核接觸病人前是否執行手部衛生",
+    ],
+  ];
+}
+
+/* ================= 品管審查結果匯入（v1.21.0） ================= */
+
+/** 結果匯入前 6 欄固定標題（第 7 欄起為該指標審查表題目文字） */
+export const RESULT_FIXED_HEADERS = [
+  "指標代號",
+  "受審單位",
+  "審查月份",
+  "審查員",
+  "受審人員職編",
+  "床號",
+];
+
+const RESULT_HEADER_MAP: Record<string, string> = {
+  指標代號: "code",
+  編號: "code",
+  受審單位: "unitCode",
+  單位: "unitCode",
+  審查月份: "monthRaw",
+  月份: "monthRaw",
+  審查員: "reviewerId",
+  受審人員職編: "personEmpNo",
+  受審人員: "personEmpNo",
+  床號: "bedNo",
+};
+
+export interface ResultImportRowInput {
+  lineNo: number;
+  code: string;
+  unitCode: string;
+  monthRaw: string;
+  reviewerId: string;
+  personEmpNo: string;
+  bedNo: string;
+  /** 每題一欄（與題目順序對應；未填＝未答） */
+  answers: string[];
+}
+
+export interface ResultImportRowResult {
+  lineNo: number;
+  ok: boolean;
+  errors: string[];
+  values: {
+    code: string;
+    unitCode: string;
+    year: number;
+    month: number;
+    reviewerId: string;
+    personEmpNo: string;
+    bedNo: string;
+    answers: string[];
+  } | null;
+}
+
+/** 審查月份解析：接受 2026-11 / 2026/11（亦接受 2026.11）；其餘回傳 null */
+export function parseReviewMonth(
+  raw: string,
+): { year: number; month: number } | null {
+  const m = /^(\d{4})[-/.](\d{1,2})$/.exec(raw.trim());
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return null;
+  return { year, month };
+}
+
+/**
+ * 結果匯入檔解析：第一列標題列（前 6 欄固定、其後為題目欄）。
+ * 回傳 headerErrors（標題列不符＝整檔中止）與資料列。
+ */
+export function parseResultSheet(rows: string[][]): {
+  headerErrors: string[];
+  data: ResultImportRowInput[];
+} {
+  if (rows.length === 0)
+    return { headerErrors: ["檔案為空，請使用範本格式"], data: [] };
+  const { col } = mapHeaders(rows[0], RESULT_HEADER_MAP);
+  const required = ["code", "unitCode", "monthRaw"];
+  const missingRequired = required.filter((k) => col[k] === undefined);
+  if (missingRequired.length > 0) {
+    const labels = ["指標代號", "受審單位", "審查月份"];
+    return {
+      headerErrors: [
+        `缺少欄位：${missingRequired
+          .map((k) => labels[required.indexOf(k)])
+          .join("、")}（請下載範本對照標題列）`,
+      ],
+      data: [],
+    };
+  }
+  const data: ResultImportRowInput[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const get = (k: string) => r[col[k]] ?? "";
+    if (r.every((c) => c.trim() === "")) continue;
+    data.push({
+      lineNo: i + 1,
+      code: get("code"),
+      unitCode: get("unitCode"),
+      monthRaw: get("monthRaw"),
+      reviewerId: get("reviewerId"),
+      personEmpNo: get("personEmpNo"),
+      bedNo: get("bedNo"),
+      answers: r.slice(6).map((c) => c.trim()),
+    });
+  }
+  return { headerErrors: [], data };
+}
+
+/**
+ * 結果匯入驗證（v1.21.0）：
+ * - 檔案級預檢：全部列指標代號須等於所選指標 code；題數（欄數-6）須等於
+ *   該指標題目數；任一不符即整檔中止（fileErrors 非空）。
+ * - 逐列：受審單位須存在、審查月份須合法、審查員職編須存在（未填留空）、
+ *   各題答案須為 是／否／不適用（未填＝未答）；任一不符該列跳過。
+ */
+export function validateResultSheet(
+  data: ResultImportRowInput[],
+  ctx: {
+    code: string;
+    questionCount: number;
+    unitHas: (code: string) => boolean;
+    staffHas: (id: string) => boolean;
+    staffLoaded: boolean;
+  },
+): { fileErrors: string[]; rows: ResultImportRowResult[] } {
+  const fileErrors: string[] = [];
+  const badCode = data.filter((r) => r.code.trim() !== ctx.code);
+  if (badCode.length > 0) {
+    fileErrors.push(
+      `指標代號須全部等於 ${ctx.code}（第 ${badCode
+        .map((r) => r.lineNo)
+        .join("、")} 列不符），已中止全部匯入`,
+    );
+  }
+  const badCount = data.filter((r) => r.answers.length !== ctx.questionCount);
+  if (badCount.length > 0) {
+    fileErrors.push(
+      `題數須為 ${ctx.questionCount} 題（總欄數-6；第 ${badCount
+        .map((r) => r.lineNo)
+        .join("、")} 列欄數不符），已中止全部匯入`,
+    );
+  }
+  if (fileErrors.length > 0)
+    return {
+      fileErrors,
+      rows: data.map((r) => ({
+        lineNo: r.lineNo,
+        ok: false,
+        errors: fileErrors,
+        values: null,
+      })),
+    };
+  const rows = data.map((r) => {
+    const errors: string[] = [];
+    const unitCode = r.unitCode.trim();
+    if (!unitCode) errors.push("受審單位未填");
+    else if (!ctx.unitHas(unitCode)) errors.push(`受審單位 ${unitCode} 不存在`);
+    const ym = parseReviewMonth(r.monthRaw);
+    if (!ym) errors.push(`審查月份「${r.monthRaw || "（空白）"}」格式須為 2026-11`);
+    const reviewerId = r.reviewerId.trim();
+    if (reviewerId && ctx.staffLoaded && !ctx.staffHas(reviewerId))
+      errors.push(`審查員職編 ${reviewerId} 不存在`);
+    const badAnswers = r.answers.filter(
+      (a) => a !== "" && a !== "是" && a !== "否" && a !== "不適用",
+    );
+    if (badAnswers.length > 0)
+      errors.push(`答案須為 是／否／不適用：${badAnswers.join("、")}`);
+    if (errors.length > 0 || !ym)
+      return { lineNo: r.lineNo, ok: false, errors, values: null };
+    return {
+      lineNo: r.lineNo,
+      ok: true,
+      errors: [],
+      values: {
+        code: ctx.code,
+        unitCode,
+        year: ym.year,
+        month: ym.month,
+        reviewerId,
+        personEmpNo: r.personEmpNo.trim(),
+        bedNo: r.bedNo.trim(),
+        answers: r.answers,
+      },
+    };
+  });
+  return { fileErrors: [], rows };
+}
+
+/** 結果匯入範本：前 6 欄固定＋每題一欄（標題＝題目文字），依所選指標即時產生 */
+export function resultTemplateRows(
+  code: string,
+  questions: string[],
+): string[][] {
+  return [
+    [...RESULT_FIXED_HEADERS, ...questions],
+    [
+      code,
+      "9A",
+      "2026-11",
+      "A12345",
+      "B67890",
+      "9A-01",
+      ...questions.map(() => "是"),
     ],
   ];
 }

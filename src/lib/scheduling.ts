@@ -12,6 +12,7 @@ import {
   writeBatch,
 } from "./db";
 import { logAudit } from "./audit";
+import { isReviewerRole } from "./roleIdentity";
 import {
   categoryLabel,
   monthToCalendarYear,
@@ -370,11 +371,12 @@ export function reviewerDocId(groupId: string, personId: string): string {
 export const UNCATEGORIZED_GROUP_ID = "__uncategorized__";
 
 /**
- * 人員儲存時是否應自動加入審查員名單（純函式）：roles 含「審查員」。
+ * 人員儲存時是否應自動加入審查員名單（純函式）：roles 含任一審查員身分。
  * 移除角色時，同步移除自動加入的「未分類」審查員（手動指派的不動）。
+ * v1.21：新舊審查員角色並認（審查員／品管組審查員／單位審查員）。
  */
 export function shouldAutoLinkReviewer(roles: string[]): boolean {
-  return roles.includes("審查員");
+  return isReviewerRole(roles);
 }
 
 /**

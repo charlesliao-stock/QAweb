@@ -1,6 +1,6 @@
 /**
  * 展示模式預載資料（新資料模型）。
- * collectionPath → { docId: data }；子集合 path 如 "indicators/QI-001/versions"
+ * collectionPath → { docId: data }；子集合 path 如 "indicators/g-ward__QI-001/versions"
  */
 import {
   DEFAULT_SYSTEM_PARAMS,
@@ -235,7 +235,9 @@ export function getDemoData(): Record<string, Record<string, unknown>> {
       },
     },
     indicators: {
-      "QI-001": {
+      // v1.21：文件 ID 改複合 ID `${groupId}__${code}`；code 另存欄位供顯示
+      "g-ward__QI-001": {
+        code: "QI-001",
         name: "護理人員給藥作業正確率",
         groupId: "g-ward",
         owners: ["B67890"],
@@ -248,7 +250,8 @@ export function getDemoData(): Record<string, Record<string, unknown>> {
         requireBedNo: false,
         requireReviewee: true,
       },
-      "QI-002": {
+      "g-ward__QI-002": {
+        code: "QI-002",
         name: "手部衛生遵從率",
         groupId: "g-ward",
         owners: ["B67890"],
@@ -262,7 +265,7 @@ export function getDemoData(): Record<string, Record<string, unknown>> {
         requireReviewee: true,
       },
     },
-    "indicators/QI-001/versions": {
+    "indicators/g-ward__QI-001/versions": {
       "v1.0": {
         version: "v1.0",
         status: "啟用",
@@ -273,7 +276,7 @@ export function getDemoData(): Record<string, Record<string, unknown>> {
         note: "初版",
       },
     },
-    "indicators/QI-002/versions": {
+    "indicators/g-ward__QI-002/versions": {
       "v1.0": {
         version: "v1.0",
         status: "啟用",

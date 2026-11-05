@@ -65,6 +65,18 @@ export const DEFAULT_ROLE_PERMS: Record<string, RolePermissions> = {
   指標負責人: { resultQuery: true },
   /** 召集人（v1.16.0）：可建立／改派排程（分組限縮下一版再加） */
   召集人: { resultQuery: true, manageSchedule: true },
+  // v1.21：新角色預設權限＝對應舊角色（單位級無排程權限）
+  品管組審查員: { resultQuery: true, viewPhotos: true, editSubmitted: true },
+  單位審查員: { resultQuery: true, viewPhotos: true, editSubmitted: true },
+  品管組召集人: { resultQuery: true, manageSchedule: true },
+  品管組執行幹事: {
+    resultQuery: true,
+    viewPhotos: true,
+    manageSchedule: true,
+    editSubmitted: true,
+  },
+  單位召集人: { resultQuery: true },
+  單位執行幹事: { resultQuery: true, viewPhotos: true, editSubmitted: true },
 };
 
 /** 防禦性解析 roles/titles 文件的 permissions 欄位 */

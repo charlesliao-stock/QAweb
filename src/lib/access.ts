@@ -49,6 +49,29 @@ export const ROLE_PAGES: Record<Role, readonly PageId[]> = {
     "admin",
   ],
   指標負責人: ["dashboard", "indicators", "schedule", "results", "capa"],
+  // v1.21：新角色（展示用導覽對照；正式授權見 lib/roleIdentity）
+  品管組召集人: [
+    "dashboard",
+    "indicators",
+    "schedule",
+    "audit",
+    "results",
+    "capa",
+    "groups",
+  ],
+  品管組執行幹事: [
+    "dashboard",
+    "indicators",
+    "schedule",
+    "audit",
+    "results",
+    "capa",
+    "groups",
+  ],
+  品管組審查員: ["dashboard", "schedule", "audit", "results"],
+  單位召集人: ["dashboard", "schedule", "audit", "results"],
+  單位執行幹事: ["dashboard", "schedule", "audit", "results"],
+  單位審查員: ["dashboard", "schedule", "audit", "results"],
 };
 
 export function canView(role: Role, page: PageId): boolean {
