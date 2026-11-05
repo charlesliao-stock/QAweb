@@ -128,30 +128,6 @@ function fmtPct(p: number | null): string {
   return p == null ? "—" : `${p}%`;
 }
 
-function calendarYearFor(
-  sched: IndicatorSchedule,
-  month: number,
-  now: Date,
-): number {
-  if (sched.category === "temp" && sched.refYear != null) return sched.refYear;
-  if (sched.category === "academic") {
-    const p = parseInt(sched.period, 10);
-    const roc = Number.isFinite(p)
-      ? p
-      : now.getMonth() + 1 >= 8
-        ? now.getFullYear() - 1911
-        : now.getFullYear() - 1912;
-    return month >= 8 ? roc + 1911 : roc + 1912;
-  }
-  if (sched.category === "temp") {
-    const t = Number(sched.period);
-    if (Number.isFinite(t) && t > 0) return new Date(t).getFullYear();
-    return now.getFullYear();
-  }
-  const y = parseInt(sched.period, 10);
-  return Number.isFinite(y) ? y : now.getFullYear();
-}
-
 function schedLike(s: IndicatorSchedule) {
   return {
     category: s.category,
@@ -423,10 +399,14 @@ export function AuditPage({
             intervalMonthKeys: keys,
           });
           if (isProgressComplete(progress)) continue; // 已達 100%
-          const monthOptions: MonthOption[] = s.months.map((m) => {
-            const y = calendarYearFor(s, m, today);
-            return { month: m, year: y, label: `${y}年${m}月` };
-          });
+          // v1.23：區間內每個月皆為審查月（不再只有起始月）
+          const monthOptions: MonthOption[] = iv.reviewMonths.map(
+            ({ year, month }) => ({
+              month,
+              year,
+              label: `${year}年${month}月`,
+            }),
+          );
           out.push({
             sched: s,
             indicatorId: s.indicatorId,

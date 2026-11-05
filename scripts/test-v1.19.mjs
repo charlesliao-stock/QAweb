@@ -73,11 +73,12 @@ const sYear = {
       eq(ivs[3].end, { year: 2026, month: 12 }),
   );
   assert(
-    "年度4+3：審查月為起始月",
-    eq(
-      ivs[3].reviewMonths,
-      [{ year: 2026, month: 10 }],
-    ),
+    "年度4+3：審查月為區間內全部月份（v1.23：不再只有起始月）",
+    eq(ivs[3].reviewMonths, [
+      { year: 2026, month: 10 },
+      { year: 2026, month: 11 },
+      { year: 2026, month: 12 },
+    ]),
   );
   assert(
     "年度4+3：顯示「2026/1-3」",
