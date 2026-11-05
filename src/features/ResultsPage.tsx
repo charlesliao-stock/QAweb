@@ -1,11 +1,22 @@
 /**
- * 結果分析頁（v1.13.0：佔位文字改為真實串接）。
- * 三區塊：指標趨勢（月平均正確率折線）、達標統計（各指標 RAG）、結果明細（各單位＋查看）。
- * 資料歸屬依排程月份（reviewTasks.year/month）與單位代號；權限用 can("resultQuery") gating；
- * 資料範圍：管理員全部、審查員只看自己負責單位、一般人員只看自己單位。
+ * 結果分析頁（v1.25.0：取代舊畫面）。
+ * 四個頁籤：組別分析、單位分析、指標分析、結果匯入。
+ * 期間模型：年別／年份（起算年）／年數（往後數）／區間（季／年）／子選項
+ * （季→第一～四季；年→半年／一年），矩陣欄＝期間欄。
+ * 達閾值＝紀錄 rate ≥ 指標閾值（紀錄無自帶達標旗標，一律以當前閾值計算；
+ * 匯入紀錄同樣計入）；人次率＝合併計算，單位彙總率＝各單位率平均。
+ * 權限：can("resultQuery")；資料範圍：管理員全部、審查員只看負責單位、
+ * 一般人員只看自己單位（沿用舊頁規則）。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Download, Upload, X } from "lucide-react";
+import {
+  ChevronDown,
+  Download,
+  FileText,
+  TrendingUp,
+  Upload,
+  X,
+} from "lucide-react";
 import {
   collection,
   doc,
@@ -16,10 +27,9 @@ import {
   where,
   writeBatch,
 } from "../lib/db";
-import { getFirebaseDb, toFirebaseProfile } from "../lib/firebase";
+import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
 import { usePermissions } from "../lib/usePermissions";
-import { isDemoMode } from "../lib/demoMode";
 import {
   effectiveThreshold,
   indicatorCodeOf,
@@ -35,53 +45,107 @@ import {
   validateResultSheet,
 } from "../lib/import";
 import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
-import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
+import { EmptyState, PageHeading, SectionTitle, SummaryCell } from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
-import { ReviewExecutePage } from "./ReviewExecutePage";
-import { QuarterResults } from "./QuarterResults";
-import type { Indicator as LegacyIndicator, Role } from "../types";
 import {
-  filterByScope,
-  indicatorMonthStats,
-  monthlyTrend,
-  unitMonthRows,
-  type AnalysisTask,
-  type DataScope,
-  type RagState,
-  type RateRecord,
-  type StatsCycle,
-} from "../lib/resultAnalysis";
-import { academicYearOf } from "../lib/cycle";
+  calendarYearsOf,
+  currentQuarterSub,
+  expandAnalysisColumns,
+  type AnalysisCycle,
+  type AnalysisInterval,
+  type AnalysisPeriodColumn,
+  type QuarterSub,
+  type YearSub,
+} from "../lib/analysisPeriod";
+import {
+  averageUnitPassRate,
+  optionDetailRows,
+  passRateOf,
+  recordsInMonths,
+  type AnalysisRecord,
+  type OptionDetailRow,
+} from "../lib/analysisRates";
+import { YEAR_FILTER_OPTIONS, yearOptionLabel } from "../lib/scheduling";
 
 interface IndicatorOpt {
   id: string;
-  /** 顯示用編號（由複合文件 ID 解析；v1.21） */
   code: string;
   name: string;
   groupId: string;
   status: string;
   threshold: number;
-  /** 審查表題目（匯入範本與計分用） */
   questions: AuditQuestion[];
 }
 
-function RagDot({ state, label }: { state: RagState; label: string }) {
+interface GroupOpt {
+  id: string;
+  name: string;
+}
+
+interface UnitOpt {
+  code: string;
+  name: string;
+  groupId: string;
+}
+
+type TabId = "group" | "unit" | "indicator" | "import";
+type UnitMode = "person" | "unit";
+
+interface CellValue {
+  rate: number | null;
+  title: string;
+}
+
+interface ChartModalData {
+  title: string;
+  subtitle: string;
+  values: number[];
+  labels: string[];
+}
+
+interface DocModalData {
+  title: string;
+  subtitle: string;
+  rows: OptionDetailRow[];
+}
+
+const QUARTER_LABELS: Record<QuarterSub, string> = {
+  1: "第一季",
+  2: "第二季",
+  3: "第三季",
+  4: "第四季",
+};
+
+function fmtRate(rate: number | null): string {
+  return rate == null ? "—" : `${rate.toFixed(1)}%`;
+}
+
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string | number;
+  onChange: (v: string) => void;
+  options: { value: string | number; label: string }[];
+}) {
   return (
-    <span className={`rag-badge rag-${state}`}>
-      <i />
+    <label className="field-label">
       {label}
-    </span>
+      <div className="select-wrap">
+        <select value={value} onChange={(e) => onChange(e.target.value)}>
+          {options.map((o) => (
+            <option key={String(o.value)} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown size={15} />
+      </div>
+    </label>
   );
-}
-
-function unitRagLabel(avgRate: number | null, threshold: number): string {
-  if (avgRate == null) return "無資料";
-  if (!(threshold > 0)) return "無閾值";
-  return avgRate >= threshold ? "達標" : "未達標";
-}
-
-function statRagLabel(state: RagState): string {
-  return state === "green" ? "全數達標" : state === "red" ? "有未達標" : "無資料";
 }
 
 export function ResultsPage({
@@ -93,133 +157,217 @@ export function ResultsPage({
   const { can } = usePermissions();
   const now = new Date();
   const [indicators, setIndicators] = useState<IndicatorOpt[]>([]);
-  const [tasks, setTasks] = useState<AnalysisTask[]>([]);
-  const [records, setRecords] = useState<RateRecord[]>([]);
-  const [years, setYears] = useState<number[]>([]);
-  const [selIndicator, setSelIndicator] = useState("");
-  const [selYear, setSelYear] = useState(now.getFullYear());
-  const [selMonth, setSelMonth] = useState(now.getMonth() + 1);
+  const [groups, setGroups] = useState<GroupOpt[]>([]);
+  const [units, setUnits] = useState<UnitOpt[]>([]);
+  const [records, setRecords] = useState<AnalysisRecord[]>([]);
+  const [tasks, setTasks] = useState<
+    { id: string; unitId: string; reviewerId: string }[]
+  >([]);
   const [loading, setLoading] = useState(true);
-  const [viewingTaskId, setViewingTaskId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"overview" | "quarterly">("overview");
-  /** 匯入品管審查結果 dialog 開關（v1.21） */
-  const [importOpen, setImportOpen] = useState(false);
-  /** 匯入後重讀任務／紀錄的觸發器 */
   const [reloadNonce, setReloadNonce] = useState(0);
-  /** 統計週期（系統參數 systemParams.statsCycle；缺值預設 'year'） */
-  const [statsCycle, setStatsCycle] = useState<StatsCycle>("year");
+  const [tab, setTab] = useState<TabId>("group");
+  /** 統計週期（系統參數 systemParams.statsCycle；載入後套為年別預設） */
+  const [statsCycle, setStatsCycle] = useState<AnalysisCycle | null>(null);
+  const statsAppliedRef = useRef(false);
 
-  // 統計週期：讀系統參數（沿用既有 systemParams/config 讀法）
-  useEffect(() => {
-    (async () => {
-      try {
-        const snap = await getDoc(
-          doc(getFirebaseDb(), "systemParams", "config"),
-        );
-        const v = snap.data()?.statsCycle;
-        setStatsCycle(v === "academic" ? "academic" : "year");
-      } catch {
-        setStatsCycle("year");
-      }
-    })();
-  }, []);
+  // 期間篩選（四個頁籤共用）
+  const [cycle, setCycle] = useState<AnalysisCycle>("year");
+  const [startYear, setStartYear] = useState(now.getFullYear());
+  const [yearCount, setYearCount] = useState(1);
+  const [interval, setInterval] = useState<AnalysisInterval>("quarter");
+  const [sub, setSub] = useState<QuarterSub | YearSub>(
+    currentQuarterSub("year"),
+  );
+  // 組別分析
+  const [selGroup, setSelGroup] = useState("");
+  const [groupUnit, setGroupUnit] = useState<UnitMode>("person");
+  // 單位分析
+  const [selUnit, setSelUnit] = useState("");
+  // 指標分析
+  const [selGroup2, setSelGroup2] = useState("");
+  const [selIndicator, setSelIndicator] = useState("");
+  const [indUnit, setIndUnit] = useState<UnitMode>("person");
+  // Modal
+  const [chartModal, setChartModal] = useState<ChartModalData | null>(null);
+  const [docModal, setDocModal] = useState<DocModalData | null>(null);
 
-  const scope: DataScope = useMemo(() => {
+  // 資料範圍（沿用舊頁規則）
+  const scope = useMemo(() => {
     const roles = user?.roles ?? [];
-    if (roles.includes("系統管理員")) return { kind: "admin" };
+    if (roles.includes("系統管理員")) return { kind: "admin" as const };
     if (user && isReviewerRole(roles))
-      return { kind: "reviewer", staffId: user.staffId };
-    if (user) return { kind: "staff", unitCode: user.unitCode };
-    return { kind: "admin" };
+      return { kind: "reviewer" as const, staffId: user.staffId };
+    if (user) return { kind: "staff" as const, unitCode: user.unitCode };
+    return { kind: "admin" as const };
   }, [user]);
 
-  // 指標清單（名稱＋閾值；v1.17 起達標判定吃基本資料閾值）
+  // 指標／組別／單位／統計週期（掛載時載入一次）
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         const db = getFirebaseDb();
-        const snap = await getDocs(collection(db, "indicators"));
+        const [isnap, gsnap, usnap, cfg] = await Promise.all([
+          getDocs(collection(db, "indicators")),
+          getDocs(collection(db, "groups")),
+          getDocs(collection(db, "units")),
+          getDoc(doc(getFirebaseDb(), "systemParams", "config")).catch(
+            () => null,
+          ),
+        ]);
+        if (cancelled) return;
         const list: IndicatorOpt[] = [];
-        snap.docs.forEach((d) => {
+        isnap.docs.forEach((d) => {
           const data = d.data() as Record<string, unknown>;
-          const name =
-            typeof data.name === "string" && data.name ? data.name : d.id;
           list.push({
             id: d.id,
             code: indicatorCodeOf(d.id),
-            name,
+            name:
+              typeof data.name === "string" && data.name ? data.name : d.id,
             groupId: typeof data.groupId === "string" ? data.groupId : "",
             status: typeof data.status === "string" ? data.status : "",
             threshold: effectiveThreshold(data),
             questions: normalizeQuestions(data.questions).questions,
           });
         });
-        list.sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+        list.sort((a, b) => a.code.localeCompare(b.code, "zh-Hant"));
         setIndicators(list);
-        setSelIndicator((prev) => prev || list[0]?.id || "");
+        setGroups(
+          gsnap.docs
+            .map((d) => ({
+              id: d.id,
+              name:
+                typeof d.data().name === "string" ? d.data().name : d.id,
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant")),
+        );
+        setUnits(
+          usnap.docs
+            .map((d) => {
+              const data = d.data();
+              return {
+                code: d.id,
+                name: typeof data.name === "string" ? data.name : d.id,
+                groupId:
+                  typeof data.groupId === "string" ? data.groupId : "",
+              };
+            })
+            .sort((a, b) => a.code.localeCompare(b.code, "zh-Hant")),
+        );
+        const v = cfg?.data()?.statsCycle;
+        setStatsCycle(v === "academic" ? "academic" : "year");
       } catch {
-        setIndicators([]);
+        if (!cancelled) {
+          setIndicators([]);
+          setGroups([]);
+          setUnits([]);
+          setStatsCycle("year");
+        }
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // 任務＋逐件紀錄（依年度；單一 where 避免複合索引，範圍在前端過濾）
+  // 統計週期載入後套為年別預設（只套一次，不蓋掉使用者已改的值）
+  useEffect(() => {
+    if (statsCycle == null || statsAppliedRef.current) return;
+    statsAppliedRef.current = true;
+    setCycle(statsCycle);
+    if (interval === "quarter") setSub(currentQuarterSub(statsCycle));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statsCycle]);
+
+  // 期間欄（年份為起算年，年數往後數）
+  const columns = useMemo(
+    () =>
+      expandAnalysisColumns({
+        cycle,
+        startYear,
+        yearCount,
+        interval,
+        sub,
+      }),
+    [cycle, startYear, yearCount, interval, sub],
+  );
+  const queryYears = useMemo(() => calendarYearsOf(columns), [columns]);
+  const yearsKey = queryYears.join(",");
+  const allMonths = useMemo(
+    () => columns.flatMap((c) => c.months),
+    [columns],
+  );
+
+  // 審查紀錄（依期間欄涵蓋的曆年查詢；審查員範圍另查任務）
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
       try {
         const db = getFirebaseDb();
-        const [tsnap, rsnap] = await Promise.all([
-          getDocs(
-            query(collection(db, "reviewTasks"), where("year", "==", selYear)),
-          ),
-          getDocs(
-            query(
-              collection(db, "reviewRecords"),
-              where("year", "==", selYear),
+        const snaps = await Promise.all(
+          queryYears.map((y) =>
+            getDocs(
+              query(collection(db, "reviewRecords"), where("year", "==", y)),
             ),
           ),
-        ]);
+        );
+        const rl: AnalysisRecord[] = [];
+        snaps.forEach((snap) =>
+          snap.docs.forEach((d) => {
+            const v = d.data() as Record<string, unknown>;
+            const answers = Array.isArray(v.answers)
+              ? v.answers.map((a) => {
+                  const r = (a ?? {}) as Record<string, unknown>;
+                  return {
+                    questionId:
+                      typeof r.questionId === "string" ? r.questionId : "",
+                    itemText:
+                      typeof r.itemText === "string" ? r.itemText : "",
+                    optionLabel:
+                      typeof r.optionLabel === "string" ? r.optionLabel : "",
+                    score: typeof r.score === "number" ? r.score : 0,
+                    excluded: r.excluded === true,
+                  };
+                })
+              : [];
+            rl.push({
+              indicatorId: String(v.indicatorId ?? ""),
+              unitId: String(v.unitId ?? ""),
+              year: Number(v.year ?? 0),
+              month: Number(v.month ?? 0),
+              rate: typeof v.rate === "number" ? v.rate : null,
+              answers,
+            });
+          }),
+        );
+        let tl: { id: string; unitId: string; reviewerId: string }[] = [];
+        if (scope.kind === "reviewer") {
+          const tsnaps = await Promise.all(
+            queryYears.map((y) =>
+              getDocs(
+                query(collection(db, "reviewTasks"), where("year", "==", y)),
+              ),
+            ),
+          );
+          tsnaps.forEach((snap) =>
+            snap.docs.forEach((d) => {
+              const v = d.data() as Record<string, unknown>;
+              tl.push({
+                id: d.id,
+                unitId: String(v.unitId ?? ""),
+                reviewerId: String(v.reviewerId ?? ""),
+              });
+            }),
+          );
+        }
         if (cancelled) return;
-        const tl: AnalysisTask[] = [];
-        tsnap.docs.forEach((d) => {
-          const v = d.data() as Record<string, unknown>;
-          tl.push({
-            id: d.id,
-            indicatorId: String(v.indicatorId ?? ""),
-            unitId: String(v.unitId ?? ""),
-            reviewerId: String(v.reviewerId ?? ""),
-            year: Number(v.year ?? 0),
-            month: Number(v.month ?? 0),
-            caseCount:
-              typeof v.caseCount === "number" && v.caseCount >= 1
-                ? v.caseCount
-                : null,
-          });
-        });
-        const rl: RateRecord[] = [];
-        rsnap.docs.forEach((d) => {
-          const v = d.data() as Record<string, unknown>;
-          rl.push({
-            taskId:
-              typeof v.taskId === "string" && v.taskId ? v.taskId : d.id,
-            indicatorId: String(v.indicatorId ?? ""),
-            unitId: String(v.unitId ?? ""),
-            year: Number(v.year ?? selYear),
-            month: Number(v.month ?? 0),
-            rate: typeof v.rate === "number" ? v.rate : null,
-          });
-        });
-        const ys = [...new Set(tl.map((t) => t.year))].sort((a, b) => b - a);
-        if (!ys.includes(now.getFullYear())) ys.unshift(now.getFullYear());
-        setYears(ys);
-        setTasks(tl);
         setRecords(rl);
+        setTasks(tl);
       } catch {
         if (!cancelled) {
-          setTasks([]);
           setRecords([]);
+          setTasks([]);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -229,106 +377,204 @@ export function ResultsPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selYear, reloadNonce]);
+  }, [yearsKey, reloadNonce, scope.kind, scope.kind === "reviewer" ? scope.staffId : ""]);
 
-  const scoped = useMemo(
-    () => filterByScope(tasks, records, scope),
-    [tasks, records, scope],
-  );
-  const thresholds = useMemo(
-    () => new Map(indicators.map((i) => [i.id, i.threshold])),
-    [indicators],
-  );
-  const selInd = indicators.find((i) => i.id === selIndicator);
-  /** 趨勢的週期鍵：年度＝西元年；學年度＝包含所選曆年月的學年度 */
-  const trendPeriod = useMemo(
-    () =>
-      statsCycle === "academic"
-        ? String(academicYearOf(new Date(selYear, selMonth - 1, 1)))
-        : String(selYear),
-    [statsCycle, selYear, selMonth],
-  );
-  const trendScopeLabel =
-    statsCycle === "academic"
-      ? `${trendPeriod}學年度各月份平均正確率`
-      : `${selYear}年各月份平均正確率`;
-  const trend = useMemo(
-    () => monthlyTrend(scoped.records, selIndicator, statsCycle, trendPeriod),
-    [scoped, selIndicator, statsCycle, trendPeriod],
-  );
-  const stats = useMemo(
-    () =>
-      indicatorMonthStats(
-        scoped.tasks,
-        scoped.records,
-        selYear,
-        selMonth,
-        thresholds,
-        statsCycle,
-      ),
-    [scoped, selYear, selMonth, thresholds, statsCycle],
-  );
-  const rows = useMemo(
-    () =>
-      unitMonthRows(
-        scoped.tasks,
-        scoped.records,
-        selIndicator,
-        selYear,
-        selMonth,
-        selInd?.threshold ?? 0,
-      ),
-    [scoped, selIndicator, selYear, selMonth, selInd],
-  );
-  const indNameOf = useMemo(
-    () => new Map(indicators.map((i) => [i.id, i.name])),
-    [indicators],
+  // 範圍內紀錄（依權限範圍過濾）
+  const scopedRecords = useMemo(() => {
+    if (scope.kind === "admin") return records;
+    if (scope.kind === "staff")
+      return records.filter((r) => r.unitId === scope.unitCode);
+    const unitIds = new Set(
+      tasks
+        .filter((t) => t.reviewerId === scope.staffId)
+        .map((t) => t.unitId),
+    );
+    return records.filter((r) => unitIds.has(r.unitId));
+  }, [records, tasks, scope]);
+
+  const scopedUnitCodes = useMemo(() => {
+    if (scope.kind === "admin") return new Set(units.map((u) => u.code));
+    if (scope.kind === "staff") return new Set([scope.unitCode]);
+    return new Set(
+      tasks
+        .filter((t) => t.reviewerId === scope.staffId)
+        .map((t) => t.unitId),
+    );
+  }, [units, tasks, scope]);
+
+  const scopedUnits = useMemo(
+    () => units.filter((u) => scopedUnitCodes.has(u.code)),
+    [units, scopedUnitCodes],
   );
 
-  // 季度分析 tab：把新版指標對應到舊版 Indicator 形狀
-  const primaryRole: Role = useMemo(() => {
-    const first = user?.roles?.[0];
-    const known: Role[] = [
-      "一般人員",
-      "審查員",
-      "護理長",
-      "主任",
-      "副主任",
-      "督導",
-      "各組召集人",
-      "執行幹事",
-      "品管執行幹事",
-      "系統管理員",
-      "指標負責人",
-      "品管組召集人",
-      "品管組執行幹事",
-      "品管組審查員",
-      "單位召集人",
-      "單位執行幹事",
-      "單位審查員",
-    ];
-    return first && (known as string[]).includes(first)
-      ? (first as Role)
-      : "一般人員";
-  }, [user]);
-  const quarterlyIndicators: LegacyIndicator[] = useMemo(
-    () =>
-      indicators.map((i) => ({
-        id: i.id,
-        code: i.code,
-        name: i.name,
-        group: "未分類",
-        threshold: i.threshold,
-        attainment: 0,
-        audited: 0,
-        planned: 0,
-        version: "",
-        status: "啟用" as const,
-        owner: "",
-        resultLabel: "符合率",
-      })),
+  const scopedGroups = useMemo(() => {
+    if (scope.kind === "admin") return groups;
+    const gids = new Set(scopedUnits.map((u) => u.groupId).filter(Boolean));
+    const list = groups.filter((g) => gids.has(g.id));
+    return list.length > 0 ? list : groups;
+  }, [groups, scopedUnits, scope]);
+
+  // 選項預設（資料載入後補）
+  useEffect(() => {
+    if (scopedGroups.length > 0 && !scopedGroups.some((g) => g.id === selGroup))
+      setSelGroup(scopedGroups[0].id);
+  }, [scopedGroups, selGroup]);
+  useEffect(() => {
+    if (scopedGroups.length > 0 && !scopedGroups.some((g) => g.id === selGroup2))
+      setSelGroup2(scopedGroups[0].id);
+  }, [scopedGroups, selGroup2]);
+  useEffect(() => {
+    if (scopedUnits.length > 0 && !scopedUnits.some((u) => u.code === selUnit))
+      setSelUnit(scopedUnits[0].code);
+  }, [scopedUnits, selUnit]);
+
+  const indOf = useMemo(
+    () => new Map(indicators.map((i) => [i.id, i])),
     [indicators],
   );
+  const unitNameOf = useMemo(
+    () => new Map(units.map((u) => [u.code, u.name])),
+    [units],
+  );
+  const groupNameOf = useMemo(
+    () => new Map(groups.map((g) => [g.id, g.name])),
+    [groups],
+  );
+
+  const groupIndicators = useMemo(
+    () => indicators.filter((i) => i.groupId === selGroup),
+    [indicators, selGroup],
+  );
+  const indTabIndicators = useMemo(
+    () => indicators.filter((i) => i.groupId === selGroup2),
+    [indicators, selGroup2],
+  );
+  useEffect(() => {
+    if (
+      indTabIndicators.length > 0 &&
+      !indTabIndicators.some((i) => i.id === selIndicator)
+    )
+      setSelIndicator(indTabIndicators[0].id);
+  }, [indTabIndicators, selIndicator]);
+
+  // 單位分析：該單位在所選期間審查過的指標（依編號排序）
+  const unitIndicators = useMemo(() => {
+    const periodRecs = recordsInMonths(
+      scopedRecords.filter((r) => r.unitId === selUnit),
+      allMonths,
+    );
+    const ids = [...new Set(periodRecs.map((r) => r.indicatorId))];
+    return ids
+      .map((id) => indOf.get(id))
+      .filter((i): i is IndicatorOpt => i != null)
+      .sort((a, b) => a.code.localeCompare(b.code, "zh-Hant"));
+  }, [scopedRecords, selUnit, allMonths, indOf]);
+
+  // 期間說明文字（modal 副標共用）
+  const periodDesc = useMemo(() => {
+    const cycleLabel = cycle === "academic" ? "學年度" : "年度";
+    const subLabel =
+      interval === "quarter"
+        ? QUARTER_LABELS[sub as QuarterSub]
+        : sub === "half"
+          ? "半年"
+          : "一年";
+    return `${cycleLabel} ${startYear} 起 ${yearCount} 年・${subLabel}`;
+  }, [cycle, startYear, yearCount, interval, sub]);
+
+  function handleCycleChange(v: string) {
+    const c = v as AnalysisCycle;
+    setCycle(c);
+    if (interval === "quarter") setSub(currentQuarterSub(c));
+  }
+  function handleIntervalChange(v: string) {
+    const iv = v as AnalysisInterval;
+    setInterval(iv);
+    setSub(iv === "quarter" ? currentQuarterSub(cycle) : "full");
+  }
+
+  /** 單格達閾值率（人次＝合併；單位＝各單位率平均） */
+  function cellValue(
+    indicatorId: string,
+    col: AnalysisPeriodColumn,
+    unitId: string | undefined,
+    mode: UnitMode,
+  ): CellValue {
+    const ind = indOf.get(indicatorId);
+    const th = ind?.threshold ?? 0;
+    let recs = scopedRecords.filter((r) => r.indicatorId === indicatorId);
+    if (unitId) recs = recs.filter((r) => r.unitId === unitId);
+    recs = recordsInMonths(recs, col.months);
+    if (mode === "unit") {
+      const avg = averageUnitPassRate(recs, th);
+      return {
+        rate: avg.rate,
+        title:
+          avg.rate == null
+            ? "無資料"
+            : `各單位率平均（${avg.unitCount} 單位）`,
+      };
+    }
+    const pr = passRateOf(recs, th);
+    return {
+      rate: pr.rate,
+      title: pr.total === 0 ? "無資料" : `${pr.pass}/${pr.total}`,
+    };
+  }
+
+  /** 曲線圖數列（只取有資料的欄） */
+  function chartSeries(
+    indicatorId: string,
+    unitId: string | undefined,
+    mode: UnitMode,
+  ): { values: number[]; labels: string[] } {
+    const values: number[] = [];
+    const labels: string[] = [];
+    for (const col of columns) {
+      const c = cellValue(indicatorId, col, unitId, mode);
+      if (c.rate != null) {
+        values.push(c.rate);
+        labels.push(col.label);
+      }
+    }
+    return { values, labels };
+  }
+
+  function openChart(
+    indicatorId: string,
+    unitId: string | undefined,
+    mode: UnitMode,
+    scopeLabel: string,
+  ) {
+    const ind = indOf.get(indicatorId);
+    if (!ind) return;
+    const { values, labels } = chartSeries(indicatorId, unitId, mode);
+    setChartModal({
+      title: `${ind.code}・${ind.name} 達閾值率曲線`,
+      subtitle: `${periodDesc}・${scopeLabel}・${
+        mode === "unit" ? "單位（各單位率平均）" : "人次（合併）"
+      }`,
+      values,
+      labels,
+    });
+  }
+
+  function openDoc(
+    indicatorId: string,
+    unitId: string | undefined,
+    scopeLabel: string,
+  ) {
+    const ind = indOf.get(indicatorId);
+    if (!ind) return;
+    let recs = scopedRecords.filter((r) => r.indicatorId === indicatorId);
+    if (unitId) recs = recs.filter((r) => r.unitId === unitId);
+    recs = recordsInMonths(recs, allMonths);
+    setDocModal({
+      title: `${ind.code}・${ind.name} 各選項得分狀況`,
+      subtitle: `${periodDesc}・${scopeLabel}・共 ${recs.length} 人次`,
+      rows: optionDetailRows(recs, ind.questions),
+    });
+  }
 
   if (!can("resultQuery")) {
     return (
@@ -342,312 +588,523 @@ export function ResultsPage({
     );
   }
 
-  // 明細「查看」→ 該單位該月查詢頁（沿用審查執行的查詢模式）
-  if (viewingTaskId) {
-    return (
-      <ReviewExecutePage
-        target={{ mode: "records", taskId: viewingTaskId }}
-        onBack={() => setViewingTaskId(null)}
-        onAction={onAction}
-      />
+  // 指標分析：所選期間內有使用該指標審查的人員、單位皆列入
+  const indRecs = useMemo(() => {
+    if (!selIndicator) return [];
+    return recordsInMonths(
+      scopedRecords.filter((r) => r.indicatorId === selIndicator),
+      allMonths,
     );
-  }
-
-  const trendValues = trend.map((t) => t.rate);
-  const trendLabels = trend.map((t) => t.label);
+  }, [scopedRecords, selIndicator, allMonths]);
+  const indSel = indOf.get(selIndicator);
+  const indSummary = useMemo(() => {
+    if (!indSel) return null;
+    const th = indSel.threshold;
+    const unitIds = new Set(indRecs.map((r) => r.unitId));
+    const avg = averageUnitPassRate(indRecs, th);
+    const merged = passRateOf(indRecs, th);
+    const perColumn =
+      indUnit === "unit"
+        ? columns.map((c) => {
+            const recs = recordsInMonths(indRecs, c.months);
+            return averageUnitPassRate(recs, th).rate;
+          })
+        : columns.map((c) => {
+            const recs = recordsInMonths(indRecs, c.months);
+            return passRateOf(recs, th).rate;
+          });
+    const pts = columns
+      .map((c, i) => ({ label: c.label, value: perColumn[i] }))
+      .filter((p): p is { label: string; value: number } => p.value != null);
+    return {
+      unitCount: unitIds.size,
+      total: indRecs.length,
+      unitRate: avg.rate,
+      personRate: merged.rate,
+      chartValues: pts.map((p) => p.value),
+      chartLabels: pts.map((p) => p.label),
+      optionRows: optionDetailRows(indRecs, indSel.questions),
+    };
+  }, [indRecs, indSel, indUnit, columns]);
 
   return (
     <div className="results-page">
-      <PageHeading
-        page="results"
-        action={
-          <>
-            <button
-              className="button button-outline"
-              onClick={() => setImportOpen(true)}
-            >
-              <Upload size={16} />
-              匯入品管審查結果
-            </button>
-            <button
-              className="button button-outline"
-              onClick={() => onAction("報表匯出功能開發中")}
-            >
-              <Download size={16} />
-              匯出報表
-            </button>
-          </>
-        }
-      />
+      <PageHeading page="results" />
 
       <div className="results-tabs" role="tablist" aria-label="結果分析檢視">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "overview"}
-          className={tab === "overview" ? "active" : ""}
-          onClick={() => setTab("overview")}
-        >
-          分析總覽
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "quarterly"}
-          className={tab === "quarterly" ? "active" : ""}
-          onClick={() => setTab("quarterly")}
-        >
-          季度分析
-        </button>
+        {(
+          [
+            ["group", "組別分析"],
+            ["unit", "單位分析"],
+            ["indicator", "指標分析"],
+            ["import", "結果匯入"],
+          ] as [TabId, string][]
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            className={tab === id ? "active" : ""}
+            onClick={() => setTab(id)}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      {tab === "quarterly" ? (
-        <QuarterResults
-          indicators={quarterlyIndicators}
-          role={primaryRole}
-          firebaseMode={!isDemoMode()}
-          profile={toFirebaseProfile(user)}
-        />
-      ) : (
+      {tab !== "import" && (
+        <div className="results-filters">
+          <SelectField
+            label="年別"
+            value={cycle}
+            onChange={handleCycleChange}
+            options={[
+              { value: "year", label: "年度" },
+              { value: "academic", label: "學年度" },
+            ]}
+          />
+          <SelectField
+            label="年份"
+            value={startYear}
+            onChange={(v) => setStartYear(Number(v))}
+            options={YEAR_FILTER_OPTIONS.map((y) => ({
+              value: y,
+              label: yearOptionLabel(y),
+            }))}
+          />
+          <SelectField
+            label="年數"
+            value={yearCount}
+            onChange={(v) => setYearCount(Number(v))}
+            options={[1, 2, 3].map((n) => ({ value: n, label: `${n}年` }))}
+          />
+          <SelectField
+            label="區間"
+            value={interval}
+            onChange={handleIntervalChange}
+            options={[
+              { value: "quarter", label: "季" },
+              { value: "year", label: "年" },
+            ]}
+          />
+          {interval === "quarter" ? (
+            <SelectField
+              label="季"
+              value={sub}
+              onChange={(v) => setSub(Number(v) as QuarterSub)}
+              options={([1, 2, 3, 4] as QuarterSub[]).map((q) => ({
+                value: q,
+                label: QUARTER_LABELS[q],
+              }))}
+            />
+          ) : (
+            <SelectField
+              label="期間"
+              value={sub}
+              onChange={(v) => setSub(v as YearSub)}
+              options={[
+                { value: "half", label: "半年" },
+                { value: "full", label: "一年" },
+              ]}
+            />
+          )}
+        </div>
+      )}
+
+      {tab === "group" && (
         <>
           <div className="results-filters">
-        <label className="field-label">
-          指標
-          <div className="select-wrap">
-            <select
-              value={selIndicator}
-              onChange={(e) => setSelIndicator(e.target.value)}
-            >
-              {indicators.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={15} />
+            <SelectField
+              label="組別"
+              value={selGroup}
+              onChange={setSelGroup}
+              options={scopedGroups.map((g) => ({
+                value: g.id,
+                label: g.name,
+              }))}
+            />
+            <SelectField
+              label="單元"
+              value={groupUnit}
+              onChange={(v) => setGroupUnit(v as UnitMode)}
+              options={[
+                { value: "person", label: "人次" },
+                { value: "unit", label: "單位" },
+              ]}
+            />
           </div>
-        </label>
-        <label className="field-label">
-          年度
-          <div className="select-wrap">
-            <select
-              value={selYear}
-              onChange={(e) => setSelYear(Number(e.target.value))}
-            >
-              {years.map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={15} />
-          </div>
-        </label>
-        <label className="field-label">
-          月份
-          <div className="select-wrap">
-            <select
-              value={selMonth}
-              onChange={(e) => setSelMonth(Number(e.target.value))}
-            >
-              {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                <option key={m} value={m}>
-                  {m}月
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={15} />
-          </div>
-        </label>
-      </div>
+          {loading ? (
+            <EmptyState title="載入中" description="正在讀取審查紀錄…" />
+          ) : groupIndicators.length === 0 ? (
+            <EmptyState
+              title="無指標"
+              description="該組別尚無指標。"
+            />
+          ) : (
+            <section className="panel">
+              <SectionTitle
+                title={`${groupNameOf.get(selGroup) ?? selGroup}・達閾值率`}
+                note={`${periodDesc}・單元：${groupUnit === "unit" ? "單位（各單位率平均）" : "人次（合併）"}`}
+              />
+              <RateMatrix
+                rows={groupIndicators.map((i) => ({
+                  id: i.id,
+                  label: `${i.code}・${i.name}`,
+                }))}
+                columns={columns}
+                cellOf={(id, col) =>
+                  cellValue(id, col, undefined, groupUnit)
+                }
+                onChart={(id) =>
+                  openChart(id, undefined, groupUnit, "全部單位")
+                }
+                onDoc={(id) => openDoc(id, undefined, "全部單位")}
+              />
+            </section>
+          )}
+        </>
+      )}
 
-      {loading ? (
-        <EmptyState title="載入中" description="正在讀取審查紀錄…" />
-      ) : (
+      {tab === "unit" && (
         <>
-          <section className="panel">
-            <SectionTitle
-              title="指標趨勢"
-              note={selInd ? `${selInd.name}・${trendScopeLabel}` : undefined}
+          <div className="results-filters">
+            <SelectField
+              label="單位"
+              value={selUnit}
+              onChange={setSelUnit}
+              options={scopedUnits.map((u) => ({
+                value: u.code,
+                label: `${u.code}・${u.name}`,
+              }))}
             />
-            {trend.length === 0 ? (
-              <div className="chart-empty">尚無趨勢資料</div>
-            ) : (
-              <TrendChart
-                values={trendValues}
-                labels={trendLabels}
-                legend="平均正確率"
-                currentLabel={trend[trend.length - 1].label}
-              />
-            )}
-          </section>
-
-          <section className="panel">
-            <SectionTitle
-              title="達標統計"
-              note={`${statsCycle === "academic" ? `${trendPeriod}學年度・${selMonth}月` : `${selYear}年${selMonth}月`}・達標率＝達標單位數 ÷ 已完成單位數`}
+          </div>
+          {loading ? (
+            <EmptyState title="載入中" description="正在讀取審查紀錄…" />
+          ) : unitIndicators.length === 0 ? (
+            <EmptyState
+              title="無資料"
+              description="該單位在所選期間尚無審查紀錄。"
             />
-            {stats.length === 0 ? (
-              <EmptyState
-                title="無排程資料"
-                description="該月份尚無審查任務。"
+          ) : (
+            <section className="panel">
+              <SectionTitle
+                title={`${selUnit}・${unitNameOf.get(selUnit) ?? ""} 達閾值率`}
+                note={`${periodDesc}・單元：人次`}
               />
-            ) : (
-              <>
-                <div className="task-table-wrap">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>指標名稱</th>
-                        <th>應審單位數</th>
-                        <th>已完成單位數</th>
-                        <th>達標單位數</th>
-                        <th>達標率</th>
-                        <th>燈號</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stats.map((s) => (
-                        <tr key={s.indicatorId}>
-                          <td>{indNameOf.get(s.indicatorId) ?? s.indicatorId}</td>
-                          <td>{s.totalUnits}</td>
-                          <td>{s.doneUnits}</td>
-                          <td>{s.passUnits}</td>
-                          <td>
-                            {s.passRate == null ? "—" : `${s.passRate}%`}
-                          </td>
-                          <td>
-                            <RagDot state={s.rag} label={statRagLabel(s.rag)} />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="task-cards">
-                  {stats.map((s) => (
-                    <div className="task-card" key={s.indicatorId}>
-                      <div className="task-card-top">
-                        <b>{indNameOf.get(s.indicatorId) ?? s.indicatorId}</b>
-                        <RagDot state={s.rag} label={statRagLabel(s.rag)} />
-                      </div>
-                      <div className="task-card-meta">
-                        應審 {s.totalUnits}・已完成 {s.doneUnits}・達標{" "}
-                        {s.passUnits}・達標率{" "}
-                        {s.passRate == null ? "—" : `${s.passRate}%`}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </section>
-
-          <section className="panel">
-            <SectionTitle
-              title="結果明細"
-              note={
-                selInd
-                  ? `${selInd.name}・${selYear}年${selMonth}月各單位`
-                  : undefined
-              }
-            />
-            {rows.length === 0 ? (
-              <EmptyState
-                title="無資料"
-                description="該指標該月份尚無審查任務或紀錄。"
+              <RateMatrix
+                rows={unitIndicators.map((i) => ({
+                  id: i.id,
+                  label: `${i.code}・${i.name}`,
+                }))}
+                columns={columns}
+                cellOf={(id, col) =>
+                  cellValue(id, col, selUnit, "person")
+                }
+                onChart={(id) =>
+                  openChart(id, selUnit, "person", `單位：${selUnit}`)
+                }
+                onDoc={(id) => openDoc(id, selUnit, `單位：${selUnit}`)}
               />
-            ) : (
-              <>
-                <div className="task-table-wrap">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>審查單位</th>
-                        <th>完成/應審件數</th>
-                        <th>平均正確率</th>
-                        <th>達標燈號</th>
-                        <th>操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((r) => (
-                        <tr key={r.unitId}>
-                          <td>{r.unitId}</td>
-                          <td>
-                            {r.doneCount}/{r.required}
-                          </td>
-                          <td>
-                            {r.avgRate == null ? "—" : `${r.avgRate}%`}
-                          </td>
-                          <td>
-                            <RagDot
-                              state={r.rag}
-                              label={unitRagLabel(
-                                r.avgRate,
-                                selInd?.threshold ?? 0,
-                              )}
-                            />
-                          </td>
-                          <td>
-                            <button
-                              className="button button-outline button-sm"
-                              onClick={() => setViewingTaskId(r.taskId)}
-                              disabled={!r.taskId}
-                            >
-                              查看
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="task-cards">
-                  {rows.map((r) => (
-                    <div className="task-card" key={r.unitId}>
-                      <div className="task-card-top">
-                        <b>{r.unitId}</b>
-                        <RagDot
-                          state={r.rag}
-                          label={unitRagLabel(r.avgRate, selInd?.threshold ?? 0)}
-                        />
-                      </div>
-                      <div className="task-card-meta">
-                        完成/應審 {r.doneCount}/{r.required}・平均正確率{" "}
-                        {r.avgRate == null ? "—" : `${r.avgRate}%`}
-                      </div>
-                      <button
-                        className="button button-outline button-sm button-block"
-                        onClick={() => setViewingTaskId(r.taskId)}
-                        disabled={!r.taskId}
-                      >
-                        查看
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </section>
+            </section>
+          )}
         </>
       )}
+
+      {tab === "indicator" && (
+        <>
+          <div className="results-filters">
+            <SelectField
+              label="組別"
+              value={selGroup2}
+              onChange={setSelGroup2}
+              options={scopedGroups.map((g) => ({
+                value: g.id,
+                label: g.name,
+              }))}
+            />
+            <SelectField
+              label="指標"
+              value={selIndicator}
+              onChange={setSelIndicator}
+              options={indTabIndicators.map((i) => ({
+                value: i.id,
+                label: `${i.code}・${i.name}`,
+              }))}
+            />
+            <SelectField
+              label="單元"
+              value={indUnit}
+              onChange={(v) => setIndUnit(v as UnitMode)}
+              options={[
+                { value: "person", label: "人次" },
+                { value: "unit", label: "單位" },
+              ]}
+            />
+          </div>
+          {loading ? (
+            <EmptyState title="載入中" description="正在讀取審查紀錄…" />
+          ) : !indSel || !indSummary ? (
+            <EmptyState
+              title="無指標"
+              description="請先選擇組別與指標。"
+            />
+          ) : (
+            <>
+              <div className="analysis-stats">
+                <SummaryCell
+                  label="受審單位數"
+                  value={String(indSummary.unitCount)}
+                  note="所選期間內有紀錄的單位"
+                />
+                <SummaryCell
+                  label="受審總人次"
+                  value={String(indSummary.total)}
+                  note="所選期間內總人次數"
+                />
+                <SummaryCell
+                  label="單位正確率"
+                  value={fmtRate(indSummary.unitRate)}
+                  note="各單位率平均"
+                />
+                <SummaryCell
+                  label="人員正確率"
+                  value={fmtRate(indSummary.personRate)}
+                  note="合併人次率"
+                />
+              </div>
+              <section className="panel">
+                <SectionTitle
+                  title="通過率"
+                  note={`${indSel.code}・${indSel.name}・${periodDesc}・單元：${indUnit === "unit" ? "單位（各單位率平均）" : "人次（合併）"}`}
+                />
+                {indSummary.chartValues.length === 0 ? (
+                  <div className="chart-empty">尚無資料</div>
+                ) : (
+                  <TrendChart
+                    values={indSummary.chartValues}
+                    labels={indSummary.chartLabels}
+                    legend="正確率"
+                    currentLabel={
+                      indSummary.chartLabels[indSummary.chartLabels.length - 1]
+                    }
+                  />
+                )}
+              </section>
+              <section className="panel">
+                <SectionTitle
+                  title="指標選項審查明細"
+                  note={`${indSel.code}・${indSel.name}・${periodDesc}・共 ${indSummary.total} 人次`}
+                />
+                <OptionDetailTable rows={indSummary.optionRows} />
+              </section>
+            </>
+          )}
         </>
       )}
-      {importOpen && (
-        <ResultImportDialog
+
+      {tab === "import" && (
+        <ResultImportPanel
           indicators={indicators}
           user={user ? { staffId: user.staffId, name: user.name } : null}
           onAction={onAction}
-          onClose={() => setImportOpen(false)}
           onDone={() => setReloadNonce((n) => n + 1)}
         />
+      )}
+
+      {chartModal && (
+        <div
+          className="reviewer-modal-backdrop"
+          onClick={() => setChartModal(null)}
+        >
+          <div
+            className="reviewer-modal wide panel"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label={chartModal.title}
+          >
+            <div className="reviewer-modal-head">
+              <div>
+                <h2>{chartModal.title}</h2>
+                <p>{chartModal.subtitle}</p>
+              </div>
+              <button
+                className="button button-ghost"
+                onClick={() => setChartModal(null)}
+                aria-label="關閉"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {chartModal.values.length === 0 ? (
+              <div className="chart-empty">尚無資料</div>
+            ) : (
+              <TrendChart
+                values={chartModal.values}
+                labels={chartModal.labels}
+                legend="達閾值率"
+                currentLabel={
+                  chartModal.labels[chartModal.labels.length - 1]
+                }
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {docModal && (
+        <div
+          className="reviewer-modal-backdrop"
+          onClick={() => setDocModal(null)}
+        >
+          <div
+            className="reviewer-modal wide panel"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label={docModal.title}
+          >
+            <div className="reviewer-modal-head">
+              <div>
+                <h2>{docModal.title}</h2>
+                <p>{docModal.subtitle}</p>
+              </div>
+              <button
+                className="button button-ghost"
+                onClick={() => setDocModal(null)}
+                aria-label="關閉"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <OptionDetailTable rows={docModal.rows} />
+          </div>
+        </div>
       )}
     </div>
   );
 }
 
-/* ================= 品管審查結果匯入（v1.21.0） ================= */
+/* ================= 達閾值率矩陣（組別／單位分析共用） ================= */
+
+function RateMatrix({
+  rows,
+  columns,
+  cellOf,
+  onChart,
+  onDoc,
+}: {
+  rows: { id: string; label: string }[];
+  columns: AnalysisPeriodColumn[];
+  cellOf: (rowId: string, col: AnalysisPeriodColumn) => CellValue;
+  onChart: (rowId: string) => void;
+  onDoc: (rowId: string) => void;
+}) {
+  return (
+    <div className="analysis-table-wrap">
+      <table className="data-table analysis-matrix">
+        <thead>
+          <tr>
+            <th className="ind-col">指標</th>
+            {columns.map((c) => (
+              <th key={c.key} className="rate-col">
+                {c.label}
+              </th>
+            ))}
+            <th className="icon-col">曲線圖</th>
+            <th className="icon-col">明細</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.id}>
+              <td className="ind-col">{row.label}</td>
+              {columns.map((c) => {
+                const cell = cellOf(row.id, c);
+                return (
+                  <td key={c.key} className="rate-cell" title={cell.title}>
+                    {fmtRate(cell.rate)}
+                  </td>
+                );
+              })}
+              <td className="icon-col">
+                <button
+                  type="button"
+                  className="icon-button"
+                  title="曲線圖"
+                  aria-label={`${row.label} 曲線圖`}
+                  onClick={() => onChart(row.id)}
+                >
+                  <TrendingUp size={16} />
+                </button>
+              </td>
+              <td className="icon-col">
+                <button
+                  type="button"
+                  className="icon-button"
+                  title="各選項得分狀況"
+                  aria-label={`${row.label} 各選項得分狀況`}
+                  onClick={() => onDoc(row.id)}
+                >
+                  <FileText size={16} />
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ================= 各選項得分狀況表（文件圖示／指標選項明細共用） ================= */
+
+function OptionDetailTable({ rows }: { rows: OptionDetailRow[] }) {
+  if (rows.length === 0) {
+    return <EmptyState title="無題目" description="該指標尚無審核表題目。" />;
+  }
+  const hasData = rows.some((r) => r.total > 0);
+  const cell = (n: number, rate: number | null) =>
+    `${n}（${rate == null ? "—" : `${rate.toFixed(1)}%`}）`;
+  return (
+    <>
+      {!hasData && (
+        <p className="settings-note" role="status">
+          所選期間尚無審查紀錄。
+        </p>
+      )}
+      <div className="analysis-table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>題目</th>
+              <th>是</th>
+              <th>否</th>
+              <th>不適用</th>
+              <th>得分率</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.questionId}>
+                <td>
+                  {i + 1}. {r.itemText}
+                </td>
+                <td>{cell(r.yes, r.yesRate)}</td>
+                <td>{cell(r.no, r.noRate)}</td>
+                <td>{cell(r.na, r.naRate)}</td>
+                <td>{fmtRate(r.scoreRate)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+/* ================= 品管審查結果匯入（v1.21.0 邏輯原樣搬入頁籤） ================= */
 
 /**
  * 各指標審查結果匯入：選組別→選指標（只列啟用）→選檔匯入。
@@ -656,17 +1113,15 @@ export function ResultsPage({
  * 每列寫一筆 reviewRecord（source="import"，不自動建 reviewTasks），
  * 計入審核進度（unitId／year／month 參與進度計算）。
  */
-function ResultImportDialog({
+function ResultImportPanel({
   indicators,
   user,
   onAction,
-  onClose,
   onDone,
 }: {
   indicators: IndicatorOpt[];
   user: { staffId: string; name: string } | null;
   onAction: (m: string) => void;
-  onClose: () => void;
   onDone: () => void;
 }) {
   const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
@@ -852,113 +1307,89 @@ function ResultImportDialog({
   }
 
   return (
-    <div className="reviewer-modal-backdrop" onClick={onClose}>
-      <div
-        className="reviewer-modal panel"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="匯入品管審查結果"
-      >
-        <div className="reviewer-modal-head">
-          <div>
-            <h2>匯入品管審查結果</h2>
-            <p>
-              先選組別與指標（只列啟用），再選 Excel／CSV 檔匯入。預檢不符（指標代號或題數）即整檔中止；逐列未填忽略、非法值該列跳過。匯入的紀錄計入審核進度，不自動建立審查任務。
-            </p>
-          </div>
-          <button
-            className="button button-ghost"
-            onClick={onClose}
-            aria-label="關閉"
-          >
-            <X size={16} />
-          </button>
-        </div>
-        <div className="form-stack">
-          <div className="form-field">
-            <label className="field-label">組別</label>
-            <div className="select-wrap">
-              <select
-                value={selGroup}
-                onChange={(e) => handleGroupChange(e.target.value)}
-              >
-                <option value="">全部組別</option>
-                {groups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </div>
-          <div className="form-field">
-            <label className="field-label">指標（只列啟用）</label>
-            <div className="select-wrap">
-              <select
-                value={selIndicatorId}
-                onChange={(e) => handleIndicatorChange(e.target.value)}
-              >
-                <option value="">請選擇指標</option>
-                {enabledByGroup.map((i) => (
-                  <option key={i.id} value={i.id}>
-                    {i.code}・{i.name}（{i.questions.length} 題）
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
+    <section className="panel">
+      <SectionTitle
+        title="匯入品管審查結果"
+        note="先選組別與指標（只列啟用），再選 Excel／CSV 檔匯入。預檢不符（指標代號或題數）即整檔中止；逐列未填忽略、非法值該列跳過。匯入的紀錄計入審核進度，不自動建立審查任務。"
+      />
+      <div className="form-stack">
+        <div className="form-field">
+          <label className="field-label">組別</label>
+          <div className="select-wrap">
+            <select
+              value={selGroup}
+              onChange={(e) => handleGroupChange(e.target.value)}
+            >
+              <option value="">全部組別</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={15} />
           </div>
         </div>
-        <div className="batch-toolbar">
-          <button
-            className="button button-outline button-sm"
-            disabled={!selInd}
-            onClick={downloadCurrentTemplate}
-          >
-            <Download size={14} /> 下載範本（依該指標題目產生）
-          </button>
-          <button
-            className="button button-outline button-sm"
-            disabled={!selInd || busy}
-            onClick={() => fileRef.current?.click()}
-          >
-            <Upload size={14} /> 選擇檔案匯入
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            style={{ display: "none" }}
-            aria-label="匯入審查結果檔案"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (f) void handleImport(f);
-            }}
-          />
-        </div>
-        {summary && (
-          <p className="settings-note" role="status">
-            {summary}
-          </p>
-        )}
-        {errors.length > 0 && (
-          <div style={{ maxHeight: 160, overflow: "auto", marginBottom: 8 }}>
-            {errors.map((msg, i) => (
-              <div key={i} className="field-error">
-                {msg}
-              </div>
-            ))}
+        <div className="form-field">
+          <label className="field-label">指標（只列啟用）</label>
+          <div className="select-wrap">
+            <select
+              value={selIndicatorId}
+              onChange={(e) => handleIndicatorChange(e.target.value)}
+            >
+              <option value="">請選擇指標</option>
+              {enabledByGroup.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.code}・{i.name}（{i.questions.length} 題）
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={15} />
           </div>
-        )}
-        <div className="form-actions">
-          <button className="button button-outline" onClick={onClose}>
-            關閉
-          </button>
         </div>
       </div>
-    </div>
+      <div className="batch-toolbar">
+        <button
+          className="button button-outline button-sm"
+          disabled={!selInd}
+          onClick={downloadCurrentTemplate}
+        >
+          <Download size={14} /> 下載範本（依該指標題目產生）
+        </button>
+        <button
+          className="button button-outline button-sm"
+          disabled={!selInd || busy}
+          onClick={() => fileRef.current?.click()}
+        >
+          <Upload size={14} /> 選擇檔案匯入
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          style={{ display: "none" }}
+          aria-label="匯入審查結果檔案"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (f) void handleImport(f);
+          }}
+        />
+      </div>
+      {summary && (
+        <p className="settings-note" role="status">
+          {summary}
+        </p>
+      )}
+      {errors.length > 0 && (
+        <div style={{ maxHeight: 160, overflow: "auto", marginBottom: 8 }}>
+          {errors.map((msg, i) => (
+            <div key={i} className="field-error">
+              {msg}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

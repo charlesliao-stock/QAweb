@@ -4311,6 +4311,73 @@ button:disabled {
   color: #fff;
 }
 
+/* v1.25.0：結果分析矩陣（組別／單位／指標分析） */
+.analysis-table-wrap {
+  overflow-x: auto;
+}
+.analysis-matrix th.rate-col,
+.analysis-matrix td.rate-cell {
+  text-align: center;
+  white-space: nowrap;
+}
+.analysis-matrix th.ind-col,
+.analysis-matrix td.ind-col {
+  position: sticky;
+  left: 0;
+  background: var(--surface, #fff);
+  min-width: 220px;
+  box-shadow: 1px 0 0 var(--line, #e6ebec);
+}
+.analysis-matrix th.ind-col {
+  z-index: 2;
+}
+.analysis-matrix td.ind-col {
+  z-index: 1;
+}
+.analysis-matrix th.icon-col,
+.analysis-matrix td.icon-col {
+  text-align: center;
+  white-space: nowrap;
+}
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  color: #0f766e;
+  cursor: pointer;
+}
+.icon-button:hover {
+  border-color: #0f766e;
+  background: #f0fdfa;
+}
+.analysis-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 4px 0 16px;
+}
+@media (max-width: 720px) {
+  .analysis-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+:root[data-mode="dark"] .analysis-matrix th.ind-col,
+:root[data-mode="dark"] .analysis-matrix td.ind-col {
+  background: var(--surface, #1b2a2e);
+}
+:root[data-mode="dark"] .icon-button {
+  background: var(--surface, #1b2a2e);
+}
+:root[data-mode="dark"] .icon-button:hover {
+  background: #134e4a;
+}
+
 /* 季度分析 */
 .quarter-toolbar {
   display: flex;

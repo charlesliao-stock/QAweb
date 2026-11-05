@@ -150,10 +150,18 @@ t("無閾值(0)→gray 不判燈", ra.ragStatus(95, 0) === "gray");
 {
   const page = readFileSync("src/features/ResultsPage.tsx", "utf8");
   t("ResultsPage 用 resultQuery gating", page.includes('can("resultQuery")'));
-  t("ResultsPage 有指標/年/月篩選", page.includes("selIndicator") && page.includes("selYear") && page.includes("selMonth"));
+  t(
+    "ResultsPage 有期間篩選（v1.25.0）",
+    page.includes("startYear") &&
+      page.includes("yearCount") &&
+      page.includes("expandAnalysisColumns"),
+  );
   t("ResultsPage 渲染 TrendChart", page.includes("<TrendChart"));
-  t("ResultsPage 明細查看進查詢頁", page.includes('mode: "records"'));
-  t("ResultsPage 手機卡片", page.includes("task-cards"));
+  t(
+    "ResultsPage 有曲線／明細 modal（v1.25.0）",
+    page.includes("chartModal") && page.includes("docModal"),
+  );
+  t("ResultsPage 矩陣橫向捲動（v1.25.0）", page.includes("analysis-table-wrap"));
   const css = readFileSync("src/styles.css", "utf8");
   t("rag-gray 樣式存在", css.includes(".rag-badge.rag-gray"));
   t("results-page 手機版 CSS 存在", css.includes(".results-page .task-cards"));
