@@ -20,12 +20,106 @@ import {
 } from "./cycle";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-/** 月份快捷：一年 2 / 3 / 4 次，12 個月平均分配的起始月份 */
+/** 月份快捷：一年 2 / 3 / 4 次，12 個月平均分配的起始月份（v1.18 前 UI 用；保留供舊資料相容） */
 export const QUICK_MONTHS: Record<2 | 3 | 4, number[]> = {
   2: [1, 7],
   3: [1, 5, 9],
   4: [1, 4, 7, 10],
 };
+
+/** 審查頻次：一年幾次（v1.18 排程設定下拉） */
+export type ReviewFrequency = 2 | 3 | 4;
+/** 審查區間：每次審查連續涵蓋幾個月（v1.18 排程設定下拉） */
+export type ReviewInterval = 2 | 3 | 4;
+
+export const FREQUENCY_OPTIONS: ReviewFrequency[] = [2, 3, 4];
+export const INTERVAL_OPTIONS: ReviewInterval[] = [2, 3, 4];
+
+/** 預設審查頻次／區間（v1.18：季審） */
+export const DEFAULT_FREQUENCY: ReviewFrequency = 4;
+export const DEFAULT_INTERVAL: ReviewInterval = 3;
+
+export function frequencyLabel(f: ReviewFrequency): string {
+  return `${f}次/年`;
+}
+export function intervalLabel(m: ReviewInterval): string {
+  return `${m}個月`;
+}
+
+/** 防禦性解析頻次（只接受 2／3／4） */
+export function parseFrequency(raw: unknown): ReviewFrequency | null {
+  return raw === 2 || raw === 3 || raw === 4 ? raw : null;
+}
+
+/** 防禦性解析區間（只接受 2／3／4） */
+export function parseIntervalMonths(raw: unknown): ReviewInterval | null {
+  return raw === 2 || raw === 3 || raw === 4 ? raw : null;
+}
+
+/** 年份篩選選項：2024～2033（v1.18） */
+export const YEAR_FILTER_OPTIONS: number[] = Array.from(
+  { length: 10 },
+  (_, i) => 2024 + i,
+);
+
+/** 年份選項顯示：「2024 (113)」（西元年＋民國年） */
+export function yearOptionLabel(year: number): string {
+  return `${year} (${year - 1911})`;
+}
+
+/**
+ * 篩選器（年份＋年別）→ 排程週期鍵（v1.18）。
+ * 年度→西元年字串；學年度→民國學年字串（該年 8 月起算的新學年）。
+ */
+export function periodForFilter(
+  cycle: "year" | "academic",
+  year: number,
+): string {
+  return cycle === "academic" ? String(year - 1911) : String(year);
+}
+
+/**
+ * 依頻次＋區間自動預選起始月份（v1.18，純函式）。
+ * 從週期月份序列第 0 個起，每隔 intervalMonths 取一個，共 frequency 個。
+ * 年度：[1..12] 從 1 月起；學年度：[8..12,1..7] 從 8 月起。
+ * 例：4次/年＋3個月＋年度 → [1,4,7,10]；＋學年度 → [2,5,8,11]。
+ */
+export function autoSelectMonths(
+  frequency: ReviewFrequency,
+  intervalMonths: ReviewInterval,
+  monthOrder: number[],
+): number[] {
+  if (monthOrder.length === 0) return [];
+  const out: number[] = [];
+  for (let i = 0; i < frequency; i++) {
+    out.push(monthOrder[(i * intervalMonths) % monthOrder.length]);
+  }
+  return [...new Set(out)].sort((a, b) => a - b);
+}
+
+/**
+ * 排程／單位設定是否完成（v1.18）：受審單位≥1、月份≥1、審查件數>0。
+ * 「已排」燈號與「產生排程」啟用條件共用此判定。
+ */
+export function scheduleSetupComplete(
+  s: {
+    unitIds?: unknown;
+    months?: unknown;
+    caseCount?: unknown;
+  } | null,
+): boolean {
+  if (!s) return false;
+  const units = Array.isArray(s.unitIds) ? s.unitIds : [];
+  const months = Array.isArray(s.months) ? s.months : [];
+  const cc = s.caseCount;
+  return (
+    units.length > 0 &&
+    months.length > 0 &&
+    typeof cc === "number" &&
+    Number.isInteger(cc) &&
+    cc > 0
+  );
+}
 
 export const MONTH_LABELS = [
   "1月",
@@ -387,6 +481,12 @@ export interface IndicatorSchedule {
   periodLabel: string;
   /** 審查起始月份（1–12，可複選） */
   months: number[];
+  /** 審查頻次：一年幾次（v1.18；null＝未設定／舊資料） */
+  frequency: ReviewFrequency | null;
+  /** 審查區間：每次審查連續涵蓋幾個月（v1.18；null＝未設定／舊資料） */
+  intervalMonths: ReviewInterval | null;
+  /** 關聯年份（臨時排程用，v1.18；null＝未設定） */
+  refYear: number | null;
   /** 每輪審查件數（全單位共用單一值；null＝未設定） */
   caseCount: number | null;
   /** 受審單位 id 清單（各組複選／全選） */
@@ -449,6 +549,12 @@ export function parseIndicatorSchedule(raw: unknown): IndicatorSchedule | null {
         ? d.periodLabel
         : periodLabel(category, period),
     months: parseScheduleMonths(d.months),
+    frequency: parseFrequency(d.frequency),
+    intervalMonths: parseIntervalMonths(d.intervalMonths),
+    refYear:
+      typeof d.refYear === "number" && Number.isInteger(d.refYear)
+        ? d.refYear
+        : null,
     caseCount: parseCaseCount(d.caseCount),
     unitIds,
     notes: typeof d.notes === "string" ? d.notes : "",
@@ -478,6 +584,9 @@ export function legacyYearScheduleToIndicatorSchedule(
     period,
     periodLabel: periodLabel("year", period),
     months: parseScheduleMonths(d.months),
+    frequency: null,
+    intervalMonths: null,
+    refYear: null,
     caseCount: parseCaseCount(d.caseCount),
     unitIds: [],
     notes: typeof d.notes === "string" ? d.notes : "",
@@ -584,6 +693,12 @@ export async function saveSchedule(
       period: sched.period,
       periodLabel: periodLabel(sched.category, sched.period),
       months: parseScheduleMonths(sched.months),
+      frequency: parseFrequency(sched.frequency),
+      intervalMonths: parseIntervalMonths(sched.intervalMonths),
+      refYear:
+        typeof sched.refYear === "number" && Number.isInteger(sched.refYear)
+          ? sched.refYear
+          : null,
       caseCount: parseCaseCount(sched.caseCount),
       unitIds: sched.unitIds.filter((u) => typeof u === "string"),
       notes: sched.notes ?? "",
@@ -620,6 +735,9 @@ export async function deleteSchedule(
       period,
       periodLabel: periodLabel(category, period),
       months: [],
+      frequency: null,
+      intervalMonths: null,
+      refYear: null,
       caseCount: null,
       unitIds: [],
       notes: "",
@@ -750,8 +868,15 @@ export interface TempScheduleInput {
   /** 審查月份（1–12） */
   months: number[];
   caseCount: number | null;
-  /** 負責審查員職編清單（每位審查員負責全部 unitIds） */
+  /** 負責審查員職編清單（每位審查員負責全部 unitIds；items 提供時忽略） */
   reviewerIds: string[];
+  /**
+   * 分工表項目：審查員→負責單位配對（v1.18 加審；
+   * 提供且非空時優先使用，不再用 reviewerIds×unitIds 交叉）。
+   */
+  items?: AssignmentItem[];
+  /** 關聯年份（v1.18 加審；顯示／查閱用） */
+  refYear?: number;
   /** true＝自審（護理長為自己單位），false＝加審 */
   selfReview: boolean;
   notes?: string;
@@ -771,14 +896,43 @@ export async function createTempSchedule(
   const reviewerIds = (input.reviewerIds ?? []).filter(
     (r) => typeof r === "string" && r,
   );
+  // 分工表：items 優先；否則每位審查員負責全部受審單位
+  //（件數透傳 null；件數以排程單一值為準）
+  const items: AssignmentItem[] =
+    input.items && input.items.length > 0
+      ? input.items.map((it) => ({
+          reviewerId: it.reviewerId,
+          units: it.units
+            .filter((u) => typeof u.unitId === "string" && u.unitId)
+            .map((u) => ({
+              unitId: u.unitId,
+              caseCount: null as number | null,
+            })),
+        }))
+      : reviewerIds.map((reviewerId) => ({
+          reviewerId,
+          units: unitIds.map((unitId) => ({
+            unitId,
+            caseCount: null as number | null,
+          })),
+        }));
+  const allUnitIds = [
+    ...new Set(items.flatMap((it) => it.units.map((u) => u.unitId))),
+  ];
   const sched: IndicatorSchedule = {
     indicatorId: input.indicatorId,
     category: "temp",
     period: String(Date.now()),
     periodLabel: "臨時",
     months: parseScheduleMonths(input.months),
+    frequency: null,
+    intervalMonths: null,
+    refYear:
+      typeof input.refYear === "number" && Number.isInteger(input.refYear)
+        ? input.refYear
+        : null,
     caseCount: parseCaseCount(input.caseCount),
-    unitIds,
+    unitIds: allUnitIds.length > 0 ? allUnitIds : unitIds,
     notes: input.notes ?? "",
     selfReview: input.selfReview === true,
     updatedBy: input.actor.id,
@@ -786,11 +940,6 @@ export async function createTempSchedule(
     updatedAt: serverTimestamp(),
   };
   await saveSchedule(db, sched, input.actor);
-  // 分工表：每位審查員負責全部受審單位（件數透傳 null；件數以排程單一值為準）
-  const items: AssignmentItem[] = reviewerIds.map((reviewerId) => ({
-    reviewerId,
-    units: unitIds.map((unitId) => ({ unitId, caseCount: null as number | null })),
-  }));
   const taskCount = await buildTasksFromSchedule(
     db,
     sched,
@@ -803,7 +952,7 @@ export async function createTempSchedule(
     input.actor,
     sched.selfReview ? "自審排程" : "加審",
     sched,
-    `${input.indicatorId}・${unitIds.length} 單位・${reviewerIds.length} 位審查員・${taskCount} 筆任務`,
+    `${input.indicatorId}・${sched.unitIds.length} 單位・${items.length} 位審查員・${taskCount} 筆任務`,
   );
   return {
     scheduleId: scheduleDocId(sched.indicatorId, sched.category, sched.period),

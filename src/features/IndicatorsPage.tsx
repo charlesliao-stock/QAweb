@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { ChevronDown, ChevronUp, Pencil, Plus, Trash2, X } from "lucide-react";
 import {
   collection,
@@ -105,7 +112,6 @@ interface IndicatorForm {
   /** 基本資料閾值（v1.17 起必填；""＝未填） */
   basicThreshold: number | "";
   owners: string[];
-  ownerSearch: string;
   status: IndicatorStatus;
   steps: TenSteps;
   questions: AuditQuestion[];
@@ -128,7 +134,6 @@ function emptyForm(): IndicatorForm {
     name: "",
     basicThreshold: "",
     owners: [],
-    ownerSearch: "",
     status: "草稿",
     steps,
     questions: [],
@@ -148,6 +153,505 @@ function nextVersion(version: string): string {
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   return "讀寫失敗，請檢查網路連線後再試";
+}
+
+/** 審核表編輯值（單筆表單＋批次新增共用，v1.18 抽取） */
+export interface AuditFormValue {
+  questions: AuditQuestion[];
+  questionGroups: QuestionGroup[];
+  useQuestionGroups: boolean;
+  requireBedNo: boolean;
+  requireReviewee: boolean;
+}
+
+export function emptyAuditFormValue(): AuditFormValue {
+  return {
+    questions: [],
+    questionGroups: [],
+    useQuestionGroups: false,
+    requireBedNo: true,
+    requireReviewee: true,
+  };
+}
+
+/** 負責人多選（職編／姓名搜尋；單筆表單＋批次新增共用，v1.18 抽取） */
+function OwnerMultiSelect({
+  staffMap,
+  staffLoaded,
+  owners,
+  onChange,
+}: {
+  staffMap: Map<string, StaffOption>;
+  staffLoaded: boolean;
+  owners: string[];
+  onChange: (owners: string[]) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const suggestions = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q || !staffLoaded) return [];
+    return [...staffMap.values()]
+      .filter(
+        (s) =>
+          !owners.includes(s.staffId) &&
+          (s.staffId.toLowerCase().includes(q) ||
+            s.name.toLowerCase().includes(q)),
+      )
+      .slice(0, 8);
+  }, [search, owners, staffMap, staffLoaded]);
+
+  function ownerLabel(staffId: string): string {
+    const s = staffMap.get(staffId);
+    return s && s.name !== staffId
+      ? `${maskName(s.name)}（${staffId}）`
+      : staffId;
+  }
+
+  return (
+    <>
+      {owners.length > 0 && (
+        <div className="chip-row">
+          {owners.map((id) => (
+            <span className="chip" key={id}>
+              {ownerLabel(id)}
+              <button
+                type="button"
+                aria-label={`移除 ${ownerLabel(id)}`}
+                onClick={() => onChange(owners.filter((x) => x !== id))}
+              >
+                <X size={13} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="suggest-wrap">
+        <input
+          className="text-input"
+          value={search}
+          placeholder="輸入職編或姓名搜尋…"
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        {suggestions.length > 0 && (
+          <ul className="suggest-list">
+            {suggestions.map((s) => (
+              <li key={s.staffId}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChange([...owners, s.staffId]);
+                    setSearch("");
+                  }}
+                >
+                  {maskName(s.name)}（{s.staffId}）
+                  {s.unitCode ? `・${s.unitCode}` : ""}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {!staffLoaded && (
+        <p className="settings-note">
+          人員清單載入失敗（可能無查詢權限），請確認帳號角色後重試。
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * 審核表編輯器（v1.18 自單筆表單抽取，單筆＋批次共用）：
+ * 題目分組開關＋分組管理＋題目橫向表格＋需要病人床號／受審人員資料。
+ */
+function AuditFormEditor({
+  value,
+  onChange,
+}: {
+  value: AuditFormValue;
+  onChange: (patch: Partial<AuditFormValue>) => void;
+}) {
+  function groupNameOf(groupId: string | null): string {
+    if (!groupId) return "";
+    return value.questionGroups.find((g) => g.id === groupId)?.name ?? "";
+  }
+
+  function addQuestion(groupId: string | null) {
+    const q = emptyAuditQuestion(groupId, groupNameOf(groupId));
+    onChange({ questions: [...value.questions, q] });
+  }
+
+  function updateQuestion(id: string, patch: Partial<AuditQuestion>) {
+    onChange({
+      questions: value.questions.map((q) =>
+        q.id === id ? { ...q, ...patch } : q,
+      ),
+    });
+  }
+
+  function removeQuestion(id: string) {
+    onChange({ questions: value.questions.filter((q) => q.id !== id) });
+  }
+
+  /** 題目在所屬區段（同分組或未分組）內上／下移 */
+  function moveQuestion(id: string, dir: -1 | 1) {
+    const qs = [...value.questions];
+    const idx = qs.findIndex((q) => q.id === id);
+    if (idx < 0) return;
+    const gid = qs[idx].groupId;
+    const sectionIdx: number[] = [];
+    qs.forEach((q, i) => {
+      if ((q.groupId ?? null) === (gid ?? null)) sectionIdx.push(i);
+    });
+    const pos = sectionIdx.indexOf(idx);
+    const swap = pos + dir;
+    if (swap < 0 || swap >= sectionIdx.length) return;
+    const j = sectionIdx[swap];
+    [qs[idx], qs[j]] = [qs[j], qs[idx]];
+    onChange({ questions: qs });
+  }
+
+  /** 題目跨分組移動（下拉選擇目標，含「未分組」） */
+  function moveQuestionToGroup(id: string, targetGroupId: string | null) {
+    const q = value.questions.find((x) => x.id === id);
+    if (!q) return;
+    const rest = value.questions.filter((x) => x.id !== id);
+    const gname = targetGroupId
+      ? (value.questionGroups.find((g) => g.id === targetGroupId)?.name ?? "")
+      : "";
+    onChange({
+      questions: [...rest, { ...q, groupId: targetGroupId, groupName: gname }],
+    });
+  }
+
+  function toggleQuestionGroups() {
+    if (!value.useQuestionGroups) {
+      onChange({ useQuestionGroups: true });
+      return;
+    }
+    const hasGroupData =
+      value.questionGroups.length > 0 ||
+      value.questions.some((q) => q.groupId !== null);
+    if (
+      hasGroupData &&
+      !window.confirm("關閉後分組將取消、題目保留為扁平清單，確定嗎？")
+    ) {
+      return;
+    }
+    onChange({
+      useQuestionGroups: false,
+      questionGroups: [],
+      questions: value.questions.map((q) => ({
+        ...q,
+        groupId: null,
+        groupName: "",
+      })),
+    });
+  }
+
+  function addQuestionGroup() {
+    const g: QuestionGroup = {
+      id: newQid(),
+      name: `分組 ${value.questionGroups.length + 1}`,
+      order: value.questionGroups.length,
+    };
+    onChange({ questionGroups: [...value.questionGroups, g] });
+  }
+
+  function renameQuestionGroup(id: string, name: string) {
+    onChange({
+      questionGroups: value.questionGroups.map((g) =>
+        g.id === id ? { ...g, name } : g,
+      ),
+      questions: value.questions.map((q) =>
+        q.groupId === id ? { ...q, groupName: name } : q,
+      ),
+    });
+  }
+
+  function moveQuestionGroup(id: string, dir: -1 | 1) {
+    const gs = [...value.questionGroups].sort((a, b) => a.order - b.order);
+    const idx = gs.findIndex((g) => g.id === id);
+    const j = idx + dir;
+    if (idx < 0 || j < 0 || j >= gs.length) return;
+    [gs[idx], gs[j]] = [gs[j], gs[idx]];
+    onChange({ questionGroups: gs.map((g, i) => ({ ...g, order: i })) });
+  }
+
+  function removeQuestionGroup(id: string) {
+    const count = value.questions.filter((q) => q.groupId === id).length;
+    if (
+      !window.confirm(
+        count > 0
+          ? `刪除此分組將一併刪除其下 ${count} 個題目，確定嗎？`
+          : "確定刪除此分組嗎？",
+      )
+    ) {
+      return;
+    }
+    onChange({
+      questionGroups: value.questionGroups
+        .filter((g) => g.id !== id)
+        .map((g, i) => ({ ...g, order: i })),
+      questions: value.questions.filter((q) => q.groupId !== id),
+    });
+  }
+
+  const sortedQuestionGroups = useMemo(
+    () => [...value.questionGroups].sort((a, b) => a.order - b.order),
+    [value.questionGroups],
+  );
+
+  /**
+   * 審核表題目橫向表格：
+   * 欄位＝分組（僅分組開關開時，用「移動到」下拉選分組）／題目／選項／審核指引／操作
+   */
+  function renderQuestionTable(qs: AuditQuestion[]) {
+    return (
+      <div className="table-scroll">
+        <table className="permission-table">
+          <thead>
+            <tr>
+              {value.useQuestionGroups && <th>分組</th>}
+              <th>題目</th>
+              <th>選項</th>
+              <th>審核指引</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {qs.map((q) => {
+              const gid = q.groupId ?? null;
+              const section = value.questions.filter(
+                (x) => (x.groupId ?? null) === gid,
+              );
+              const pos = section.findIndex((x) => x.id === q.id);
+              return (
+                <tr key={q.id}>
+                  {value.useQuestionGroups && (
+                    <td>
+                      <div className="select-wrap">
+                        <select
+                          value={q.groupId ?? ""}
+                          aria-label="移動到分組"
+                          onChange={(e) =>
+                            moveQuestionToGroup(q.id, e.target.value || null)
+                          }
+                        >
+                          <option value="">未分組</option>
+                          {sortedQuestionGroups.map((g) => (
+                            <option key={g.id} value={g.id}>
+                              {g.name}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={15} />
+                      </div>
+                    </td>
+                  )}
+                  <td>
+                    <input
+                      className="text-input"
+                      value={q.itemText}
+                      placeholder="指標項目"
+                      aria-label="題目"
+                      onChange={(e) =>
+                        updateQuestion(q.id, { itemText: e.target.value })
+                      }
+                    />
+                  </td>
+                  <td>
+                    <div className="select-wrap">
+                      <select
+                        value={q.optionSet}
+                        aria-label="選項"
+                        onChange={(e) =>
+                          updateQuestion(q.id, {
+                            optionSet: e.target.value as OptionSet,
+                          })
+                        }
+                      >
+                        {(
+                          Object.keys(OPTION_SET_LABELS) as OptionSet[]
+                        ).map((s) => (
+                          <option key={s} value={s}>
+                            {OPTION_SET_LABELS[s]}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown size={15} />
+                    </div>
+                  </td>
+                  <td>
+                    <input
+                      className="text-input"
+                      value={q.guidance}
+                      placeholder="審核指引（審查員填寫時的判斷依據）"
+                      aria-label="審核指引"
+                      onChange={(e) =>
+                        updateQuestion(q.id, { guidance: e.target.value })
+                      }
+                    />
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button
+                      className="icon-button"
+                      aria-label="題目上移"
+                      disabled={pos <= 0}
+                      onClick={() => moveQuestion(q.id, -1)}
+                    >
+                      <ChevronUp size={15} />
+                    </button>
+                    <button
+                      className="icon-button"
+                      aria-label="題目下移"
+                      disabled={pos >= section.length - 1}
+                      onClick={() => moveQuestion(q.id, 1)}
+                    >
+                      <ChevronDown size={15} />
+                    </button>
+                    <button
+                      className="icon-button"
+                      aria-label="刪除題目"
+                      onClick={() => removeQuestion(q.id)}
+                    >
+                      <X size={15} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <SectionTitle
+        title="審核表題目"
+        note="每題含指標項目、選項與審核指引（審查員填寫時的判斷依據）"
+      />
+      <button
+        type="button"
+        className={`mode-toggle${value.useQuestionGroups ? " on" : ""}`}
+        onClick={toggleQuestionGroups}
+        aria-pressed={value.useQuestionGroups}
+      >
+        <span>啟用題目分組</span>
+        <span className="toggle-track" />
+      </button>
+      <p className="settings-note">
+        開啟後可建立多個分組、一個分組下可建多個題目；關閉則分組取消、題目保留為扁平清單。
+      </p>
+      <label className="check-row" style={{ marginTop: 8 }}>
+        <input
+          type="checkbox"
+          checked={value.requireBedNo}
+          onChange={(e) => onChange({ requireBedNo: e.target.checked })}
+        />
+        <span>
+          需要病人床號
+          <span className="muted-text">
+            （勾選後，審查表單會顯示「病人床號」欄位並列為必填）
+          </span>
+        </span>
+      </label>
+      <label className="check-row" style={{ marginTop: 8 }}>
+        <input
+          type="checkbox"
+          checked={value.requireReviewee}
+          onChange={(e) => onChange({ requireReviewee: e.target.checked })}
+        />
+        <span>
+          需要受審人員資料
+          <span className="muted-text">
+            （勾選後，審查表單會顯示「職編」欄位並列為必填）
+          </span>
+        </span>
+      </label>
+      {value.useQuestionGroups ? (
+        <>
+          <div className="group-actions">
+            <button className="text-button" onClick={addQuestionGroup}>
+              <Plus size={14} /> 新增分組
+            </button>
+          </div>
+          {sortedQuestionGroups.map((g, gi) => {
+            const qs = value.questions.filter((x) => x.groupId === g.id);
+            return (
+              <div className="question-group-block" key={g.id}>
+                <div className="question-group-head">
+                  <input
+                    className="text-input"
+                    value={g.name}
+                    placeholder="分組名稱"
+                    onChange={(e) => renameQuestionGroup(g.id, e.target.value)}
+                  />
+                  <span className="settings-note">{qs.length} 題</span>
+                  <button
+                    className="icon-button"
+                    aria-label="分組上移"
+                    disabled={gi === 0}
+                    onClick={() => moveQuestionGroup(g.id, -1)}
+                  >
+                    <ChevronUp size={15} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    aria-label="分組下移"
+                    disabled={gi === sortedQuestionGroups.length - 1}
+                    onClick={() => moveQuestionGroup(g.id, 1)}
+                  >
+                    <ChevronDown size={15} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    aria-label="刪除分組"
+                    onClick={() => removeQuestionGroup(g.id)}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+                {renderQuestionTable(qs)}
+                <button
+                  className="text-button"
+                  onClick={() => addQuestion(g.id)}
+                >
+                  <Plus size={14} /> 在此分組新增題目
+                </button>
+              </div>
+            );
+          })}
+          <div className="question-group-block">
+            <div className="question-group-head">
+              <b>未分組題目</b>
+              <button className="text-button" onClick={() => addQuestion(null)}>
+                <Plus size={14} /> 新增題目
+              </button>
+            </div>
+            {renderQuestionTable(value.questions.filter((x) => !x.groupId))}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="group-actions">
+            <button className="text-button" onClick={() => addQuestion(null)}>
+              <Plus size={14} /> 新增題目
+            </button>
+          </div>
+          {value.questions.length === 0 ? (
+            <p className="settings-note">
+              尚未建立題目（未建立審核表仍可進行審查，依規格書）。
+            </p>
+          ) : (
+            renderQuestionTable(value.questions)
+          )}
+        </>
+      )}
+    </>
+  );
 }
 
 export function IndicatorsPage({
@@ -170,6 +674,7 @@ export function IndicatorsPage({
   const [saving, setSaving] = useState(false);
   const [hasReviewData, setHasReviewData] = useState(false);
   const [versions, setVersions] = useState<VersionRow[]>([]);
+  const [batchOpen, setBatchOpen] = useState(false);
   const [groupMap, setGroupMap] = useState<Map<string, string>>(new Map());
   const [staffMap, setStaffMap] = useState<Map<string, StaffOption>>(new Map());
   const [staffLoaded, setStaffLoaded] = useState(false);
@@ -278,6 +783,14 @@ export function IndicatorsPage({
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  /** 清單負責人欄顯示：姓名（職編） */
+  function ownerLabel(staffId: string): string {
+    const s = staffMap.get(staffId);
+    return s && s.name !== staffId
+      ? `${maskName(s.name)}（${staffId}）`
+      : staffId;
+  }
+
   function setStep<K extends keyof TenSteps>(key: K, value: TenSteps[K]) {
     setForm((prev) => ({ ...prev, steps: { ...prev.steps, [key]: value } }));
   }
@@ -360,7 +873,6 @@ export function IndicatorsPage({
         basicThreshold:
           typeof data.basicThreshold === "number" ? data.basicThreshold : "",
         owners: Array.isArray(data.owners) ? data.owners.map(String) : [],
-        ownerSearch: "",
         status: STATUSES.includes(data.status) ? data.status : "草稿",
         steps,
         questions,
@@ -403,325 +915,6 @@ export function IndicatorsPage({
     } catch (error) {
       onAction(`讀取指標失敗：${toErrorMessage(error)}`);
     }
-  }
-
-  // ---- 負責人 autocomplete ----
-  const ownerSuggestions = useMemo(() => {
-    const q = form.ownerSearch.trim().toLowerCase();
-    if (!q || !staffLoaded) return [];
-    return [...staffMap.values()]
-      .filter(
-        (s) =>
-          !form.owners.includes(s.staffId) &&
-          (s.staffId.toLowerCase().includes(q) ||
-            s.name.toLowerCase().includes(q)),
-      )
-      .slice(0, 8);
-  }, [form.ownerSearch, form.owners, staffMap, staffLoaded]);
-
-  function addOwner(staffId: string) {
-    setForm((prev) => ({
-      ...prev,
-      owners: prev.owners.includes(staffId)
-        ? prev.owners
-        : [...prev.owners, staffId],
-      ownerSearch: "",
-    }));
-  }
-
-  function removeOwner(staffId: string) {
-    setForm((prev) => ({
-      ...prev,
-      owners: prev.owners.filter((id) => id !== staffId),
-    }));
-  }
-
-  function ownerLabel(staffId: string): string {
-    const s = staffMap.get(staffId);
-    return s && s.name !== staffId ? `${maskName(s.name)}（${staffId}）` : staffId;
-  }
-
-  // ---- 審核表題目 / 分組 / 選項 ----
-  function groupNameOf(groupId: string | null): string {
-    if (!groupId) return "";
-    return form.questionGroups.find((g) => g.id === groupId)?.name ?? "";
-  }
-
-  function addQuestion(groupId: string | null) {
-    const q = emptyAuditQuestion(groupId, groupNameOf(groupId));
-    setForm((prev) => ({ ...prev, questions: [...prev.questions, q] }));
-  }
-
-  function updateQuestion(id: string, patch: Partial<AuditQuestion>) {
-    setForm((prev) => ({
-      ...prev,
-      questions: prev.questions.map((q) =>
-        q.id === id ? { ...q, ...patch } : q,
-      ),
-    }));
-  }
-
-  function removeQuestion(id: string) {
-    setForm((prev) => ({
-      ...prev,
-      questions: prev.questions.filter((q) => q.id !== id),
-    }));
-  }
-
-  /** 題目在所屬區段（同分組或未分組）內上／下移 */
-  function moveQuestion(id: string, dir: -1 | 1) {
-    setForm((prev) => {
-      const qs = [...prev.questions];
-      const idx = qs.findIndex((q) => q.id === id);
-      if (idx < 0) return prev;
-      const gid = qs[idx].groupId;
-      const sectionIdx: number[] = [];
-      qs.forEach((q, i) => {
-        if ((q.groupId ?? null) === (gid ?? null)) sectionIdx.push(i);
-      });
-      const pos = sectionIdx.indexOf(idx);
-      const swap = pos + dir;
-      if (swap < 0 || swap >= sectionIdx.length) return prev;
-      const j = sectionIdx[swap];
-      [qs[idx], qs[j]] = [qs[j], qs[idx]];
-      return { ...prev, questions: qs };
-    });
-  }
-
-  /** 題目跨分組移動（下拉選擇目標，含「未分組」） */
-  function moveQuestionToGroup(id: string, targetGroupId: string | null) {
-    setForm((prev) => {
-      const q = prev.questions.find((x) => x.id === id);
-      if (!q) return prev;
-      const rest = prev.questions.filter((x) => x.id !== id);
-      const gname = targetGroupId
-        ? (prev.questionGroups.find((g) => g.id === targetGroupId)?.name ?? "")
-        : "";
-      return {
-        ...prev,
-        questions: [
-          ...rest,
-          { ...q, groupId: targetGroupId, groupName: gname },
-        ],
-      };
-    });
-  }
-
-  function toggleQuestionGroups() {
-    if (!form.useQuestionGroups) {
-      setForm((prev) => ({ ...prev, useQuestionGroups: true }));
-      return;
-    }
-    const hasGroupData =
-      form.questionGroups.length > 0 ||
-      form.questions.some((q) => q.groupId !== null);
-    if (
-      hasGroupData &&
-      !window.confirm("關閉後分組將取消、題目保留為扁平清單，確定嗎？")
-    ) {
-      return;
-    }
-    setForm((prev) => ({
-      ...prev,
-      useQuestionGroups: false,
-      questionGroups: [],
-      questions: prev.questions.map((q) => ({
-        ...q,
-        groupId: null,
-        groupName: "",
-      })),
-    }));
-  }
-
-  function addQuestionGroup() {
-    const g: QuestionGroup = {
-      id: newQid(),
-      name: `分組 ${form.questionGroups.length + 1}`,
-      order: form.questionGroups.length,
-    };
-    setForm((prev) => ({
-      ...prev,
-      questionGroups: [...prev.questionGroups, g],
-    }));
-  }
-
-  function renameQuestionGroup(id: string, name: string) {
-    setForm((prev) => ({
-      ...prev,
-      questionGroups: prev.questionGroups.map((g) =>
-        g.id === id ? { ...g, name } : g,
-      ),
-      questions: prev.questions.map((q) =>
-        q.groupId === id ? { ...q, groupName: name } : q,
-      ),
-    }));
-  }
-
-  function moveQuestionGroup(id: string, dir: -1 | 1) {
-    setForm((prev) => {
-      const gs = [...prev.questionGroups].sort((a, b) => a.order - b.order);
-      const idx = gs.findIndex((g) => g.id === id);
-      const j = idx + dir;
-      if (idx < 0 || j < 0 || j >= gs.length) return prev;
-      [gs[idx], gs[j]] = [gs[j], gs[idx]];
-      return {
-        ...prev,
-        questionGroups: gs.map((g, i) => ({ ...g, order: i })),
-      };
-    });
-  }
-
-  function removeQuestionGroup(id: string) {
-    const count = form.questions.filter((q) => q.groupId === id).length;
-    if (
-      !window.confirm(
-        count > 0
-          ? `刪除此分組將一併刪除其下 ${count} 個題目，確定嗎？`
-          : "確定刪除此分組嗎？",
-      )
-    ) {
-      return;
-    }
-    setForm((prev) => ({
-      ...prev,
-      questionGroups: prev.questionGroups
-        .filter((g) => g.id !== id)
-        .map((g, i) => ({ ...g, order: i })),
-      questions: prev.questions.filter((q) => q.groupId !== id),
-    }));
-  }
-
-  // ---- 題目選項（v1.17：每題二選一選項集，不再自由編輯選項文字＋分數） ----
-
-  const sortedQuestionGroups = useMemo(
-    () =>
-      [...form.questionGroups].sort((a, b) => a.order - b.order),
-    [form.questionGroups],
-  );
-
-  /**
-   * 審核表題目橫向表格（v1.17）：
-   * 欄位＝分組（僅分組開關開時，用「移動到」下拉選分組）／題目／選項／審核指引／操作
-   */
-  function renderQuestionTable(qs: AuditQuestion[]) {
-    return (
-      <div className="table-scroll">
-        <table className="permission-table">
-          <thead>
-            <tr>
-              {form.useQuestionGroups && <th>分組</th>}
-              <th>題目</th>
-              <th>選項</th>
-              <th>審核指引</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {qs.map((q) => {
-              const gid = q.groupId ?? null;
-              const section = form.questions.filter(
-                (x) => (x.groupId ?? null) === gid,
-              );
-              const pos = section.findIndex((x) => x.id === q.id);
-              return (
-                <tr key={q.id}>
-                  {form.useQuestionGroups && (
-                    <td>
-                      <div className="select-wrap">
-                        <select
-                          value={q.groupId ?? ""}
-                          aria-label="移動到分組"
-                          onChange={(e) =>
-                            moveQuestionToGroup(q.id, e.target.value || null)
-                          }
-                        >
-                          <option value="">未分組</option>
-                          {sortedQuestionGroups.map((g) => (
-                            <option key={g.id} value={g.id}>
-                              {g.name}
-                            </option>
-                          ))}
-                        </select>
-                        <ChevronDown size={15} />
-                      </div>
-                    </td>
-                  )}
-                  <td>
-                    <input
-                      className="text-input"
-                      value={q.itemText}
-                      placeholder="指標項目"
-                      aria-label="題目"
-                      onChange={(e) =>
-                        updateQuestion(q.id, { itemText: e.target.value })
-                      }
-                    />
-                  </td>
-                  <td>
-                    <div className="select-wrap">
-                      <select
-                        value={q.optionSet}
-                        aria-label="選項"
-                        onChange={(e) =>
-                          updateQuestion(q.id, {
-                            optionSet: e.target.value as OptionSet,
-                          })
-                        }
-                      >
-                        {(
-                          Object.keys(OPTION_SET_LABELS) as OptionSet[]
-                        ).map((s) => (
-                          <option key={s} value={s}>
-                            {OPTION_SET_LABELS[s]}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronDown size={15} />
-                    </div>
-                  </td>
-                  <td>
-                    <input
-                      className="text-input"
-                      value={q.guidance}
-                      placeholder="審核指引（審查員填寫時的判斷依據）"
-                      aria-label="審核指引"
-                      onChange={(e) =>
-                        updateQuestion(q.id, { guidance: e.target.value })
-                      }
-                    />
-                  </td>
-                  <td style={{ whiteSpace: "nowrap" }}>
-                    <button
-                      className="icon-button"
-                      aria-label="題目上移"
-                      disabled={pos <= 0}
-                      onClick={() => moveQuestion(q.id, -1)}
-                    >
-                      <ChevronUp size={15} />
-                    </button>
-                    <button
-                      className="icon-button"
-                      aria-label="題目下移"
-                      disabled={pos >= section.length - 1}
-                      onClick={() => moveQuestion(q.id, 1)}
-                    >
-                      <ChevronDown size={15} />
-                    </button>
-                    <button
-                      className="icon-button"
-                      aria-label="刪除題目"
-                      onClick={() => removeQuestion(q.id)}
-                    >
-                      <X size={15} />
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    );
   }
 
   // ---- 步驟四「指標」 / 步驟五「閾值」（兩者一一對應、同步增刪） ----
@@ -1093,6 +1286,13 @@ export function IndicatorsPage({
                 <Plus size={16} />
                 新增指標
               </button>
+              <button
+                className="button button-outline"
+                onClick={() => setBatchOpen(true)}
+              >
+                <Plus size={16} />
+                批次新增
+              </button>
             </div>
           ) : (
             <button
@@ -1334,47 +1534,12 @@ export function IndicatorsPage({
               <label className="field-label">
                 負責人 *（輸入職編或姓名搜尋，可多選）
               </label>
-              {form.owners.length > 0 && (
-                <div className="chip-row">
-                  {form.owners.map((id) => (
-                    <span className="chip" key={id}>
-                      {ownerLabel(id)}
-                      <button
-                        type="button"
-                        aria-label={`移除 ${ownerLabel(id)}`}
-                        onClick={() => removeOwner(id)}
-                      >
-                        <X size={13} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <div className="suggest-wrap">
-                <input
-                  className="text-input"
-                  value={form.ownerSearch}
-                  placeholder="輸入職編或姓名搜尋…"
-                  onChange={(e) => setField("ownerSearch", e.target.value)}
-                />
-                {ownerSuggestions.length > 0 && (
-                  <ul className="suggest-list">
-                    {ownerSuggestions.map((s) => (
-                      <li key={s.staffId}>
-                        <button type="button" onClick={() => addOwner(s.staffId)}>
-                          {maskName(s.name)}（{s.staffId}）
-                          {s.unitCode ? `・${s.unitCode}` : ""}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-              {!staffLoaded && (
-                <p className="settings-note">
-                  人員清單載入失敗（可能無查詢權限），請確認帳號角色後重試。
-                </p>
-              )}
+              <OwnerMultiSelect
+                staffMap={staffMap}
+                staffLoaded={staffLoaded}
+                owners={form.owners}
+                onChange={(owners) => setField("owners", owners)}
+              />
             </div>
             <div className="form-field">
               <label className="field-label">狀態 *</label>
@@ -1650,152 +1815,16 @@ export function IndicatorsPage({
 
           {formTab === "audit" && (
             <>
-              <SectionTitle
-                title="審核表題目"
-                note="每題含指標項目、選項與審核指引（審查員填寫時的判斷依據）"
+              <AuditFormEditor
+                value={{
+                  questions: form.questions,
+                  questionGroups: form.questionGroups,
+                  useQuestionGroups: form.useQuestionGroups,
+                  requireBedNo: form.requireBedNo,
+                  requireReviewee: form.requireReviewee,
+                }}
+                onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
               />
-              <button
-                type="button"
-                className={`mode-toggle${form.useQuestionGroups ? " on" : ""}`}
-                onClick={toggleQuestionGroups}
-                aria-pressed={form.useQuestionGroups}
-              >
-                <span>啟用題目分組</span>
-                <span className="toggle-track" />
-              </button>
-              <p className="settings-note">
-                開啟後可建立多個分組、一個分組下可建多個題目；關閉則分組取消、題目保留為扁平清單。
-              </p>
-              <label className="check-row" style={{ marginTop: 8 }}>
-                <input
-                  type="checkbox"
-                  checked={form.requireBedNo}
-                  onChange={(e) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      requireBedNo: e.target.checked,
-                    }))
-                  }
-                />
-                <span>
-                  需要病人床號
-                  <span className="muted-text">
-                    （勾選後，審查表單會顯示「病人床號」欄位並列為必填）
-                  </span>
-                </span>
-              </label>
-              <label className="check-row" style={{ marginTop: 8 }}>
-                <input
-                  type="checkbox"
-                  checked={form.requireReviewee}
-                  onChange={(e) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      requireReviewee: e.target.checked,
-                    }))
-                  }
-                />
-                <span>
-                  需要受審人員資料
-                  <span className="muted-text">
-                    （勾選後，審查表單會顯示「職編」欄位並列為必填）
-                  </span>
-                </span>
-              </label>
-              {form.useQuestionGroups ? (
-                <>
-                  <div className="group-actions">
-                    <button
-                      className="text-button"
-                      onClick={addQuestionGroup}
-                    >
-                      <Plus size={14} /> 新增分組
-                    </button>
-                  </div>
-                  {sortedQuestionGroups.map((g, gi) => {
-                    const qs = form.questions.filter(
-                      (x) => x.groupId === g.id,
-                    );
-                    return (
-                      <div className="question-group-block" key={g.id}>
-                        <div className="question-group-head">
-                          <input
-                            className="text-input"
-                            value={g.name}
-                            placeholder="分組名稱"
-                            onChange={(e) =>
-                              renameQuestionGroup(g.id, e.target.value)
-                            }
-                          />
-                          <span className="settings-note">{qs.length} 題</span>
-                          <button
-                            className="icon-button"
-                            aria-label="分組上移"
-                            disabled={gi === 0}
-                            onClick={() => moveQuestionGroup(g.id, -1)}
-                          >
-                            <ChevronUp size={15} />
-                          </button>
-                          <button
-                            className="icon-button"
-                            aria-label="分組下移"
-                            disabled={
-                              gi === sortedQuestionGroups.length - 1
-                            }
-                            onClick={() => moveQuestionGroup(g.id, 1)}
-                          >
-                            <ChevronDown size={15} />
-                          </button>
-                          <button
-                            className="icon-button"
-                            aria-label="刪除分組"
-                            onClick={() => removeQuestionGroup(g.id)}
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </div>
-                        {renderQuestionTable(qs)}
-                        <button
-                          className="text-button"
-                          onClick={() => addQuestion(g.id)}
-                        >
-                          <Plus size={14} /> 在此分組新增題目
-                        </button>
-                      </div>
-                    );
-                  })}
-                  <div className="question-group-block">
-                    <div className="question-group-head">
-                      <b>未分組題目</b>
-                      <button
-                        className="text-button"
-                        onClick={() => addQuestion(null)}
-                      >
-                        <Plus size={14} /> 新增題目
-                      </button>
-                    </div>
-                    {renderQuestionTable(form.questions.filter((x) => !x.groupId))}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="group-actions">
-                    <button
-                      className="text-button"
-                      onClick={() => addQuestion(null)}
-                    >
-                      <Plus size={14} /> 新增題目
-                    </button>
-                  </div>
-                  {form.questions.length === 0 ? (
-                    <p className="settings-note">
-                      尚未建立題目（未建立審核表仍可進行審查，依規格書）。
-                    </p>
-                  ) : (
-                    renderQuestionTable(form.questions)
-                  )}
-                </>
-              )}
 
           {isEditing && versions.length > 0 && (
             <>
@@ -1849,6 +1878,442 @@ export function IndicatorsPage({
           </div>
         </section>
       )}
+
+      {batchOpen && (
+        <BatchAddDialog
+          groupMap={groupMap}
+          staffMap={staffMap}
+          staffLoaded={staffLoaded}
+          existingCodes={new Set(rows.map((r) => r.code))}
+          user={user ? { staffId: user.staffId, name: user.name } : null}
+          onAction={onAction}
+          onClose={() => setBatchOpen(false)}
+          onDone={() => {
+            setBatchOpen(false);
+            loadList();
+          }}
+        />
+      )}
     </>
+  );
+}
+
+/* ================= 批次新增指標（v1.18） ================= */
+
+interface BatchRow {
+  key: string;
+  groupId: string;
+  code: string;
+  name: string;
+  /** 閾值（必填、>0 正整數、≤100；""＝未填） */
+  threshold: number | "";
+  owners: string[];
+  audit: AuditFormValue;
+  showAudit: boolean;
+  errors: Record<string, string>;
+}
+
+function emptyBatchRow(): BatchRow {
+  return {
+    key: newQid(),
+    groupId: "",
+    code: "",
+    name: "",
+    threshold: "",
+    owners: [],
+    audit: emptyAuditFormValue(),
+    showAudit: false,
+    errors: {},
+  };
+}
+
+function BatchAddDialog({
+  groupMap,
+  staffMap,
+  staffLoaded,
+  existingCodes,
+  user,
+  onAction,
+  onClose,
+  onDone,
+}: {
+  groupMap: Map<string, string>;
+  staffMap: Map<string, StaffOption>;
+  staffLoaded: boolean;
+  existingCodes: Set<string>;
+  user: { staffId: string; name: string } | null;
+  onAction: (m: string) => void;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [rows, setRows] = useState<BatchRow[]>(() => [emptyBatchRow()]);
+  const [saving, setSaving] = useState(false);
+
+  function updateRow(
+    key: string,
+    patch: Partial<BatchRow>,
+    clearErrKeys: string[] = [],
+  ) {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.key !== key) return r;
+        const errors = { ...r.errors };
+        for (const k of clearErrKeys) delete errors[k];
+        return { ...r, ...patch, errors };
+      }),
+    );
+  }
+
+  function removeRow(key: string) {
+    setRows((prev) =>
+      prev.length <= 1 ? prev : prev.filter((r) => r.key !== key),
+    );
+  }
+
+  function validateRow(
+    r: BatchRow,
+    codeCounts: Map<string, number>,
+  ): Record<string, string> {
+    const errs: Record<string, string> = {};
+    if (!r.groupId) errs.groupId = "請選擇組別";
+    const code = r.code.trim();
+    if (!code) errs.code = "請填寫編號";
+    else if ((codeCounts.get(code) ?? 0) > 1) errs.code = "批次內編號重複";
+    else if (existingCodes.has(code)) errs.code = "編號已存在";
+    if (!r.name.trim()) errs.name = "請填寫指標名稱";
+    const thErr = validateBasicThreshold(r.threshold);
+    if (thErr) errs.threshold = thErr;
+    if (r.owners.length === 0) errs.owners = "請選擇至少一位負責人";
+    r.audit.questions.forEach((q, i) => {
+      if (!q.itemText.trim())
+        errs[`q_${q.id}`] = `第 ${i + 1} 題尚未填寫指標項目`;
+    });
+    return errs;
+  }
+
+  async function handleSave() {
+    if (!user) {
+      onAction("請先登入");
+      return;
+    }
+    const codeCounts = new Map<string, number>();
+    for (const r of rows) {
+      const c = r.code.trim();
+      if (c) codeCounts.set(c, (codeCounts.get(c) ?? 0) + 1);
+    }
+    let hasError = false;
+    const checked = rows.map((r) => {
+      const errors = validateRow(r, codeCounts);
+      if (Object.keys(errors).length > 0) {
+        hasError = true;
+        const qErr = Object.keys(errors).some((k) => k.startsWith("q_"));
+        return { ...r, errors, showAudit: r.showAudit || qErr };
+      }
+      return { ...r, errors };
+    });
+    setRows(checked);
+    if (hasError) {
+      onAction("批次資料有誤（紅字標示），請修正後再儲存");
+      return;
+    }
+    setSaving(true);
+    try {
+      const db = getFirebaseDb();
+      let n = 0;
+      for (const r of checked) {
+        const code = r.code.trim();
+        const ref = doc(db, "indicators", code);
+        const exists = await getDoc(ref);
+        if (exists.exists()) throw new Error(`指標編號 ${code} 已存在`);
+        const basicThreshold =
+          typeof r.threshold === "number" ? r.threshold : 0;
+        const questions = r.audit.questions.map((q, i) => ({
+          id: q.id,
+          itemText: q.itemText.trim(),
+          optionSet: q.optionSet,
+          guidance: q.guidance.trim(),
+          groupId: r.audit.useQuestionGroups ? q.groupId : null,
+          groupName: r.audit.useQuestionGroups ? q.groupName.trim() : "",
+          order: i,
+        }));
+        const questionGroups = r.audit.useQuestionGroups
+          ? [...r.audit.questionGroups]
+              .sort((a, b) => a.order - b.order)
+              .map((g, i) => ({
+                id: g.id,
+                name: g.name.trim() || `分組 ${i + 1}`,
+                order: i,
+              }))
+          : [];
+        const steps = emptyTenSteps();
+        steps.step5.thresholds = [];
+        await setDoc(ref, {
+          name: r.name.trim(),
+          groupId: r.groupId,
+          owners: r.owners,
+          threshold: basicThreshold,
+          basicThreshold,
+          status: "草稿",
+          tenSteps: steps,
+          questions,
+          questionGroups,
+          useQuestionGroups: r.audit.useQuestionGroups,
+          requireBedNo: r.audit.requireBedNo,
+          requireReviewee: r.audit.requireReviewee,
+          version: "v1.0",
+          hasReviewData: false,
+          createdAt: serverTimestamp(),
+          createdBy: user.staffId,
+          updatedAt: serverTimestamp(),
+          updatedBy: user.staffId,
+        });
+        await setDoc(doc(db, "indicators", code, "versions", "v1.0"), {
+          version: "v1.0",
+          status: "草稿",
+          threshold: basicThreshold,
+          tenSteps: steps,
+          questions,
+          effectiveDate: new Date().toISOString().slice(0, 10),
+          note: "初版",
+          createdAt: serverTimestamp(),
+          createdBy: user.staffId,
+        });
+        logAudit(db, {
+          actor: user.staffId,
+          actorName: user.name,
+          action: "建立指標",
+          targetType: "indicator",
+          targetId: code,
+          detail: r.name.trim(),
+        });
+        n++;
+      }
+      onAction(`已建立 ${n} 支指標`);
+      onDone();
+    } catch (error) {
+      onAction(
+        `批次新增失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="reviewer-modal-backdrop" onClick={onClose}>
+      <div
+        className="reviewer-modal panel batch-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="批次新增指標"
+      >
+        <div className="reviewer-modal-head">
+          <div>
+            <h2>批次新增指標</h2>
+            <p>
+              每列一支指標（基本資料必填）；可展開「審核表」逐列編輯題目。存檔前會整批驗證，有誤整批退回。
+            </p>
+          </div>
+          <button
+            className="button button-ghost"
+            onClick={onClose}
+            aria-label="關閉"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="batch-toolbar">
+          <button
+            className="button button-outline button-sm"
+            onClick={() => setRows((prev) => [...prev, emptyBatchRow()])}
+          >
+            <Plus size={14} /> 新增一列
+          </button>
+          <span className="muted-text">共 {rows.length} 列</span>
+        </div>
+        <div className="table-scroll">
+          <table className="permission-table">
+            <thead>
+              <tr>
+                <th style={{ width: 36 }}>#</th>
+                <th>組別 *</th>
+                <th>編號 *</th>
+                <th>指標名稱 *</th>
+                <th>閾值% *</th>
+                <th>負責人 *</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, ri) => (
+                <Fragment key={r.key}>
+                  <tr>
+                    <td>{ri + 1}</td>
+                    <td>
+                      <div className="select-wrap">
+                        <select
+                          value={r.groupId}
+                          aria-label={`第${ri + 1}列組別`}
+                          onChange={(e) =>
+                            updateRow(
+                              r.key,
+                              { groupId: e.target.value },
+                              ["groupId"],
+                            )
+                          }
+                        >
+                          <option value="">請選擇</option>
+                          {[...groupMap.entries()].map(([id, name]) => (
+                            <option key={id} value={id}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={15} />
+                      </div>
+                      {r.errors.groupId && (
+                        <div className="field-error">{r.errors.groupId}</div>
+                      )}
+                    </td>
+                    <td>
+                      <input
+                        className="text-input"
+                        value={r.code}
+                        placeholder="QI-001"
+                        aria-label={`第${ri + 1}列編號`}
+                        onChange={(e) =>
+                          updateRow(r.key, { code: e.target.value }, ["code"])
+                        }
+                      />
+                      {r.errors.code && (
+                        <div className="field-error">{r.errors.code}</div>
+                      )}
+                    </td>
+                    <td>
+                      <input
+                        className="text-input"
+                        value={r.name}
+                        placeholder="指標名稱"
+                        aria-label={`第${ri + 1}列指標名稱`}
+                        onChange={(e) =>
+                          updateRow(r.key, { name: e.target.value }, ["name"])
+                        }
+                      />
+                      {r.errors.name && (
+                        <div className="field-error">{r.errors.name}</div>
+                      )}
+                    </td>
+                    <td>
+                      <input
+                        className="text-input"
+                        type="number"
+                        min={1}
+                        max={100}
+                        step={1}
+                        style={{ width: 90 }}
+                        placeholder="1–100"
+                        aria-label={`第${ri + 1}列閾值`}
+                        value={
+                          typeof r.threshold === "number" &&
+                          Number.isFinite(r.threshold)
+                            ? String(r.threshold)
+                            : ""
+                        }
+                        onChange={(e) =>
+                          updateRow(
+                            r.key,
+                            {
+                              threshold:
+                                e.target.value === ""
+                                  ? ""
+                                  : Number(e.target.value),
+                            },
+                            ["threshold"],
+                          )
+                        }
+                      />
+                      {r.errors.threshold && (
+                        <div className="field-error">{r.errors.threshold}</div>
+                      )}
+                    </td>
+                    <td style={{ minWidth: 230 }}>
+                      <OwnerMultiSelect
+                        staffMap={staffMap}
+                        staffLoaded={staffLoaded}
+                        owners={r.owners}
+                        onChange={(owners) =>
+                          updateRow(r.key, { owners }, ["owners"])
+                        }
+                      />
+                      {r.errors.owners && (
+                        <div className="field-error">{r.errors.owners}</div>
+                      )}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <button
+                        className="text-button"
+                        onClick={() =>
+                          updateRow(r.key, { showAudit: !r.showAudit })
+                        }
+                      >
+                        {r.showAudit
+                          ? "收合審核表"
+                          : `審核表（${r.audit.questions.length}題）`}
+                      </button>{" "}
+                      <button
+                        className="icon-button"
+                        aria-label={`刪除第${ri + 1}列`}
+                        disabled={rows.length <= 1}
+                        onClick={() => removeRow(r.key)}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </td>
+                  </tr>
+                  {r.showAudit && (
+                    <tr>
+                      <td colSpan={7}>
+                        <AuditFormEditor
+                          value={r.audit}
+                          onChange={(patch) =>
+                            updateRow(
+                              r.key,
+                              { audit: { ...r.audit, ...patch } },
+                              Object.keys(r.errors).filter((k) =>
+                                k.startsWith("q_"),
+                              ),
+                            )
+                          }
+                        />
+                        {Object.entries(r.errors)
+                          .filter(([k]) => k.startsWith("q_"))
+                          .map(([k, msg]) => (
+                            <div key={k} className="field-error">
+                              {msg}
+                            </div>
+                          ))}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="form-actions">
+          <button
+            className="button button-primary"
+            disabled={saving}
+            onClick={handleSave}
+          >
+            {saving ? "儲存中…" : `建立 ${rows.length} 支指標`}
+          </button>
+          <button className="button button-ghost" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

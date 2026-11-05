@@ -4433,3 +4433,13 @@ button:disabled {
   color: var(--muted, #6b7a7d);
   margin: 0;
 }
+
+/* v1.18：批次新增指標 dialog（寬版）＋欄位錯誤訊息 */
+.reviewer-modal.batch-modal {
+  width: min(1180px, 100%);
+}
+.field-error {
+  color: #b91c1c;
+  font-size: 12px;
+  margin-top: 4px;
+}
