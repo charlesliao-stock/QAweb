@@ -60,7 +60,7 @@ const NAV_GROUPS = [
     items: [
       { id: "indicators", label: "指標管理", icon: BookOpenCheck },
       { id: "schedule", label: "品管審查排程", icon: CalendarDays },
-      { id: "audit", label: "指標審查", icon: ClipboardCheck },
+      { id: "audit", label: "品管審查", icon: ClipboardCheck },
       { id: "results", label: "結果分析", icon: FileBarChart2 },
       { id: "capa", label: "CAPA 改善追蹤", icon: Activity },
     ],
@@ -548,7 +548,7 @@ function Shell() {
         {[
           { id: "dashboard", label: "總覽", icon: LayoutDashboard },
           { id: "indicators", label: "指標", icon: BookOpenCheck },
-          { id: "audit", label: "審查", icon: ClipboardCheck },
+          { id: "audit", label: "品管", icon: ClipboardCheck },
           { id: "results", label: "結果", icon: FileBarChart2 },
           { id: "groups", label: "更多", icon: Menu },
         ].map((item) => {
