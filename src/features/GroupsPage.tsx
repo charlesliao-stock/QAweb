@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
+  ChevronUp,
   Download,
   Pencil,
   Plus,
@@ -96,6 +97,30 @@ interface RoleRow {
 interface OptionItem {
   id: string;
   name: string;
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  activeKey,
+  direction,
+  onSort,
+}: {
+  label: string;
+  sortKey: string;
+  activeKey: string;
+  direction: 1 | -1;
+  onSort: (key: string) => void;
+}) {
+  return (
+    <th>
+      <button type="button" className="th-sort" onClick={() => onSort(sortKey)}>
+        {label}
+        {activeKey === sortKey &&
+          (direction === 1 ? <ChevronDown size={13} /> : <ChevronUp size={13} />)}
+      </button>
+    </th>
+  );
 }
 
 interface GroupForm {
@@ -217,6 +242,9 @@ const TITLE_SAMPLE: string[][] = [
   ["執行幹事", "單位"],
 ];
 const TITLE_HEADER = ["職稱名稱", "層級"];
+
+const ROLE_SAMPLE: string[][] = [["角色名稱"], ["自訂角色"]];
+const ROLE_HEADER = ["角色名稱"];
 
 const USER_SAMPLE: string[][] = userTemplateRows();
 const USER_HEADER = USER_TEMPLATE_HEADERS;
@@ -499,6 +527,37 @@ export function GroupsPage({
     isAdmin || (user?.roles ?? []).includes("品管執行幹事");
 
   const [tab, setTab] = useState<Tab>("users");
+  const [sortState, setSortState] = useState<{ key: string; dir: 1 | -1 }>({
+    key: "",
+    dir: 1,
+  });
+  const [userUnitFilter, setUserUnitFilter] = useState("");
+  const [userSearch, setUserSearch] = useState("");
+  const [unitGroupFilter, setUnitGroupFilter] = useState("");
+  const [unitSearch, setUnitSearch] = useState("");
+
+  function toggleListSort(key: string) {
+    setSortState((prev) => ({
+      key,
+      dir: prev.key === key ? (prev.dir === 1 ? -1 : 1) : 1,
+    }));
+  }
+
+  function sortedRows<T>(
+    items: T[],
+    key: string,
+    valueOf: (row: T, key: string) => string | number,
+  ) {
+    return [...items].sort((a, b) => {
+      const av = valueOf(a, key);
+      const bv = valueOf(b, key);
+      const cmp =
+        typeof av === "number" && typeof bv === "number"
+          ? av - bv
+          : String(av).localeCompare(String(bv), "zh-Hant", { numeric: true });
+      return sortState.dir * cmp;
+    });
+  }
 
   // ---- 群組 ----
   const [groups, setGroups] = useState<GroupRow[]>([]);
@@ -541,6 +600,10 @@ export function GroupsPage({
   const [roleOptions, setRoleOptions] = useState<OptionItem[]>([]);
 
   // ---- 角色（v1.21：種子 7 新角色＋成員管理） ----
+  const [roleCreateOpen, setRoleCreateOpen] = useState(false);
+  const [newRoleName, setNewRoleName] = useState("");
+  const [roleCreateError, setRoleCreateError] = useState("");
+  const [roleCreateSaving, setRoleCreateSaving] = useState(false);
   /** 正在管理成員的角色 id（""＝未開啟） */
   const [managingRoleId, setManagingRoleId] = useState("");
   const [roleMemberChecked, setRoleMemberChecked] = useState<string[]>([]);
@@ -566,6 +629,51 @@ export function GroupsPage({
   const [groupUnitChecked, setGroupUnitChecked] = useState<string[]>([]);
   const [groupUnitAdd, setGroupUnitAdd] = useState("");
   const [groupBusy, setGroupBusy] = useState(false);
+
+  const visibleUnits = sortedRows(
+    units.filter((row) => {
+      const keyword = unitSearch.trim().toLocaleLowerCase();
+      return (
+        (!unitGroupFilter || row.groupId === unitGroupFilter) &&
+        (!keyword ||
+          row.code.toLocaleLowerCase().includes(keyword) ||
+          row.name.toLocaleLowerCase().includes(keyword))
+      );
+    }),
+    sortState.key,
+    (row, key) =>
+      key === "unit-name"
+        ? row.name
+        : key === "unit-group"
+          ? row.groupName
+          : key === "unit-count"
+            ? (row.memberCount ?? -1)
+            : row.code,
+  );
+  const visibleUsers = sortedRows(
+    users.filter((row) => {
+      const keyword = userSearch.trim().toLocaleLowerCase();
+      return (
+        (!userUnitFilter || row.unitCode === userUnitFilter) &&
+        (!keyword ||
+          row.staffId.toLocaleLowerCase().includes(keyword) ||
+          row.name.toLocaleLowerCase().includes(keyword))
+      );
+    }),
+    sortState.key,
+    (row, key) =>
+      key === "user-name"
+        ? row.name
+        : key === "user-unit"
+          ? row.unitCode
+          : key === "user-title"
+            ? row.title
+            : key === "user-role"
+              ? row.roles.join("、")
+              : key === "user-status"
+                ? row.status
+                : row.staffId,
+  );
 
   /** 角色清單＋成員數（由 roleOptions 與人員清單衍生） */
   const roleRows: RoleRow[] = useMemo(
@@ -1593,6 +1701,36 @@ export function GroupsPage({
     }
   }
 
+  async function handleRoleCreate() {
+    const name = newRoleName.trim();
+    if (!name) {
+      setRoleCreateError("請輸入角色名稱");
+      return;
+    }
+    if (roleRows.some((role) => role.name === name)) {
+      setRoleCreateError(`角色「${name}」已存在`);
+      return;
+    }
+    setRoleCreateSaving(true);
+    setRoleCreateError("");
+    try {
+      await setDoc(doc(collection(getFirebaseDb(), "roles")), {
+        name,
+        description: "",
+        permissions: emptyPermissions(),
+        ...auditFields(user?.staffId ?? "", true),
+      });
+      setNewRoleName("");
+      setRoleCreateOpen(false);
+      await loadRoles();
+      onAction(`已新增角色「${name}」；請至系統管理設定其權限`);
+    } catch (error) {
+      setRoleCreateError(`新增失敗：${toErrorMessage(error)}`);
+    } finally {
+      setRoleCreateSaving(false);
+    }
+  }
+
   // ================= 單位成員（v1.21） =================
 
   async function handleUnitMembersRemove() {
@@ -1777,6 +1915,36 @@ export function GroupsPage({
             name: r.values[0].trim(),
             ...auditFields(me, true),
           }),
+      ),
+    );
+  }
+
+  function validateRoleRows(rows: string[][]): Promise<PreviewRow[]> {
+    const existing = new Set(roleRows.map((role) => role.name));
+    const seen = new Set<string>();
+    return Promise.resolve(
+      rows.map((row, i) => {
+        const name = (row[0] ?? "").trim();
+        let error = "";
+        if (!name) error = "角色名稱不可空白";
+        else if (existing.has(name)) error = `「${name}」已存在`;
+        else if (seen.has(name)) error = `檔案內重複：${name}`;
+        seen.add(name);
+        return { index: i + 1, values: row, ok: !error, error };
+      }),
+    );
+  }
+
+  async function importRoleRows(rows: PreviewRow[]): Promise<void> {
+    const me = user?.staffId ?? "";
+    await commitInBatches(
+      rows.map((row) => (batch: WriteBatch) =>
+        batch.set(doc(collection(getFirebaseDb(), "roles")), {
+          name: row.values[0].trim(),
+          description: "",
+          permissions: emptyPermissions(),
+          ...auditFields(me, true),
+        }),
       ),
     );
   }
@@ -2030,9 +2198,24 @@ export function GroupsPage({
       return back(() => setTitleView({ kind: "list" }));
     }
     if (tab === "roles") {
-      return managingRoleId
-        ? back(() => setManagingRoleId(""))
-        : undefined;
+      if (roleCreateOpen)
+        return back(() => {
+          setRoleCreateOpen(false);
+          setRoleCreateError("");
+        });
+      if (managingRoleId) return back(() => setManagingRoleId(""));
+      return canManageMaster ? (
+        <button
+          className="button button-primary"
+          onClick={() => {
+            setNewRoleName("");
+            setRoleCreateError("");
+            setRoleCreateOpen(true);
+          }}
+        >
+          <Plus size={16} /> 新增角色
+        </button>
+      ) : undefined;
     }
     if (tab === "users") {
       if (userView.kind === "list")
@@ -2084,8 +2267,61 @@ export function GroupsPage({
         </button>
       </div>
 
+      {tab === "users" && userView.kind === "list" && isAdmin && (
+        <div className="org-filter-row" role="search">
+          <div className="select-wrap">
+            <select
+              value={userUnitFilter}
+              aria-label="依單位篩選人員"
+              onChange={(e) => setUserUnitFilter(e.target.value)}
+            >
+              <option value="">全部單位</option>
+              {units.map((unit) => (
+                <option key={unit.code} value={unit.code}>
+                  {unit.name}（{unit.code}）
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={15} />
+          </div>
+          <input
+            className="text-input"
+            placeholder="搜尋職編／姓名"
+            aria-label="搜尋職編或姓名"
+            value={userSearch}
+            onChange={(e) => setUserSearch(e.target.value)}
+          />
+        </div>
+      )}
+      {tab === "units" && unitView.kind === "list" && (
+        <div className="org-filter-row" role="search">
+          <div className="select-wrap">
+            <select
+              value={unitGroupFilter}
+              aria-label="依組別篩選單位"
+              onChange={(e) => setUnitGroupFilter(e.target.value)}
+            >
+              <option value="">全部組別</option>
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={15} />
+          </div>
+          <input
+            className="text-input"
+            placeholder="搜尋單位代號／名稱"
+            aria-label="搜尋單位代號或名稱"
+            value={unitSearch}
+            onChange={(e) => setUnitSearch(e.target.value)}
+          />
+        </div>
+      )}
+
       {/* 批次上傳工具列（僅清單檢視） */}
-      {tab === "groups" && groupView.kind === "list" && canManageMaster && (
+      {tab === "groups" && groupView.kind !== "edit" && canManageMaster && (
         <div className="batch-toolbar">
           <BatchImporter
             sampleBaseName="群組範例"
@@ -2098,7 +2334,7 @@ export function GroupsPage({
           />
         </div>
       )}
-      {tab === "units" && unitView.kind === "list" && canManageMaster && (
+      {tab === "units" && unitView.kind !== "edit" && canManageMaster && (
         <div className="batch-toolbar">
           <BatchImporter
             sampleBaseName="單位範例"
@@ -2111,7 +2347,7 @@ export function GroupsPage({
           />
         </div>
       )}
-      {tab === "titles" && titleView.kind === "list" && canManageMaster && (
+      {tab === "titles" && titleView.kind !== "edit" && canManageMaster && (
         <div className="batch-toolbar">
           <BatchImporter
             sampleBaseName="職稱範例"
@@ -2124,7 +2360,7 @@ export function GroupsPage({
           />
         </div>
       )}
-      {tab === "users" && userView.kind === "list" && isAdmin && (
+      {tab === "users" && userView.kind !== "edit" && isAdmin && (
         <div className="batch-toolbar">
           <BatchImporter
             sampleBaseName="人員範例"
@@ -2134,6 +2370,19 @@ export function GroupsPage({
             importRows={importUserRows}
             postImportNote="提醒：匯入的人員仍需到 Firebase Console → Authentication 手動建立登入帳號（email 格式為「職編@nurseboard.internal」）。"
             onDone={loadUsers}
+            onAction={onAction}
+          />
+        </div>
+      )}
+      {tab === "roles" && !managingRole && canManageMaster && (
+        <div className="batch-toolbar">
+          <BatchImporter
+            sampleBaseName="角色範例"
+            sampleRows={ROLE_SAMPLE}
+            header={ROLE_HEADER}
+            validateRows={validateRoleRows}
+            importRows={importRoleRows}
+            onDone={loadRoles}
             onAction={onAction}
           />
         </div>
@@ -2156,13 +2405,13 @@ export function GroupsPage({
                 <table className="permission-table">
                   <thead>
                     <tr>
-                      <th>群組名稱</th>
-                      <th>所屬單位數</th>
+                      <SortHeader label="群組名稱" sortKey="group-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                      <SortHeader label="所屬單位數" sortKey="group-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
                       {canManageMaster && <th>操作</th>}
                     </tr>
                   </thead>
                   <tbody>
-                    {groups.map((row) => (
+                    {sortedRows(groups, sortState.key, (row, key) => key === "group-count" ? row.unitCount : row.name).map((row) => (
                       <tr key={row.id}>
                         <td>
                           <b>{row.name}</b>
@@ -2325,15 +2574,17 @@ export function GroupsPage({
                 <table className="permission-table">
                   <thead>
                     <tr>
-                      <th>單位代號</th>
-                      <th>單位名稱</th>
-                      <th>所屬群組</th>
-                      <th>所屬人員數</th>
+                      <SortHeader label="單位代號" sortKey="unit-code" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                      <SortHeader label="單位名稱" sortKey="unit-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                      <SortHeader label="所屬群組" sortKey="unit-group" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                      <SortHeader label="所屬人員數" sortKey="unit-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
                       {canManageMaster && <th>操作</th>}
                     </tr>
                   </thead>
                   <tbody>
-                    {units.map((row) => (
+                    {visibleUnits.length === 0 ? (
+                      <tr><td colSpan={canManageMaster ? 5 : 4} className="muted-text">沒有符合篩選條件的單位</td></tr>
+                    ) : visibleUnits.map((row) => (
                       <tr key={row.code}>
                         <td>
                           <b>{row.code}</b>
@@ -2553,14 +2804,14 @@ export function GroupsPage({
                 <table className="permission-table">
                   <thead>
                     <tr>
-                      <th>職稱名稱</th>
-                      <th>層級</th>
-                      <th>使用人數</th>
+                      <SortHeader label="職稱名稱" sortKey="title-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                      <SortHeader label="層級" sortKey="title-level" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                      <SortHeader label="使用人數" sortKey="title-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
                       {canManageMaster && <th>操作</th>}
                     </tr>
                   </thead>
                   <tbody>
-                    {titles.map((row) => (
+                    {sortedRows(titles, sortState.key, (row, key) => key === "title-level" ? row.level : key === "title-count" ? (row.userCount ?? -1) : row.name).map((row) => (
                       <tr key={row.id}>
                         <td>
                           <b>{row.name}</b>
@@ -2778,17 +3029,19 @@ export function GroupsPage({
               <table className="permission-table">
                 <thead>
                   <tr>
-                    <th>職編</th>
-                    <th>姓名</th>
-                    <th>單位</th>
-                    <th>職稱</th>
-                    <th>角色</th>
-                    <th>狀態</th>
+                    <SortHeader label="職編" sortKey="user-id" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    <SortHeader label="姓名" sortKey="user-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    <SortHeader label="單位" sortKey="user-unit" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    <SortHeader label="職稱" sortKey="user-title" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    <SortHeader label="角色" sortKey="user-role" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    <SortHeader label="狀態" sortKey="user-status" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
                     <th>操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {users.map((row) => (
+                  {visibleUsers.length === 0 ? (
+                    <tr><td colSpan={7} className="muted-text">沒有符合篩選條件的人員</td></tr>
+                  ) : visibleUsers.map((row) => (
                     <tr key={row.staffId}>
                       <td>
                         <b>{row.staffId}</b>
@@ -3097,6 +3350,28 @@ export function GroupsPage({
               <p>如需新增或異動角色成員，請聯絡系統管理員。</p>
             </div>
           </section>
+        ) : roleCreateOpen ? (
+          <section className="panel data-panel indicator-form">
+            <SectionTitle title="新增角色" note="新角色預設無功能權限，建立後請至系統管理設定權限" />
+            {roleCreateError && <div className="login-error">{roleCreateError}</div>}
+            <div className="form-field" style={{ maxWidth: 420 }}>
+              <label className="field-label">角色名稱 *</label>
+              <input
+                className="text-input"
+                value={newRoleName}
+                placeholder="輸入角色名稱"
+                onChange={(event) => setNewRoleName(event.target.value)}
+              />
+            </div>
+            <div className="form-actions">
+              <button className="button button-primary" disabled={roleCreateSaving} onClick={handleRoleCreate}>
+                {roleCreateSaving ? "建立中…" : "建立角色"}
+              </button>
+              <button className="button button-outline" onClick={() => setRoleCreateOpen(false)}>
+                取消
+              </button>
+            </div>
+          </section>
         ) : managingRole ? (
           <section className="panel data-panel">
             <MemberChecklist
@@ -3244,13 +3519,13 @@ export function GroupsPage({
               <table className="permission-table">
                 <thead>
                   <tr>
-                    <th>角色名稱</th>
-                    <th>成員數</th>
+                      <SortHeader label="角色名稱" sortKey="role-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                      <SortHeader label="成員數" sortKey="role-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
                     <th>操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {roleRows.map((row) => (
+                  {sortedRows(roleRows, sortState.key, (row, key) => key === "role-count" ? (row.memberCount ?? -1) : row.name).map((row) => (
                     <tr key={row.id}>
                       <td>
                         <b>{row.name}</b>
@@ -3294,4 +3569,3 @@ export function GroupsPage({
     </>
   );
 }
-

@@ -3220,6 +3220,34 @@ button:disabled {
   cursor: pointer;
 }
 
+/* 人員／單位清單篩選器 */
+.org-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.org-filter-row .select-wrap {
+  flex: 0 0 220px;
+}
+.org-filter-row select,
+.org-filter-row input {
+  height: 38px;
+}
+.org-filter-row input {
+  width: min(320px, 100%);
+}
+@media (max-width: 640px) {
+  .org-filter-row {
+    flex-wrap: wrap;
+  }
+  .org-filter-row .select-wrap,
+  .org-filter-row input {
+    flex: 1 1 180px;
+    width: 100%;
+  }
+}
+
 /* 批次上傳工具列 */
 .batch-toolbar {
   display: flex;
