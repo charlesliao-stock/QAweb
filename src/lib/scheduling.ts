@@ -32,15 +32,21 @@ export const QUICK_MONTHS: Record<2 | 3 | 4, number[]> = {
 export type ReviewFrequency = 2 | 3 | 4;
 /**
  * 審查區間：每次審查連續涵蓋幾個月。
- * v1.18 由下拉選 2／3／4；v1.20 起由頻次衍生（12／頻次：2次→6、3次→4、4次→3），
- * 舊資料可能存 2，解析時一併接受。
+ * v1.23 起下拉只提供 1／2／3（獨立於頻次）；4／6 為 v1.18–v1.20 舊資料相容
+ *（v1.18 下拉 2／3／4；v1.20 由頻次衍生 12／頻次：2次→6、3次→4、4次→3）。
  */
-export type ReviewInterval = 2 | 3 | 4 | 6;
+export type ReviewInterval = 1 | 2 | 3 | 4 | 6;
 
 export const FREQUENCY_OPTIONS: ReviewFrequency[] = [2, 3, 4];
 
+/** 審查區間下拉選項（v1.23：1／2／3 個月） */
+export const INTERVAL_OPTIONS: Array<1 | 2 | 3> = [1, 2, 3];
+
 /** 預設審查頻次（v1.18：季審） */
 export const DEFAULT_FREQUENCY: ReviewFrequency = 4;
+
+/** 新排程預設審查區間（v1.23：3 個月；與預設頻次 4次/年 的舊衍生值一致） */
+export const DEFAULT_INTERVAL_MONTHS: 1 | 2 | 3 = 3;
 
 /** 頻次 → 每次間隔月數（12 個月平分；v1.20） */
 export function intervalMonthsForFrequency(f: ReviewFrequency): ReviewInterval {
@@ -50,7 +56,7 @@ export function intervalMonthsForFrequency(f: ReviewFrequency): ReviewInterval {
 export function frequencyLabel(f: ReviewFrequency): string {
   return `${f}次/年`;
 }
-export function intervalLabel(m: ReviewInterval): string {
+export function intervalLabel(m: number): string {
   return `${m}個月`;
 }
 
@@ -59,9 +65,34 @@ export function parseFrequency(raw: unknown): ReviewFrequency | null {
   return raw === 2 || raw === 3 || raw === 4 ? raw : null;
 }
 
-/** 防禦性解析區間（接受 2／3／4／6；6 為 v1.20 頻次衍生值） */
+/**
+ * 防禦性解析區間（接受 1／2／3／4／6；4／6 為 v1.18–v1.20 舊值相容）。
+ */
 export function parseIntervalMonths(raw: unknown): ReviewInterval | null {
-  return raw === 2 || raw === 3 || raw === 4 || raw === 6 ? raw : null;
+  return raw === 1 || raw === 2 || raw === 3 || raw === 4 || raw === 6
+    ? raw
+    : null;
+}
+
+/**
+ * 編輯器用的區間初值（v1.23）：已存 1／2／3 照用；舊值 4／6 或 null → 3
+ *（4／6 已不在下拉選項內，以最接近的 3 個月取代；儲存後即寫為 3）。
+ */
+export function clampIntervalForEditor(raw: unknown): 1 | 2 | 3 {
+  return raw === 1 || raw === 2 || raw === 3 ? raw : 3;
+}
+
+/**
+ * 有效區間月數（v1.23）：已存值優先；無則由頻次推導（12／頻次，舊規則：
+ * 2次→6、3次→4、4次→3）；皆無 → null（臨時／舊排程）。
+ */
+export function resolveIntervalMonths(
+  frequency: ReviewFrequency | null,
+  intervalMonths: ReviewInterval | null,
+): number | null {
+  if (intervalMonths != null) return intervalMonths;
+  if (frequency != null) return 12 / frequency;
+  return null;
 }
 
 /** 年份篩選選項：2024～2033（v1.18） */
@@ -144,6 +175,23 @@ export const MONTH_LABELS = [
   "11月",
   "12月",
 ];
+
+/**
+ * 起始月份（呼叫端已依週期順序排好）＋區間月數 → 各期區間文字。
+ * 例：[8,12,4]＋2 → ["8-9月","12-1月","4-5月"]；1 個月時只顯示單月。
+ */
+export function intervalRangeLabels(
+  orderedStarts: number[],
+  len: number,
+): string[] {
+  return orderedStarts
+    .filter((m) => Number.isInteger(m) && m >= 1 && m <= 12)
+    .map((m) => {
+      if (len <= 1) return MONTH_LABELS[m - 1];
+      const end = ((m - 1 + len - 1) % 12) + 1;
+      return `${m}-${end}月`;
+    });
+}
 
 /** 審查員主檔（人員管理→審查員頁籤）：依指標分類組別分組 */
 export interface ReviewReviewerDoc {
@@ -783,11 +831,51 @@ export async function previousPeriodSchedule(
   return getSchedule(db, indicatorId, category, prev);
 }
 
+function addCalMonths(
+  y: number,
+  m: number,
+  n: number,
+): { year: number; month: number } {
+  const total = y * 12 + (m - 1) + n;
+  return { year: Math.floor(total / 12), month: (total % 12) + 1 };
+}
+
+/**
+ * 排程 → 全部審查曆年月（v1.23）。
+ * 年度／學年度＋頻次：每個起始月起連續 len 個月（len＝有效區間月數），可跨年；
+ * 臨時／無頻次區間：回傳原月份。依曆年月排序、去重。
+ */
+export function scheduleReviewCalendarMonths(sched: {
+  category: ScheduleCategory;
+  period: string;
+  months: number[];
+  frequency: ReviewFrequency | null;
+  intervalMonths: ReviewInterval | null;
+}): { year: number; month: number }[] {
+  const starts = parseScheduleMonths(sched.months);
+  const len =
+    sched.category === "temp"
+      ? null
+      : resolveIntervalMonths(sched.frequency, sched.intervalMonths);
+  const out = new Map<string, { year: number; month: number }>();
+  for (const m of starts) {
+    const y = monthToCalendarYear(sched.category, sched.period, m);
+    const count = len ?? 1;
+    for (let i = 0; i < count; i++) {
+      const ym = addCalMonths(y, m, i);
+      out.set(`${ym.year}-${ym.month}`, ym);
+    }
+  }
+  return [...out.values()].sort((a, b) => a.year - b.year || a.month - b.month);
+}
+
 /**
  * 依排程展開審查任務。
  *
- * 沿用 buildReviewTasks 的（月份 × 審查員 × 單位）展開邏輯，但月份先經
- * monthToCalendarYear 換算成曆年月後、按曆年分組再展開（reviewTasks 欄位結構不變）。
+ * 沿用 buildReviewTasks 的（月份 × 審查員 × 單位）展開邏輯，
+ * 但月份先以 scheduleReviewCalendarMonths 展開為全部審查曆年月
+ *（起始月＋區間月數，可跨年）後、按曆年分組再展開
+ *（reviewTasks 欄位結構不變）。
  *
  * 產生前先刪除該排程涵蓋曆年、該指標「未執行」的舊任務（已完成的保留，
  * 沿用既有規則）；成功後 audit「產生排程」。回傳新產生任務筆數。
@@ -799,12 +887,12 @@ export async function buildTasksFromSchedule(
   actor: { id: string; name: string },
   deadlineDay = 10,
 ): Promise<number> {
-  const months = parseScheduleMonths(sched.months);
+  // v1.23：起始月＋區間月數展開為全部審查曆年月（可跨年）
+  const reviewMonths = scheduleReviewCalendarMonths(sched);
   const items = assignments?.items ?? [];
-  // 月份 → 曆年分組（學年度會跨兩個曆年）
+  // 曆年月 → 曆年分組（學年度會跨兩個曆年）
   const byYear = new Map<number, number[]>();
-  for (const m of months) {
-    const cy = monthToCalendarYear(sched.category, sched.period, m);
+  for (const { year: cy, month: m } of reviewMonths) {
     const arr = byYear.get(cy) ?? [];
     arr.push(m);
     byYear.set(cy, arr);

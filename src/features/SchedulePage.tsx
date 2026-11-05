@@ -41,7 +41,6 @@ import {
   academicYearOf,
   categoryLabel,
   cycleMonths,
-  monthToCalendarYear,
   periodLabel,
   type CycleCategory,
 } from "../lib/cycle";
@@ -49,21 +48,26 @@ import {
   MONTH_LABELS,
   autoSelectMonths,
   buildTasksFromSchedule,
+  clampIntervalForEditor,
   createTempSchedule,
   DEFAULT_FREQUENCY,
+  DEFAULT_INTERVAL_MONTHS,
   deleteSchedule,
   findDuplicateUnits,
   FREQUENCY_OPTIONS,
   frequencyLabel,
   getSchedule,
+  INTERVAL_OPTIONS,
   intervalLabel,
-  intervalMonthsForFrequency,
+  intervalRangeLabels,
   listSchedules,
   normalizeAssignmentItem,
   parseCaseCount,
   periodForFilter,
   previousPeriodSchedule,
+  resolveIntervalMonths,
   saveSchedule,
+  scheduleReviewCalendarMonths,
   scheduleSetupComplete,
   YEAR_FILTER_OPTIONS,
   yearOptionLabel,
@@ -98,14 +102,11 @@ function fmtTs(ts: unknown): string {
   return "—";
 }
 
-/** 排程月份 → 曆年月清單（學年度會跨兩個曆年） */
+/** 排程 → 全部審查曆年月（起始月＋區間月數展開；v1.23） */
 function scheduleCalendarMonths(
   s: IndicatorSchedule,
 ): { year: number; month: number }[] {
-  return s.months.map((m) => ({
-    year: monthToCalendarYear(s.category, s.period, m),
-    month: m,
-  }));
+  return scheduleReviewCalendarMonths(s);
 }
 
 interface IndicatorLite {
@@ -1505,6 +1506,8 @@ function ScheduleEditor({
   const [months, setMonths] = useState<number[]>([]);
   const [frequency, setFrequency] =
     useState<ReviewFrequency>(DEFAULT_FREQUENCY);
+  const [interval, setInterval] =
+    useState<1 | 2 | 3>(DEFAULT_INTERVAL_MONTHS);
   const caseCount = useCaseCountInput();
   const [unitIds, setUnitIds] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
@@ -1538,12 +1541,16 @@ function ScheduleEditor({
           // 編輯舊排程：保留原月份，不強制重算（v1.18）；改頻次才重算
           setMonths(s.months);
           setFrequency(s.frequency ?? DEFAULT_FREQUENCY);
+          setInterval(clampIntervalForEditor(s.intervalMonths));
         } else {
           // 新排程：依預設頻次自動預選月份（12 個月平分）
           setMonths(autoSelectMonths(DEFAULT_FREQUENCY, monthOrder));
           setFrequency(DEFAULT_FREQUENCY);
+          setInterval(DEFAULT_INTERVAL_MONTHS);
         }
-        caseCount.setValue(s?.caseCount != null ? String(s.caseCount) : "");
+        caseCount.setValue(
+          s?.caseCount != null ? String(s.caseCount) : "3",
+        );
         setUnitIds(s?.unitIds ?? []);
         setNotes(s?.notes ?? "");
         setPrev(pv);
@@ -1569,7 +1576,10 @@ function ScheduleEditor({
     if (!prev) return;
     setMonths([...prev.months]);
     if (prev.frequency) setFrequency(prev.frequency);
-    caseCount.setValue(prev.caseCount != null ? String(prev.caseCount) : "");
+    setInterval(clampIntervalForEditor(prev.intervalMonths));
+    caseCount.setValue(
+      prev.caseCount != null ? String(prev.caseCount) : "3",
+    );
     setUnitIds([...prev.unitIds]);
     setNotes(prev.notes);
     onAction(`已帶入前一期（${prev.periodLabel}）設定，請確認後儲存`);
@@ -1602,8 +1612,8 @@ function ScheduleEditor({
           periodLabel: periodLabel(category, period),
           months: [...months].sort((a, b) => a - b),
           frequency,
-          // v1.20：區間由頻次衍生（12／頻次），供進度計算沿用
-          intervalMonths: intervalMonthsForFrequency(frequency),
+          // v1.23：區間由下拉獨立選擇（1／2／3 個月），不再由頻次衍生
+          intervalMonths: interval,
           refYear: null,
           caseCount: parseCaseCount(cc),
           unitIds: [...unitIds],
@@ -1652,7 +1662,7 @@ function ScheduleEditor({
           <p className="settings-note">讀取中…</p>
         ) : (
           <>
-            <div className="form-grid">
+            <div className="form-row">
               <div className="form-field" style={{ maxWidth: 200 }}>
                 <label className="field-label">年份</label>
                 <div className="select-wrap">
@@ -1712,7 +1722,7 @@ function ScheduleEditor({
               />
             </div>
 
-            <div className="form-grid">
+            <div className="form-row">
               <div className="form-field" style={{ maxWidth: 200 }}>
                 <label className="field-label">審查頻次</label>
                 <div className="select-wrap">
@@ -1734,14 +1744,50 @@ function ScheduleEditor({
               </div>
               <div className="form-field" style={{ maxWidth: 200 }}>
                 <label className="field-label">審查區間</label>
-                <p className="settings-note" style={{ margin: 0 }}>
-                  每次間隔 {intervalMonthsForFrequency(frequency)} 個月
-                </p>
+                <div className="select-wrap">
+                  <select
+                    value={interval}
+                    disabled={!canEdit}
+                    onChange={(e) =>
+                      setInterval(Number(e.target.value) as 1 | 2 | 3)
+                    }
+                  >
+                    {INTERVAL_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {n}個月
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={15} />
+                </div>
+              </div>
+              <div className="form-field" style={{ maxWidth: 200 }}>
+                <label className="field-label">審查件數 *</label>
+                <span className="case-count-field">
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={caseCount.value}
+                    placeholder="3"
+                    disabled={!canEdit}
+                    onChange={(e) => caseCount.onInput(e.target.value)}
+                    aria-label="審查件數"
+                  />
+                  件
+                </span>
               </div>
             </div>
             <p className="settings-note">
-              審查頻次將 12 個月平分（例：4次/年 → 1、4、7、10月；2次/年 →
-              1、7月）；區間為每次審查連續涵蓋的月數。
+              審查頻次將 12 個月平分（例：4次/年 → 1、4、7、10月；學年度
+              3次/年 → 8、12、4月）；審查區間為每次審查連續涵蓋的月數。
+              {months.length > 0 &&
+                ` 本次審查區間：${intervalRangeLabels(
+                  [...months].sort(
+                    (a, b) => monthOrder.indexOf(a) - monthOrder.indexOf(b),
+                  ),
+                  interval,
+                ).join("、")}`}
             </p>
 
             <div className="form-field">
@@ -1783,26 +1829,6 @@ function ScheduleEditor({
                 {category === "academic" &&
                   "學年度月份依 8 月制順序排列（8–12 月為前一年曆年、1–7 月為後一年曆年）。"}
               </p>
-            </div>
-
-            <div className="form-field">
-              <label className="field-label">
-                審查件數 *
-                <span className="muted-text">（適用該期間所有單位；必填）</span>
-              </label>
-              <span className="case-count-field">
-                <input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={caseCount.value}
-                  placeholder="必填"
-                  disabled={!canEdit}
-                  onChange={(e) => caseCount.onInput(e.target.value)}
-                  aria-label="審查件數"
-                />
-                件
-              </span>
             </div>
 
             <div className="form-field">
@@ -2492,6 +2518,18 @@ function ScheduleDetailModal({
       .join("、");
   }, [sched]);
 
+  // v1.23：年度／學年度顯示各期區間（例：8-9月、12-1月、4-5月）；臨時／舊排程顯示起始月份
+  const intervalRangeText = useMemo(() => {
+    if (!sched || sched.category === "temp") return "";
+    const len = resolveIntervalMonths(sched.frequency, sched.intervalMonths);
+    if (len == null) return "";
+    const order = cycleMonths(sched.category, sched.period);
+    const starts = [...sched.months].sort(
+      (a, b) => order.indexOf(a) - order.indexOf(b),
+    );
+    return intervalRangeLabels(starts, len).join("、");
+  }, [sched]);
+
   if (!sched) return null;
   return (
     <Modal
@@ -2513,7 +2551,7 @@ function ScheduleDetailModal({
             </tr>
             <tr>
               <td style={{ whiteSpace: "nowrap" }}><b>審查月份</b></td>
-              <td>{monthLabels || "—"}</td>
+              <td>{intervalRangeText || monthLabels || "—"}</td>
             </tr>
             {!isTemp && (
               <>

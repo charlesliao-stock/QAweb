@@ -3,6 +3,8 @@
  *
  * - 審核區間：年度／學年度用 frequency／intervalMonths 算出各區間；
  *   臨時＝全部月份為一區；無頻次區間資料的舊排程視整期為一區。
+ *   v1.23：區間內每個月皆為審查月（審查月數＝區間月數，進度公式用）；
+ *   intervalMonths 為 null 時由頻次推導（12／頻次，舊規則）。
  * - 「現階段」＝今天所在的區間；今天早於第一區間則用第一區間；
  *   今天晚於最後區間結束月 → null（已結束）。
  * - 進度改以審查紀錄（reviewRecords）計算，不依賴任務表。
@@ -18,7 +20,7 @@ export interface CalendarYM {
 export interface ReviewInterval {
   start: CalendarYM;
   end: CalendarYM;
-  /** 該區間內的審查起始月份（曆年月） */
+  /** 該區間內的審查月份（曆年月；v1.23 起為區間內全部月份） */
   reviewMonths: CalendarYM[];
   /** 區間內所有曆年月（start..end） */
   allMonths: CalendarYM[];
@@ -113,17 +115,20 @@ export function scheduleIntervals(
   }
 
   const freq = sched.frequency;
-  const len = sched.intervalMonths;
+  // v1.23：區間月數無則由頻次推導（12／頻次，舊規則）；區間內每月皆為審查月
+  let len = sched.intervalMonths;
+  if (len == null && freq != null && freq > 0) len = 12 / freq;
   if (freq != null && len != null && freq > 0 && len > 0) {
     // 起始月依曆年排序（學年度跨年時 8–12 月在前）
     const starts = months.map(calOf).sort(cmpYM);
     return starts.map((s) => {
       const e = addMonths(s, len - 1);
+      const all = monthRange(s, e);
       return {
         start: s,
         end: e,
-        reviewMonths: [s],
-        allMonths: monthRange(s, e),
+        reviewMonths: all,
+        allMonths: all,
       };
     });
   }

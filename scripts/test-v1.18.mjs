@@ -108,7 +108,7 @@ assert("parseFrequency(5)＝null", L.parseFrequency(5) === null);
 assert("parseFrequency('4')＝null", L.parseFrequency("4") === null);
 assert("parseIntervalMonths(2)＝2（舊資料相容）", L.parseIntervalMonths(2) === 2);
 assert("parseIntervalMonths(6)＝6（v1.20 衍生值）", L.parseIntervalMonths(6) === 6);
-assert("parseIntervalMonths(1)＝null", L.parseIntervalMonths(1) === null);
+assert("parseIntervalMonths(1)＝1（v1.23 新選項）", L.parseIntervalMonths(1) === 1);
 assert("parseIntervalMonths(5)＝null", L.parseIntervalMonths(5) === null);
 assert("frequencyLabel(4)＝4次/年", L.frequencyLabel(4) === "4次/年");
 assert("intervalLabel(3)＝3個月", L.intervalLabel(3) === "3個月");

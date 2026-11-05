@@ -3131,6 +3131,13 @@ button:disabled {
   grid-template-columns: 1fr 1fr;
   gap: 0 18px;
 }
+/* 橫向一列（v1.23 排程設定：年分／年別／複製前一期、頻次／區間／件數） */
+.form-row {
+  display: flex;
+  gap: 0 18px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
 .form-field {
   margin-bottom: 14px;
 }
@@ -3778,15 +3785,19 @@ button:disabled {
   margin-top: 2px;
 }
 .month-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  gap: 6px;
 }
 .month-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: center;
+  gap: 4px;
   border: 1px solid #dde5e4;
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 6px 4px;
   cursor: pointer;
+  white-space: nowrap;
 }
 .month-cell.checked {
   border-color: var(--teal);
