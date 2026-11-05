@@ -16,7 +16,6 @@ import {
   CircleDashed,
   Copy,
   Eye,
-  Pencil,
   Plus,
   Trash2,
   X,
@@ -46,20 +45,32 @@ import {
 } from "../lib/cycle";
 import {
   MONTH_LABELS,
-  QUICK_MONTHS,
+  autoSelectMonths,
   buildTasksFromSchedule,
   createTempSchedule,
+  DEFAULT_FREQUENCY,
+  DEFAULT_INTERVAL,
   deleteSchedule,
   findDuplicateUnits,
+  FREQUENCY_OPTIONS,
+  frequencyLabel,
   getSchedule,
+  INTERVAL_OPTIONS,
+  intervalLabel,
   listSchedules,
   normalizeAssignmentItem,
   parseCaseCount,
+  periodForFilter,
   previousPeriodSchedule,
   saveSchedule,
+  scheduleSetupComplete,
+  YEAR_FILTER_OPTIONS,
+  yearOptionLabel,
   type AssignmentItem,
   type IndicatorAssignment,
   type IndicatorSchedule,
+  type ReviewFrequency,
+  type ReviewInterval,
 } from "../lib/scheduling";
 
 function toErrorMessage(error: unknown): string {
@@ -85,16 +96,6 @@ function fmtTs(ts: unknown): string {
     /* ignore */
   }
   return "—";
-}
-
-/** 期間下拉選項：年度→曆年；學年度→民國學年 */
-function periodOptionsFor(cat: CycleCategory): string[] {
-  if (cat === "academic") {
-    const roc = academicYearOf(new Date());
-    return [roc - 1, roc, roc + 1, roc + 2].map(String);
-  }
-  const cy = new Date().getFullYear();
-  return [cy - 1, cy, cy + 1, cy + 2].map(String);
 }
 
 /** 排程月份 → 曆年月清單（學年度會跨兩個曆年） */
@@ -133,8 +134,6 @@ interface ReviewerLite {
   name: string;
 }
 
-type CatFilter = "all" | CycleCategory;
-
 interface RowItem {
   key: string;
   indicatorId: string;
@@ -154,11 +153,10 @@ type View =
   | {
       kind: "schedule";
       indicatorId: string;
-      category: CycleCategory;
-      period: string;
+      category: "year" | "academic";
+      year: number;
     }
-  | { kind: "assignment"; indicatorId: string }
-  | { kind: "tasks"; row: RowItem };
+  | { kind: "assignment"; indicatorId: string };
 
 const PILL_OK = "status-pill success";
 const PILL_NONE = "status-pill muted";
@@ -169,15 +167,48 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   locked: "已鎖定",
 };
 
-const CAT_ORDER: CycleCategory[] = ["year", "academic", "temp"];
-
 /* ================= 純函式（UI 判定邏輯，可單元測試） ================= */
 
-/** 排程 pill：有排程且受審單位非空 → "done"（已排），否則 "none"（未排） */
+/**
+ * 排程 pill：設定完成（受審單位≥1、月份≥1、審查件數>0）→ "done"（已排），
+ * 否則 "none"（未排）。v1.18 起件數為必填，一併納入判定。
+ */
 export function schedulePillState(
   schedule: IndicatorSchedule | null,
 ): "done" | "none" {
-  return schedule && schedule.unitIds.length > 0 ? "done" : "none";
+  return scheduleSetupComplete(schedule) ? "done" : "none";
+}
+
+/**
+ * 分工表合併（v1.18）：把選中的審查員 × 選中的單位併入既有分工表；
+ * 已存在者保留其每單位件數（透傳），新單位件數為 null。
+ * 純函式，可單元測試。
+ */
+export function mergeItemsWithUnits(
+  prev: AssignmentItem[],
+  reviewerIds: string[],
+  unitIds: string[],
+): AssignmentItem[] {
+  const next = prev.map((it) => ({
+    reviewerId: it.reviewerId,
+    units: it.units.map((u) => ({ ...u })),
+  }));
+  for (const rid of reviewerIds) {
+    const existing = next.find((it) => it.reviewerId === rid);
+    const existingMap = new Map(
+      (existing?.units ?? []).map((u) => [u.unitId, u.caseCount]),
+    );
+    const merged = [...new Set([...existingMap.keys(), ...unitIds])]
+      .map((unitId) => ({
+        unitId,
+        caseCount: existingMap.get(unitId) ?? null,
+      }))
+      .sort((a, b) => a.unitId.localeCompare(b.unitId, "zh-Hant"));
+    const idx = next.findIndex((it) => it.reviewerId === rid);
+    if (idx >= 0) next[idx] = { reviewerId: rid, units: merged };
+    else next.push({ reviewerId: rid, units: merged });
+  }
+  return next.sort((a, b) => a.reviewerId.localeCompare(b.reviewerId, "zh-Hant"));
 }
 
 /** 分工表 pill：有分工表且有項目 → "done"，否則 "none" */
@@ -261,15 +292,17 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
   >(new Map());
   const [deadlineDay, setDeadlineDay] = useState(10);
 
-  // 篩選：類別／期間／組別／關鍵字
-  const [catFilter, setCatFilter] = useState<CatFilter>("all");
-  const [period, setPeriod] = useState(() => String(new Date().getFullYear()));
+  // 篩選（v1.18）：年份／年別（鎖定系統統計週期）／組別／關鍵字／顯示加審
+  const [filterYear, setFilterYear] = useState(() => new Date().getFullYear());
+  const [statsCycle, setStatsCycle] = useState<"year" | "academic">("year");
+  const [showTemp, setShowTemp] = useState(false);
   const [filterGroup, setFilterGroup] = useState("");
   const [filterKeyword, setFilterKeyword] = useState("");
 
   const [generatingKey, setGeneratingKey] = useState<string | null>(null);
   const [addAuditRow, setAddAuditRow] = useState<RowItem | null>(null);
   const [selfAuditOpen, setSelfAuditOpen] = useState(false);
+  const [detailRow, setDetailRow] = useState<RowItem | null>(null);
 
   const usersMap = useMemo(() => {
     const m = new Map<string, string>();
@@ -285,14 +318,13 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     [indicators],
   );
 
-  // 系統參數：統計週期（預設期間用）＋補審截止日（產生任務用）
+  // 系統參數：統計週期（年別篩選鎖定用；設定改了這裡跟著變）＋補審截止日（產生任務用）
   useEffect(() => {
     (async () => {
       try {
         const snap = await getDoc(doc(getFirebaseDb(), "systemParams", "config"));
         const data = snap.data() as Record<string, unknown> | undefined;
-        const sc = data?.statsCycle === "academic" ? "academic" : "year";
-        setPeriod(defaultPeriodForStatsCycle(sc));
+        setStatsCycle(data?.statsCycle === "academic" ? "academic" : "year");
         const dd = data?.supplementDeadlineDay;
         if (typeof dd === "number" && dd >= 1 && dd <= 31) setDeadlineDay(dd);
       } catch {
@@ -437,17 +469,13 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     loadData();
   }, [loadData]);
 
-  const defaultYearPeriod = useMemo(() => defaultPeriodForStatsCycle("year"), []);
-  const defaultAcademicPeriod = useMemo(
-    () => defaultPeriodForStatsCycle("academic"),
-    [],
-  );
+  // v1.18：年別鎖定系統統計週期；一列＝一支啟用指標＋當期；臨時排程另列
+  const cycle: "year" | "academic" = statsCycle;
+  const period = periodForFilter(cycle, filterYear);
 
-  // ---------- 主畫面列：一列＝（指標×類別）當期；無排程也列出以便建立 ----------
+  // ---------- 主畫面列：一列＝（啟用指標×當期）；無排程也列出以便建立 ----------
   const rows: RowItem[] = useMemo(() => {
-    const cats: CycleCategory[] =
-      catFilter === "all" ? ["year", "academic", "temp"] : [catFilter];
-    let inds = indicators;
+    let inds = indicators.filter((i) => i.status === "啟用");
     if (filterGroup) inds = inds.filter((i) => i.groupId === filterGroup);
     const kw = filterKeyword.trim().toLowerCase();
     if (kw)
@@ -458,60 +486,39 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     const out: RowItem[] = [];
     for (const ind of inds) {
       const groupName = groupMap.get(ind.groupId) ?? "—";
-      for (const cat of cats) {
-        if (cat === "temp") {
-          const temps = schedules
-            .filter((s) => s.indicatorId === ind.id && s.category === "temp")
-            .sort((a, b) => b.period.localeCompare(a.period));
-          if (temps.length === 0) {
-            out.push({
-              key: `${ind.id}||temp||new`,
-              indicatorId: ind.id,
-              name: ind.name,
-              groupId: ind.groupId,
-              groupName,
-              status: ind.status,
-              category: cat,
-              period: "",
-              schedule: null,
-            });
-          } else {
-            for (const s of temps) {
-              out.push({
-                key: `${ind.id}||temp||${s.period}`,
-                indicatorId: ind.id,
-                name: ind.name,
-                groupId: ind.groupId,
-                groupName,
-                status: ind.status,
-                category: cat,
-                period: s.period,
-                schedule: s,
-              });
-            }
-          }
-        } else {
-          const p =
-            catFilter === "all"
-              ? cat === "year"
-                ? defaultYearPeriod
-                : defaultAcademicPeriod
-              : period;
-          const s =
-            schedules.find(
-              (x) =>
-                x.indicatorId === ind.id && x.category === cat && x.period === p,
-            ) ?? null;
+      const s =
+        schedules.find(
+          (x) =>
+            x.indicatorId === ind.id &&
+            x.category === cycle &&
+            x.period === period,
+        ) ?? null;
+      out.push({
+        key: `${ind.id}||${cycle}||${period}`,
+        indicatorId: ind.id,
+        name: ind.name,
+        groupId: ind.groupId,
+        groupName,
+        status: ind.status,
+        category: cycle,
+        period,
+        schedule: s,
+      });
+      if (showTemp) {
+        const temps = schedules
+          .filter((x) => x.indicatorId === ind.id && x.category === "temp")
+          .sort((a, b) => b.period.localeCompare(a.period));
+        for (const t of temps) {
           out.push({
-            key: `${ind.id}||${cat}||${p}`,
+            key: `${ind.id}||temp||${t.period}`,
             indicatorId: ind.id,
             name: ind.name,
             groupId: ind.groupId,
             groupName,
             status: ind.status,
-            category: cat,
-            period: p,
-            schedule: s,
+            category: "temp",
+            period: t.period,
+            schedule: t,
           });
         }
       }
@@ -520,19 +527,29 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
       (a, b) =>
         a.groupName.localeCompare(b.groupName, "zh-Hant") ||
         a.name.localeCompare(b.name, "zh-Hant") ||
-        CAT_ORDER.indexOf(a.category) - CAT_ORDER.indexOf(b.category),
+        (a.category === "temp" ? 1 : 0) - (b.category === "temp" ? 1 : 0) ||
+        b.period.localeCompare(a.period),
     );
   }, [
     indicators,
     schedules,
     groupMap,
-    catFilter,
+    cycle,
     period,
     filterGroup,
     filterKeyword,
-    defaultYearPeriod,
-    defaultAcademicPeriod,
+    showTemp,
   ]);
+
+  /** 各指標的臨時（加審）筆數：加審按鈕下方顯示用 */
+  const tempCountByIndicator = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of schedules) {
+      if (s.category !== "temp") continue;
+      m.set(s.indicatorId, (m.get(s.indicatorId) ?? 0) + 1);
+    }
+    return m;
+  }, [schedules]);
 
   /** 該列排程曆年月已產生的任務數（未執行／已完成） */
   function taskCountsFor(row: RowItem): { pending: number; done: number } {
@@ -591,28 +608,6 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     }
   }
 
-  function changeCatFilter(v: CatFilter) {
-    setCatFilter(v);
-    if (v === "year" || v === "academic") setPeriod(defaultPeriodForStatsCycle(v));
-  }
-
-  // 加審對話框的審核員候選：該組審查員 ∪ 分工表審查員
-  const addAuditReviewers: ReviewerLite[] = useMemo(() => {
-    if (!addAuditRow) return [];
-    const map = new Map<string, string>();
-    for (const r of reviewersByGroup.get(addAuditRow.groupId) ?? []) {
-      map.set(r.personId, r.name);
-    }
-    for (const it of assignments.get(addAuditRow.indicatorId)?.items ?? []) {
-      if (!map.has(it.reviewerId)) {
-        map.set(it.reviewerId, usersMap.get(it.reviewerId) ?? it.reviewerId);
-      }
-    }
-    return [...map.entries()]
-      .map(([personId, name]) => ({ personId, name }))
-      .sort((a, b) => a.personId.localeCompare(b.personId, "zh-Hant"));
-  }, [addAuditRow, reviewersByGroup, assignments, usersMap]);
-
   // 自審：自己單位在職人員
   const myUnitUsers = useMemo(
     () =>
@@ -643,39 +638,47 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
         />
         <section className="panel">
           <div className="filter-bar">
-            <div className="form-field" style={{ maxWidth: 160 }}>
-              <label className="field-label">類別</label>
+            <div className="form-field" style={{ maxWidth: 170 }}>
+              <label className="field-label">年份</label>
               <div className="select-wrap">
                 <select
-                  value={catFilter}
-                  onChange={(e) => changeCatFilter(e.target.value as CatFilter)}
+                  value={filterYear}
+                  onChange={(e) => setFilterYear(Number(e.target.value))}
                 >
-                  <option value="all">全部</option>
-                  <option value="year">年度</option>
-                  <option value="academic">學年度</option>
-                  <option value="temp">臨時</option>
+                  {YEAR_FILTER_OPTIONS.map((y) => (
+                    <option key={y} value={y}>
+                      {yearOptionLabel(y)}
+                    </option>
+                  ))}
                 </select>
                 <ChevronDown size={15} />
               </div>
             </div>
-            {catFilter !== "all" && catFilter !== "temp" && (
-              <div className="form-field" style={{ maxWidth: 160 }}>
-                <label className="field-label">期間</label>
-                <div className="select-wrap">
-                  <select
-                    value={period}
-                    onChange={(e) => setPeriod(e.target.value)}
-                  >
-                    {periodOptionsFor(catFilter).map((p) => (
-                      <option key={p} value={p}>
-                        {catFilter === "academic" ? `${p}學年度` : `${p}年`}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
+            <div className="form-field" style={{ maxWidth: 140 }}>
+              <label className="field-label">年別</label>
+              <div className="select-wrap">
+                <select
+                  value={statsCycle}
+                  disabled
+                  title="年別跟隨系統管理「統計週期」設定"
+                >
+                  <option value="year">年度</option>
+                  <option value="academic">學年度</option>
+                </select>
+                <ChevronDown size={15} />
               </div>
-            )}
+            </div>
+            <div className="form-field" style={{ maxWidth: 130 }}>
+              <label className="field-label">&nbsp;</label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={showTemp}
+                  onChange={(e) => setShowTemp(e.target.checked)}
+                />
+                <span>顯示加審</span>
+              </label>
+            </div>
             <div className="form-field" style={{ maxWidth: 200 }}>
               <label className="field-label">組別篩選</label>
               <div className="select-wrap">
@@ -703,11 +706,10 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               />
             </div>
           </div>
-          {catFilter === "all" && (
-            <p className="settings-note">
-              全部類別：年度列為今年、學年度列為本學年度；臨時列出所有臨時排程。
-            </p>
-          )}
+          <p className="settings-note">
+            年別跟隨系統管理「統計週期」設定（年度＝1–12 月；學年度＝8 月制，8
+            月～隔年 7 月）。清單只列出已啟用的指標。
+          </p>
         </section>
 
         {loading ? (
@@ -726,7 +728,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                 <thead>
                   <tr>
                     <th>組別</th>
-                    <th>類別</th>
+                    <th>年別</th>
                     <th>指標編號</th>
                     <th>指標名稱</th>
                     <th>排程/單位設定</th>
@@ -743,26 +745,38 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                     const asgDone = assignmentPillState(asg) === "done";
                     const { pending, done } = taskCountsFor(r);
                     const hasTasks = pending + done > 0;
+                    // v1.18：產生排程需兩邊設定都完成（排程／單位設定：
+                    // 單位≥1、月份≥1、件數>0；審查員／單位設定：分工表≥1 筆）
                     const canGenerate =
                       canEdit && !!sched && schedDone && asgDone;
                     const isTemp = r.category === "temp";
-                    // v1.17.0 補強：只有「啟用」的指標能產生排程／加審（查閱不受限）
-                    const indicatorActive = r.status === "啟用";
-                    const inactiveHint = "需先將指標設為啟用才能排程";
+                    const tempCount =
+                      tempCountByIndicator.get(r.indicatorId) ?? 0;
                     return (
                       <tr key={r.key}>
                         <td>{r.groupName}</td>
                         <td>
-                          {categoryLabel(r.category)}
-                          {isTemp && sched?.selfReview && (
-                            <div>
-                              <span className="status-pill info">自審</span>
-                            </div>
-                          )}
-                          {!isTemp && (
-                            <div className="muted-text">
-                              {periodLabel(r.category, r.period)}
-                            </div>
+                          {isTemp ? (
+                            <>
+                              臨時
+                              {sched?.selfReview && (
+                                <div>
+                                  <span className="status-pill info">自審</span>
+                                </div>
+                              )}
+                              {sched?.refYear != null && (
+                                <div className="muted-text">
+                                  {sched.refYear}年加審
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              {categoryLabel(r.category)}
+                              <div className="muted-text">
+                                {periodLabel(r.category, r.period)}
+                              </div>
+                            </>
                           )}
                         </td>
                         <td className="muted-text">{r.indicatorId}</td>
@@ -789,8 +803,8 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                                 setView({
                                   kind: "schedule",
                                   indicatorId: r.indicatorId,
-                                  category: r.category,
-                                  period: r.period,
+                                  category: r.category as "year" | "academic",
+                                  year: filterYear,
                                 })
                               }
                               title={
@@ -876,20 +890,16 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                               <button
                                 className="button button-outline button-sm"
                                 disabled={
-                                  !indicatorActive ||
-                                  !canGenerate ||
-                                  generatingKey === r.key
+                                  !canGenerate || generatingKey === r.key
                                 }
                                 title={
-                                  !indicatorActive
-                                    ? inactiveHint
-                                    : !canEdit
-                                      ? "需排程建立／改派權限"
-                                      : !schedDone
-                                        ? "請先完成排程／單位設定"
-                                        : !asgDone
-                                          ? "請先完成單位／審查員設定"
-                                          : "依排程展開審查任務"
+                                  !canEdit
+                                    ? "需排程建立／改派權限"
+                                    : !schedDone
+                                      ? "請先完成排程／單位設定（單位、月份、件數皆需設定）"
+                                      : !asgDone
+                                        ? "請先完成審查員／單位設定（分工表至少一筆）"
+                                        : "依排程展開審查任務"
                                 }
                                 onClick={() => handleGenerate(r)}
                               >
@@ -901,24 +911,24 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                             </>
                           )}
                           {!isTemp && canEdit && (
-                            <button
-                              className="button button-outline button-sm"
-                              disabled={!indicatorActive}
-                              onClick={() => setAddAuditRow(r)}
-                              title={
-                                !indicatorActive
-                                  ? inactiveHint
-                                  : "建立臨時加審排程"
-                              }
-                            >
-                              <Plus size={14} /> 加審
-                            </button>
+                            <>
+                              <button
+                                className="button button-outline button-sm"
+                                onClick={() => setAddAuditRow(r)}
+                                title="建立臨時加審排程"
+                              >
+                                <Plus size={14} /> 加審
+                              </button>
+                              <div className="muted-text">
+                                臨時 {tempCount} 筆
+                              </div>
+                            </>
                           )}{" "}
                           {!!sched && (
                             <button
                               className="text-button"
-                              onClick={() => setView({ kind: "tasks", row: r })}
-                              title="查閱此排程產生的任務"
+                              onClick={() => setDetailRow(r)}
+                              title="查閱設定內容與任務"
                             >
                               <Eye size={14} /> 查閱
                             </button>
@@ -948,17 +958,30 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
           <AddAuditDialog
             row={addAuditRow}
             units={units}
+            users={users}
             groupMap={groupMap}
+            reviewersByGroup={reviewersByGroup}
             assignment={assignments.get(addAuditRow.indicatorId) ?? null}
-            reviewerOptions={addAuditReviewers}
             actor={actor}
             deadlineDay={deadlineDay}
+            filterYear={filterYear}
+            cycle={cycle}
             onAction={onAction}
             onClose={() => setAddAuditRow(null)}
             onDone={() => {
               setAddAuditRow(null);
               loadData();
             }}
+          />
+        )}
+        {detailRow && (
+          <ScheduleDetailModal
+            row={detailRow}
+            assignment={assignments.get(detailRow.indicatorId) ?? null}
+            usersMap={usersMap}
+            unitNameOf={unitNameOf}
+            onAction={onAction}
+            onClose={() => setDetailRow(null)}
           />
         )}
         {selfAuditOpen && (
@@ -984,10 +1007,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
 
   // ================= 子畫面 =================
   const subView = view as Exclude<View, { kind: "list" }>;
-  const indicator =
-    subView.kind === "tasks"
-      ? indicatorOf(subView.row.indicatorId)
-      : indicatorOf(subView.indicatorId);
+  const indicator = indicatorOf(subView.indicatorId);
   return (
     <>
       <PageHeading page="schedule" />
@@ -1009,7 +1029,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               indicatorId={indicator.id}
               indicatorName={indicator.name}
               category={view.category}
-              initialPeriod={view.period}
+              initialYear={view.year}
               units={units}
               groupMap={groupMap}
               canEdit={canEdit}
@@ -1022,7 +1042,8 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
           {view.kind === "assignment" && (
             <AssignmentEditor
               indicatorId={indicator.id}
-              reviewers={reviewersByGroup.get(indicator.groupId) ?? []}
+              indicatorGroupId={indicator.groupId}
+              reviewersByGroup={reviewersByGroup}
               units={units}
               groupMap={groupMap}
               usersMap={usersMap}
@@ -1030,14 +1051,6 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               canEdit={canEdit}
               onAction={onAction}
               onSaved={backToList}
-            />
-          )}
-          {view.kind === "tasks" && (
-            <TasksView
-              row={view.row}
-              usersMap={usersMap}
-              unitNameOf={unitNameOf}
-              onAction={onAction}
             />
           )}
         </>
@@ -1087,7 +1100,7 @@ function Modal({
   );
 }
 
-/** 群組→單位樹（複選／全選） */
+/** 群組→單位樹（可縮放、總全選、群組全選、單位複選；v1.18） */
 function UnitTreePicker({
   units,
   groupMap,
@@ -1113,6 +1126,14 @@ function UnitTreePicker({
     return map;
   }, [units]);
   const sel = useMemo(() => new Set(selected), [selected]);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  const allCodes = useMemo(
+    () => [...unitsByGroup.values()].flat().map((u) => u.code),
+    [unitsByGroup],
+  );
+  const allChecked =
+    allCodes.length > 0 && allCodes.every((c) => sel.has(c));
 
   function toggle(code: string) {
     const next = new Set(sel);
@@ -1123,47 +1144,203 @@ function UnitTreePicker({
   function toggleGroup(gid: string) {
     const codes = (unitsByGroup.get(gid) ?? []).map((u) => u.code);
     const next = new Set(sel);
-    const allChecked = codes.length > 0 && codes.every((c) => next.has(c));
-    if (allChecked) codes.forEach((c) => next.delete(c));
+    const groupChecked = codes.length > 0 && codes.every((c) => next.has(c));
+    if (groupChecked) codes.forEach((c) => next.delete(c));
     else codes.forEach((c) => next.add(c));
     onChange([...next]);
+  }
+  function toggleAll() {
+    const next = new Set(sel);
+    if (allChecked) allCodes.forEach((c) => next.delete(c));
+    else allCodes.forEach((c) => next.add(c));
+    onChange([...next]);
+  }
+  function toggleCollapse(gid: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(gid)) next.delete(gid);
+      else next.add(gid);
+      return next;
+    });
   }
 
   return (
     <>
+      <label className="check-row" style={{ marginBottom: 8 }}>
+        <input
+          type="checkbox"
+          checked={allChecked}
+          disabled={disabled}
+          onChange={toggleAll}
+        />
+        <b>
+          全選（已選 {sel.size}／{allCodes.length}）
+        </b>
+      </label>
       {[...unitsByGroup.entries()].map(([gid, list]) => {
         const codes = list.map((u) => u.code);
-        const allChecked = codes.length > 0 && codes.every((c) => sel.has(c));
+        const groupChecked =
+          codes.length > 0 && codes.every((c) => sel.has(c));
+        const isCollapsed = collapsed.has(gid);
         return (
           <div key={gid} className="unit-group-block">
-            <label className="check-row unit-group-head">
-              <input
-                type="checkbox"
-                checked={allChecked}
-                disabled={disabled}
-                onChange={() => toggleGroup(gid)}
-              />
-              <b>
-                {groupMap.get(gid) ?? gid}（全選）
-              </b>
-            </label>
-            <div className="unit-check-grid">
-              {list.map((u) => (
-                <label key={u.code} className="check-row">
-                  <input
-                    type="checkbox"
-                    checked={sel.has(u.code)}
-                    disabled={disabled}
-                    onChange={() => toggle(u.code)}
-                  />
-                  <span title={u.code}>{unitNameOf(u.code)}</span>
-                </label>
-              ))}
+            <div className="unit-group-head" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => toggleCollapse(gid)}
+                aria-label={isCollapsed ? `展開${groupMap.get(gid) ?? gid}` : `收合${groupMap.get(gid) ?? gid}`}
+              >
+                {isCollapsed ? "展開 ▸" : "收合 ▾"}
+              </button>
+              <label className="check-row" style={{ margin: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={groupChecked}
+                  disabled={disabled}
+                  onChange={() => toggleGroup(gid)}
+                />
+                <b>
+                  {groupMap.get(gid) ?? gid}（全選）
+                </b>
+              </label>
+              <span className="muted-text">
+                {codes.filter((c) => sel.has(c)).length}/{codes.length}
+              </span>
             </div>
+            {!isCollapsed && (
+              <div className="unit-check-grid">
+                {list.map((u) => (
+                  <label key={u.code} className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={sel.has(u.code)}
+                      disabled={disabled}
+                      onChange={() => toggle(u.code)}
+                    />
+                    <span title={u.code}>{unitNameOf(u.code)}</span>
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}
     </>
+  );
+}
+
+/** 選取選項（群組篩選＋搜尋＋複選共用；v1.18 審查員／單位選取用） */
+export interface PickerOption {
+  id: string;
+  label: string;
+  sub: string;
+  groupId: string;
+}
+
+/** 群組下拉篩選＋搜尋框＋複選清單（審查員／單位選取共用） */
+function OptionMultiPicker({
+  title,
+  options,
+  groupMap,
+  defaultGroupId,
+  selected,
+  onToggle,
+  disabled,
+  searchPlaceholder,
+}: {
+  title: string;
+  options: PickerOption[];
+  groupMap: Map<string, string>;
+  defaultGroupId?: string;
+  selected: string[];
+  onToggle: (id: string) => void;
+  disabled?: boolean;
+  searchPlaceholder?: string;
+}) {
+  const [groupFilter, setGroupFilter] = useState(defaultGroupId ?? "");
+  const [kw, setKw] = useState("");
+  const sel = useMemo(() => new Set(selected), [selected]);
+  const filtered = useMemo(() => {
+    const q = kw.trim().toLowerCase();
+    return options.filter((o) => {
+      if (groupFilter && o.groupId !== groupFilter) return false;
+      if (
+        q &&
+        !(
+          o.label.toLowerCase().includes(q) ||
+          o.id.toLowerCase().includes(q)
+        )
+      )
+        return false;
+      return true;
+    });
+  }, [options, groupFilter, kw]);
+  return (
+    <div className="form-field">
+      <label className="field-label">
+        {title}
+        {selected.length > 0 && `：已選 ${selected.length}`}
+      </label>
+      <div
+        style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}
+      >
+        <div className="select-wrap" style={{ maxWidth: 200 }}>
+          <select
+            value={groupFilter}
+            onChange={(e) => setGroupFilter(e.target.value)}
+            disabled={disabled}
+            aria-label={`${title}：組別篩選`}
+          >
+            <option value="">全部組別</option>
+            {[...groupMap.entries()].map(([id, name]) => (
+              <option key={id} value={id}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <ChevronDown size={15} />
+        </div>
+        <input
+          className="text-input"
+          style={{ maxWidth: 220 }}
+          placeholder={searchPlaceholder ?? "搜尋名稱或代碼"}
+          value={kw}
+          onChange={(e) => setKw(e.target.value)}
+          disabled={disabled}
+        />
+      </div>
+      <div
+        style={{
+          maxHeight: 220,
+          overflow: "auto",
+          border: "1px solid #e5e7eb",
+          borderRadius: 8,
+          padding: 8,
+        }}
+      >
+        {filtered.length === 0 ? (
+          <p className="settings-note">無符合項目</p>
+        ) : (
+          <div className="unit-check-grid">
+            {filtered.map((o) => (
+              <label key={o.id} className="check-row">
+                <input
+                  type="checkbox"
+                  checked={sel.has(o.id)}
+                  disabled={disabled}
+                  onChange={() => onToggle(o.id)}
+                />
+                <span>
+                  {o.label}
+                  {o.sub && <span className="muted-text">（{o.sub}）</span>}
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1220,13 +1397,13 @@ function useCaseCountInput(initial = "") {
   return { value, setValue, onInput };
 }
 
-/* ================= 排程設定編輯器（年度／學年度） ================= */
+/* ================= 排程設定編輯器（年度／學年度；v1.18 頻次＋區間） ================= */
 
 function ScheduleEditor({
   indicatorId,
   indicatorName,
   category,
-  initialPeriod,
+  initialYear,
   units,
   groupMap,
   canEdit,
@@ -1237,8 +1414,8 @@ function ScheduleEditor({
 }: {
   indicatorId: string;
   indicatorName: string;
-  category: CycleCategory;
-  initialPeriod: string;
+  category: "year" | "academic";
+  initialYear: number;
   units: UnitLite[];
   groupMap: Map<string, string>;
   canEdit: boolean;
@@ -1247,14 +1424,13 @@ function ScheduleEditor({
   onSaved: () => void;
   onBack: () => void;
 }) {
-  const periodOptions = useMemo(
-    () => periodOptionsFor(category),
-    [category],
-  );
-  const [period, setPeriod] = useState(
-    periodOptions.includes(initialPeriod) ? initialPeriod : periodOptions[1],
-  );
+  const [year, setYear] = useState(initialYear);
+  const period = periodForFilter(category, year);
   const [months, setMonths] = useState<number[]>([]);
+  const [frequency, setFrequency] =
+    useState<ReviewFrequency>(DEFAULT_FREQUENCY);
+  const [intervalMonths, setIntervalMonths] =
+    useState<ReviewInterval>(DEFAULT_INTERVAL);
   const caseCount = useCaseCountInput();
   const [unitIds, setUnitIds] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
@@ -1263,7 +1439,10 @@ function ScheduleEditor({
   const [loadingPeriod, setLoadingPeriod] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const monthOrder = useMemo(() => cycleMonths(category, period), [category, period]);
+  const monthOrder = useMemo(
+    () => cycleMonths(category, period),
+    [category, period],
+  );
   const unitNameOf = useCallback(
     (code: string) => units.find((u) => u.code === code)?.name ?? code,
     [units],
@@ -1281,7 +1460,19 @@ function ScheduleEditor({
         ]);
         if (cancelled) return;
         setExists(!!s);
-        setMonths(s?.months ?? []);
+        if (s) {
+          // 編輯舊排程：保留原月份，不強制重算（v1.18）
+          setMonths(s.months);
+          setFrequency(s.frequency ?? DEFAULT_FREQUENCY);
+          setIntervalMonths(s.intervalMonths ?? DEFAULT_INTERVAL);
+        } else {
+          // 新排程：依預設頻次＋區間自動預選月份
+          setMonths(
+            autoSelectMonths(DEFAULT_FREQUENCY, DEFAULT_INTERVAL, monthOrder),
+          );
+          setFrequency(DEFAULT_FREQUENCY);
+          setIntervalMonths(DEFAULT_INTERVAL);
+        }
         caseCount.setValue(s?.caseCount != null ? String(s.caseCount) : "");
         setUnitIds(s?.unitIds ?? []);
         setNotes(s?.notes ?? "");
@@ -1298,13 +1489,21 @@ function ScheduleEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indicatorId, category, period]);
 
-  function applyQuick(times: 2 | 3 | 4) {
-    setMonths([...QUICK_MONTHS[times]]);
+  /** 切換頻次／區間下拉 → 重新依規則預選月份（覆蓋手動勾選） */
+  function handleFrequencyChange(f: ReviewFrequency) {
+    setFrequency(f);
+    setMonths(autoSelectMonths(f, intervalMonths, monthOrder));
+  }
+  function handleIntervalChange(m: ReviewInterval) {
+    setIntervalMonths(m);
+    setMonths(autoSelectMonths(frequency, m, monthOrder));
   }
 
   function handleCopyPrev() {
     if (!prev) return;
     setMonths([...prev.months]);
+    if (prev.frequency) setFrequency(prev.frequency);
+    if (prev.intervalMonths) setIntervalMonths(prev.intervalMonths);
     caseCount.setValue(prev.caseCount != null ? String(prev.caseCount) : "");
     setUnitIds([...prev.unitIds]);
     setNotes(prev.notes);
@@ -1320,11 +1519,15 @@ function ScheduleEditor({
       onAction("請至少選擇一個受審單位");
       return;
     }
+    // v1.18：審查件數改為必填
+    if (caseCount.value.trim() === "") {
+      onAction("請填寫審查件數");
+      return;
+    }
     setSaving(true);
     try {
       const db = getFirebaseDb();
-      const cc =
-        caseCount.value.trim() === "" ? null : Number(caseCount.value);
+      const cc = Number(caseCount.value);
       await saveSchedule(
         db,
         {
@@ -1333,6 +1536,9 @@ function ScheduleEditor({
           period,
           periodLabel: periodLabel(category, period),
           months: [...months].sort((a, b) => a - b),
+          frequency,
+          intervalMonths,
+          refYear: null,
           caseCount: parseCaseCount(cc),
           unitIds: [...unitIds],
           notes: notes.trim(),
@@ -1386,18 +1592,28 @@ function ScheduleEditor({
         ) : (
           <>
             <div className="form-grid">
-              <div className="form-field" style={{ maxWidth: 220 }}>
-                <label className="field-label">期間</label>
+              <div className="form-field" style={{ maxWidth: 200 }}>
+                <label className="field-label">年份</label>
                 <div className="select-wrap">
                   <select
-                    value={period}
-                    onChange={(e) => setPeriod(e.target.value)}
+                    value={year}
+                    onChange={(e) => setYear(Number(e.target.value))}
                   >
-                    {periodOptions.map((p) => (
-                      <option key={p} value={p}>
-                        {category === "academic" ? `${p}學年度` : `${p}年`}
+                    {YEAR_FILTER_OPTIONS.map((y) => (
+                      <option key={y} value={y}>
+                        {yearOptionLabel(y)}
                       </option>
                     ))}
+                  </select>
+                  <ChevronDown size={15} />
+                </div>
+              </div>
+              <div className="form-field" style={{ maxWidth: 160 }}>
+                <label className="field-label">年別</label>
+                <div className="select-wrap">
+                  <select value={category} disabled>
+                    <option value="year">年度</option>
+                    <option value="academic">學年度</option>
                   </select>
                   <ChevronDown size={15} />
                 </div>
@@ -1409,7 +1625,7 @@ function ScheduleEditor({
                   disabled={!canEdit || !prev}
                   title={
                     prev
-                      ? `帶入 ${prev.periodLabel} 的月份／件數／單位／備註`
+                      ? `帶入 ${prev.periodLabel} 的頻次／區間／月份／件數／單位／備註`
                       : "前一期無排程資料"
                   }
                   onClick={handleCopyPrev}
@@ -1435,23 +1651,65 @@ function ScheduleEditor({
               />
             </div>
 
+            <div className="form-grid">
+              <div className="form-field" style={{ maxWidth: 200 }}>
+                <label className="field-label">審查頻次</label>
+                <div className="select-wrap">
+                  <select
+                    value={frequency}
+                    disabled={!canEdit}
+                    onChange={(e) =>
+                      handleFrequencyChange(Number(e.target.value) as ReviewFrequency)
+                    }
+                  >
+                    {FREQUENCY_OPTIONS.map((f) => (
+                      <option key={f} value={f}>
+                        {frequencyLabel(f)}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={15} />
+                </div>
+              </div>
+              <div className="form-field" style={{ maxWidth: 200 }}>
+                <label className="field-label">審查區間</label>
+                <div className="select-wrap">
+                  <select
+                    value={intervalMonths}
+                    disabled={!canEdit}
+                    onChange={(e) =>
+                      handleIntervalChange(Number(e.target.value) as ReviewInterval)
+                    }
+                  >
+                    {INTERVAL_OPTIONS.map((m) => (
+                      <option key={m} value={m}>
+                        {intervalLabel(m)}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={15} />
+                </div>
+              </div>
+            </div>
+            <p className="settings-note">
+              審查區間＝每次審查連續涵蓋的月數（例：4次/年＋3個月 → 1–3月、4–6月、7–9月、10–12月）。
+            </p>
+
             <div className="form-field">
               <label className="field-label">
                 審查月份（可複選）
                 {months.length > 0 && `：已選 ${months.length} 個月`}
               </label>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-                {category === "year" &&
-                  ([2, 3, 4] as const).map((t) => (
-                    <button
-                      key={t}
-                      className="button button-outline button-sm"
-                      disabled={!canEdit}
-                      onClick={() => applyQuick(t)}
-                    >
-                      {t}次/年
-                    </button>
-                  ))}
+                <button
+                  className="button button-outline button-sm"
+                  disabled={!canEdit}
+                  onClick={() =>
+                    setMonths(autoSelectMonths(frequency, intervalMonths, monthOrder))
+                  }
+                >
+                  依頻次／區間預選
+                </button>
                 <button
                   className="button button-outline button-sm"
                   disabled={!canEdit}
@@ -1473,20 +1731,17 @@ function ScheduleEditor({
                 onChange={setMonths}
                 disabled={!canEdit}
               />
-              {category === "academic" && (
-                <p className="settings-note">
-                  學年度月份依 8 月制順序排列（8–12 月為前一年曆年、1–7
-                  月為後一年曆年）。
-                </p>
-              )}
+              <p className="settings-note">
+                切換審查頻次／區間會依規則重新預選月份（覆蓋手動勾選），之後可再手動調整。
+                {category === "academic" &&
+                  "學年度月份依 8 月制順序排列（8–12 月為前一年曆年、1–7 月為後一年曆年）。"}
+              </p>
             </div>
 
             <div className="form-field">
               <label className="field-label">
-                審查件數
-                <span className="muted-text">
-                  （適用該期間所有單位；留白＝未設定）
-                </span>
+                審查件數 *
+                <span className="muted-text">（適用該期間所有單位；必填）</span>
               </label>
               <span className="case-count-field">
                 <input
@@ -1494,7 +1749,7 @@ function ScheduleEditor({
                   min={1}
                   step={1}
                   value={caseCount.value}
-                  placeholder="未設定"
+                  placeholder="必填"
                   disabled={!canEdit}
                   onChange={(e) => caseCount.onInput(e.target.value)}
                   aria-label="審查件數"
@@ -1538,78 +1793,163 @@ function ScheduleEditor({
   );
 }
 
-/* ================= 加審（臨時排程） ================= */
+/* ================= 加審（臨時排程；v1.18：合併兩邊設定＋分工表） ================= */
 
 function AddAuditDialog({
   row,
   units,
+  users,
   groupMap,
+  reviewersByGroup,
   assignment,
-  reviewerOptions,
   actor,
   deadlineDay,
+  filterYear,
+  cycle,
   onAction,
   onClose,
   onDone,
 }: {
   row: RowItem;
   units: UnitLite[];
+  users: UserLite[];
   groupMap: Map<string, string>;
+  reviewersByGroup: Map<string, ReviewerLite[]>;
   assignment: IndicatorAssignment | null;
-  reviewerOptions: ReviewerLite[];
   actor: { id: string; name: string };
   deadlineDay: number;
+  filterYear: number;
+  cycle: "year" | "academic";
   onAction: (m: string) => void;
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [unitIds, setUnitIds] = useState<string[]>(row.schedule?.unitIds ?? []);
+  const monthOrder = useMemo(() => cycleMonths(cycle, ""), [cycle]);
   const [months, setMonths] = useState<number[]>([]);
   const caseCount = useCaseCountInput();
-  const [reviewerIds, setReviewerIds] = useState<string[]>([]);
+  const [selUnits, setSelUnits] = useState<string[]>(
+    () => row.schedule?.unitIds ?? [],
+  );
+  const [selReviewers, setSelReviewers] = useState<string[]>(() =>
+    defaultAddAuditReviewers(assignment, row.schedule?.unitIds ?? []),
+  );
+  const [items, setItems] = useState<AssignmentItem[]>([]);
   const [saving, setSaving] = useState(false);
+
+  // 審核員候選：全部組別審查員主檔 ∪ 分工表審查員（組別由其單位推導）
+  const reviewerMeta = useMemo(() => {
+    const map = new Map<string, { name: string; groupId: string }>();
+    reviewersByGroup.forEach((arr, gid) => {
+      for (const r of arr) {
+        if (!map.has(r.personId))
+          map.set(r.personId, { name: r.name, groupId: gid });
+      }
+    });
+    for (const it of assignment?.items ?? []) {
+      if (map.has(it.reviewerId)) continue;
+      const u = users.find((x) => x.id === it.reviewerId);
+      const g = units.find((x) => x.code === u?.unitCode)?.groupId ?? "";
+      map.set(it.reviewerId, { name: u?.name ?? it.reviewerId, groupId: g });
+    }
+    return map;
+  }, [reviewersByGroup, assignment, users, units]);
+
+  const reviewerOptions: PickerOption[] = useMemo(
+    () =>
+      [...reviewerMeta.entries()]
+        .map(([id, m]) => ({
+          id,
+          label: `${maskName(m.name)}（${id}）`,
+          sub: m.groupId ? (groupMap.get(m.groupId) ?? m.groupId) : "分工表",
+          groupId: m.groupId,
+        }))
+        .sort((a, b) => a.id.localeCompare(b.id, "zh-Hant")),
+    [reviewerMeta, groupMap],
+  );
+
+  const unitOptions: PickerOption[] = useMemo(
+    () =>
+      units.map((u) => ({
+        id: u.code,
+        label: `${u.name}（${u.code}）`,
+        sub: groupMap.get(u.groupId) ?? u.groupId,
+        groupId: u.groupId,
+      })),
+    [units, groupMap],
+  );
+
+  const reviewerNameOf = useCallback(
+    (id: string) => maskName(reviewerMeta.get(id)?.name ?? id),
+    [reviewerMeta],
+  );
   const unitNameOf = useCallback(
     (code: string) => units.find((u) => u.code === code)?.name ?? code,
     [units],
   );
 
-  // 審核員預設＝分工表中涵蓋所選單位者（單位變更時重算；不動單位時可手動調整）
-  useEffect(() => {
-    setReviewerIds(defaultAddAuditReviewers(assignment, unitIds));
-  }, [unitIds, assignment]);
+  const duplicates = useMemo(() => findDuplicateUnits(items), [items]);
 
-  function toggleReviewer(id: string) {
-    setReviewerIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+  function toggleId(list: string[], id: string): string[] {
+    return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
+  }
+
+  function applyToTable() {
+    if (selReviewers.length === 0) {
+      onAction("請先選擇審核員");
+      return;
+    }
+    if (selUnits.length === 0) {
+      onAction("請至少勾選一個單位");
+      return;
+    }
+    setItems((prev) => mergeItemsWithUnits(prev, selReviewers, selUnits));
+    setSelReviewers([]);
+    setSelUnits([]);
+  }
+
+  function removeItem(reviewerId: string) {
+    setItems((prev) => prev.filter((it) => it.reviewerId !== reviewerId));
+  }
+
+  function removeUnit(reviewerId: string, unitId: string) {
+    setItems((prev) =>
+      prev
+        .map((it) =>
+          it.reviewerId === reviewerId
+            ? { ...it, units: it.units.filter((u) => u.unitId !== unitId) }
+            : it,
+        )
+        .filter((it) => it.units.length > 0),
     );
   }
 
-  const previewTasks = previewTempTaskCount(months, unitIds, reviewerIds);
+  const pairCount = items.reduce((n, it) => n + it.units.length, 0);
+  const previewTasks = months.length * pairCount;
 
   async function handleConfirm() {
-    if (unitIds.length === 0) {
-      onAction("請至少選擇一個受審單位");
-      return;
-    }
     if (months.length === 0) {
       onAction("請至少選擇一個審查月份");
       return;
     }
-    if (reviewerIds.length === 0) {
-      onAction("請至少選擇一位審核員");
+    if (caseCount.value.trim() === "") {
+      onAction("請填寫審查件數");
+      return;
+    }
+    if (items.length === 0) {
+      onAction("請先將審核員與單位加入分工表");
       return;
     }
     setSaving(true);
     try {
       const db = getFirebaseDb();
-      const cc =
-        caseCount.value.trim() === "" ? null : Number(caseCount.value);
       const { taskCount } = await createTempSchedule(db, {
         indicatorId: row.indicatorId,
-        unitIds: [...unitIds],
+        unitIds: [],
         months: [...months].sort((a, b) => a - b),
-        caseCount: parseCaseCount(cc),
-        reviewerIds: [...reviewerIds],
+        caseCount: parseCaseCount(Number(caseCount.value)),
+        reviewerIds: [],
+        items,
+        refYear: filterYear,
         selfReview: false,
         actor,
         deadlineDay,
@@ -1626,43 +1966,32 @@ function AddAuditDialog({
   return (
     <Modal
       title={`加審：${row.name}`}
-      note="建立臨時排程並直接產生任務（加審）"
+      note={`建立臨時排程並直接產生任務（${filterYear}年・${cycle === "academic" ? "學年度" : "年度"}月份）`}
       onClose={onClose}
     >
-      <div className="form-field">
-        <label className="field-label">
-          受審單位（可複選）
-          {unitIds.length > 0 && `：已選 ${unitIds.length} 個`}
-        </label>
-        <div style={{ maxHeight: 220, overflow: "auto" }}>
-          <UnitTreePicker
-            units={units}
-            groupMap={groupMap}
-            selected={unitIds}
-            onChange={setUnitIds}
-            disabled={false}
-            unitNameOf={unitNameOf}
-          />
-        </div>
-      </div>
-
       <div className="form-field">
         <label className="field-label">
           審查月份（可複選）
           {months.length > 0 && `：已選 ${months.length} 個月`}
         </label>
         <MonthPicker
-          order={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]}
+          order={monthOrder}
           selected={months}
           onChange={setMonths}
           disabled={false}
         />
+        {cycle === "academic" && (
+          <p className="settings-note">
+            學年度月份依 8 月制順序排列（8–12 月為前一年曆年、1–7
+            月為後一年曆年）。
+          </p>
+        )}
       </div>
 
       <div className="form-field">
         <label className="field-label">
-          審查件數
-          <span className="muted-text">（所有單位共用；留白＝未設定）</span>
+          審查件數 *
+          <span className="muted-text">（必填，所有單位共用）</span>
         </label>
         <span className="case-count-field">
           <input
@@ -1670,7 +1999,7 @@ function AddAuditDialog({
             min={1}
             step={1}
             value={caseCount.value}
-            placeholder="未設定"
+            placeholder="必填"
             onChange={(e) => caseCount.onInput(e.target.value)}
             aria-label="審查件數"
           />
@@ -1678,40 +2007,107 @@ function AddAuditDialog({
         </span>
       </div>
 
-      <div className="form-field">
-        <label className="field-label">
-          審核員（可複選；已依分工表自動帶入涵蓋所選單位者）
-        </label>
-        {reviewerOptions.length === 0 ? (
-          <p className="settings-note">
-            尚無審核員候選人（該組未設審查員且分工表空白）。
-          </p>
-        ) : (
-          <div className="unit-check-grid">
-            {reviewerOptions.map((r) => (
-              <label key={r.personId} className="check-row">
-                <input
-                  type="checkbox"
-                  checked={reviewerIds.includes(r.personId)}
-                  onChange={() => toggleReviewer(r.personId)}
-                />
-                <span>
-                  {maskName(r.name)}
-                  <span className="muted-text">（{r.personId}）</span>
-                </span>
-              </label>
-            ))}
-          </div>
-        )}
+      <OptionMultiPicker
+        title="選擇受審單位"
+        options={unitOptions}
+        groupMap={groupMap}
+        selected={selUnits}
+        onToggle={(id) => setSelUnits((prev) => toggleId(prev, id))}
+        searchPlaceholder="搜尋單位名稱或代碼"
+      />
+
+      <OptionMultiPicker
+        title="選擇審核員"
+        options={reviewerOptions}
+        groupMap={groupMap}
+        defaultGroupId={row.groupId}
+        selected={selReviewers}
+        onToggle={(id) => setSelReviewers((prev) => toggleId(prev, id))}
+        searchPlaceholder="搜尋姓名或職編"
+      />
+
+      <div className="form-actions">
+        <button
+          className="button button-outline"
+          disabled={selReviewers.length === 0 || selUnits.length === 0}
+          onClick={applyToTable}
+        >
+          <Plus size={15} /> 加入分工表
+        </button>
       </div>
 
-      <div className="form-field">
+      <SectionTitle
+        title="分工總覽"
+        note={
+          items.length === 0
+            ? "尚無分工資料"
+            : `${items.length} 位審核員・${pairCount} 單位指派`
+        }
+      />
+      {items.length === 0 ? (
+        <p className="settings-note">由上方選擇單位與審核員後加入。</p>
+      ) : (
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>審核員</th>
+                <th>負責單位</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it) => (
+                <tr key={it.reviewerId}>
+                  <td>
+                    <b>{reviewerNameOf(it.reviewerId)}</b>
+                    <div className="muted-text">{it.reviewerId}</div>
+                  </td>
+                  <td>
+                    {it.units.map((u) => (
+                      <div key={u.unitId} className="assign-unit-row">
+                        <span>
+                          {unitNameOf(u.unitId)}
+                          <span className="muted-text">（{u.unitId}）</span>
+                          {duplicates.has(u.unitId) && (
+                            <CircleAlert
+                              size={13}
+                              className="dup-warn"
+                              aria-label="重複指派"
+                            />
+                          )}
+                        </span>
+                        <button
+                          className="text-button"
+                          onClick={() => removeUnit(it.reviewerId, u.unitId)}
+                          aria-label={`移除${u.unitId}`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </td>
+                  <td>
+                    <button
+                      className="text-button"
+                      onClick={() => removeItem(it.reviewerId)}
+                    >
+                      <Trash2 size={13} /> 移除
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="form-field" style={{ marginTop: 12 }}>
         <label className="field-label">預覽</label>
         <p>
           <b>{previewTasks}</b> 筆任務
           <span className="muted-text">
-            （{months.length} 個月 × {unitIds.length} 單位 ×{" "}
-            {reviewerIds.length} 位審核員）
+            （{months.length} 個月 × {pairCount} 組審核員-單位配對）
           </span>
         </p>
       </div>
@@ -1735,7 +2131,6 @@ function AddAuditDialog({
     </Modal>
   );
 }
-
 /* ================= 自審（護理長，臨時排程） ================= */
 
 function SelfAuditDialog({
@@ -1939,7 +2334,7 @@ function SelfAuditDialog({
   );
 }
 
-/* ================= 查閱：該排程產生的任務 ================= */
+/* ================= 查閱：設定內容＋任務（v1.18 彈窗） ================= */
 
 interface TaskLite {
   year: number;
@@ -1951,18 +2346,23 @@ interface TaskLite {
   caseCount: number | null;
 }
 
-function TasksView({
+function ScheduleDetailModal({
   row,
+  assignment,
   usersMap,
   unitNameOf,
   onAction,
+  onClose,
 }: {
   row: RowItem;
+  assignment: IndicatorAssignment | null;
   usersMap: Map<string, string>;
   unitNameOf: (code: string) => string;
   onAction: (m: string) => void;
+  onClose: () => void;
 }) {
   const sched = row.schedule;
+  const isTemp = row.category === "temp";
   const [tasks, setTasks] = useState<TaskLite[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -2024,12 +2424,152 @@ function TasksView({
     };
   }, [sched, row.indicatorId, ymSet, onAction]);
 
+  // 臨時排程：審核員由任務推導（臨時排程不存分工表）
+  const tempReviewers = useMemo(() => {
+    if (!isTemp) return [];
+    const m = new Map<string, string>();
+    for (const t of tasks) {
+      if (!m.has(t.reviewerId))
+        m.set(t.reviewerId, usersMap.get(t.reviewerId) ?? t.reviewerId);
+    }
+    return [...m.entries()].sort((a, b) =>
+      a[0].localeCompare(b[0], "zh-Hant"),
+    );
+  }, [isTemp, tasks, usersMap]);
+
+  const monthLabels = useMemo(() => {
+    if (!sched) return "";
+    return [...sched.months]
+      .sort((a, b) => a - b)
+      .map((m) => MONTH_LABELS[m - 1])
+      .join("、");
+  }, [sched]);
+
   if (!sched) return null;
   return (
-    <section className="panel">
+    <Modal
+      title={`查閱：${row.name}`}
+      note={`${isTemp ? "臨時" : categoryLabel(row.category)}・${sched.periodLabel}${sched.selfReview ? "・自審" : ""}`}
+      onClose={onClose}
+    >
+      <SectionTitle title="排程／單位設定" />
+      <div className="table-scroll">
+        <table className="data-table">
+          <tbody>
+            <tr>
+              <td style={{ whiteSpace: "nowrap" }}><b>期間</b></td>
+              <td>
+                {sched.periodLabel}
+                {sched.refYear != null && `（${sched.refYear}年加審）`}
+              </td>
+            </tr>
+            <tr>
+              <td style={{ whiteSpace: "nowrap" }}><b>審查月份</b></td>
+              <td>{monthLabels || "—"}</td>
+            </tr>
+            {!isTemp && (
+              <>
+                <tr>
+                  <td style={{ whiteSpace: "nowrap" }}><b>審查頻次</b></td>
+                  <td>
+                    {sched.frequency != null
+                      ? frequencyLabel(sched.frequency)
+                      : "—"}
+                  </td>
+                </tr>
+                <tr>
+                  <td style={{ whiteSpace: "nowrap" }}><b>審查區間</b></td>
+                  <td>
+                    {sched.intervalMonths != null
+                      ? intervalLabel(sched.intervalMonths)
+                      : "—"}
+                  </td>
+                </tr>
+              </>
+            )}
+            <tr>
+              <td style={{ whiteSpace: "nowrap" }}><b>受審單位</b></td>
+              <td>
+                {sched.unitIds.length === 0
+                  ? "—"
+                  : sched.unitIds
+                      .map(
+                        (c) => `${unitNameOf(c)}（${c}）`,
+                      )
+                      .join("、")}
+              </td>
+            </tr>
+            <tr>
+              <td style={{ whiteSpace: "nowrap" }}><b>審查件數</b></td>
+              <td>
+                {sched.caseCount != null ? `${sched.caseCount} 件/輪` : "—"}
+              </td>
+            </tr>
+            {sched.notes && (
+              <tr>
+                <td style={{ whiteSpace: "nowrap" }}><b>備註</b></td>
+                <td>{sched.notes}</td>
+              </tr>
+            )}
+            <tr>
+              <td style={{ whiteSpace: "nowrap" }}><b>最後編輯</b></td>
+              <td>
+                {sched.updatedByName || "—"}・{fmtTs(sched.updatedAt)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <SectionTitle
-        title="排程任務查閱"
-        note={`${row.name}・${sched.periodLabel}${sched.selfReview ? "・自審" : ""}・${sched.months.length} 個月`}
+        title="審查員／單位設定"
+        note={isTemp ? "臨時排程不存分工表，審核員見任務清單" : undefined}
+      />
+      {isTemp ? (
+        tempReviewers.length === 0 ? (
+          <p className="settings-note">尚無任務</p>
+        ) : (
+          <p>
+            {tempReviewers.map(([id, name]) => (
+              <span key={id} className="chip" style={{ marginRight: 6 }}>
+                {maskName(name)}（{id}）
+              </span>
+            ))}
+          </p>
+        )
+      ) : assignment && assignment.items.length > 0 ? (
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>審查員</th>
+                <th>負責單位</th>
+              </tr>
+            </thead>
+            <tbody>
+              {assignment.items.map((it) => (
+                <tr key={it.reviewerId}>
+                  <td>
+                    <b>{maskName(usersMap.get(it.reviewerId) ?? it.reviewerId)}</b>
+                    <div className="muted-text">{it.reviewerId}</div>
+                  </td>
+                  <td>
+                    {it.units
+                      .map((u) => `${unitNameOf(u.unitId)}（${u.unitId}）`)
+                      .join("、")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="settings-note">尚未設定分工表</p>
+      )}
+
+      <SectionTitle
+        title="已產生任務"
+        note={loading ? "讀取中…" : `${tasks.length} 筆`}
       />
       <p className="settings-note">
         依指標編號＋排程曆年月查出（任務未記錄所屬排程 id；同指標同時段的其他排程任務可能一併列出）。
@@ -2071,28 +2611,35 @@ function TasksView({
           </table>
         </div>
       )}
-    </section>
+      <div className="form-actions">
+        <button className="button button-outline" onClick={onClose}>
+          關閉
+        </button>
+      </div>
+    </Modal>
   );
 }
-/* ================= 單位／審查員設定 ================= */
+/* ================= 審查員／單位設定（v1.18：組別篩選＋搜尋多選） ================= */
 
 function AssignmentEditor({
   indicatorId,
-  initial,
-  reviewers,
+  indicatorGroupId,
+  reviewersByGroup,
   units,
   groupMap,
   usersMap,
+  initial,
   canEdit,
   onAction,
   onSaved,
 }: {
   indicatorId: string;
-  initial: IndicatorAssignment | null;
-  reviewers: ReviewerLite[];
+  indicatorGroupId: string;
+  reviewersByGroup: Map<string, ReviewerLite[]>;
   units: UnitLite[];
   groupMap: Map<string, string>;
   usersMap: Map<string, string>;
+  initial: IndicatorAssignment | null;
   canEdit: boolean;
   onAction: (m: string) => void;
   onSaved: () => void;
@@ -2105,53 +2652,52 @@ function AssignmentEditor({
         }))
       : [],
   );
-  const [selReviewer, setSelReviewer] = useState("");
-  /** 已勾選的單位代碼（v1.10.0 起件數改在年度排程設定，此處不再編輯件數） */
-  const [selUnits, setSelUnits] = useState<Set<string>>(new Set());
+  const [selReviewers, setSelReviewers] = useState<string[]>([]);
+  const [selUnits, setSelUnits] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const reviewerName = (id: string) =>
-    maskName(
-      usersMap.get(id) ?? reviewers.find((r) => r.personId === id)?.name ?? id,
-    );
-
-  const unitsByGroup = useMemo(() => {
-    const map = new Map<string, UnitLite[]>();
-    units.forEach((u) => {
-      const arr = map.get(u.groupId) ?? [];
-      arr.push(u);
-      map.set(u.groupId, arr);
+  // 審查員候選：全部組別的審查員主檔（組別下拉篩選）
+  const reviewerOptions: PickerOption[] = useMemo(() => {
+    const out: PickerOption[] = [];
+    reviewersByGroup.forEach((arr, gid) => {
+      for (const r of arr) {
+        out.push({
+          id: r.personId,
+          label: `${maskName(r.name)}（${r.personId}）`,
+          sub: groupMap.get(gid) ?? gid,
+          groupId: gid,
+        });
+      }
     });
-    return map;
-  }, [units]);
+    return out.sort((a, b) => a.id.localeCompare(b.id, "zh-Hant"));
+  }, [reviewersByGroup, groupMap]);
+
+  const unitOptions: PickerOption[] = useMemo(
+    () =>
+      units.map((u) => ({
+        id: u.code,
+        label: `${u.name}（${u.code}）`,
+        sub: groupMap.get(u.groupId) ?? u.groupId,
+        groupId: u.groupId,
+      })),
+    [units, groupMap],
+  );
+
+  const reviewerName = useCallback(
+    (id: string) => {
+      for (const arr of reviewersByGroup.values()) {
+        const r = arr.find((x) => x.personId === id);
+        if (r) return maskName(r.name);
+      }
+      return maskName(usersMap.get(id) ?? id);
+    },
+    [reviewersByGroup, usersMap],
+  );
 
   const duplicates = useMemo(() => findDuplicateUnits(items), [items]);
 
-  function pickReviewer(id: string) {
-    setSelReviewer(id);
-    const existing = items.find((it) => it.reviewerId === id);
-    setSelUnits(new Set((existing?.units ?? []).map((u) => u.unitId)));
-  }
-
-  function toggleUnit(code: string) {
-    setSelUnits((prev) => {
-      const next = new Set(prev);
-      if (next.has(code)) next.delete(code);
-      else next.add(code);
-      return next;
-    });
-  }
-
-  function toggleGroupUnits(gid: string) {
-    const list = unitsByGroup.get(gid) ?? [];
-    const codes = list.map((u) => u.code);
-    setSelUnits((prev) => {
-      const next = new Set(prev);
-      const allChecked = codes.every((c) => next.has(c));
-      if (allChecked) codes.forEach((c) => next.delete(c));
-      else codes.forEach((c) => next.add(c));
-      return next;
-    });
+  function toggleId(list: string[], id: string): string[] {
+    return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
   }
 
   function removeUnit(reviewerId: string, unitId: string) {
@@ -2167,33 +2713,20 @@ function AssignmentEditor({
   }
 
   function applyToTable() {
-    if (!selReviewer) {
+    if (selReviewers.length === 0) {
       onAction("請先選擇審查員");
       return;
     }
-    if (selUnits.size === 0) {
+    if (selUnits.length === 0) {
       onAction("請至少勾選一個單位");
       return;
     }
-    // 保留既有 caseCount（v1.10.0 起件數改在年度排程設定，此處只透傳不編輯）
-    const existing = items.find((it) => it.reviewerId === selReviewer);
-    const existingMap = new Map(
-      (existing?.units ?? []).map((u) => [u.unitId, u.caseCount]),
+    setItems((prev) => mergeItemsWithUnits(prev, selReviewers, selUnits));
+    onAction(
+      `已加入分工表：${selReviewers.length} 位審查員 × ${selUnits.length} 個單位`,
     );
-    const units = [...selUnits]
-      .map((unitId) => ({
-        unitId,
-        caseCount: existingMap.get(unitId) ?? null,
-      }))
-      .sort((a, b) => a.unitId.localeCompare(b.unitId, "zh-Hant"));
-    setItems((prev) => {
-      const rest = prev.filter((it) => it.reviewerId !== selReviewer);
-      return [...rest, { reviewerId: selReviewer, units }].sort((a, b) =>
-        a.reviewerId.localeCompare(b.reviewerId, "zh-Hant"),
-      );
-    });
-    setSelReviewer("");
-    setSelUnits(new Set());
+    setSelReviewers([]);
+    setSelUnits([]);
   }
 
   function removeItem(reviewerId: string) {
@@ -2223,7 +2756,7 @@ function AssignmentEditor({
         items,
         updatedAt: serverTimestamp(),
       });
-      onAction("已儲存單位／審查員分工表");
+      onAction("已儲存審查員／單位分工表");
       onSaved();
     } catch (error) {
       onAction(`儲存失敗：${toErrorMessage(error)}`);
@@ -2236,93 +2769,44 @@ function AssignmentEditor({
     <>
       <section className="panel">
         <SectionTitle
-          title="單位／審查員設定"
-          note="先選審查員，再複選其負責單位；同一單位可指派給多位審查員（會警示但不阻擋）。審查件數改在「審核排程設定」中按年度設定。"
+          title="審查員／單位設定"
+          note="先選審查員（可多選），再選其負責單位（可多選），按「加入分工表」；同一單位可指派給多位審查員（會警示但不阻擋）。審查件數在「排程／單位設定」中按年度設定。"
         />
-        {reviewers.length === 0 ? (
+        {reviewerOptions.length === 0 ? (
           <p className="settings-note">
-            此組別尚未設定審查員，請先到「群組與人員」→「審查員」頁籤新增。
+            尚未設定審查員，請先到「群組與人員」→「審查員」頁籤新增。
           </p>
         ) : (
-          <>
-            <div className="form-field" style={{ maxWidth: 320 }}>
-              <label className="field-label">1. 選擇審查員</label>
-              <div className="select-wrap">
-                <select
-                  value={selReviewer}
-                  disabled={!canEdit}
-                  onChange={(e) => pickReviewer(e.target.value)}
-                >
-                  <option value="">請選擇審查員</option>
-                  {reviewers.map((r) => (
-                    <option key={r.personId} value={r.personId}>
-                      {reviewerName(r.personId)}（{r.personId}）
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
-
-            <div className="form-field">
-              <label className="field-label">
-                2. 複選負責單位
-                {selUnits.size > 0 && `（已選 ${selUnits.size} 個）`}
-              </label>
-              {[...unitsByGroup.entries()].map(([gid, list]) => {
-                const codes = list.map((u) => u.code);
-                const allChecked =
-                  codes.length > 0 && codes.every((c) => selUnits.has(c));
-                return (
-                  <div key={gid} className="unit-group-block">
-                    <label className="check-row unit-group-head">
-                      <input
-                        type="checkbox"
-                        checked={allChecked}
-                        disabled={!canEdit || !selReviewer}
-                        onChange={() => toggleGroupUnits(gid)}
-                      />
-                      <b>{groupMap.get(gid) ?? gid}（全選）</b>
-                    </label>
-                    <div className="unit-check-grid">
-                      {list.map((u) => (
-                        <label key={u.code} className="check-row">
-                          <input
-                            type="checkbox"
-                            checked={selUnits.has(u.code)}
-                            disabled={!canEdit || !selReviewer}
-                            onChange={() => toggleUnit(u.code)}
-                          />
-                          <span>
-                            {u.code}
-                            {duplicates.has(u.code) && (
-                              <CircleAlert
-                                size={14}
-                                className="dup-warn"
-                                aria-label="重複指派"
-                              />
-                            )}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {canEdit && (
-              <div className="form-actions">
-                <button
-                  className="button button-outline"
-                  disabled={!selReviewer}
-                  onClick={applyToTable}
-                >
-                  <Plus size={15} /> 加入分工表
-                </button>
-              </div>
-            )}
-          </>
+          <OptionMultiPicker
+            title="1. 選擇審查員"
+            options={reviewerOptions}
+            groupMap={groupMap}
+            defaultGroupId={indicatorGroupId}
+            selected={selReviewers}
+            onToggle={(id) => setSelReviewers((prev) => toggleId(prev, id))}
+            disabled={!canEdit}
+            searchPlaceholder="搜尋姓名或職編"
+          />
+        )}
+        <OptionMultiPicker
+          title="2. 選擇負責單位"
+          options={unitOptions}
+          groupMap={groupMap}
+          selected={selUnits}
+          onToggle={(id) => setSelUnits((prev) => toggleId(prev, id))}
+          disabled={!canEdit}
+          searchPlaceholder="搜尋單位名稱或代碼"
+        />
+        {canEdit && (
+          <div className="form-actions">
+            <button
+              className="button button-outline"
+              disabled={selReviewers.length === 0 || selUnits.length === 0}
+              onClick={applyToTable}
+            >
+              <Plus size={15} /> 加入分工表
+            </button>
+          </div>
         )}
       </section>
 
@@ -2381,12 +2865,6 @@ function AssignmentEditor({
                     </td>
                     {canEdit && (
                       <td>
-                        <button
-                          className="text-button"
-                          onClick={() => pickReviewer(it.reviewerId)}
-                        >
-                          <Pencil size={13} /> 調整
-                        </button>{" "}
                         <button
                           className="text-button"
                           onClick={() => removeItem(it.reviewerId)}
