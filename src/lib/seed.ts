@@ -62,6 +62,39 @@ export const SEED_ROLES: SeedRoleDef[] = [
     description:
       "人員、單位、角色權限、系統參數；動態建立新角色並對應權限；維護單位沿革對應；唯一可修改 10 steps 標題者",
   },
+  // v1.21：新角色種子（品管組／單位級；不存在才建立）
+  {
+    id: "qi-convener",
+    name: "品管組召集人",
+    description:
+      "品管組召集人：所屬群組的排程權限與審查監督（組級）。",
+  },
+  {
+    id: "qi-officer",
+    name: "品管組執行幹事",
+    description:
+      "品管組執行幹事：所屬群組的排程權限與審查執行（組級）。",
+  },
+  {
+    id: "qi-reviewer",
+    name: "品管組審查員",
+    description: "品管組審查員：依分工表執行審查。",
+  },
+  {
+    id: "unit-convener",
+    name: "單位召集人",
+    description: "單位召集人：所屬單位的品管審查召集。",
+  },
+  {
+    id: "unit-officer",
+    name: "單位執行幹事",
+    description: "單位執行幹事：所屬單位的品管審查執行與自審。",
+  },
+  {
+    id: "unit-reviewer",
+    name: "單位審查員",
+    description: "單位審查員：依分工表執行審查。",
+  },
 ];
 
 export interface SeedTitleDef {
@@ -78,6 +111,10 @@ export const SEED_TITLES: SeedTitleDef[] = [
   { name: "主任", level: "單位" },
   { name: "副主任", level: "單位" },
   { name: "督導", level: "單位" },
+  // v1.21：使用者定案的 6 職稱（護理部主任／副主任／督導；不存在才建立）
+  { name: "護理部主任", level: "單位" },
+  { name: "護理部副主任", level: "單位" },
+  { name: "護理部督導", level: "單位" },
   { name: "護理長", level: "單位" },
   { name: "副護理長", level: "單位" },
   { name: "執行幹事", level: "單位" },
@@ -86,6 +123,15 @@ export const SEED_TITLES: SeedTitleDef[] = [
 
 /** 七個系統角色名稱（批次上傳人員時驗證用） */
 export const SYSTEM_ROLE_NAMES: string[] = SEED_ROLES.map((r) => r.name);
+
+/** v1.21：五個群組名稱（群組管理種子；不存在才建立） */
+export const SEED_GROUP_NAMES: string[] = [
+  "單位",
+  "加護組",
+  "病房組",
+  "腫瘤組",
+  "護品組",
+];
 
 export interface SystemParams {
   /** RAG 黃燈區間：閾值以下幾個百分點為「接近閾值」 */

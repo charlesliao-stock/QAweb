@@ -42,10 +42,13 @@ import {
   emptyAuditQuestion,
   emptyTenSteps,
   filterIndicators,
+  indicatorCodeOf,
+  indicatorDocId,
   mergeQuestionGroups,
   newQid,
   normalizeQuestions,
   normalizeTenSteps,
+  parseIndicatorDocId,
   primaryThreshold,
   validateBasicThreshold,
   OPTION_SET_LABELS,
@@ -60,15 +63,12 @@ import {
 import {
   auditTemplateRows,
   basicTemplateRows,
-  normalizeSheetRows,
   parseAuditSheet,
   parseBasicSheet,
-  parseCSV,
-  toCSV,
   validateAuditRows,
   validateBasicRows,
 } from "../lib/import";
-import * as XLSX from "xlsx";
+import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
 
 export type IndicatorStatus =
   | "草稿"
@@ -106,6 +106,9 @@ interface StaffOption {
 }
 
 interface IndicatorRow {
+  /** Firestore 文件 ID（v1.21：`${groupId}__${code}` 複合 ID） */
+  id: string;
+  /** 指標編號（組別內唯一；顯示層只顯示此值） */
   code: string;
   name: string;
   groupId: string;
@@ -682,7 +685,7 @@ export function IndicatorsPage({
 }) {
   const { user } = useAuth();
   const [view, setView] = useState<
-    { kind: "list" } | { kind: "create" } | { kind: "edit"; code: string }
+    { kind: "list" } | { kind: "create" } | { kind: "edit"; id: string }
   >({ kind: "list" });
   const [rows, setRows] = useState<IndicatorRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -753,7 +756,10 @@ export function IndicatorsPage({
       const list: IndicatorRow[] = snap.docs.map((d) => {
         const data = d.data();
         return {
-          code: d.id,
+          id: d.id,
+          code:
+            parseIndicatorDocId(d.id)?.code ??
+            (typeof data.code === "string" ? data.code : d.id),
           name: typeof data.name === "string" ? data.name : "",
           groupId: typeof data.groupId === "string" ? data.groupId : "",
           owners: Array.isArray(data.owners) ? data.owners.map(String) : [],
@@ -889,7 +895,7 @@ export function IndicatorsPage({
       }));
       setForm({
         groupId,
-        code: snap.id,
+        code: indicatorCodeOf(snap.id),
         name: typeof data.name === "string" ? data.name : "",
         basicThreshold:
           typeof data.basicThreshold === "number" ? data.basicThreshold : "",
@@ -932,7 +938,7 @@ export function IndicatorsPage({
       } catch {
         setVersions([]);
       }
-      setView({ kind: "edit", code: snap.id });
+      setView({ kind: "edit", id: snap.id });
     } catch (error) {
       onAction(`讀取指標失敗：${toErrorMessage(error)}`);
     }
@@ -1156,22 +1162,25 @@ export function IndicatorsPage({
 
       if (view.kind === "create") {
         const code = form.code.trim();
-        const ref = doc(db, "indicators", code);
+        // v1.21：文件 ID＝`${groupId}__${code}`；code 另存欄位供顯示
+        const docId = indicatorDocId(form.groupId, code);
+        const ref = doc(db, "indicators", docId);
         const exists = await getDoc(ref);
         if (exists.exists()) {
           setFormTab("basic");
-          showFormError(`指標編號 ${code} 已存在`);
+          showFormError(`指標編號 ${code} 在此組別已存在`);
           setSaving(false);
           return;
         }
         await setDoc(ref, {
           ...base,
+          code,
           version: "v1.0",
           hasReviewData: false,
           createdAt: serverTimestamp(),
           createdBy: user.staffId,
         });
-        await setDoc(doc(db, "indicators", code, "versions", "v1.0"), {
+        await setDoc(doc(db, "indicators", docId, "versions", "v1.0"), {
           version: "v1.0",
           status: form.status,
           threshold: basicThreshold,
@@ -1188,12 +1197,12 @@ export function IndicatorsPage({
           actorName: user.name,
           action: "建立指標",
           targetType: "indicator",
-          targetId: code,
+          targetId: docId,
           detail: form.name.trim(),
         });
       } else {
-        const code = view.kind === "edit" ? view.code : "";
-        if (!code) {
+        const docId = view.kind === "edit" ? view.id : "";
+        if (!docId) {
           showFormError("狀態異常，請重新開啟編輯");
           setSaving(false);
           return;
@@ -1206,9 +1215,9 @@ export function IndicatorsPage({
             setSaving(false);
             return;
           }
-          const current = rows.find((r) => r.code === code);
+          const current = rows.find((r) => r.id === docId);
           const newVersion = nextVersion(current?.version ?? "v1.0");
-          await setDoc(doc(db, "indicators", code, "versions", newVersion), {
+          await setDoc(doc(db, "indicators", docId, "versions", newVersion), {
             version: newVersion,
             status: form.status,
             threshold: basicThreshold,
@@ -1219,7 +1228,7 @@ export function IndicatorsPage({
             createdAt: serverTimestamp(),
             createdBy: user.staffId,
           });
-          await updateDoc(doc(db, "indicators", code), {
+          await updateDoc(doc(db, "indicators", docId), {
             ...base,
             version: newVersion,
             hasReviewData: true,
@@ -1230,18 +1239,18 @@ export function IndicatorsPage({
             actorName: user.name,
             action: "編輯指標",
             targetType: "indicator",
-            targetId: code,
+            targetId: docId,
             detail: `新版本 ${newVersion}：${form.name.trim()}`,
           });
         } else {
-          await updateDoc(doc(db, "indicators", code), base);
+          await updateDoc(doc(db, "indicators", docId), base);
           onAction("已儲存指標修改");
           logAudit(db, {
             actor: user.staffId,
             actorName: user.name,
             action: "編輯指標",
             targetType: "indicator",
-            targetId: code,
+            targetId: docId,
             detail: form.name.trim(),
           });
         }
@@ -1255,19 +1264,20 @@ export function IndicatorsPage({
     }
   }
 
-  async function handleDeactivate(code: string) {
+  async function handleDeactivate(docId: string) {
     if (!user) return;
-    const locked = await checkReviewData(code);
+    const locked = await checkReviewData(docId);
     if (locked) {
       onAction("此指標已有審查資料，無法停用");
       return;
     }
+    const code = indicatorCodeOf(docId);
     const ok = window.confirm(
       `確定將指標 ${code} 設為停用？（僅標記停用，不會刪除資料）`,
     );
     if (!ok) return;
     try {
-      await updateDoc(doc(getFirebaseDb(), "indicators", code), {
+      await updateDoc(doc(getFirebaseDb(), "indicators", docId), {
         status: "停用",
         updatedAt: serverTimestamp(),
         updatedBy: user.staffId,
@@ -1278,7 +1288,7 @@ export function IndicatorsPage({
         actorName: user.name,
         action: "停用指標",
         targetType: "indicator",
-        targetId: code,
+        targetId: docId,
       });
       await loadList();
     } catch (error) {
@@ -1428,14 +1438,14 @@ export function IndicatorsPage({
                       <td>
                         <button
                           className="text-button"
-                          onClick={() => openEdit(row.code)}
+                          onClick={() => openEdit(row.id)}
                         >
                           <Pencil size={13} /> 編輯
                         </button>{" "}
                         {row.status !== "停用" && (
                           <button
                             className="text-button"
-                            onClick={() => handleDeactivate(row.code)}
+                            onClick={() => handleDeactivate(row.id)}
                           >
                             <Trash2 size={13} /> 停用
                           </button>
@@ -1497,6 +1507,7 @@ export function IndicatorsPage({
               <div className="select-wrap">
                 <select
                   value={form.groupId}
+                  disabled={isEditing}
                   onChange={(e) => setField("groupId", e.target.value)}
                 >
                   <option value="">請選擇組別</option>
@@ -1905,7 +1916,7 @@ export function IndicatorsPage({
           groupMap={groupMap}
           staffMap={staffMap}
           staffLoaded={staffLoaded}
-          existingCodes={new Set(rows.map((r) => r.code))}
+          existingCodes={new Set(rows.map((r) => r.id))}
           user={user ? { staffId: user.staffId, name: user.name } : null}
           onAction={onAction}
           onClose={() => setBatchOpen(false)}
@@ -1946,52 +1957,6 @@ function emptyBatchRow(): BatchRow {
     showAudit: false,
     errors: {},
   };
-}
-
-/** 讀取匯入檔（.xlsx/.xls 走 SheetJS；.csv 走自寫解析）為字串陣列（v1.20） */
-async function readSheetFile(file: File): Promise<string[][]> {
-  if (/\.xlsx?$/i.test(file.name)) {
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type: "array" });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    if (!ws) return [];
-    const aoa = XLSX.utils.sheet_to_json<unknown[]>(ws, {
-      header: 1,
-      defval: "",
-    });
-    return normalizeSheetRows(aoa);
-  }
-  const text = await file.text();
-  return parseCSV(text);
-}
-
-/** 下載 CSV（UTF-8 BOM，Excel 可直接開啟） */
-function downloadCsvFile(rows: string[][], filename: string) {
-  const blob = new Blob(["\uFEFF" + toCSV(rows)], {
-    type: "text/csv;charset=utf-8",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-/** 下載 .xlsx 範本（失敗時退回 .csv） */
-function downloadTemplate(
-  rows: string[][],
-  sheetName: string,
-  baseName: string,
-) {
-  try {
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
-    XLSX.writeFile(wb, `${baseName}.xlsx`);
-  } catch {
-    downloadCsvFile(rows, `${baseName}.csv`);
-  }
 }
 
 function BatchAddDialog({
@@ -2050,7 +2015,7 @@ function BatchAddDialog({
       const codeSet = new Set<string>([...existingCodes]);
       rows.forEach((r) => {
         const c = r.code.trim();
-        if (c) codeSet.add(c);
+        if (c && r.groupId) codeSet.add(indicatorDocId(r.groupId, c));
       });
       const results = validateBasicRows(data, {
         groupByName,
@@ -2193,9 +2158,11 @@ function BatchAddDialog({
     const errs: Record<string, string> = {};
     if (!r.groupId) errs.groupId = "請選擇組別";
     const code = r.code.trim();
+    // v1.21：編號唯一以 (groupId, code) 計；不同組別同編號不報錯
+    const dupKey = r.groupId ? indicatorDocId(r.groupId, code) : code;
     if (!code) errs.code = "請填寫編號";
-    else if ((codeCounts.get(code) ?? 0) > 1) errs.code = "批次內編號重複";
-    else if (existingCodes.has(code)) errs.code = "編號已存在";
+    else if ((codeCounts.get(dupKey) ?? 0) > 1) errs.code = "批次內編號重複";
+    else if (existingCodes.has(dupKey)) errs.code = "編號已存在";
     if (!r.name.trim()) errs.name = "請填寫指標名稱";
     const thErr = validateBasicThreshold(r.threshold);
     if (thErr) errs.threshold = thErr;
@@ -2215,7 +2182,9 @@ function BatchAddDialog({
     const codeCounts = new Map<string, number>();
     for (const r of rows) {
       const c = r.code.trim();
-      if (c) codeCounts.set(c, (codeCounts.get(c) ?? 0) + 1);
+      if (!c) continue;
+      const k = r.groupId ? indicatorDocId(r.groupId, c) : c;
+      codeCounts.set(k, (codeCounts.get(k) ?? 0) + 1);
     }
     let hasError = false;
     const checked = rows.map((r) => {
@@ -2238,9 +2207,11 @@ function BatchAddDialog({
       let n = 0;
       for (const r of checked) {
         const code = r.code.trim();
-        const ref = doc(db, "indicators", code);
+        const docId = indicatorDocId(r.groupId, code);
+        const ref = doc(db, "indicators", docId);
         const exists = await getDoc(ref);
-        if (exists.exists()) throw new Error(`指標編號 ${code} 已存在`);
+        if (exists.exists())
+          throw new Error(`指標編號 ${code} 在此組別已存在`);
         const basicThreshold =
           typeof r.threshold === "number" ? r.threshold : 0;
         const questions = r.audit.questions.map((q, i) => ({
@@ -2264,6 +2235,7 @@ function BatchAddDialog({
         const steps = emptyTenSteps();
         steps.step5.thresholds = [];
         await setDoc(ref, {
+          code,
           name: r.name.trim(),
           groupId: r.groupId,
           owners: r.owners,
@@ -2283,7 +2255,7 @@ function BatchAddDialog({
           updatedAt: serverTimestamp(),
           updatedBy: user.staffId,
         });
-        await setDoc(doc(db, "indicators", code, "versions", "v1.0"), {
+        await setDoc(doc(db, "indicators", docId, "versions", "v1.0"), {
           version: "v1.0",
           status: "草稿",
           threshold: basicThreshold,
@@ -2299,7 +2271,7 @@ function BatchAddDialog({
           actorName: user.name,
           action: "建立指標",
           targetType: "indicator",
-          targetId: code,
+          targetId: docId,
           detail: r.name.trim(),
         });
         n++;

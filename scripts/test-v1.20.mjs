@@ -105,7 +105,8 @@ const groupByName = new Map([
 const staffHas = (id) => ["A12345", "B23456"].includes(id);
 const ctx = {
   groupByName,
-  existingCodes: new Set(["QI-000"]),
+  // v1.21：existingCodes 改為複合 ID 集合（`${groupId}__${code}`）
+  existingCodes: new Set(["g1__QI-000"]),
   staffHas,
   staffLoaded: true,
 };

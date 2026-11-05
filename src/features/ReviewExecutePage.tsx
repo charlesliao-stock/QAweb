@@ -16,6 +16,7 @@ import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import {
+  indicatorCodeOf,
   normalizeQuestions,
   optionLabelsOf,
   type AuditQuestion,
@@ -298,7 +299,9 @@ export function ReviewExecutePage({
         const idata = isnap.data() as Record<string, unknown>;
         if (!cancelled) {
           setIndicatorName(
-            typeof idata.name === "string" ? idata.name : t.indicatorId,
+            typeof idata.name === "string"
+              ? idata.name
+              : indicatorCodeOf(t.indicatorId),
           );
           setRequireBedNo(idata.requireBedNo === true);
           // v1.17：缺值視為 true（舊資料維持顯示職編欄）

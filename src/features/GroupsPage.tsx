@@ -27,12 +27,31 @@ import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
-import { SYSTEM_ROLE_NAMES } from "../lib/seed";
-import { downloadCSV, parseCSV } from "../lib/csv";
+import { SEED_GROUP_NAMES, SEED_ROLES, SEED_TITLES } from "../lib/seed";
 import { reviewerDocId, UNCATEGORIZED_GROUP_ID, shouldAutoLinkReviewer } from "../lib/scheduling";
 import { emptyPermissions, parsePermissions } from "../lib/permissions";
+import {
+  deriveGroupIds,
+  deriveRoles,
+  isGroupScopedRole,
+  isUnitLevelRole,
+  parseMemberships,
+  type Membership,
+} from "../lib/roleIdentity";
+import {
+  UNIT_TEMPLATE_HEADERS,
+  USER_TEMPLATE_HEADERS,
+  parseUnitSheet,
+  parseUserSheet,
+  unitTemplateRows,
+  userTemplateRows,
+  validateUnitRows as validateUnitRowsLib,
+  validateUserRows as validateUserRowsLib,
+} from "../lib/orgImport";
+import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
 
-type Tab = "groups" | "units" | "titles" | "users" | "reviewers";
+/** v1.21：組織與設定重整為五區（人員／單位／角色／職稱／群組） */
+type Tab = "users" | "units" | "roles" | "titles" | "groups";
 
 interface GroupRow {
   id: string;
@@ -63,7 +82,15 @@ interface UserRow {
   unitCode: string;
   title: string;
   roles: string[];
+  /** 群組＋角色配對（v1.21；無則由舊 groupIds＋roles 推導） */
+  memberships: Membership[];
   status: string;
+}
+
+interface RoleRow {
+  id: string;
+  name: string;
+  memberCount: number | null;
 }
 
 interface OptionItem {
@@ -94,7 +121,10 @@ interface UserForm {
   hireDate: string;
   email: string;
   phone: string;
-  roles: string[];
+  /** 群組＋角色配對列（v1.21：可多個、各群組角色可不同） */
+  memberships: Membership[];
+  /** 非群組角色（一般人員／護理長／主任／副主任／督導／系統管理員／指標負責人） */
+  otherRoles: string[];
   mustChangePassword: boolean;
   /** 督導負責的群組 id（v1.15.0：督導儀表板轄區用） */
   districtGroupIds: string[];
@@ -105,13 +135,6 @@ interface PreviewRow {
   values: string[];
   ok: boolean;
   error: string;
-}
-
-interface ReviewerRow {
-  personId: string;
-  name: string;
-  unitCode: string;
-  groupId: string;
 }
 
 function emptyGroupForm(): GroupForm {
@@ -135,7 +158,8 @@ function emptyUserForm(): UserForm {
     hireDate: "",
     email: "",
     phone: "",
-    roles: [],
+    memberships: [],
+    otherRoles: [],
     mustChangePassword: true,
     districtGroupIds: [],
   };
@@ -170,26 +194,15 @@ async function commitInBatches(
   }
 }
 
-/** 系統角色以 、；，, 分隔 */
-function splitRoles(raw: string): string[] {
-  const parts = raw
-    .split(/[、;；,，]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return [...new Set(parts)];
-}
 
 // ================= 範例檔 =================
 
 const GROUP_SAMPLE: string[][] = [["群組名稱"], ["病房組"], ["加護組"]];
 const GROUP_HEADER = ["群組名稱"];
 
-const UNIT_SAMPLE: string[][] = [
-  ["單位代號", "單位名稱", "所屬群組"],
-  ["9A", "9A病房", "病房組"],
-  ["9B", "9B病房", "病房組"],
-];
-const UNIT_HEADER = ["單位代號", "單位名稱", "所屬群組"];
+// v1.21：單位／人員範本改用 lib/orgImport（匯入欄位與範本單一來源）
+const UNIT_SAMPLE: string[][] = unitTemplateRows();
+const UNIT_HEADER = UNIT_TEMPLATE_HEADERS;
 
 const TITLE_SAMPLE: string[][] = [
   ["職稱名稱", "層級"],
@@ -205,17 +218,13 @@ const TITLE_SAMPLE: string[][] = [
 ];
 const TITLE_HEADER = ["職稱名稱", "層級"];
 
-const USER_SAMPLE: string[][] = [
-  ["職編", "姓名", "單位代號", "職稱", "系統角色"],
-  ["A12345", "王小明", "9A", "護理師", "審查員"],
-  ["B67890", "陳大華", "9A", "護理長", "護理長"],
-];
-const USER_HEADER = ["職編", "姓名", "單位代號", "職稱", "系統角色"];
+const USER_SAMPLE: string[][] = userTemplateRows();
+const USER_HEADER = USER_TEMPLATE_HEADERS;
 
 // ================= 批次上傳共用元件 =================
 
 function BatchImporter({
-  sampleFilename,
+  sampleBaseName,
   sampleRows,
   header,
   validateRows,
@@ -224,11 +233,12 @@ function BatchImporter({
   onDone,
   onAction,
 }: {
-  sampleFilename: string;
+  sampleBaseName: string;
   sampleRows: string[][];
   header: string[];
   validateRows: (rows: string[][]) => Promise<PreviewRow[]>;
-  importRows: (rows: PreviewRow[]) => Promise<void>;
+  /** 回傳摘要字串時以該字串為匯入結果訊息（新增／更新筆數） */
+  importRows: (rows: PreviewRow[]) => Promise<string | void>;
   postImportNote?: string;
   onDone: () => void | Promise<void>;
   onAction: (message: string) => void;
@@ -252,7 +262,8 @@ function BatchImporter({
     setPreview(null);
     setResult("");
     try {
-      const rows = parseCSV(await f.text());
+      // v1.21：Excel／CSV 皆可（.xlsx 走 SheetJS，.csv 走自寫解析）
+      const rows = await readSheetFile(f);
       if (rows.length === 0) {
         setFileError("檔案為空");
         return;
@@ -288,9 +299,11 @@ function BatchImporter({
     setImporting(true);
     setFileError("");
     try {
-      await importRows(valid);
+      const summary = await importRows(valid);
       const skipped = preview.length - valid.length;
-      const message = `匯入完成：成功 ${valid.length} 筆${skipped > 0 ? `，跳過 ${skipped} 筆（資料有誤）` : ""}`;
+      const message =
+        summary ||
+        `匯入完成：成功 ${valid.length} 筆${skipped > 0 ? `，跳過 ${skipped} 筆（資料有誤）` : ""}`;
       setResult(message);
       onAction(message);
       setPreview(null);
@@ -308,7 +321,7 @@ function BatchImporter({
     <>
       <button
         className="button button-outline"
-        onClick={() => downloadCSV(sampleFilename, sampleRows)}
+        onClick={() => downloadTemplate(sampleRows, "範本", sampleBaseName)}
       >
         <Download size={14} />
         下載範例檔
@@ -320,7 +333,7 @@ function BatchImporter({
       <input
         ref={fileRef}
         type="file"
-        accept=".csv,text/csv"
+        accept=".xlsx,.xls,.csv"
         hidden
         onChange={handleFile}
       />
@@ -388,6 +401,91 @@ function BatchImporter({
   );
 }
 
+// ================= 成員勾選清單共用（v1.21：全選＋批次移除） =================
+
+function MemberChecklist({
+  title,
+  note,
+  emptyText = "尚無成員。",
+  items,
+  checked,
+  onToggle,
+  onToggleAll,
+  onRemoveSelected,
+  removeLabel,
+  busy,
+}: {
+  title: string;
+  note?: string;
+  emptyText?: string;
+  items: { id: string; label: string; sub?: string }[];
+  checked: string[];
+  onToggle: (id: string, next: boolean) => void;
+  onToggleAll: (next: boolean) => void;
+  onRemoveSelected: () => void;
+  removeLabel: string;
+  busy: boolean;
+}) {
+  const allChecked =
+    items.length > 0 && items.every((i) => checked.includes(i.id));
+  return (
+    <div>
+      <SectionTitle title={title} note={note} />
+      {items.length === 0 ? (
+        <p className="settings-note">{emptyText}</p>
+      ) : (
+        <>
+          <div className="table-scroll">
+            <table className="permission-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 36 }}>
+                    <input
+                      type="checkbox"
+                      checked={allChecked}
+                      onChange={(e) => onToggleAll(e.target.checked)}
+                      aria-label="全選"
+                    />
+                  </th>
+                  <th>職編／代號</th>
+                  <th>姓名／名稱</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((it) => (
+                  <tr key={it.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={checked.includes(it.id)}
+                        onChange={(e) => onToggle(it.id, e.target.checked)}
+                        aria-label={`選擇 ${it.id}`}
+                      />
+                    </td>
+                    <td>
+                      <b>{it.id}</b>
+                    </td>
+                    <td>{it.sub ? `${it.label}（${it.sub}）` : it.label}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="form-actions">
+            <button
+              className="button button-outline"
+              disabled={checked.length === 0 || busy}
+              onClick={onRemoveSelected}
+            >
+              {removeLabel}（{checked.length}）
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ================= 主頁 =================
 
 export function GroupsPage({
@@ -400,7 +498,7 @@ export function GroupsPage({
   const canManageMaster =
     isAdmin || (user?.roles ?? []).includes("品管執行幹事");
 
-  const [tab, setTab] = useState<Tab>("groups");
+  const [tab, setTab] = useState<Tab>("users");
 
   // ---- 群組 ----
   const [groups, setGroups] = useState<GroupRow[]>([]);
@@ -442,39 +540,120 @@ export function GroupsPage({
   const [userSaving, setUserSaving] = useState(false);
   const [roleOptions, setRoleOptions] = useState<OptionItem[]>([]);
 
-  // ---- 審查員（v1.8.0：依指標分類組別分組） ----
-  const [reviewerGroupId, setReviewerGroupId] = useState("");
-  const [reviewers, setReviewers] = useState<ReviewerRow[]>([]);
-  const [reviewersLoading, setReviewersLoading] = useState(false);
-  const [reviewerSearch, setReviewerSearch] = useState("");
-  // 審查員名單：排序（v1.12.2，點標題切換）＋姓名關鍵字篩選
-  const [reviewerSortKey, setReviewerSortKey] = useState<"staffId" | "name">(
-    "staffId",
+  // ---- 角色（v1.21：種子 7 新角色＋成員管理） ----
+  /** 正在管理成員的角色 id（""＝未開啟） */
+  const [managingRoleId, setManagingRoleId] = useState("");
+  const [roleMemberChecked, setRoleMemberChecked] = useState<string[]>([]);
+  const [roleAddSearch, setRoleAddSearch] = useState("");
+  const [roleAddGroupId, setRoleAddGroupId] = useState("");
+  const [roleAddChecked, setRoleAddChecked] = useState<string[]>([]);
+  const [roleBusy, setRoleBusy] = useState(false);
+
+  // ---- 單位成員管理（v1.21） ----
+  const [managingUnitCode, setManagingUnitCode] = useState("");
+  const [unitMemberChecked, setUnitMemberChecked] = useState<string[]>([]);
+  const [unitAddSearch, setUnitAddSearch] = useState("");
+  const [unitBusy, setUnitBusy] = useState(false);
+
+  // ---- 職稱成員管理（v1.21） ----
+  const [managingTitleName, setManagingTitleName] = useState("");
+  const [titleMemberChecked, setTitleMemberChecked] = useState<string[]>([]);
+  const [titleAddSearch, setTitleAddSearch] = useState("");
+  const [titleBusy, setTitleBusy] = useState(false);
+
+  // ---- 群組單位管理（v1.21） ----
+  const [managingGroupId, setManagingGroupId] = useState("");
+  const [groupUnitChecked, setGroupUnitChecked] = useState<string[]>([]);
+  const [groupUnitAdd, setGroupUnitAdd] = useState("");
+  const [groupBusy, setGroupBusy] = useState(false);
+
+  /** 角色清單＋成員數（由 roleOptions 與人員清單衍生） */
+  const roleRows: RoleRow[] = useMemo(
+    () =>
+      roleOptions.map((r) => ({
+        id: r.id,
+        name: r.name,
+        memberCount:
+          users.length > 0
+            ? users.filter((u) => u.roles.includes(r.name)).length
+            : null,
+      })),
+    [roleOptions, users],
   );
-  const [reviewerSortDir, setReviewerSortDir] = useState<1 | -1>(1);
-  const [reviewerFilter, setReviewerFilter] = useState("");
-  const toggleReviewerSort = (key: "staffId" | "name") => {
-    if (reviewerSortKey === key) {
-      setReviewerSortDir((d) => (d === 1 ? -1 : 1));
-    } else {
-      setReviewerSortKey(key);
-      setReviewerSortDir(1);
-    }
-  };
-  const filteredReviewers = useMemo(() => {
-    const kw = reviewerFilter.trim().toLowerCase();
-    const rows = kw
-      ? reviewers.filter((r) => r.name.toLowerCase().includes(kw))
-      : [...reviewers];
-    rows.sort((a, b) => {
-      const av = reviewerSortKey === "name" ? a.name : a.personId;
-      const bv = reviewerSortKey === "name" ? b.name : b.personId;
-      const c = av.localeCompare(bv, "zh-Hant");
-      return reviewerSortDir === 1 ? c : -c;
-    });
-    return rows;
-  }, [reviewers, reviewerFilter, reviewerSortKey, reviewerSortDir]);
-  const [reviewerSaving, setReviewerSaving] = useState(false);
+
+  // ---- 各成員管理面板的衍生清單（v1.21） ----
+  const managingRole = roleRows.find((r) => r.id === managingRoleId) ?? null;
+  const roleMembers = useMemo(
+    () =>
+      managingRole
+        ? users.filter((u) => u.roles.includes(managingRole.name))
+        : [],
+    [users, managingRole],
+  );
+  const roleCandidates = useMemo(() => {
+    if (!managingRole) return [];
+    const kw = roleAddSearch.trim().toLowerCase();
+    return users.filter(
+      (u) =>
+        u.status === "在職" &&
+        !u.roles.includes(managingRole.name) &&
+        (kw === "" ||
+          u.staffId.toLowerCase().includes(kw) ||
+          u.name.toLowerCase().includes(kw)),
+    );
+  }, [users, managingRole, roleAddSearch]);
+
+  const unitMembers = useMemo(
+    () =>
+      managingUnitCode
+        ? users.filter((u) => u.unitCode === managingUnitCode)
+        : [],
+    [users, managingUnitCode],
+  );
+  const unitCandidates = useMemo(() => {
+    if (!managingUnitCode) return [];
+    const kw = unitAddSearch.trim().toLowerCase();
+    return users
+      .filter(
+        (u) =>
+          u.status === "在職" &&
+          u.unitCode !== managingUnitCode &&
+          (kw === "" ||
+            u.staffId.toLowerCase().includes(kw) ||
+            u.name.toLowerCase().includes(kw)),
+      )
+      .slice(0, 20);
+  }, [users, managingUnitCode, unitAddSearch]);
+
+  const titleMembers = useMemo(
+    () =>
+      managingTitleName
+        ? users.filter((u) => u.title === managingTitleName)
+        : [],
+    [users, managingTitleName],
+  );
+  const titleCandidates = useMemo(() => {
+    if (!managingTitleName) return [];
+    const kw = titleAddSearch.trim().toLowerCase();
+    return users
+      .filter(
+        (u) =>
+          u.status === "在職" &&
+          u.title !== managingTitleName &&
+          (kw === "" ||
+            u.staffId.toLowerCase().includes(kw) ||
+            u.name.toLowerCase().includes(kw)),
+      )
+      .slice(0, 20);
+  }, [users, managingTitleName, titleAddSearch]);
+
+  const groupUnits = useMemo(
+    () =>
+      managingGroupId
+        ? units.filter((u) => u.groupId === managingGroupId)
+        : [],
+    [units, managingGroupId],
+  );
 
   const loadRoles = useCallback(async () => {
     try {
@@ -611,12 +790,22 @@ export function GroupsPage({
       const list: UserRow[] = snap.docs
         .map((d) => {
           const data = d.data();
+          const roles = Array.isArray(data.roles)
+            ? data.roles.map(String)
+            : [];
           return {
             staffId: d.id,
             name: typeof data.name === "string" ? data.name : "",
             unitCode: typeof data.unitCode === "string" ? data.unitCode : "",
             title: typeof data.title === "string" ? data.title : "",
-            roles: Array.isArray(data.roles) ? data.roles.map(String) : [],
+            roles,
+            // v1.21：讀取以 memberships 為主，無則 fallback 舊 groupIds＋roles
+            memberships: parseMemberships(data.memberships, {
+              roles,
+              groupIds: Array.isArray(data.groupIds)
+                ? data.groupIds.map(String)
+                : [],
+            }),
             status: typeof data.status === "string" ? data.status : "在職",
           };
         })
@@ -629,14 +818,95 @@ export function GroupsPage({
     }
   }, [onAction]);
 
+  /**
+   * v1.21 種子：角色（SEED_ROLES 含 7 新角色）、職稱（6 職稱）、
+   * 群組（5 群組），不存在才建立。
+   * 角色用固定 id；職稱文件 id＝`${level}-${name}`；群組以名稱判重。
+   */
+  const ensureSeeds = useCallback(async () => {
+    // v1.21：種子寫入含 roles 集合（rules 限管理員寫入），僅管理員執行
+    if (!isAdmin) return;
+    try {
+      const db = getFirebaseDb();
+      const me = user?.staffId ?? "";
+      const [rSnap, tSnap, gSnap] = await Promise.all([
+        getDocs(collection(db, "roles")),
+        getDocs(collection(db, "titles")),
+        getDocs(collection(db, "groups")),
+      ]);
+      const roleNames = new Set(
+        rSnap.docs.map((d) => String(d.data().name ?? "")),
+      );
+      const titleIds = new Set(tSnap.docs.map((d) => d.id));
+      const groupNames = new Set(
+        gSnap.docs.map((d) => String(d.data().name ?? "")),
+      );
+      const ops: Array<(b: WriteBatch) => void> = [];
+      for (const role of SEED_ROLES) {
+        if (!roleNames.has(role.name)) {
+          ops.push((b) =>
+            b.set(
+              doc(db, "roles", role.id),
+              {
+                name: role.name,
+                description: role.description,
+                ...auditFields(me, true),
+              },
+              { merge: true },
+            ),
+          );
+        }
+      }
+      for (const title of SEED_TITLES) {
+        const id = `${title.level}-${title.name}`;
+        if (!titleIds.has(id)) {
+          ops.push((b) =>
+            b.set(
+              doc(db, "titles", id),
+              {
+                name: title.name,
+                level: title.level,
+                permissions: emptyPermissions(),
+                ...auditFields(me, true),
+              },
+              { merge: true },
+            ),
+          );
+        }
+      }
+      for (const name of SEED_GROUP_NAMES) {
+        if (!groupNames.has(name)) {
+          ops.push((b) =>
+            b.set(doc(collection(db, "groups")), {
+              name,
+              ...auditFields(me, true),
+            }),
+          );
+        }
+      }
+      if (ops.length > 0) await commitInBatches(ops);
+    } catch {
+      // 種子建立失敗不阻擋清單載入（下次開頁再補）
+    }
+  }, [isAdmin, user]);
+
   useEffect(() => {
-    loadMaster();
-    loadRoles();
-    loadTitles();
-    // v1.12.0：掛載時即預載人員（修頁籤 badge 初始顯示 0 的問題）
-    if (isAdmin) loadUsers();
+    let cancelled = false;
+    (async () => {
+      // v1.21：先補種子（新角色／職稱／群組，不存在才建立），再載入清單
+      await ensureSeeds();
+      if (cancelled) return;
+      loadMaster();
+      loadRoles();
+      loadTitles();
+      // v1.12.0：掛載時即預載人員（修頁籤 badge 初始顯示 0 的問題）
+      if (isAdmin) loadUsers();
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadMaster, loadRoles, loadTitles, isAdmin]);
+  }, [loadMaster, loadRoles, loadTitles, isAdmin, ensureSeeds]);
 
   useEffect(() => {
     if (tab === "users" && isAdmin) {
@@ -644,79 +914,11 @@ export function GroupsPage({
     }
   }, [tab, isAdmin, loadUsers]);
 
-  /** 審查員（v1.8.0）：讀取 reviewReviewers，並以 users 主檔補姓名/單位 */
-  const loadReviewers = useCallback(async () => {
-    setReviewersLoading(true);
-    try {
-      const db = getFirebaseDb();
-      const snap = await getDocs(collection(db, "reviewReviewers"));
-      const userMap = new Map(users.map((u) => [u.staffId, u]));
-      const list: ReviewerRow[] = snap.docs
-        .map((d) => {
-          const data = d.data();
-          const personId =
-            typeof data.personId === "string" ? data.personId : d.id;
-          const u = userMap.get(personId);
-          return {
-            personId,
-            name: u?.name ?? "",
-            unitCode: u?.unitCode ?? "",
-            groupId: typeof data.groupId === "string" ? data.groupId : "",
-          };
-        })
-        .filter((r) => !reviewerGroupId || r.groupId === reviewerGroupId)
-        .sort((a, b) => a.personId.localeCompare(b.personId, "zh-Hant"));
-      setReviewers(list);
-    } catch (error) {
-      onAction(`讀取審查員清單失敗：${toErrorMessage(error)}`);
-    } finally {
-      setReviewersLoading(false);
-    }
-  }, [onAction, users, reviewerGroupId]);
-
   useEffect(() => {
-    if (tab === "reviewers") {
-      if (canManageMaster && users.length === 0) loadUsers();
-      loadReviewers();
+    if (tab === "roles" && canManageMaster && users.length === 0) {
+      loadUsers();
     }
-  }, [tab, canManageMaster, users.length, loadUsers, loadReviewers]);
-
-  async function handleReviewerAdd(personId: string) {
-    if (!reviewerGroupId) {
-      onAction("請先選擇組別");
-      return;
-    }
-    setReviewerSaving(true);
-    try {
-      const db = getFirebaseDb();
-      await setDoc(
-        doc(db, "reviewReviewers", reviewerDocId(reviewerGroupId, personId)),
-        { groupId: reviewerGroupId, personId, createdAt: serverTimestamp() },
-      );
-      setReviewerSearch("");
-      onAction(`已將 ${personId} 加入審查員`);
-      loadReviewers();
-    } catch (error) {
-      onAction(`加入審查員失敗：${toErrorMessage(error)}`);
-    } finally {
-      setReviewerSaving(false);
-    }
-  }
-
-  async function handleReviewerRemove(personId: string) {
-    const ok = window.confirm(`確定將 ${personId} 移出審查員名單？`);
-    if (!ok) return;
-    try {
-      const db = getFirebaseDb();
-      await deleteDoc(
-        doc(db, "reviewReviewers", reviewerDocId(reviewerGroupId, personId)),
-      );
-      onAction(`已將 ${personId} 移出審查員名單`);
-      loadReviewers();
-    } catch (error) {
-      onAction(`移除審查員失敗：${toErrorMessage(error)}`);
-    }
-  }
+  }, [tab, canManageMaster, users.length, loadUsers]);
 
   // ================= 群組 =================
 
@@ -1031,7 +1233,12 @@ export function GroupsPage({
       hireDate: "",
       email: "",
       phone: "",
-      roles: [...row.roles],
+      // v1.21：群組角色走 memberships 配對列；非群組角色另列勾選
+      memberships: row.memberships.map((m) => ({
+        groupId: m.groupId,
+        roles: [...m.roles],
+      })),
+      otherRoles: row.roles.filter((r) => !isGroupScopedRole(r)),
       mustChangePassword: true,
       districtGroupIds: [],
     });
@@ -1058,12 +1265,52 @@ export function GroupsPage({
     setUserView({ kind: "edit", staffId });
   }
 
-  function toggleRole(roleName: string) {
+  /** 群組＋角色配對列（v1.21）：新增一列 */
+  function addMembershipRow() {
     setUserForm((prev) => ({
       ...prev,
-      roles: prev.roles.includes(roleName)
-        ? prev.roles.filter((r) => r !== roleName)
-        : [...prev.roles, roleName],
+      memberships: [...prev.memberships, { groupId: "", roles: [] }],
+    }));
+  }
+
+  function updateMembershipRow(index: number, patch: Partial<Membership>) {
+    setUserForm((prev) => ({
+      ...prev,
+      memberships: prev.memberships.map((m, i) =>
+        i === index ? { ...m, ...patch } : m,
+      ),
+    }));
+  }
+
+  function removeMembershipRow(index: number) {
+    setUserForm((prev) => ({
+      ...prev,
+      memberships: prev.memberships.filter((_, i) => i !== index),
+    }));
+  }
+
+  function toggleMembershipRole(index: number, roleName: string) {
+    setUserForm((prev) => ({
+      ...prev,
+      memberships: prev.memberships.map((m, i) =>
+        i === index
+          ? {
+              ...m,
+              roles: m.roles.includes(roleName)
+                ? m.roles.filter((r) => r !== roleName)
+                : [...m.roles, roleName],
+            }
+          : m,
+      ),
+    }));
+  }
+
+  function toggleOtherRole(roleName: string) {
+    setUserForm((prev) => ({
+      ...prev,
+      otherRoles: prev.otherRoles.includes(roleName)
+        ? prev.otherRoles.filter((r) => r !== roleName)
+        : [...prev.otherRoles, roleName],
     }));
   }
 
@@ -1085,6 +1332,11 @@ export function GroupsPage({
     setUserSaving(true);
     try {
       const db = getFirebaseDb();
+      // v1.21：memberships 為主；同步更新 groupIds（衍生）與 roles（聯集＋非群組角色）
+      const memberships = userForm.memberships.filter((m) => m.groupId);
+      const roles = [
+        ...new Set([...deriveRoles(memberships), ...userForm.otherRoles]),
+      ];
       const payload = {
         name: userForm.name.trim(),
         unitCode: userForm.unitCode,
@@ -1092,7 +1344,9 @@ export function GroupsPage({
         hireDate: userForm.hireDate,
         email: userForm.email.trim(),
         phone: userForm.phone.trim(),
-        roles: userForm.roles,
+        memberships,
+        groupIds: deriveGroupIds(memberships),
+        roles,
         districtGroupIds: userForm.districtGroupIds,
         ...auditFields(user.staffId, false),
       };
@@ -1119,11 +1373,11 @@ export function GroupsPage({
       }
       setUserView({ kind: "list" });
       await loadUsers();
-      // 審查員連動（v1.12.0）：roles 含「審查員」→ 自動加入審查員名單（未分類）
+      // 審查員連動（v1.12.0）：roles 含任一審查員身分 → 自動加入審查員名單（未分類）
       const savedStaffId =
         view.kind === "edit" ? view.staffId : userForm.staffId.trim();
       try {
-        if (shouldAutoLinkReviewer(userForm.roles)) {
+        if (shouldAutoLinkReviewer(roles)) {
           const existing = await getDocs(
             query(
               collection(db, "reviewReviewers"),
@@ -1157,7 +1411,7 @@ export function GroupsPage({
           );
         }
       } catch {
-        onAction("審查員名單連動失敗，請到「審查員」頁籤手動調整");
+        onAction("審查員名單連動失敗，請聯絡系統管理員手動調整");
       }
     } catch (error) {
       setUserError(`儲存失敗：${toErrorMessage(error)}`);
@@ -1187,6 +1441,310 @@ export function GroupsPage({
       await loadUsers();
     } catch (error) {
       onAction(`狀態變更失敗：${toErrorMessage(error)}`);
+    }
+  }
+
+  // ================= 角色成員（v1.21） =================
+
+  /** 從人員的 roles／memberships 移除指定角色（角色刪除／成員移除共用） */
+  function removeRoleFromUser(row: UserRow, roleName: string) {
+    return (b: WriteBatch) => {
+      const memberships = row.memberships
+        .map((m) => ({ ...m, roles: m.roles.filter((r) => r !== roleName) }))
+        .filter((m) => m.roles.length > 0);
+      b.update(doc(getFirebaseDb(), "users", row.staffId), {
+        roles: row.roles.filter((r) => r !== roleName),
+        memberships,
+        groupIds: deriveGroupIds(memberships),
+        ...auditFields(user?.staffId ?? "", false),
+      });
+    };
+  }
+
+  /** 將角色加入人員（群組範圍角色需指定群組；單位級以其單位所屬群組計） */
+  function addRoleToUser(row: UserRow, roleName: string, groupId: string) {
+    return (b: WriteBatch) => {
+      const roles = [...new Set([...row.roles, roleName])];
+      let memberships = row.memberships;
+      if (isGroupScopedRole(roleName)) {
+        const existing = memberships.find((m) => m.groupId === groupId);
+        if (existing) {
+          memberships = memberships.map((m) =>
+            m.groupId === groupId
+              ? { ...m, roles: [...new Set([...m.roles, roleName])] }
+              : m,
+          );
+        } else {
+          memberships = [...memberships, { groupId, roles: [roleName] }];
+        }
+      }
+      b.update(doc(getFirebaseDb(), "users", row.staffId), {
+        roles,
+        memberships,
+        groupIds: deriveGroupIds(memberships),
+        ...auditFields(user?.staffId ?? "", false),
+      });
+    };
+  }
+
+  function openRoleMembers(roleId: string) {
+    setManagingRoleId(roleId);
+    setRoleMemberChecked([]);
+    setRoleAddSearch("");
+    setRoleAddGroupId("");
+    setRoleAddChecked([]);
+  }
+
+  async function handleRoleMembersRemove() {
+    const role = roleRows.find((r) => r.id === managingRoleId);
+    if (!role || roleMemberChecked.length === 0) return;
+    const ok = window.confirm(
+      `確定將 ${roleMemberChecked.length} 位人員移出角色「${role.name}」？`,
+    );
+    if (!ok) return;
+    setRoleBusy(true);
+    try {
+      const targets = users.filter((u) =>
+        roleMemberChecked.includes(u.staffId),
+      );
+      await commitInBatches(
+        targets.map((u) => removeRoleFromUser(u, role.name)),
+      );
+      onAction(`已將 ${targets.length} 位人員移出角色「${role.name}」`);
+      setRoleMemberChecked([]);
+      await loadUsers();
+    } catch (error) {
+      onAction(`移除失敗：${toErrorMessage(error)}`);
+    } finally {
+      setRoleBusy(false);
+    }
+  }
+
+  async function handleRoleMembersAdd() {
+    const role = roleRows.find((r) => r.id === managingRoleId);
+    if (!role || roleAddChecked.length === 0) return;
+    const groupScoped = isGroupScopedRole(role.name);
+    const unitLevel = isUnitLevelRole(role.name);
+    const unitGroupOf = (unitCode: string) =>
+      units.find((u) => u.code === unitCode)?.groupId ?? "";
+    const targets = users.filter((u) => roleAddChecked.includes(u.staffId));
+    const noUnit: string[] = [];
+    const ops: Array<(b: WriteBatch) => void> = [];
+    for (const u of targets) {
+      let gid = "";
+      if (unitLevel) {
+        gid = unitGroupOf(u.unitCode);
+        if (!gid) {
+          noUnit.push(u.staffId);
+          continue;
+        }
+      } else if (groupScoped) {
+        gid = roleAddGroupId;
+        if (!gid) {
+          onAction("請先選擇此角色適用的群組");
+          return;
+        }
+      }
+      ops.push(addRoleToUser(u, role.name, gid));
+    }
+    if (noUnit.length > 0) {
+      onAction(
+        `以下人員無所屬單位群組，無法加入單位級角色：${noUnit.join("、")}`,
+      );
+      if (ops.length === 0) return;
+    }
+    setRoleBusy(true);
+    try {
+      await commitInBatches(ops);
+      onAction(`已將 ${ops.length} 位人員加入角色「${role.name}」`);
+      setRoleAddChecked([]);
+      setRoleAddSearch("");
+      await loadUsers();
+    } catch (error) {
+      onAction(`加入失敗：${toErrorMessage(error)}`);
+    } finally {
+      setRoleBusy(false);
+    }
+  }
+
+  async function handleRoleDelete(row: RoleRow) {
+    if (!user) return;
+    const ok = window.confirm(
+      `確定刪除角色「${row.name}」？將同時從所有人員的角色中移除此角色，此動作無法復原。`,
+    );
+    if (!ok) return;
+    setRoleBusy(true);
+    try {
+      const targets = users.filter((u) => u.roles.includes(row.name));
+      await commitInBatches(
+        targets.map((u) => removeRoleFromUser(u, row.name)),
+      );
+      await deleteDoc(doc(getFirebaseDb(), "roles", row.id));
+      onAction(
+        `角色「${row.name}」已刪除（已從 ${targets.length} 位人員移除）`,
+      );
+      setManagingRoleId("");
+      await loadRoles();
+      await loadUsers();
+    } catch (error) {
+      onAction(`刪除失敗：${toErrorMessage(error)}`);
+    } finally {
+      setRoleBusy(false);
+    }
+  }
+
+  // ================= 單位成員（v1.21） =================
+
+  async function handleUnitMembersRemove() {
+    if (!managingUnitCode || unitMemberChecked.length === 0) return;
+    const ok = window.confirm(
+      `確定將 ${unitMemberChecked.length} 位人員移出單位 ${managingUnitCode}？`,
+    );
+    if (!ok) return;
+    setUnitBusy(true);
+    try {
+      const me = user?.staffId ?? "";
+      await commitInBatches(
+        unitMemberChecked.map(
+          (staffId) => (b: WriteBatch) =>
+            b.update(doc(getFirebaseDb(), "users", staffId), {
+              unitCode: "",
+              ...auditFields(me, false),
+            }),
+        ),
+      );
+      onAction(
+        `已將 ${unitMemberChecked.length} 位人員移出單位 ${managingUnitCode}`,
+      );
+      setUnitMemberChecked([]);
+      await loadUsers();
+      await loadMaster();
+    } catch (error) {
+      onAction(`移除失敗：${toErrorMessage(error)}`);
+    } finally {
+      setUnitBusy(false);
+    }
+  }
+
+  async function handleUnitMemberAdd(staffId: string) {
+    if (!managingUnitCode) return;
+    setUnitBusy(true);
+    try {
+      await updateDoc(doc(getFirebaseDb(), "users", staffId), {
+        unitCode: managingUnitCode,
+        ...auditFields(user?.staffId ?? "", false),
+      });
+      onAction(`已將 ${staffId} 加入單位 ${managingUnitCode}`);
+      setUnitAddSearch("");
+      await loadUsers();
+      await loadMaster();
+    } catch (error) {
+      onAction(`加入失敗：${toErrorMessage(error)}`);
+    } finally {
+      setUnitBusy(false);
+    }
+  }
+
+  // ================= 職稱成員（v1.21） =================
+
+  async function handleTitleMembersRemove() {
+    if (!managingTitleName || titleMemberChecked.length === 0) return;
+    const ok = window.confirm(
+      `確定將 ${titleMemberChecked.length} 位人員移出職稱「${managingTitleName}」？`,
+    );
+    if (!ok) return;
+    setTitleBusy(true);
+    try {
+      const me = user?.staffId ?? "";
+      await commitInBatches(
+        titleMemberChecked.map(
+          (staffId) => (b: WriteBatch) =>
+            b.update(doc(getFirebaseDb(), "users", staffId), {
+              title: "",
+              ...auditFields(me, false),
+            }),
+        ),
+      );
+      onAction(
+        `已將 ${titleMemberChecked.length} 位人員移出職稱「${managingTitleName}」`,
+      );
+      setTitleMemberChecked([]);
+      await loadUsers();
+      await loadTitles();
+    } catch (error) {
+      onAction(`移除失敗：${toErrorMessage(error)}`);
+    } finally {
+      setTitleBusy(false);
+    }
+  }
+
+  async function handleTitleMemberAdd(staffId: string) {
+    if (!managingTitleName) return;
+    setTitleBusy(true);
+    try {
+      await updateDoc(doc(getFirebaseDb(), "users", staffId), {
+        title: managingTitleName,
+        ...auditFields(user?.staffId ?? "", false),
+      });
+      onAction(`已將 ${staffId} 轉任「${managingTitleName}」`);
+      setTitleAddSearch("");
+      await loadUsers();
+      await loadTitles();
+    } catch (error) {
+      onAction(`加入失敗：${toErrorMessage(error)}`);
+    } finally {
+      setTitleBusy(false);
+    }
+  }
+
+  // ================= 群組單位（v1.21） =================
+
+  async function handleGroupUnitsRemove() {
+    if (!managingGroupId || groupUnitChecked.length === 0) return;
+    const group = groups.find((g) => g.id === managingGroupId);
+    const ok = window.confirm(
+      `確定將 ${groupUnitChecked.length} 個單位移出群組「${group?.name ?? ""}」？`,
+    );
+    if (!ok) return;
+    setGroupBusy(true);
+    try {
+      const me = user?.staffId ?? "";
+      await commitInBatches(
+        groupUnitChecked.map(
+          (code) => (b: WriteBatch) =>
+            b.update(doc(getFirebaseDb(), "units", code), {
+              groupId: "",
+              ...auditFields(me, false),
+            }),
+        ),
+      );
+      onAction(
+        `已將 ${groupUnitChecked.length} 個單位移出群組「${group?.name ?? ""}」`,
+      );
+      setGroupUnitChecked([]);
+      await loadMaster();
+    } catch (error) {
+      onAction(`移除失敗：${toErrorMessage(error)}`);
+    } finally {
+      setGroupBusy(false);
+    }
+  }
+
+  async function handleGroupUnitAdd(code: string) {
+    if (!managingGroupId) return;
+    setGroupBusy(true);
+    try {
+      await updateDoc(doc(getFirebaseDb(), "units", code), {
+        groupId: managingGroupId,
+        ...auditFields(user?.staffId ?? "", false),
+      });
+      onAction(`已將單位 ${code} 加入群組`);
+      setGroupUnitAdd("");
+      await loadMaster();
+    } catch (error) {
+      onAction(`加入失敗：${toErrorMessage(error)}`);
+    } finally {
+      setGroupBusy(false);
     }
   }
 
@@ -1223,52 +1781,71 @@ export function GroupsPage({
     );
   }
 
+  /** 單位匯入驗證（v1.21：舊資料匯入，未填忽略；代號已存在→更新） */
   function validateUnitRows(rows: string[][]): Promise<PreviewRow[]> {
-    const existing = new Set(units.map((u) => u.code));
-    const seen = new Set<string>();
-    const groupNameToId = new Map(groups.map((g) => [g.name, g.id]));
+    const groupByName = new Map(groups.map((g) => [g.name, g.id]));
+    const { headerErrors, data } = parseUnitSheet([UNIT_HEADER, ...rows]);
+    if (headerErrors.length > 0) {
+      return Promise.resolve(
+        rows.map((r, i) => ({
+          index: i + 1,
+          values: r,
+          ok: false,
+          error: headerErrors.join("；"),
+        })),
+      );
+    }
+    const results = validateUnitRowsLib(data, {
+      existingCodes: new Set(units.map((u) => u.code)),
+      groupByName,
+    });
     return Promise.resolve(
-      rows.map((r, i) => {
-        const index = i + 1;
-        const code = (r[0] ?? "").trim();
-        const name = (r[1] ?? "").trim();
-        const groupName = (r[2] ?? "").trim();
-        if (!code) return { index, values: r, ok: false, error: "單位代號不可空白" };
-        if (!name) return { index, values: r, ok: false, error: "單位名稱不可空白" };
-        if (existing.has(code))
-          return { index, values: r, ok: false, error: `單位代號 ${code} 已存在` };
-        if (seen.has(code))
-          return { index, values: r, ok: false, error: `檔案內重複：${code}` };
-        if (groupName && !groupNameToId.has(groupName))
-          return {
-            index,
-            values: r,
-            ok: false,
-            error: `群組「${groupName}」不存在，請先匯入群組`,
-          };
-        seen.add(code);
-        return { index, values: r, ok: true, error: "" };
-      }),
+      results.map((r, j) => ({
+        index: j + 1,
+        values: rows[j] ?? [],
+        ok: r.ok,
+        error: r.ok ? "" : r.errors.join("；"),
+      })),
     );
   }
 
-  async function importUnitRows(rows: PreviewRow[]): Promise<void> {
+  async function importUnitRows(rows: PreviewRow[]): Promise<string> {
     const me = user?.staffId ?? "";
-    const groupNameToId = new Map(groups.map((g) => [g.name, g.id]));
-    await commitInBatches(
-      rows.map((r) => {
-        const code = r.values[0].trim();
-        const name = r.values[1].trim();
-        const groupName = (r.values[2] ?? "").trim();
-        const groupId = groupName ? (groupNameToId.get(groupName) ?? "") : "";
+    const groupByName = new Map(groups.map((g) => [g.name, g.id]));
+    const { data } = parseUnitSheet([
+      UNIT_HEADER,
+      ...rows.map((r) => r.values),
+    ]);
+    const results = validateUnitRowsLib(data, {
+      existingCodes: new Set(units.map((u) => u.code)),
+      groupByName,
+    });
+    let created = 0;
+    let updated = 0;
+    const ops = results
+      .filter((r) => r.ok && r.values)
+      .map((r) => {
+        const v = r.values!;
+        if (r.action === "update") updated += 1;
+        else created += 1;
+        const ref = doc(getFirebaseDb(), "units", v.code);
+        if (r.action === "update") {
+          const patch: Record<string, any> = {
+            ...auditFields(me, false),
+          };
+          if (v.name !== null) patch.name = v.name;
+          if (v.groupId !== null) patch.groupId = v.groupId;
+          return (b: WriteBatch) => b.update(ref, patch);
+        }
         return (b: WriteBatch) =>
-          b.set(doc(getFirebaseDb(), "units", code), {
-            name,
-            groupId,
+          b.set(ref, {
+            name: v.name ?? "",
+            groupId: v.groupId ?? "",
             ...auditFields(me, true),
           });
-      }),
-    );
+      });
+    await commitInBatches(ops);
+    return `單位匯入完成：新增 ${created} 筆、更新 ${updated} 筆`;
   }
 
   function validateTitleRows(rows: string[][]): Promise<PreviewRow[]> {
@@ -1309,75 +1886,103 @@ export function GroupsPage({
     );
   }
 
+  /** 人員匯入驗證（v1.21：舊資料匯入，未填忽略；職編已存在→更新） */
   function validateUserRows(rows: string[][]): Promise<PreviewRow[]> {
-    const existing = new Set(users.map((u) => u.staffId));
-    const seen = new Set<string>();
-    const unitCodes = new Set(units.map((u) => u.code));
-    const titleNames = new Set(titles.map((t) => t.name));
+    const groupByName = new Map(groups.map((g) => [g.name, g.id]));
+    const { headerErrors, data } = parseUserSheet([USER_HEADER, ...rows]);
+    if (headerErrors.length > 0) {
+      return Promise.resolve(
+        rows.map((r, i) => ({
+          index: i + 1,
+          values: r,
+          ok: false,
+          error: headerErrors.join("；"),
+        })),
+      );
+    }
+    const results = validateUserRowsLib(data, {
+      existingStaffIds: new Set(users.map((u) => u.staffId)),
+      groupByName,
+      roleNames: new Set(roleOptions.map((r) => r.name)),
+      titleNames: new Set(titles.map((t) => t.name)),
+      unitCodes: new Set(units.map((u) => u.code)),
+    });
     return Promise.resolve(
-      rows.map((r, i) => {
-        const index = i + 1;
-        const staffId = (r[0] ?? "").trim();
-        const name = (r[1] ?? "").trim();
-        const unitCode = (r[2] ?? "").trim();
-        const title = (r[3] ?? "").trim();
-        const roles = splitRoles(r[4] ?? "");
-        if (!staffId)
-          return { index, values: r, ok: false, error: "職編不可空白" };
-        if (!name) return { index, values: r, ok: false, error: "姓名不可空白" };
-        if (existing.has(staffId))
-          return { index, values: r, ok: false, error: `職編 ${staffId} 已存在` };
-        if (seen.has(staffId))
-          return { index, values: r, ok: false, error: `檔案內重複：${staffId}` };
-        if (unitCode && !unitCodes.has(unitCode))
-          return {
-            index,
-            values: r,
-            ok: false,
-            error: `單位代號 ${unitCode} 不存在，請先匯入單位`,
-          };
-        if (title && !titleNames.has(title))
-          return {
-            index,
-            values: r,
-            ok: false,
-            error: `職稱「${title}」不存在，請先在「職稱」頁籤新增或匯入`,
-          };
-        const unknown = roles.filter((x) => !SYSTEM_ROLE_NAMES.includes(x));
-        if (unknown.length > 0)
-          return {
-            index,
-            values: r,
-            ok: false,
-            error: `未知系統角色：${unknown.join("、")}（限：${SYSTEM_ROLE_NAMES.join("、")}）`,
-          };
-        seen.add(staffId);
-        return { index, values: r, ok: true, error: "" };
-      }),
+      results.map((r, j) => ({
+        index: j + 1,
+        values: rows[j] ?? [],
+        ok: r.ok,
+        error: r.ok ? "" : r.errors.join("；"),
+      })),
     );
   }
 
-  async function importUserRows(rows: PreviewRow[]): Promise<void> {
+  async function importUserRows(rows: PreviewRow[]): Promise<string> {
     const me = user?.staffId ?? "";
-    await commitInBatches(
-      rows.map((r) => {
-        const staffId = r.values[0].trim();
-        const roles = splitRoles(r.values[4] ?? "");
+    const groupByName = new Map(groups.map((g) => [g.name, g.id]));
+    const { data } = parseUserSheet([
+      USER_HEADER,
+      ...rows.map((r) => r.values),
+    ]);
+    const results = validateUserRowsLib(data, {
+      existingStaffIds: new Set(users.map((u) => u.staffId)),
+      groupByName,
+      roleNames: new Set(roleOptions.map((r) => r.name)),
+      titleNames: new Set(titles.map((t) => t.name)),
+      unitCodes: new Set(units.map((u) => u.code)),
+    });
+    let created = 0;
+    let updated = 0;
+    const ops = results
+      .filter((r) => r.ok && r.values)
+      .map((r) => {
+        const v = r.values!;
+        if (r.action === "update") updated += 1;
+        else created += 1;
+        const ref = doc(getFirebaseDb(), "users", v.staffId);
+        if (r.action === "update") {
+          const patch: Record<string, any> = {
+            ...auditFields(me, false),
+          };
+          if (v.name !== null) patch.name = v.name;
+          if (v.unitCode !== null) patch.unitCode = v.unitCode;
+          if (v.title !== null) patch.title = v.title;
+          if (v.memberships !== null) {
+            // 更新 memberships 時保留既有非群組角色（匯入檔不含此欄）
+            const existing = users.find((u) => u.staffId === v.staffId);
+            const keep = (existing?.roles ?? []).filter(
+              (x) => !isGroupScopedRole(x),
+            );
+            patch.memberships = v.memberships;
+            patch.groupIds = deriveGroupIds(v.memberships);
+            patch.roles = [
+              ...new Set([...deriveRoles(v.memberships), ...keep]),
+            ];
+          }
+          return (b: WriteBatch) => b.update(ref, patch);
+        }
         return (b: WriteBatch) =>
-          b.set(doc(getFirebaseDb(), "users", staffId), {
-            name: r.values[1].trim(),
-            unitCode: (r.values[2] ?? "").trim(),
-            title: (r.values[3] ?? "").trim(),
+          b.set(ref, {
+            name: v.name ?? "",
+            unitCode: v.unitCode ?? "",
+            title: v.title ?? "",
             hireDate: "",
             email: "",
             phone: "",
-            roles: roles.length > 0 ? roles : ["一般人員"],
+            memberships: v.memberships ?? [],
+            groupIds: deriveGroupIds(v.memberships ?? []),
+            roles:
+              v.memberships && v.memberships.length > 0
+                ? deriveRoles(v.memberships)
+                : ["一般人員"],
+            districtGroupIds: [],
             mustChangePassword: true,
             status: "在職",
             ...auditFields(me, true),
           });
-      }),
-    );
+      });
+    await commitInBatches(ops);
+    return `人員匯入完成：新增 ${created} 筆、更新 ${updated} 筆`;
   }
 
   // ================= 版面 =================
@@ -1424,14 +2029,22 @@ export function GroupsPage({
         ) : undefined;
       return back(() => setTitleView({ kind: "list" }));
     }
-    if (userView.kind === "list")
-      return isAdmin ? (
-        <button className="button button-primary" onClick={openUserCreate}>
-          <Plus size={16} />
-          新增人員
-        </button>
-      ) : undefined;
-    return back(() => setUserView({ kind: "list" }));
+    if (tab === "roles") {
+      return managingRoleId
+        ? back(() => setManagingRoleId(""))
+        : undefined;
+    }
+    if (tab === "users") {
+      if (userView.kind === "list")
+        return isAdmin ? (
+          <button className="button button-primary" onClick={openUserCreate}>
+            <Plus size={16} />
+            新增人員
+          </button>
+        ) : undefined;
+      return back(() => setUserView({ kind: "list" }));
+    }
+    return undefined;
   })();
 
   return (
@@ -1440,10 +2053,10 @@ export function GroupsPage({
 
       <div className="tabs" style={{ marginBottom: 12 }}>
         <button
-          className={`tab${tab === "groups" ? " active" : ""}`}
-          onClick={() => setTab("groups")}
+          className={`tab${tab === "users" ? " active" : ""}`}
+          onClick={() => setTab("users")}
         >
-          群組<span>{groups.length}</span>
+          人員{isAdmin && <span>{users.length}</span>}
         </button>
         <button
           className={`tab${tab === "units" ? " active" : ""}`}
@@ -1452,22 +2065,22 @@ export function GroupsPage({
           單位<span>{units.length}</span>
         </button>
         <button
+          className={`tab${tab === "roles" ? " active" : ""}`}
+          onClick={() => setTab("roles")}
+        >
+          角色<span>{roleOptions.length}</span>
+        </button>
+        <button
           className={`tab${tab === "titles" ? " active" : ""}`}
           onClick={() => setTab("titles")}
         >
           職稱<span>{titles.length}</span>
         </button>
         <button
-          className={`tab${tab === "users" ? " active" : ""}`}
-          onClick={() => setTab("users")}
+          className={`tab${tab === "groups" ? " active" : ""}`}
+          onClick={() => setTab("groups")}
         >
-          人員{isAdmin && <span>{users.length}</span>}
-        </button>
-        <button
-          className={`tab${tab === "reviewers" ? " active" : ""}`}
-          onClick={() => setTab("reviewers")}
-        >
-          審查員
+          群組<span>{groups.length}</span>
         </button>
       </div>
 
@@ -1475,7 +2088,7 @@ export function GroupsPage({
       {tab === "groups" && groupView.kind === "list" && canManageMaster && (
         <div className="batch-toolbar">
           <BatchImporter
-            sampleFilename="群組範例.csv"
+            sampleBaseName="群組範例"
             sampleRows={GROUP_SAMPLE}
             header={GROUP_HEADER}
             validateRows={validateGroupRows}
@@ -1488,7 +2101,7 @@ export function GroupsPage({
       {tab === "units" && unitView.kind === "list" && canManageMaster && (
         <div className="batch-toolbar">
           <BatchImporter
-            sampleFilename="單位範例.csv"
+            sampleBaseName="單位範例"
             sampleRows={UNIT_SAMPLE}
             header={UNIT_HEADER}
             validateRows={validateUnitRows}
@@ -1501,7 +2114,7 @@ export function GroupsPage({
       {tab === "titles" && titleView.kind === "list" && canManageMaster && (
         <div className="batch-toolbar">
           <BatchImporter
-            sampleFilename="職稱範例.csv"
+            sampleBaseName="職稱範例"
             sampleRows={TITLE_SAMPLE}
             header={TITLE_HEADER}
             validateRows={validateTitleRows}
@@ -1514,7 +2127,7 @@ export function GroupsPage({
       {tab === "users" && userView.kind === "list" && isAdmin && (
         <div className="batch-toolbar">
           <BatchImporter
-            sampleFilename="人員範例.csv"
+            sampleBaseName="人員範例"
             sampleRows={USER_SAMPLE}
             header={USER_HEADER}
             validateRows={validateUserRows}
@@ -1565,6 +2178,18 @@ export function GroupsPage({
                             </button>{" "}
                             <button
                               className="text-button"
+                              onClick={() => {
+                                setManagingGroupId(
+                                  managingGroupId === row.id ? "" : row.id,
+                                );
+                                setGroupUnitChecked([]);
+                                setGroupUnitAdd("");
+                              }}
+                            >
+                              單位管理
+                            </button>{" "}
+                            <button
+                              className="text-button"
                               onClick={() => handleGroupDelete(row)}
                             >
                               <Trash2 size={13} /> 刪除
@@ -1576,6 +2201,69 @@ export function GroupsPage({
                   </tbody>
                 </table>
               </div>
+              {managingGroupId && canManageMaster && (
+                <div style={{ marginTop: 12 }}>
+                  <MemberChecklist
+                    title={`群組「${groups.find((g) => g.id === managingGroupId)?.name ?? ""}」的單位`}
+                    note="加入／移除單位（改 unit.groupId）"
+                    emptyText="此群組尚無單位。"
+                    items={groupUnits.map((u) => ({
+                      id: u.code,
+                      label: u.name,
+                    }))}
+                    checked={groupUnitChecked}
+                    onToggle={(id, next) =>
+                      setGroupUnitChecked((prev) =>
+                        next
+                          ? [...prev, id]
+                          : prev.filter((x) => x !== id),
+                      )
+                    }
+                    onToggleAll={(next) =>
+                      setGroupUnitChecked(
+                        next ? groupUnits.map((u) => u.code) : [],
+                      )
+                    }
+                    onRemoveSelected={handleGroupUnitsRemove}
+                    removeLabel="批次移出"
+                    busy={groupBusy}
+                  />
+                  <div className="form-field" style={{ maxWidth: 320 }}>
+                    <label className="field-label">加入單位</label>
+                    <div className="select-wrap">
+                      <select
+                        value={groupUnitAdd}
+                        onChange={(e) => setGroupUnitAdd(e.target.value)}
+                      >
+                        <option value="">請選擇單位</option>
+                        {units
+                          .filter((u) => u.groupId !== managingGroupId)
+                          .map((u) => (
+                            <option key={u.code} value={u.code}>
+                              {u.code}・{u.name}
+                            </option>
+                          ))}
+                      </select>
+                      <ChevronDown size={15} />
+                    </div>
+                  </div>
+                  <div className="form-actions">
+                    <button
+                      className="button button-primary"
+                      disabled={!groupUnitAdd || groupBusy}
+                      onClick={() => handleGroupUnitAdd(groupUnitAdd)}
+                    >
+                      加入此群組
+                    </button>
+                    <button
+                      className="button button-outline"
+                      onClick={() => setManagingGroupId("")}
+                    >
+                      關閉
+                    </button>
+                  </div>
+                </div>
+              )}
               {!canManageMaster && (
                 <p className="settings-note">
                   群組維護限品管執行幹事或系統管理員。
@@ -1663,6 +2351,22 @@ export function GroupsPage({
                             >
                               <Pencil size={13} /> 編輯
                             </button>{" "}
+                            {isAdmin && (
+                              <button
+                                className="text-button"
+                                onClick={() => {
+                                  setManagingUnitCode(
+                                    managingUnitCode === row.code
+                                      ? ""
+                                      : row.code,
+                                  );
+                                  setUnitMemberChecked([]);
+                                  setUnitAddSearch("");
+                                }}
+                              >
+                                成員管理
+                              </button>
+                            )}{" "}
                             <button
                               className="text-button"
                               onClick={() => handleUnitDelete(row.code)}
@@ -1676,6 +2380,87 @@ export function GroupsPage({
                   </tbody>
                 </table>
               </div>
+              {managingUnitCode && isAdmin && (
+                <div style={{ marginTop: 12 }}>
+                  <MemberChecklist
+                    title={`單位 ${managingUnitCode} 的成員`}
+                    note="加入／移除人員（改 person.unitCode）"
+                    items={unitMembers.map((u) => ({
+                      id: u.staffId,
+                      label: maskName(u.name),
+                      sub: u.title || undefined,
+                    }))}
+                    checked={unitMemberChecked}
+                    onToggle={(id, next) =>
+                      setUnitMemberChecked((prev) =>
+                        next ? [...prev, id] : prev.filter((x) => x !== id),
+                      )
+                    }
+                    onToggleAll={(next) =>
+                      setUnitMemberChecked(
+                        next ? unitMembers.map((u) => u.staffId) : [],
+                      )
+                    }
+                    onRemoveSelected={handleUnitMembersRemove}
+                    removeLabel="批次移出"
+                    busy={unitBusy}
+                  />
+                  <div className="form-field" style={{ maxWidth: 320 }}>
+                    <label className="field-label">加入人員</label>
+                    <input
+                      className="text-input"
+                      placeholder="輸入職編或姓名搜尋"
+                      value={unitAddSearch}
+                      onChange={(e) => setUnitAddSearch(e.target.value)}
+                    />
+                  </div>
+                  {unitAddSearch.trim() !== "" &&
+                    (unitCandidates.length === 0 ? (
+                      <p className="settings-note">無符合的在職人員。</p>
+                    ) : (
+                      <div className="table-scroll">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>職編</th>
+                              <th>姓名</th>
+                              <th>所屬單位</th>
+                              <th>操作</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {unitCandidates.map((u) => (
+                              <tr key={u.staffId}>
+                                <td>{u.staffId}</td>
+                                <td>{maskName(u.name)}</td>
+                                <td>{u.unitCode || "—"}</td>
+                                <td>
+                                  <button
+                                    className="text-button"
+                                    disabled={unitBusy}
+                                    onClick={() =>
+                                      handleUnitMemberAdd(u.staffId)
+                                    }
+                                  >
+                                    <Plus size={13} /> 加入
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ))}
+                  <div className="form-actions">
+                    <button
+                      className="button button-outline"
+                      onClick={() => setManagingUnitCode("")}
+                    >
+                      關閉
+                    </button>
+                  </div>
+                </div>
+              )}
               {!canManageMaster && (
                 <p className="settings-note">
                   單位維護限品管執行幹事或系統管理員。
@@ -1798,6 +2583,22 @@ export function GroupsPage({
                             >
                               <Pencil size={13} /> 編輯
                             </button>{" "}
+                            {isAdmin && (
+                              <button
+                                className="text-button"
+                                onClick={() => {
+                                  setManagingTitleName(
+                                    managingTitleName === row.name
+                                      ? ""
+                                      : row.name,
+                                  );
+                                  setTitleMemberChecked([]);
+                                  setTitleAddSearch("");
+                                }}
+                              >
+                                成員管理
+                              </button>
+                            )}{" "}
                             <button
                               className="text-button"
                               onClick={() => handleTitleDelete(row)}
@@ -1811,6 +2612,87 @@ export function GroupsPage({
                   </tbody>
                 </table>
               </div>
+              {managingTitleName && isAdmin && (
+                <div style={{ marginTop: 12 }}>
+                  <MemberChecklist
+                    title={`職稱「${managingTitleName}」的成員`}
+                    note="加入即轉任此職稱（一人一職稱）；移除即清除職稱"
+                    items={titleMembers.map((u) => ({
+                      id: u.staffId,
+                      label: maskName(u.name),
+                      sub: u.unitCode || undefined,
+                    }))}
+                    checked={titleMemberChecked}
+                    onToggle={(id, next) =>
+                      setTitleMemberChecked((prev) =>
+                        next ? [...prev, id] : prev.filter((x) => x !== id),
+                      )
+                    }
+                    onToggleAll={(next) =>
+                      setTitleMemberChecked(
+                        next ? titleMembers.map((u) => u.staffId) : [],
+                      )
+                    }
+                    onRemoveSelected={handleTitleMembersRemove}
+                    removeLabel="批次移出"
+                    busy={titleBusy}
+                  />
+                  <div className="form-field" style={{ maxWidth: 320 }}>
+                    <label className="field-label">加入人員（加入即轉任）</label>
+                    <input
+                      className="text-input"
+                      placeholder="輸入職編或姓名搜尋"
+                      value={titleAddSearch}
+                      onChange={(e) => setTitleAddSearch(e.target.value)}
+                    />
+                  </div>
+                  {titleAddSearch.trim() !== "" &&
+                    (titleCandidates.length === 0 ? (
+                      <p className="settings-note">無符合的在職人員。</p>
+                    ) : (
+                      <div className="table-scroll">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>職編</th>
+                              <th>姓名</th>
+                              <th>現職稱</th>
+                              <th>操作</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {titleCandidates.map((u) => (
+                              <tr key={u.staffId}>
+                                <td>{u.staffId}</td>
+                                <td>{maskName(u.name)}</td>
+                                <td>{u.title || "—"}</td>
+                                <td>
+                                  <button
+                                    className="text-button"
+                                    disabled={titleBusy}
+                                    onClick={() =>
+                                      handleTitleMemberAdd(u.staffId)
+                                    }
+                                  >
+                                    <Plus size={13} /> 加入
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ))}
+                  <div className="form-actions">
+                    <button
+                      className="button button-outline"
+                      onClick={() => setManagingTitleName("")}
+                    >
+                      關閉
+                    </button>
+                  </div>
+                </div>
+              )}
               {!canManageMaster && (
                 <p className="settings-note">
                   職稱維護限品管執行幹事或系統管理員。
@@ -2082,23 +2964,83 @@ export function GroupsPage({
             )}
           </div>
 
-          <SectionTitle title="角色" note="一人可兼任多角色，權限取聯集" />
+          <SectionTitle
+            title="群組＋角色"
+            note="可重複新增配對列：一人可屬多群組，各群組角色可不同；權限取聯集"
+          />
+          {userForm.memberships.map((m, i) => (
+            <div
+              key={i}
+              className="panel"
+              style={{ padding: 12, marginBottom: 8 }}
+            >
+              <div className="form-field">
+                <label className="field-label">群組</label>
+                <div className="select-wrap">
+                  <select
+                    value={m.groupId}
+                    onChange={(e) =>
+                      updateMembershipRow(i, { groupId: e.target.value })
+                    }
+                  >
+                    <option value="">請選擇群組</option>
+                    {groups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={15} />
+                </div>
+              </div>
+              <div className="form-grid">
+                {roleOptions
+                  .filter((r) => isGroupScopedRole(r.name))
+                  .map((r) => (
+                    <label className="check-row" key={r.id}>
+                      <input
+                        type="checkbox"
+                        checked={m.roles.includes(r.name)}
+                        onChange={() => toggleMembershipRole(i, r.name)}
+                      />
+                      <span>{r.name}</span>
+                    </label>
+                  ))}
+              </div>
+              <button
+                className="text-button"
+                onClick={() => removeMembershipRow(i)}
+              >
+                <Trash2 size={13} /> 刪除此配對
+              </button>
+            </div>
+          ))}
+          <button
+            className="button button-outline button-sm"
+            onClick={addMembershipRow}
+          >
+            <Plus size={14} /> 新增群組＋角色配對
+          </button>
+
+          <SectionTitle title="其他角色" note="不屬特定群組的角色（權限取聯集）" />
           {roleOptions.length === 0 ? (
             <p className="settings-note">
               尚未載入角色清單（請先到「系統管理」執行系統初始化）。
             </p>
           ) : (
             <div className="form-grid">
-              {roleOptions.map((r) => (
-                <label className="check-row" key={r.id}>
-                  <input
-                    type="checkbox"
-                    checked={userForm.roles.includes(r.name)}
-                    onChange={() => toggleRole(r.name)}
-                  />
-                  <span>{r.name}</span>
-                </label>
-              ))}
+              {roleOptions
+                .filter((r) => !isGroupScopedRole(r.name))
+                .map((r) => (
+                  <label className="check-row" key={r.id}>
+                    <input
+                      type="checkbox"
+                      checked={userForm.otherRoles.includes(r.name)}
+                      onChange={() => toggleOtherRole(r.name)}
+                    />
+                    <span>{r.name}</span>
+                  </label>
+                ))}
             </div>
           )}
 
@@ -2147,199 +3089,209 @@ export function GroupsPage({
             </button>
           </div>
         </section>
-      ) : tab === "reviewers" ? (
-        <section className="panel">
-          <SectionTitle
-            title="審查員"
-            note="依指標分類組別設定審查員名單，供「品管審查排程」的單位／審查員設定選用"
-          />
-          <div
-            style={{
-              display: "flex",
-              gap: 16,
-              flexWrap: "wrap",
-              alignItems: "flex-end",
-            }}
-          >
-            <div
-              className="form-field"
-              style={{ maxWidth: 320, flex: "1 1 220px", marginBottom: 0 }}
-            >
-              <label className="field-label">組別</label>
-              <div className="select-wrap">
-                <select
-                  value={reviewerGroupId}
-                  onChange={(e) => {
-                    setReviewerGroupId(e.target.value);
-                    setReviewerFilter("");
-                  }}
-                >
-                <option value="">請選擇組別</option>
-                <option value={UNCATEGORIZED_GROUP_ID}>未分類</option>
-                {groups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={15} />
+      ) : tab === "roles" ? (
+        !canManageMaster ? (
+          <section className="panel">
+            <div className="empty-state-block">
+              <b>僅品管執行幹事或系統管理員可管理角色</b>
+              <p>如需新增或異動角色成員，請聯絡系統管理員。</p>
             </div>
+          </section>
+        ) : managingRole ? (
+          <section className="panel data-panel">
+            <MemberChecklist
+              title={`角色「${managingRole.name}」的成員`}
+              note="勾選＋全選可批次移除（同時從 memberships 移除該角色）"
+              items={roleMembers.map((u) => ({
+                id: u.staffId,
+                label: maskName(u.name),
+                sub: u.unitCode || undefined,
+              }))}
+              checked={roleMemberChecked}
+              onToggle={(id, next) =>
+                setRoleMemberChecked((prev) =>
+                  next ? [...prev, id] : prev.filter((x) => x !== id),
+                )
+              }
+              onToggleAll={(next) =>
+                setRoleMemberChecked(
+                  next ? roleMembers.map((u) => u.staffId) : [],
+                )
+              }
+              onRemoveSelected={handleRoleMembersRemove}
+              removeLabel="批次移出"
+              busy={roleBusy}
+            />
+            <div className="form-field" style={{ maxWidth: 320 }}>
+              <label className="field-label">加入人員（搜尋＋全選）</label>
+              <input
+                className="text-input"
+                placeholder="輸入職編或姓名搜尋"
+                value={roleAddSearch}
+                onChange={(e) => setRoleAddSearch(e.target.value)}
+              />
             </div>
-            {canManageMaster && (
-              <div
-                className="form-field"
-                style={{ maxWidth: 320, flex: "1 1 220px", marginBottom: 0 }}
-              >
-                <label className="field-label">加入審查員</label>
-                <input
-                  className="text-input"
-                  placeholder="輸入職編或姓名搜尋"
-                  value={reviewerSearch}
-                  onChange={(e) => setReviewerSearch(e.target.value)}
-                />
-                <p className="settings-note" style={{ marginTop: 4 }}>
-                  從在職人員中搜尋（職編／姓名）
-                </p>
-              </div>
+            {isGroupScopedRole(managingRole.name) &&
+              !isUnitLevelRole(managingRole.name) && (
+                <div className="form-field" style={{ maxWidth: 320 }}>
+                  <label className="field-label">適用群組 *</label>
+                  <div className="select-wrap">
+                    <select
+                      value={roleAddGroupId}
+                      onChange={(e) => setRoleAddGroupId(e.target.value)}
+                    >
+                      <option value="">請選擇群組</option>
+                      {groups.map((g) => (
+                        <option key={g.id} value={g.id}>
+                          {g.name}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown size={15} />
+                  </div>
+                </div>
+              )}
+            {isUnitLevelRole(managingRole.name) && (
+              <p className="settings-note">
+                單位級角色：加入時以各人所屬單位的群組計（無所屬單位群組者無法加入）。
+              </p>
             )}
-          </div>
-
-              {canManageMaster &&
-                reviewerSearch.trim() !== "" &&
-                reviewerGroupId &&
-                !reviewersLoading &&
-                (() => {
-                      const kw = reviewerSearch.trim().toLowerCase();
-                      const existed = new Set(
-                        reviewers.map((r) => r.personId),
-                      );
-                      const hits = users
-                        .filter(
-                          (u) =>
-                            u.status === "在職" &&
-                            !existed.has(u.staffId) &&
-                            (u.staffId.toLowerCase().includes(kw) ||
-                              u.name.toLowerCase().includes(kw)),
-                        )
-                        .slice(0, 20);
-                      return hits.length === 0 ? (
-                        <p className="settings-note">無符合的在職人員。</p>
-                      ) : (
-                        <div className="table-scroll">
-                          <table className="data-table">
-                            <thead>
-                              <tr>
-                                <th>職編</th>
-                                <th>姓名</th>
-                                <th>所屬單位</th>
-                                <th>操作</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {hits.map((u) => (
-                                <tr key={u.staffId}>
-                                  <td>{u.staffId}</td>
-                                  <td>{maskName(u.name)}</td>
-                                  <td>{u.unitCode || "—"}</td>
-                                  <td>
-                                    <button
-                                      className="text-button"
-                                      disabled={reviewerSaving}
-                                      onClick={() =>
-                                        handleReviewerAdd(u.staffId)
-                                      }
-                                    >
-                                      <Plus size={13} /> 加入
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      );
-                })()}
-
-          {!reviewerGroupId ? (
-            <p className="settings-note">請先選擇組別。</p>
-          ) : reviewersLoading ? (
-            <p className="settings-note">讀取中…</p>
-          ) : (
-            <>
-              <div className="form-field" style={{ maxWidth: 320 }}>
-                <input
-                  className="text-input"
-                  placeholder="依姓名篩選名單"
-                  value={reviewerFilter}
-                  onChange={(e) => setReviewerFilter(e.target.value)}
-                />
-              </div>
-              {filteredReviewers.length === 0 ? (
-                <p className="settings-note">
-                  {reviewers.length === 0
-                    ? `此組別尚無審查員${canManageMaster ? "，請由上方加入。" : "。"}`
-                    : "無符合篩選條件的審查員。"}
-                </p>
-              ) : (
+            {roleCandidates.length === 0 ? (
+              <p className="settings-note">無可加入的在職人員。</p>
+            ) : (
+              <>
                 <div className="table-scroll">
-                  <table className="data-table">
+                  <table className="permission-table">
                     <thead>
                       <tr>
-                        <th>
-                          <button
-                            type="button"
-                            className="th-sort"
-                            onClick={() => toggleReviewerSort("staffId")}
-                            title="依職編排序"
-                          >
-                            職編
-                            {reviewerSortKey === "staffId" &&
-                              (reviewerSortDir === 1 ? " ▲" : " ▼")}
-                          </button>
+                        <th style={{ width: 36 }}>
+                          <input
+                            type="checkbox"
+                            checked={
+                              roleCandidates.length > 0 &&
+                              roleCandidates.every((u) =>
+                                roleAddChecked.includes(u.staffId),
+                              )
+                            }
+                            onChange={(e) =>
+                              setRoleAddChecked(
+                                e.target.checked
+                                  ? roleCandidates.map((u) => u.staffId)
+                                  : [],
+                              )
+                            }
+                            aria-label="全選"
+                          />
                         </th>
-                        <th>
-                          <button
-                            type="button"
-                            className="th-sort"
-                            onClick={() => toggleReviewerSort("name")}
-                            title="依姓名排序"
-                          >
-                            姓名
-                            {reviewerSortKey === "name" &&
-                              (reviewerSortDir === 1 ? " ▲" : " ▼")}
-                          </button>
-                        </th>
+                        <th>職編</th>
+                        <th>姓名</th>
                         <th>所屬單位</th>
-                        {canManageMaster && <th>操作</th>}
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredReviewers.map((r) => (
-                        <tr key={r.personId}>
-                          <td>{r.personId}</td>
-                          <td>{r.name ? maskName(r.name) : "—"}</td>
-                          <td>{r.unitCode || "—"}</td>
-                          {canManageMaster && (
-                            <td>
-                              <button
-                                className="text-button"
-                                onClick={() => handleReviewerRemove(r.personId)}
-                              >
-                                <Trash2 size={13} /> 移除
-                              </button>
-                            </td>
-                          )}
+                      {roleCandidates.map((u) => (
+                        <tr key={u.staffId}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={roleAddChecked.includes(u.staffId)}
+                              onChange={(e) =>
+                                setRoleAddChecked((prev) =>
+                                  e.target.checked
+                                    ? [...prev, u.staffId]
+                                    : prev.filter((x) => x !== u.staffId),
+                                )
+                              }
+                              aria-label={`選擇 ${u.staffId}`}
+                            />
+                          </td>
+                          <td>{u.staffId}</td>
+                          <td>{maskName(u.name)}</td>
+                          <td>{u.unitCode || "—"}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-              )}
-
-            </>
-          )}
-        </section>
+                <div className="form-actions">
+                  <button
+                    className="button button-primary"
+                    disabled={roleAddChecked.length === 0 || roleBusy}
+                    onClick={handleRoleMembersAdd}
+                  >
+                    加入所選（{roleAddChecked.length}）
+                  </button>
+                </div>
+              </>
+            )}
+            <div className="form-actions">
+              <button
+                className="button button-outline"
+                onClick={() => setManagingRoleId("")}
+              >
+                返回角色清單
+              </button>
+            </div>
+          </section>
+        ) : roleRows.length === 0 ? (
+          <EmptyState
+            title="尚無角色"
+            description="角色清單載入中，或請到「系統管理」執行系統初始化載入預設角色。"
+          />
+        ) : (
+          <section className="panel data-panel">
+            <div className="table-scroll">
+              <table className="permission-table">
+                <thead>
+                  <tr>
+                    <th>角色名稱</th>
+                    <th>成員數</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {roleRows.map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <b>{row.name}</b>
+                      </td>
+                      <td>
+                        {row.memberCount === null
+                          ? "—"
+                          : `${row.memberCount} 人`}
+                      </td>
+                      <td>
+                        {isAdmin ? (
+                          <>
+                            <button
+                              className="text-button"
+                              onClick={() => openRoleMembers(row.id)}
+                            >
+                              成員管理
+                            </button>{" "}
+                            <button
+                              className="text-button"
+                              onClick={() => handleRoleDelete(row)}
+                            >
+                              <Trash2 size={13} /> 刪除
+                            </button>
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="settings-note">
+              新角色（品管組／單位級）於開頁時自動建立（不存在才建立，限系統管理員）；舊角色亦可在此刪除（會同時從所有人員移除該角色）。成員管理與刪除限系統管理員（人員主檔寫入權限）。角色權限請到「系統管理」的角色權限矩陣設定。
+            </p>
+          </section>
+        )
       ) : null}
     </>
   );
 }
+

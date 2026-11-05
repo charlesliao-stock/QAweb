@@ -4,14 +4,37 @@
  * 資料歸屬依排程月份（reviewTasks.year/month）與單位代號；權限用 can("resultQuery") gating；
  * 資料範圍：管理員全部、審查員只看自己負責單位、一般人員只看自己單位。
  */
-import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, Download } from "lucide-react";
-import { collection, doc, getDoc, getDocs, query, where } from "../lib/db";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, Download, Upload, X } from "lucide-react";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  serverTimestamp,
+  where,
+  writeBatch,
+} from "../lib/db";
 import { getFirebaseDb, toFirebaseProfile } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
 import { usePermissions } from "../lib/usePermissions";
 import { isDemoMode } from "../lib/demoMode";
-import { effectiveThreshold } from "../lib/indicators";
+import {
+  effectiveThreshold,
+  indicatorCodeOf,
+  normalizeQuestions,
+  type AuditQuestion,
+} from "../lib/indicators";
+import { isReviewerRole } from "../lib/roleIdentity";
+import { computeOptionSetScore } from "../lib/reviewRecords";
+import { logAudit } from "../lib/audit";
+import {
+  parseResultSheet,
+  resultTemplateRows,
+  validateResultSheet,
+} from "../lib/import";
+import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
 import { ReviewExecutePage } from "./ReviewExecutePage";
@@ -32,8 +55,14 @@ import { academicYearOf } from "../lib/cycle";
 
 interface IndicatorOpt {
   id: string;
+  /** 顯示用編號（由複合文件 ID 解析；v1.21） */
+  code: string;
   name: string;
+  groupId: string;
+  status: string;
   threshold: number;
+  /** 審查表題目（匯入範本與計分用） */
+  questions: AuditQuestion[];
 }
 
 function RagDot({ state, label }: { state: RagState; label: string }) {
@@ -73,6 +102,10 @@ export function ResultsPage({
   const [loading, setLoading] = useState(true);
   const [viewingTaskId, setViewingTaskId] = useState<string | null>(null);
   const [tab, setTab] = useState<"overview" | "quarterly">("overview");
+  /** 匯入品管審查結果 dialog 開關（v1.21） */
+  const [importOpen, setImportOpen] = useState(false);
+  /** 匯入後重讀任務／紀錄的觸發器 */
+  const [reloadNonce, setReloadNonce] = useState(0);
   /** 統計週期（系統參數 systemParams.statsCycle；缺值預設 'year'） */
   const [statsCycle, setStatsCycle] = useState<StatsCycle>("year");
 
@@ -94,7 +127,7 @@ export function ResultsPage({
   const scope: DataScope = useMemo(() => {
     const roles = user?.roles ?? [];
     if (roles.includes("系統管理員")) return { kind: "admin" };
-    if (user && roles.includes("審查員"))
+    if (user && isReviewerRole(roles))
       return { kind: "reviewer", staffId: user.staffId };
     if (user) return { kind: "staff", unitCode: user.unitCode };
     return { kind: "admin" };
@@ -111,7 +144,15 @@ export function ResultsPage({
           const data = d.data() as Record<string, unknown>;
           const name =
             typeof data.name === "string" && data.name ? data.name : d.id;
-          list.push({ id: d.id, name, threshold: effectiveThreshold(data) });
+          list.push({
+            id: d.id,
+            code: indicatorCodeOf(d.id),
+            name,
+            groupId: typeof data.groupId === "string" ? data.groupId : "",
+            status: typeof data.status === "string" ? data.status : "",
+            threshold: effectiveThreshold(data),
+            questions: normalizeQuestions(data.questions).questions,
+          });
         });
         list.sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
         setIndicators(list);
@@ -188,7 +229,7 @@ export function ResultsPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selYear]);
+  }, [selYear, reloadNonce]);
 
   const scoped = useMemo(
     () => filterByScope(tasks, records, scope),
@@ -259,6 +300,12 @@ export function ResultsPage({
       "品管執行幹事",
       "系統管理員",
       "指標負責人",
+      "品管組召集人",
+      "品管組執行幹事",
+      "品管組審查員",
+      "單位召集人",
+      "單位執行幹事",
+      "單位審查員",
     ];
     return first && (known as string[]).includes(first)
       ? (first as Role)
@@ -268,7 +315,7 @@ export function ResultsPage({
     () =>
       indicators.map((i) => ({
         id: i.id,
-        code: i.id,
+        code: i.code,
         name: i.name,
         group: "未分類",
         threshold: i.threshold,
@@ -314,13 +361,22 @@ export function ResultsPage({
       <PageHeading
         page="results"
         action={
-          <button
-            className="button button-outline"
-            onClick={() => onAction("報表匯出功能開發中")}
-          >
-            <Download size={16} />
-            匯出報表
-          </button>
+          <>
+            <button
+              className="button button-outline"
+              onClick={() => setImportOpen(true)}
+            >
+              <Upload size={16} />
+              匯入品管審查結果
+            </button>
+            <button
+              className="button button-outline"
+              onClick={() => onAction("報表匯出功能開發中")}
+            >
+              <Download size={16} />
+              匯出報表
+            </button>
+          </>
         }
       />
 
@@ -578,6 +634,331 @@ export function ResultsPage({
       )}
         </>
       )}
+      {importOpen && (
+        <ResultImportDialog
+          indicators={indicators}
+          user={user ? { staffId: user.staffId, name: user.name } : null}
+          onAction={onAction}
+          onClose={() => setImportOpen(false)}
+          onDone={() => setReloadNonce((n) => n + 1)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ================= 品管審查結果匯入（v1.21.0） ================= */
+
+/**
+ * 各指標審查結果匯入：選組別→選指標（只列啟用）→選檔匯入。
+ * 範本依所選指標審查表題目即時產生（前 6 欄固定＋每題一欄）。
+ * 預檢：指標代號與題數不符即整檔中止；逐列未填忽略、非法值該列跳過。
+ * 每列寫一筆 reviewRecord（source="import"，不自動建 reviewTasks），
+ * 計入審核進度（unitId／year／month 參與進度計算）。
+ */
+function ResultImportDialog({
+  indicators,
+  user,
+  onAction,
+  onClose,
+  onDone,
+}: {
+  indicators: IndicatorOpt[];
+  user: { staffId: string; name: string } | null;
+  onAction: (m: string) => void;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
+  const [unitCodes, setUnitCodes] = useState<Set<string>>(new Set());
+  const [staffMap, setStaffMap] = useState<Map<string, string>>(new Map());
+  const [staffLoaded, setStaffLoaded] = useState(false);
+  const [selGroup, setSelGroup] = useState("");
+  const [selIndicatorId, setSelIndicatorId] = useState("");
+  const [summary, setSummary] = useState<string | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const db = getFirebaseDb();
+        const [gSnap, uSnap, sSnap] = await Promise.all([
+          getDocs(collection(db, "groups")),
+          getDocs(collection(db, "units")),
+          getDocs(collection(db, "users")),
+        ]);
+        setGroups(
+          gSnap.docs
+            .map((d) => ({
+              id: d.id,
+              name:
+                typeof d.data().name === "string" ? d.data().name : d.id,
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant")),
+        );
+        setUnitCodes(new Set(uSnap.docs.map((d) => d.id)));
+        const sm = new Map<string, string>();
+        sSnap.docs.forEach((d) => {
+          const name = d.data().name;
+          sm.set(d.id, typeof name === "string" ? name : d.id);
+        });
+        setStaffMap(sm);
+        setStaffLoaded(true);
+      } catch {
+        setStaffLoaded(false);
+      }
+    })();
+  }, []);
+
+  const enabledByGroup = useMemo(
+    () =>
+      indicators.filter(
+        (i) => i.status === "啟用" && (!selGroup || i.groupId === selGroup),
+      ),
+    [indicators, selGroup],
+  );
+  const selInd = indicators.find((i) => i.id === selIndicatorId) ?? null;
+
+  function handleGroupChange(groupId: string) {
+    setSelGroup(groupId);
+    setSelIndicatorId("");
+    setSummary(null);
+    setErrors([]);
+  }
+
+  function handleIndicatorChange(id: string) {
+    setSelIndicatorId(id);
+    setSummary(null);
+    setErrors([]);
+  }
+
+  function downloadCurrentTemplate() {
+    if (!selInd) return;
+    downloadTemplate(
+      resultTemplateRows(
+        selInd.code,
+        selInd.questions.map((q) => q.itemText),
+      ),
+      "審查結果",
+      `${selInd.code}_審查結果範本`,
+    );
+  }
+
+  async function handleImport(file: File) {
+    if (!selInd || !user) return;
+    setSummary(null);
+    setErrors([]);
+    setBusy(true);
+    try {
+      const sheet = await readSheetFile(file);
+      const { headerErrors, data } = parseResultSheet(sheet);
+      if (headerErrors.length > 0) {
+        setErrors(headerErrors);
+        onAction("審查結果匯入失敗：標題列不符，請下載範本對照");
+        return;
+      }
+      if (data.length === 0) {
+        setErrors(["檔案內無資料列"]);
+        return;
+      }
+      const { fileErrors, rows } = validateResultSheet(data, {
+        code: selInd.code,
+        questionCount: selInd.questions.length,
+        unitHas: (c) => unitCodes.has(c),
+        staffHas: (id) => staffMap.has(id),
+        staffLoaded,
+      });
+      if (fileErrors.length > 0) {
+        setErrors(fileErrors);
+        onAction("審查結果匯入中止：預檢不符（指標代號或題數）");
+        return;
+      }
+      const ok = rows.filter((r) => r.ok && r.values);
+      const bad = rows.filter((r) => !r.ok);
+      if (ok.length > 0) {
+        const db = getFirebaseDb();
+        const batch = writeBatch(db);
+        const today = new Date().toISOString().slice(0, 10);
+        for (const r of ok) {
+          const v = r.values!;
+          const answers = selInd.questions.map((q, i) => {
+            const label = v.answers[i] ?? "";
+            const excluded = label === "不適用" || label === "";
+            return {
+              questionId: q.id,
+              itemText: q.itemText,
+              optionLabel: label,
+              score: label === "是" ? 1 : 0,
+              excluded,
+            };
+          });
+          const { totalScore, maxScore, rate } = computeOptionSetScore(
+            answers.map((a) => ({ score: a.score, excluded: a.excluded })),
+          );
+          const ref = doc(collection(db, "reviewRecords"));
+          batch.set(ref, {
+            taskId: "",
+            indicatorId: selInd.id,
+            unitId: v.unitCode,
+            reviewerId: v.reviewerId,
+            year: v.year,
+            month: v.month,
+            caseSeq: null,
+            reviewDate: today,
+            reviewerEmpNo: v.reviewerId,
+            reviewerName: v.reviewerId
+              ? (staffMap.get(v.reviewerId) ?? v.reviewerId)
+              : "",
+            reviewedPersonEmpNo: v.personEmpNo,
+            reviewedPersonName: v.personEmpNo
+              ? (staffMap.get(v.personEmpNo) ?? v.personEmpNo)
+              : "",
+            bedNo: v.bedNo,
+            answers,
+            totalScore,
+            maxScore,
+            rate,
+            submittedAt: serverTimestamp(),
+            submittedBy: user.staffId,
+            source: "import",
+          });
+        }
+        await batch.commit();
+        logAudit(db, {
+          actor: user.staffId,
+          actorName: user.name,
+          action: "匯入品管審查結果",
+          targetType: "indicator",
+          targetId: selInd.id,
+          detail: `${selInd.code}：匯入 ${ok.length} 筆、跳過 ${bad.length} 列`,
+        });
+      }
+      setErrors(
+        bad.map((r) => `第 ${r.lineNo} 列：${r.errors.join("；")}`),
+      );
+      const msg = `審查結果匯入：成功 ${ok.length} 筆、跳過 ${bad.length} 列`;
+      setSummary(msg);
+      onAction(msg);
+      if (ok.length > 0) onDone();
+    } catch (error) {
+      setErrors([
+        `讀取檔案失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="reviewer-modal-backdrop" onClick={onClose}>
+      <div
+        className="reviewer-modal panel"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="匯入品管審查結果"
+      >
+        <div className="reviewer-modal-head">
+          <div>
+            <h2>匯入品管審查結果</h2>
+            <p>
+              先選組別與指標（只列啟用），再選 Excel／CSV 檔匯入。預檢不符（指標代號或題數）即整檔中止；逐列未填忽略、非法值該列跳過。匯入的紀錄計入審核進度，不自動建立審查任務。
+            </p>
+          </div>
+          <button
+            className="button button-ghost"
+            onClick={onClose}
+            aria-label="關閉"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="form-stack">
+          <div className="form-field">
+            <label className="field-label">組別</label>
+            <div className="select-wrap">
+              <select
+                value={selGroup}
+                onChange={(e) => handleGroupChange(e.target.value)}
+              >
+                <option value="">全部組別</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+          <div className="form-field">
+            <label className="field-label">指標（只列啟用）</label>
+            <div className="select-wrap">
+              <select
+                value={selIndicatorId}
+                onChange={(e) => handleIndicatorChange(e.target.value)}
+              >
+                <option value="">請選擇指標</option>
+                {enabledByGroup.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.code}・{i.name}（{i.questions.length} 題）
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+        </div>
+        <div className="batch-toolbar">
+          <button
+            className="button button-outline button-sm"
+            disabled={!selInd}
+            onClick={downloadCurrentTemplate}
+          >
+            <Download size={14} /> 下載範本（依該指標題目產生）
+          </button>
+          <button
+            className="button button-outline button-sm"
+            disabled={!selInd || busy}
+            onClick={() => fileRef.current?.click()}
+          >
+            <Upload size={14} /> 選擇檔案匯入
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            style={{ display: "none" }}
+            aria-label="匯入審查結果檔案"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) void handleImport(f);
+            }}
+          />
+        </div>
+        {summary && (
+          <p className="settings-note" role="status">
+            {summary}
+          </p>
+        )}
+        {errors.length > 0 && (
+          <div style={{ maxHeight: 160, overflow: "auto", marginBottom: 8 }}>
+            {errors.map((msg, i) => (
+              <div key={i} className="field-error">
+                {msg}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="form-actions">
+          <button className="button button-outline" onClick={onClose}>
+            關閉
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
