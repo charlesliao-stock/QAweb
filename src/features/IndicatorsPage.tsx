@@ -31,11 +31,13 @@ import {
   normalizeQuestions,
   normalizeTenSteps,
   primaryThreshold,
+  validateBasicThreshold,
+  OPTION_SET_LABELS,
   type AuditQuestion,
   type IndicatorSortKey,
   type NamedThreshold,
+  type OptionSet,
   type QuestionGroup,
-  type QuestionOption,
   type SubIndicator,
   type TenSteps,
 } from "../lib/indicators";
@@ -100,7 +102,7 @@ interface IndicatorForm {
   groupId: string;
   code: string;
   name: string;
-  /** 基本資料閾值（v1.15.1，選填；""＝未填） */
+  /** 基本資料閾值（v1.17 起必填；""＝未填） */
   basicThreshold: number | "";
   owners: string[];
   ownerSearch: string;
@@ -112,6 +114,8 @@ interface IndicatorForm {
   useQuestionGroups: boolean;
   /** 需要病人床號（v1.15.0）：審查表單顯示床號欄位且列為必填 */
   requireBedNo: boolean;
+  /** 需要受審人員資料（v1.17）：審查表單顯示「職編」欄位且列為必填 */
+  requireReviewee: boolean;
 }
 
 function emptyForm(): IndicatorForm {
@@ -130,7 +134,8 @@ function emptyForm(): IndicatorForm {
     questions: [],
     questionGroups: [],
     useQuestionGroups: false,
-    requireBedNo: false,
+    requireBedNo: true,
+    requireReviewee: true,
   };
 }
 
@@ -362,6 +367,8 @@ export function IndicatorsPage({
         questionGroups: mergedGroups,
         useQuestionGroups,
         requireBedNo: data.requireBedNo === true,
+        // v1.17：舊資料缺值視為 false（不主動回寫，下次存檔才寫入）
+        requireReviewee: data.requireReviewee === true,
       });
       const locked = await checkReviewData(snap.id);
       setHasReviewData(locked);
@@ -584,56 +591,7 @@ export function IndicatorsPage({
     }));
   }
 
-  // ---- 題目選項 ----
-  function addQuestionOption(qid: string) {
-    setForm((prev) => ({
-      ...prev,
-      questions: prev.questions.map((q) =>
-        q.id === qid
-          ? {
-              ...q,
-              options: [
-                ...q.options,
-                {
-                  label: "",
-                  score: q.options.length,
-                },
-              ],
-            }
-          : q,
-      ),
-    }));
-  }
-
-  function updateQuestionOption(
-    qid: string,
-    oi: number,
-    patch: Partial<QuestionOption>,
-  ) {
-    setForm((prev) => ({
-      ...prev,
-      questions: prev.questions.map((q) =>
-        q.id === qid
-          ? {
-              ...q,
-              options: q.options.map((o, i) =>
-                i === oi ? { ...o, ...patch } : o,
-              ),
-            }
-          : q,
-      ),
-    }));
-  }
-
-  function removeQuestionOption(qid: string, oi: number) {
-    setForm((prev) => ({
-      ...prev,
-      questions: prev.questions.map((q) => {
-        if (q.id !== qid || q.options.length <= 1) return q;
-        return { ...q, options: q.options.filter((_, i) => i !== oi) };
-      }),
-    }));
-  }
+  // ---- 題目選項（v1.17：每題二選一選項集，不再自由編輯選項文字＋分數） ----
 
   const sortedQuestionGroups = useMemo(
     () =>
@@ -641,118 +599,127 @@ export function IndicatorsPage({
     [form.questionGroups],
   );
 
-  /** 單一題目編輯區塊（指標項目→選項→審核指引） */
-  function renderQuestion(q: AuditQuestion) {
-    const n = form.questions.findIndex((x) => x.id === q.id) + 1;
-    const gid = q.groupId ?? null;
-    const section = form.questions.filter(
-      (x) => (x.groupId ?? null) === gid,
-    );
-    const pos = section.findIndex((x) => x.id === q.id);
+  /**
+   * 審核表題目橫向表格（v1.17）：
+   * 欄位＝分組（僅分組開關開時，用「移動到」下拉選分組）／題目／選項／審核指引／操作
+   */
+  function renderQuestionTable(qs: AuditQuestion[]) {
     return (
-      <div className="question-block" key={q.id}>
-        <div className="question-row">
-          <input
-            className="text-input"
-            value={q.itemText}
-            placeholder={`第 ${n} 題指標項目`}
-            onChange={(e) =>
-              updateQuestion(q.id, { itemText: e.target.value })
-            }
-          />
-          <button
-            className="icon-button"
-            aria-label="題目上移"
-            disabled={pos <= 0}
-            onClick={() => moveQuestion(q.id, -1)}
-          >
-            <ChevronUp size={15} />
-          </button>
-          <button
-            className="icon-button"
-            aria-label="題目下移"
-            disabled={pos >= section.length - 1}
-            onClick={() => moveQuestion(q.id, 1)}
-          >
-            <ChevronDown size={15} />
-          </button>
-          <button
-            className="icon-button"
-            aria-label="刪除題目"
-            onClick={() => removeQuestion(q.id)}
-          >
-            <X size={15} />
-          </button>
-        </div>
-        <div className="question-options">
-          <div className="settings-note">選項（顯示文字＋分數）</div>
-          {q.options.map((o, oi) => (
-            <div className="option-row" key={oi}>
-              <input
-                className="text-input"
-                value={o.label}
-                placeholder={`選項 ${oi + 1} 文字`}
-                onChange={(e) =>
-                  updateQuestionOption(q.id, oi, { label: e.target.value })
-                }
-              />
-              <input
-                className="text-input option-score"
-                type="number"
-                value={Number.isFinite(o.score) ? o.score : ""}
-                placeholder="分數"
-                onChange={(e) =>
-                  updateQuestionOption(q.id, oi, {
-                    score: e.target.value === "" ? NaN : Number(e.target.value),
-                  })
-                }
-              />
-              <button
-                className="icon-button"
-                aria-label="刪除選項"
-                disabled={q.options.length <= 1}
-                onClick={() => removeQuestionOption(q.id, oi)}
-              >
-                <X size={15} />
-              </button>
-            </div>
-          ))}
-          <button
-            className="text-button"
-            onClick={() => addQuestionOption(q.id)}
-          >
-            <Plus size={14} /> 新增選項
-          </button>
-        </div>
-        <textarea
-          className="text-input"
-          value={q.guidance}
-          placeholder="審核指引（審查員填寫時的判斷依據）"
-          onChange={(e) =>
-            updateQuestion(q.id, { guidance: e.target.value })
-          }
-        />
-        {form.useQuestionGroups && (
-          <div className="question-move-row">
-            <span className="settings-note">移動到：</span>
-            <div className="select-wrap">
-              <select
-                value={q.groupId ?? ""}
-                onChange={(e) =>
-                  moveQuestionToGroup(q.id, e.target.value || null)
-                }
-              >
-                <option value="">未分組</option>
-                {sortedQuestionGroups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </div>
-        )}
+      <div className="table-scroll">
+        <table className="permission-table">
+          <thead>
+            <tr>
+              {form.useQuestionGroups && <th>分組</th>}
+              <th>題目</th>
+              <th>選項</th>
+              <th>審核指引</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {qs.map((q) => {
+              const gid = q.groupId ?? null;
+              const section = form.questions.filter(
+                (x) => (x.groupId ?? null) === gid,
+              );
+              const pos = section.findIndex((x) => x.id === q.id);
+              return (
+                <tr key={q.id}>
+                  {form.useQuestionGroups && (
+                    <td>
+                      <div className="select-wrap">
+                        <select
+                          value={q.groupId ?? ""}
+                          aria-label="移動到分組"
+                          onChange={(e) =>
+                            moveQuestionToGroup(q.id, e.target.value || null)
+                          }
+                        >
+                          <option value="">未分組</option>
+                          {sortedQuestionGroups.map((g) => (
+                            <option key={g.id} value={g.id}>
+                              {g.name}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={15} />
+                      </div>
+                    </td>
+                  )}
+                  <td>
+                    <input
+                      className="text-input"
+                      value={q.itemText}
+                      placeholder="指標項目"
+                      aria-label="題目"
+                      onChange={(e) =>
+                        updateQuestion(q.id, { itemText: e.target.value })
+                      }
+                    />
+                  </td>
+                  <td>
+                    <div className="select-wrap">
+                      <select
+                        value={q.optionSet}
+                        aria-label="選項"
+                        onChange={(e) =>
+                          updateQuestion(q.id, {
+                            optionSet: e.target.value as OptionSet,
+                          })
+                        }
+                      >
+                        {(
+                          Object.keys(OPTION_SET_LABELS) as OptionSet[]
+                        ).map((s) => (
+                          <option key={s} value={s}>
+                            {OPTION_SET_LABELS[s]}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown size={15} />
+                    </div>
+                  </td>
+                  <td>
+                    <input
+                      className="text-input"
+                      value={q.guidance}
+                      placeholder="審核指引（審查員填寫時的判斷依據）"
+                      aria-label="審核指引"
+                      onChange={(e) =>
+                        updateQuestion(q.id, { guidance: e.target.value })
+                      }
+                    />
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button
+                      className="icon-button"
+                      aria-label="題目上移"
+                      disabled={pos <= 0}
+                      onClick={() => moveQuestion(q.id, -1)}
+                    >
+                      <ChevronUp size={15} />
+                    </button>
+                    <button
+                      className="icon-button"
+                      aria-label="題目下移"
+                      disabled={pos >= section.length - 1}
+                      onClick={() => moveQuestion(q.id, 1)}
+                    >
+                      <ChevronDown size={15} />
+                    </button>
+                    <button
+                      className="icon-button"
+                      aria-label="刪除題目"
+                      onClick={() => removeQuestion(q.id)}
+                    >
+                      <X size={15} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     );
   }
@@ -831,25 +798,37 @@ export function IndicatorsPage({
     }));
   }
 
+  /** 基本資料六欄是否皆有效（狀態「啟用」的前置條件之一） */
+  function isBasicComplete(): boolean {
+    if (!form.groupId) return false;
+    if (view.kind === "create" && !form.code.trim()) return false;
+    if (!form.name.trim()) return false;
+    if (validateBasicThreshold(form.basicThreshold) !== "") return false;
+    if (form.owners.length === 0) return false;
+    return true;
+  }
+
+  /** 審核表是否至少一題（有題目文字；「啟用」的前置條件之二） */
+  function hasAuditQuestion(): boolean {
+    return form.questions.some((q) => q.itemText.trim() !== "");
+  }
+
+  /** 是否可切到「啟用」：基本資料六欄全填＋審核表至少一題 */
+  function canEnable(): boolean {
+    return isBasicComplete() && hasAuditQuestion();
+  }
+
   /** 驗證表單：回傳錯誤訊息與錯誤欄位所在的頁籤（成功時訊息為空）。 */
   function validate(): { message: string; tab: FormTab | null } {
     if (!form.groupId) return { message: "請選擇分類組別", tab: "basic" };
     if (view.kind === "create" && !form.code.trim())
       return { message: "請填寫指標編號", tab: "basic" };
     if (!form.name.trim()) return { message: "請填寫指標名稱", tab: "basic" };
+    const thErr = validateBasicThreshold(form.basicThreshold);
+    if (thErr) return { message: thErr, tab: "basic" };
     if (form.owners.length === 0)
       return { message: "請選擇至少一位負責人", tab: "basic" };
-    const nIndicators = form.steps.step4.subIndicators.length;
-    if (nIndicators === 0)
-      return { message: "請在步驟四「指標」至少新增一支指標", tab: "steps" };
-    for (let i = 0; i < nIndicators; i++) {
-      const v = form.steps.step5.thresholds[i]?.value;
-      if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 100)
-        return {
-          message: `指標 ${i + 1} 的閾值須為 0～100 的數字（代表百分比）`,
-          tab: "steps",
-        };
-    }
+    // 10 Steps：v1.17 起取消所有必填
     for (const [i, q] of form.questions.entries()) {
       const where =
         form.useQuestionGroups && q.groupName
@@ -857,21 +836,12 @@ export function IndicatorsPage({
           : `第 ${i + 1} 題`;
       if (!q.itemText.trim())
         return { message: `${where}尚未填寫指標項目`, tab: "audit" };
-      if (q.options.length === 0)
-        return { message: `${where}至少需要一個選項`, tab: "audit" };
-      for (const [oi, o] of q.options.entries()) {
-        if (!o.label.trim())
-          return {
-            message: `${where}第 ${oi + 1} 個選項尚未填寫文字`,
-            tab: "audit",
-          };
-        if (!Number.isFinite(o.score))
-          return {
-            message: `${where}第 ${oi + 1} 個選項分數須為數字`,
-            tab: "audit",
-          };
-      }
     }
+    if (form.status === "啟用" && !canEnable())
+      return {
+        message: "啟用前需完成基本資料（六欄）與審核表（至少一題）",
+        tab: "basic",
+      };
     return { message: "", tab: null };
   }
 
@@ -892,11 +862,15 @@ export function IndicatorsPage({
     setSaving(true);
     try {
       const db = getFirebaseDb();
-      // 閾值與步驟四「指標」一一對應：名稱取自指標名稱（驗證已確保每列皆為 0～100 的數字）
-      const thresholds = form.steps.step4.subIndicators.map((s, i) => ({
-        name: s.name.trim(),
-        value: form.steps.step5.thresholds[i]?.value ?? NaN,
-      }));
+      // 閾值與步驟四「指標」一一對應：名稱取自指標名稱
+      //（v1.17 起 10 Steps 取消必填；非有限值正規化為 0，避免寫入 NaN）
+      const thresholds = form.steps.step4.subIndicators.map((s, i) => {
+        const v = form.steps.step5.thresholds[i]?.value;
+        return {
+          name: s.name.trim(),
+          value: typeof v === "number" && Number.isFinite(v) ? v : 0,
+        };
+      });
       const steps: TenSteps = {
         step1: form.steps.step1.trim(),
         step2: form.steps.step2.trim(),
@@ -931,10 +905,7 @@ export function IndicatorsPage({
       const questions = form.questions.map((q, i) => ({
         id: q.id,
         itemText: q.itemText.trim(),
-        options: q.options.map((o) => ({
-          label: o.label.trim(),
-          score: o.score,
-        })),
+        optionSet: q.optionSet,
         guidance: q.guidance.trim(),
         groupId: form.useQuestionGroups ? q.groupId : null,
         groupName: form.useQuestionGroups ? q.groupName.trim() : "",
@@ -949,19 +920,22 @@ export function IndicatorsPage({
               order: i,
             }))
         : [];
-      const threshold = thresholds[0]?.value ?? 0;
+      // v1.17：頂層 threshold 改寫基本資料閾值（必填，驗證已確保為數字）
+      const basicThreshold =
+        typeof form.basicThreshold === "number" ? form.basicThreshold : 0;
       const base = {
         name: form.name.trim(),
         groupId: form.groupId,
         owners: form.owners,
-        threshold,
-        basicThreshold: form.basicThreshold === "" ? null : form.basicThreshold,
+        threshold: basicThreshold,
+        basicThreshold,
         status: form.status,
         tenSteps: steps,
         questions,
         questionGroups,
         useQuestionGroups: form.useQuestionGroups,
         requireBedNo: form.requireBedNo,
+        requireReviewee: form.requireReviewee,
         updatedAt: serverTimestamp(),
         updatedBy: user.staffId,
       };
@@ -986,7 +960,7 @@ export function IndicatorsPage({
         await setDoc(doc(db, "indicators", code, "versions", "v1.0"), {
           version: "v1.0",
           status: form.status,
-          threshold,
+          threshold: basicThreshold,
           tenSteps: steps,
           questions,
           effectiveDate: new Date().toISOString().slice(0, 10),
@@ -1023,7 +997,7 @@ export function IndicatorsPage({
           await setDoc(doc(db, "indicators", code, "versions", newVersion), {
             version: newVersion,
             status: form.status,
-            threshold,
+            threshold: basicThreshold,
             tenSteps: steps,
             questions,
             effectiveDate: new Date().toISOString().slice(0, 10),
@@ -1166,7 +1140,7 @@ export function IndicatorsPage({
                         onClick={() => toggleSort("name")}
                         title="依名稱排序"
                       >
-                        名稱
+                        指標名稱
                         {sortKey === "name" && (sortDir === 1 ? " ▲" : " ▼")}
                       </button>
                     </th>
@@ -1192,17 +1166,6 @@ export function IndicatorsPage({
                         閾值
                         {sortKey === "threshold" &&
                           (sortDir === 1 ? " ▲" : " ▼")}
-                      </button>
-                    </th>
-                    <th>
-                      <button
-                        type="button"
-                        className="th-sort"
-                        onClick={() => toggleSort("version")}
-                        title="依版本排序"
-                      >
-                        版本
-                        {sortKey === "version" && (sortDir === 1 ? " ▲" : " ▼")}
                       </button>
                     </th>
                     <th>
@@ -1236,7 +1199,6 @@ export function IndicatorsPage({
                         {displayThreshold(row.basicThreshold, row.mainThreshold)}
                         %
                       </td>
-                      <td>{row.version}</td>
                       <td>
                         <span className={`status-pill ${STATUS_PILL[row.status]}`}>
                           {row.status}
@@ -1307,10 +1269,10 @@ export function IndicatorsPage({
 
           {formTab === "basic" && (
             <>
-              <SectionTitle title="基本資料" />
-              <div className="form-grid">
+              <SectionTitle title="基本資料" note="六欄皆為必填" />
+              <div className="form-stack">
             <div className="form-field">
-              <label className="field-label">分類組別 *</label>
+              <label className="field-label">組別 *</label>
               <div className="select-wrap">
                 <select
                   value={form.groupId}
@@ -1346,15 +1308,14 @@ export function IndicatorsPage({
               />
             </div>
             <div className="form-field">
-              <label className="field-label">
-                閾值（%，選填；留空則清單顯示主閾值）
-              </label>
+              <label className="field-label">閾值（%） *</label>
               <input
                 className="text-input"
                 type="number"
-                min={0}
+                min={1}
                 max={100}
-                placeholder="0～100"
+                step={1}
+                placeholder="1～100 的正整數"
                 value={
                   typeof form.basicThreshold === "number" &&
                   Number.isFinite(form.basicThreshold)
@@ -1369,7 +1330,7 @@ export function IndicatorsPage({
                 }
               />
             </div>
-            <div className="form-field" style={{ gridColumn: "1 / -1" }}>
+            <div className="form-field">
               <label className="field-label">
                 負責人 *（輸入職編或姓名搜尋，可多選）
               </label>
@@ -1416,7 +1377,7 @@ export function IndicatorsPage({
               )}
             </div>
             <div className="form-field">
-              <label className="field-label">狀態</label>
+              <label className="field-label">狀態 *</label>
               <div className="select-wrap">
                 <select
                   value={form.status}
@@ -1425,13 +1386,22 @@ export function IndicatorsPage({
                   }
                 >
                   {STATUSES.map((s) => (
-                    <option key={s} value={s}>
+                    <option
+                      key={s}
+                      value={s}
+                      disabled={s === "啟用" && !canEnable()}
+                    >
                       {s}
                     </option>
                   ))}
                 </select>
                 <ChevronDown size={15} />
               </div>
+              {!canEnable() && (
+                <p className="settings-note">
+                  需完成基本資料（六欄）與審核表（至少一題）才能啟用。
+                </p>
+              )}
             </div>
           </div>
           </>)}
@@ -1714,6 +1684,24 @@ export function IndicatorsPage({
                   </span>
                 </span>
               </label>
+              <label className="check-row" style={{ marginTop: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={form.requireReviewee}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      requireReviewee: e.target.checked,
+                    }))
+                  }
+                />
+                <span>
+                  需要受審人員資料
+                  <span className="muted-text">
+                    （勾選後，審查表單會顯示「職編」欄位並列為必填）
+                  </span>
+                </span>
+              </label>
               {form.useQuestionGroups ? (
                 <>
                   <div className="group-actions">
@@ -1766,7 +1754,7 @@ export function IndicatorsPage({
                             <Trash2 size={15} />
                           </button>
                         </div>
-                        {qs.map((q) => renderQuestion(q))}
+                        {renderQuestionTable(qs)}
                         <button
                           className="text-button"
                           onClick={() => addQuestion(g.id)}
@@ -1786,9 +1774,7 @@ export function IndicatorsPage({
                         <Plus size={14} /> 新增題目
                       </button>
                     </div>
-                    {form.questions
-                      .filter((x) => !x.groupId)
-                      .map((q) => renderQuestion(q))}
+                    {renderQuestionTable(form.questions.filter((x) => !x.groupId))}
                   </div>
                 </>
               ) : (
@@ -1806,7 +1792,7 @@ export function IndicatorsPage({
                       尚未建立題目（未建立審核表仍可進行審查，依規格書）。
                     </p>
                   ) : (
-                    form.questions.map((q) => renderQuestion(q))
+                    renderQuestionTable(form.questions)
                   )}
                 </>
               )}

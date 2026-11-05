@@ -17,10 +17,11 @@ import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import {
   normalizeQuestions,
+  optionLabelsOf,
   type AuditQuestion,
 } from "../lib/indicators";
 import {
-  computeReviewScore,
+  computeOptionSetScore,
   type ReviewAnswer,
 } from "../lib/reviewRecords";
 import {
@@ -133,6 +134,8 @@ export function ReviewExecutePage({
   const [loading, setLoading] = useState(true);
   const [indicatorName, setIndicatorName] = useState("");
   const [requireBedNo, setRequireBedNo] = useState(false);
+  /** 需要受審人員資料（v1.17）：false 時隱藏「職編」欄位；缺值視為 true（相容舊資料） */
+  const [requireReviewee, setRequireReviewee] = useState(true);
   const [questions, setQuestions] = useState<AuditQuestion[]>([]);
   const [task, setTask] = useState<TaskFull | null>(null);
   const [records, setRecords] = useState<CaseRecordRow[]>([]);
@@ -216,15 +219,22 @@ export function ReviewExecutePage({
     [],
   );
 
-  /* ---------- 單件答案預填（編輯用） ---------- */
+  /* ---------- 單件答案預填（編輯用；v1.17 起題目為選項集，舊作答快照相容對應） ---------- */
   function prefillRecord(rec: CaseRecordRow, qs: AuditQuestion[]) {
     const next: Record<string, number> = {};
     const nextNotes: Record<string, string> = {};
     rec.answers.forEach((a) => {
       const q = qs.find((x) => x.id === a.questionId);
       if (!q) return;
-      let idx = q.options.findIndex((o) => o.label === a.optionLabel);
-      if (idx < 0) idx = q.options.findIndex((o) => o.score === a.score);
+      const labels = optionLabelsOf(q.optionSet);
+      let idx = labels.findIndex((l) => l === a.optionLabel);
+      if (idx < 0 && a.excluded && labels.includes("不適用"))
+        idx = labels.indexOf("不適用");
+      if (idx < 0) {
+        // 舊格式快照（選項文字＋分數）：用分數推斷（是＝1、否＝0）
+        if (a.score === 1) idx = labels.indexOf("是");
+        else if (a.score === 0) idx = labels.indexOf("否");
+      }
       if (idx >= 0) next[q.id] = idx;
       if (a.note) nextNotes[a.questionId] = a.note;
     });
@@ -291,6 +301,8 @@ export function ReviewExecutePage({
             typeof idata.name === "string" ? idata.name : t.indicatorId,
           );
           setRequireBedNo(idata.requireBedNo === true);
+          // v1.17：缺值視為 true（舊資料維持顯示職編欄）
+          setRequireReviewee(idata.requireReviewee !== false);
         }
         const nq = normalizeQuestions(idata.questions);
         if (cancelled) return;
@@ -457,7 +469,7 @@ export function ReviewExecutePage({
       onAction("請填寫審查人員職編");
       return;
     }
-    if (!personEmpNo.trim()) {
+    if (requireReviewee && !personEmpNo.trim()) {
       onAction("請選擇受審人員");
       return;
     }
@@ -468,25 +480,22 @@ export function ReviewExecutePage({
     setSubmitting(true);
     try {
       const db = getFirebaseDb();
+      // v1.17：是＝1（計入分子分母）、否＝0（計入分母）、不適用＝不計入
       const answerList: ReviewAnswer[] = questions.map((q) => {
-        const opt = q.options[answers[q.id]];
+        const labels = optionLabelsOf(q.optionSet);
+        const label = labels[answers[q.id]] ?? "否";
         const note = (notes[q.id] ?? "").trim();
         return {
           questionId: q.id,
           itemText: q.itemText,
-          optionLabel: opt.label,
-          score: opt.score,
+          optionLabel: label,
+          score: label === "是" ? 1 : 0,
+          excluded: label === "不適用",
           ...(note ? { note } : {}),
         };
       });
-      const { totalScore, maxScore, rate } = computeReviewScore(
-        questions.map((q) => {
-          const opt = q.options[answers[q.id]];
-          return {
-            score: opt.score,
-            maxOptionScore: Math.max(...q.options.map((o) => o.score)),
-          };
-        }),
+      const { totalScore, maxScore, rate } = computeOptionSetScore(
+        answerList.map((a) => ({ score: a.score, excluded: !!a.excluded })),
       );
       const editId =
         target.mode === "task" ? (target.editRecordId ?? editingId) : editingId;
@@ -804,9 +813,10 @@ export function ReviewExecutePage({
                   </>
                 )}
               </div>
+              {requireReviewee && (
               <div className="form-field" style={{ position: "relative" }}>
                 <label className="field-label">
-                  受審人員 <span style={{ color: "#b3372f" }}>*</span>
+                  職編 <span style={{ color: "#b3372f" }}>*</span>
                 </label>
                 {personEmpNo ? (
                   <p style={{ margin: "12px 0" }}>
@@ -860,6 +870,7 @@ export function ReviewExecutePage({
                   </>
                 )}
               </div>
+              )}
               {requireBedNo && (
                 <div className="form-field">
                   <label className="field-label">
@@ -915,7 +926,7 @@ export function ReviewExecutePage({
                         role="radiogroup"
                         aria-label={q.itemText}
                       >
-                        {q.options.map((o, oi) => (
+                        {optionLabelsOf(q.optionSet).map((label, oi) => (
                           <label
                             key={oi}
                             className={`check-row${sel === oi ? " checked" : ""}`}
@@ -926,15 +937,7 @@ export function ReviewExecutePage({
                               checked={sel === oi}
                               onChange={() => chooseAnswer(q.id, oi)}
                             />
-                            <span>
-                              {o.label}
-                              {!o.label.includes(String(o.score)) && (
-                                <span className="muted-text">
-                                  {" "}
-                                  （{o.score} 分）
-                                </span>
-                              )}
-                            </span>
+                            <span>{label}</span>
                           </label>
                         ))}
                       </div>
