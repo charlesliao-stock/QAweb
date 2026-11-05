@@ -690,6 +690,7 @@ export function IndicatorsPage({
   const [rows, setRows] = useState<IndicatorRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchKw, setSearchKw] = useState("");
+  const [groupFilter, setGroupFilter] = useState("");
   const [sortKey, setSortKey] = useState<IndicatorSortKey>("code");
   const [sortDir, setSortDir] = useState<1 | -1>(1);
   const [form, setForm] = useState<IndicatorForm>(emptyForm);
@@ -791,12 +792,15 @@ export function IndicatorsPage({
 
   /** 搜尋（編號＋名稱）＋排序後的清單列 */
   const visibleRows = useMemo(() => {
-    const filtered = filterIndicators(rows, searchKw);
+    const byGroup = groupFilter
+      ? rows.filter((row) => row.groupId === groupFilter)
+      : rows;
+    const filtered = filterIndicators(byGroup, searchKw);
     const groupNameOf = (id: string) => groupMap.get(id) || "";
     return [...filtered].sort((a, b) =>
       compareIndicatorRows(a, b, sortKey, sortDir, groupNameOf),
     );
-  }, [rows, searchKw, sortKey, sortDir, groupMap]);
+  }, [rows, searchKw, groupFilter, sortKey, sortDir, groupMap]);
 
   useEffect(() => {
     loadMeta();
@@ -1305,15 +1309,10 @@ export function IndicatorsPage({
         action={
           view.kind === "list" ? (
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input
-                className="text-input"
-                placeholder="搜尋編號／名稱"
-                aria-label="搜尋指標"
-                value={searchKw}
-                onChange={(e) => setSearchKw(e.target.value)}
-                style={{ width: 190 }}
-              />
-              <button className="button button-primary" onClick={openCreate}>
+              <button
+                className="button button-primary"
+                onClick={openCreate}
+              >
                 <Plus size={16} />
                 新增指標
               </button>
@@ -1336,6 +1335,35 @@ export function IndicatorsPage({
           )
         }
       />
+
+      {view.kind === "list" && (
+        <div className="indicator-filter-row" role="search">
+          <div className="select-wrap indicator-filter-group">
+            <select
+              value={groupFilter}
+              aria-label="依組別篩選"
+              onChange={(e) => setGroupFilter(e.target.value)}
+            >
+              <option value="">全部組別</option>
+              {[...groupMap.entries()]
+                .sort((a, b) => a[1].localeCompare(b[1], "zh-Hant"))
+                .map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}
+                  </option>
+                ))}
+            </select>
+            <ChevronDown size={15} />
+          </div>
+          <input
+            className="text-input indicator-filter-search"
+            placeholder="搜尋編號／指標名稱"
+            aria-label="依編號或指標名稱篩選"
+            value={searchKw}
+            onChange={(e) => setSearchKw(e.target.value)}
+          />
+        </div>
+      )}
 
       {view.kind === "list" ? (
         loading ? (
@@ -1414,45 +1442,54 @@ export function IndicatorsPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleRows.map((row) => (
-                    <tr key={row.code}>
-                      <td>
-                        <b>{row.code}</b>
-                      </td>
-                      <td>{row.name}</td>
-                      <td>{groupMap.get(row.groupId) || "—"}</td>
-                      <td>
-                        {row.owners.length > 0
-                          ? row.owners.map(ownerLabel).join("、")
-                          : "—"}
-                      </td>
-                      <td>
-                        {displayThreshold(row.basicThreshold, row.mainThreshold)}
-                        %
-                      </td>
-                      <td>
-                        <span className={`status-pill ${STATUS_PILL[row.status]}`}>
-                          {row.status}
-                        </span>
-                      </td>
-                      <td>
-                        <button
-                          className="text-button"
-                          onClick={() => openEdit(row.id)}
-                        >
-                          <Pencil size={13} /> 編輯
-                        </button>{" "}
-                        {row.status !== "停用" && (
-                          <button
-                            className="text-button"
-                            onClick={() => handleDeactivate(row.id)}
-                          >
-                            <Trash2 size={13} /> 停用
-                          </button>
-                        )}
+                  {visibleRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="muted-text">
+                        沒有符合篩選條件的指標
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    visibleRows.map((row) => (
+                      <tr key={row.id}>
+                        <td>
+                          <b>{row.code}</b>
+                        </td>
+                        <td>{row.name}</td>
+                        <td>{groupMap.get(row.groupId) || "—"}</td>
+                        <td>
+                          {row.owners.length > 0
+                            ? row.owners.map(ownerLabel).join("、")
+                            : "—"}
+                        </td>
+                        <td>
+                          {displayThreshold(row.basicThreshold, row.mainThreshold)}
+                          %
+                        </td>
+                        <td>
+                          <span className={`status-pill ${STATUS_PILL[row.status]}`}>
+                            {row.status}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            className="text-button"
+                            onClick={() => openEdit(row.id)}
+                          >
+                            <Pencil size={13} /> 編輯
+                          </button>
+                          {" "}
+                          {row.status !== "停用" && (
+                            <button
+                              className="text-button"
+                              onClick={() => handleDeactivate(row.id)}
+                            >
+                              <Trash2 size={13} /> 停用
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
