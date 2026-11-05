@@ -1112,7 +1112,6 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               actor={actor}
               onAction={onAction}
               onSaved={backToList}
-              onBack={backToList}
             />
           )}
           {view.kind === "assignment" && (
@@ -1489,7 +1488,6 @@ function ScheduleEditor({
   actor,
   onAction,
   onSaved,
-  onBack,
 }: {
   indicatorId: string;
   indicatorName: string;
@@ -1501,7 +1499,6 @@ function ScheduleEditor({
   actor: { id: string; name: string };
   onAction: (m: string) => void;
   onSaved: () => void;
-  onBack: () => void;
 }) {
   const [year, setYear] = useState(initialYear);
   const period = periodForFilter(category, year);
@@ -1646,11 +1643,6 @@ function ScheduleEditor({
 
   return (
     <>
-      <div style={{ marginBottom: 12 }}>
-        <button className="button button-outline" onClick={onBack}>
-          <ArrowLeft size={15} /> 返回品管審查排程
-        </button>
-      </div>
       <section className="panel">
         <SectionTitle
           title="排程設定"
