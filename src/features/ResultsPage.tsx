@@ -11,7 +11,7 @@ import { getFirebaseDb, toFirebaseProfile } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
 import { usePermissions } from "../lib/usePermissions";
 import { isDemoMode } from "../lib/demoMode";
-import { primaryThreshold } from "../lib/indicators";
+import { effectiveThreshold } from "../lib/indicators";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
 import { ReviewExecutePage } from "./ReviewExecutePage";
@@ -100,7 +100,7 @@ export function ResultsPage({
     return { kind: "admin" };
   }, [user]);
 
-  // 指標清單（名稱＋主閾值）
+  // 指標清單（名稱＋閾值；v1.17 起達標判定吃基本資料閾值）
   useEffect(() => {
     (async () => {
       try {
@@ -111,7 +111,7 @@ export function ResultsPage({
           const data = d.data() as Record<string, unknown>;
           const name =
             typeof data.name === "string" && data.name ? data.name : d.id;
-          list.push({ id: d.id, name, threshold: primaryThreshold(data) });
+          list.push({ id: d.id, name, threshold: effectiveThreshold(data) });
         });
         list.sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
         setIndicators(list);

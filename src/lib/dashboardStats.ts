@@ -40,6 +40,8 @@ export interface DashRecord {
     itemText: string;
     optionLabel: string;
     score: number;
+    /** v1.17：不適用＝不計入（缺失統計需排除） */
+    excluded?: boolean;
     note?: string;
   }[];
   submittedAt: unknown;
@@ -76,7 +78,7 @@ export function personalTrend(
     .slice(0, n);
 }
 
-/* ---------- 護理師：個人常犯扣分 Top3（依題目聚合 score=0） ---------- */
+/* ---------- 護理師：個人常犯扣分 Top3（依題目聚合 score=0；v1.17 起排除不適用） ---------- */
 export interface WeakItem {
   itemText: string;
   miss: number;
@@ -87,6 +89,7 @@ export function weakTop3(records: DashRecord[], empNo: string): WeakItem[] {
   for (const r of records) {
     if (r.reviewedPersonEmpNo !== empNo) continue;
     for (const a of r.answers ?? []) {
+      if (a.excluded) continue;
       const e = map.get(a.itemText) ?? {
         itemText: a.itemText,
         miss: 0,
@@ -129,7 +132,7 @@ export function recentAlerts(
     if (!d) continue;
     if (nowMs - d.getTime() > hours * 3600 * 1000) continue;
     const items = (r.answers ?? [])
-      .filter((a) => a.score === 0)
+      .filter((a) => a.score === 0 && !a.excluded)
       .map((a) => ({
         itemText: a.itemText,
         optionLabel: a.optionLabel,
@@ -193,7 +196,7 @@ export function paretoTop3(
   for (const r of records) {
     if (indicatorIds && !indicatorIds.has(r.indicatorId)) continue;
     for (const a of r.answers ?? []) {
-      if (a.score === 0) {
+      if (a.score === 0 && !a.excluded) {
         map.set(a.itemText, (map.get(a.itemText) ?? 0) + 1);
         total += 1;
       }

@@ -15,7 +15,18 @@ export const TEN_STEP_TITLES = [
 
 export type OptionSet = "yes-no-na" | "yes-no";
 
-/** 審核表題目的評分選項（顯示文字＋分數，可自由增刪改） */
+/** 選項集顯示名稱（審核表題目編輯用下拉） */
+export const OPTION_SET_LABELS: Record<OptionSet, string> = {
+  "yes-no": "是／否",
+  "yes-no-na": "是／否／不適用",
+};
+
+/** 選項集對應的作答選項文字（依序，即 radio 順序） */
+export function optionLabelsOf(set: OptionSet): string[] {
+  return set === "yes-no" ? ["是", "否"] : ["是", "否", "不適用"];
+}
+
+/** 審核表題目的評分選項（舊格式 v1.16 前：顯示文字＋分數；v1.17 起題目改用 optionSet） */
 export interface QuestionOption {
   label: string;
   score: number;
@@ -32,7 +43,8 @@ export interface AuditQuestion {
   id: string;
   /** 指標項目（必填） */
   itemText: string;
-  options: QuestionOption[];
+  /** 選項集（v1.17 起：每題二選一，不再自由編輯選項文字＋分數） */
+  optionSet: OptionSet;
   /** 審核指引（多行） */
   guidance: string;
   /** 所屬題目分組 id；null＝未分組（扁平） */
@@ -48,12 +60,9 @@ export function newQid(): string {
   return `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** 新題目預設選項：0 分／1 分 */
-export function defaultQuestionOptions(): QuestionOption[] {
-  return [
-    { label: "0 分", score: 0 },
-    { label: "1 分", score: 1 },
-  ];
+/** 新題目預設選項集：是／否／不適用（v1.17） */
+export function defaultOptionSet(): OptionSet {
+  return "yes-no-na";
 }
 
 export function emptyAuditQuestion(
@@ -63,7 +72,7 @@ export function emptyAuditQuestion(
   return {
     id: newQid(),
     itemText: "",
-    options: defaultQuestionOptions(),
+    optionSet: defaultOptionSet(),
     guidance: "",
     groupId,
     groupName,
@@ -207,12 +216,24 @@ export function normalizeTenSteps(raw: unknown, legacy?: unknown): TenSteps {
   return base;
 }
 
-/** 第一筆為主閾值，用於達標判斷與列表顯示 */
+/** 第一筆為主閾值（v1.17 起僅作 fallback；達標判定改吃基本資料閾值） */
 export function primaryThreshold(
   ind: { tenSteps?: unknown } | null | undefined,
 ): number {
   const ts = normalizeTenSteps(ind?.tenSteps);
   return ts.step5.thresholds[0]?.value ?? 0;
+}
+
+/**
+ * 達標判定用閾值（v1.17）：基本資料閾值優先；
+ * 缺值（舊資料未填）時 fallback 主閾值。
+ */
+export function effectiveThreshold(
+  ind: { basicThreshold?: unknown; tenSteps?: unknown } | null | undefined,
+): number {
+  const b = (ind as Record<string, unknown> | null | undefined)?.basicThreshold;
+  if (typeof b === "number" && Number.isFinite(b)) return b;
+  return primaryThreshold(ind);
 }
 
 /** 指標清單列（搜尋／排序／閾值顯示共用） */
@@ -255,14 +276,13 @@ export function filterIndicators<T extends { code: string; name: string }>(
   );
 }
 
-/** 指標清單可排序欄位 */
+/** 指標清單可排序欄位（v1.17：移除版本欄） */
 export type IndicatorSortKey =
   | "code"
   | "name"
   | "group"
   | "threshold"
-  | "status"
-  | "version";
+  | "status";
 
 export function indicatorSortValue(
   row: IndicatorListRow,
@@ -280,8 +300,6 @@ export function indicatorSortValue(
       return indicatorDisplayThreshold(row);
     case "status":
       return row.status;
-    case "version":
-      return row.version;
   }
 }
 
@@ -301,32 +319,23 @@ export function compareIndicatorRows(
   return dir === 1 ? c : -c;
 }
 
-function asQuestionOptions(v: unknown, optionSet?: unknown): QuestionOption[] {
-  if (Array.isArray(v)) {
-    const list = v
-      .map((o) => {
-        const r = (o ?? {}) as Record<string, unknown>;
-        const num = Number(r.score);
-        return {
-          label: asString(r.label),
-          score: Number.isFinite(num) ? num : 0,
-        };
-      })
-      .filter((o) => o.label !== "");
-    if (list.length > 0) return list;
-  }
-  // 舊格式 optionSet 轉換：是＝1 分、否／不適用＝0 分
-  const set = optionSet === "yes-no" || optionSet === "yes-no-na" ? optionSet : "yes-no-na";
-  return set === "yes-no"
-    ? [
-        { label: "是", score: 1 },
-        { label: "否", score: 0 },
-      ]
-    : [
-        { label: "是", score: 1 },
-        { label: "否", score: 0 },
-        { label: "不適用", score: 0 },
-      ];
+/** 選項集正規化：非法／缺值一律視為 "yes-no-na"（v1.17 規格） */
+export function asOptionSet(v: unknown): OptionSet {
+  return v === "yes-no" || v === "yes-no-na" ? v : "yes-no-na";
+}
+
+/**
+ * 基本資料閾值驗證（v1.17：必填、>0 的正整數、≤100）。
+ * 回傳錯誤訊息；空字串＝通過。
+ */
+export function validateBasicThreshold(value: number | ""): string {
+  if (value === "") return "請填寫閾值（%）";
+  if (typeof value !== "number" || !Number.isFinite(value))
+    return "閾值須為數字";
+  if (!Number.isInteger(value) || value <= 0)
+    return "閾值須為大於 0 的正整數";
+  if (value > 100) return "閾值不可大於 100";
+  return "";
 }
 
 export interface NormalizedQuestions {
@@ -338,8 +347,9 @@ export interface NormalizedQuestions {
 }
 
 /**
- * 正規化審核表題目：
- * - 新格式：{id, itemText, options:[{label,score}], guidance, groupId, groupName, order}
+ * 正規化審核表題目（v1.17）：
+ * - 新格式：{id, itemText, optionSet, guidance, groupId, groupName, order}
+ * - v1.16 格式：{itemText, options:[{label,score}], ...} → optionSet 缺值視為 "yes-no-na"
  * - 舊格式：{text, optionSet, guidance, group} → 轉新格式；
  *   舊 group 字串（題組名）會轉為真正的分組並啟用分組。
  */
@@ -378,7 +388,7 @@ export function normalizeQuestions(raw: unknown): NormalizedQuestions {
     return {
       id: asString(r.id) || newQid(),
       itemText: isNew ? asString(r.itemText) : asString(r.text),
-      options: asQuestionOptions(r.options, r.optionSet),
+      optionSet: asOptionSet(r.optionSet),
       guidance: asString(r.guidance),
       groupId,
       groupName,

@@ -6,10 +6,12 @@ export interface ReviewAnswer {
   questionId: string;
   /** 指標項目文字（快照，題目日後修改不影響已送紀錄） */
   itemText: string;
-  /** 選擇的選項文字（快照） */
+  /** 選擇的選項文字（快照；v1.17 起為 是／否／不適用） */
   optionLabel: string;
-  /** 該選項分數 */
+  /** 該選項分數（v1.17：是＝1、否＝0、不適用＝0 但 excluded=true） */
   score: number;
+  /** v1.17 新增：不適用＝不計入分子分母 */
+  excluded?: boolean;
   /** 該題備註（v1.15.0 新增，選填） */
   note?: string;
 }
@@ -54,7 +56,7 @@ export function reviewRecordDocId(taskId: string): string {
 }
 
 /**
- * 計算審查得分（純函式）。
+ * 計算審查得分（純函式；v1.16 前舊模型保留相容）。
  * selections：每題 {得分, 該題滿分（選項中最高分）}。
  * 回傳總得分／總滿分／正確率（滿分 0 → null）。
  */
@@ -63,6 +65,23 @@ export function computeReviewScore(
 ): { totalScore: number; maxScore: number; rate: number | null } {
   const totalScore = selections.reduce((n, s) => n + s.score, 0);
   const maxScore = selections.reduce((n, s) => n + s.maxOptionScore, 0);
+  const rate =
+    maxScore > 0 ? Math.round((totalScore / maxScore) * 1000) / 10 : null;
+  return { totalScore, maxScore, rate };
+}
+
+/**
+ * 計算審查得分（v1.17 選項集模型，純函式）。
+ * 每題：是＝1 分（計入分子分母）、否＝0 分（計入分母）、
+ * 不適用＝excluded（分子分母皆排除）。
+ * 回傳總得分／計入題數／正確率（計入 0 題 → null）。
+ */
+export function computeOptionSetScore(
+  selections: { score: number; excluded: boolean }[],
+): { totalScore: number; maxScore: number; rate: number | null } {
+  const counted = selections.filter((s) => !s.excluded);
+  const totalScore = counted.reduce((n, s) => n + s.score, 0);
+  const maxScore = counted.length;
   const rate =
     maxScore > 0 ? Math.round((totalScore / maxScore) * 1000) / 10 : null;
   return { totalScore, maxScore, rate };

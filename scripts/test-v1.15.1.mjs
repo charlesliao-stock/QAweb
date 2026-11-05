@@ -79,7 +79,7 @@ assert("indicatorDisplayThreshold fallback", L.indicatorDisplayThreshold(R("A", 
   assert("組別升冪（內科組＜外科組，組內保序）", JSON.stringify(sort("group", 1)) === '["QI-001","FALL-01","QI-002"]');
   const stDesc = sort("status", -1);
   assert("狀態降冪：草稿排在最後", stDesc[2] === "QI-001");
-  assert("版本降冪：v2.0 在前", sort("version", -1)[0] === "QI-001");
+  // v1.17：版本欄自清單移除，不再支援版本排序
   assert("名稱排序不炸", sort("name", 1).length === 3);
 }
 

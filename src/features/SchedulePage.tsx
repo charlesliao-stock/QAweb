@@ -111,6 +111,8 @@ interface IndicatorLite {
   id: string;
   name: string;
   groupId: string;
+  /** 指標狀態（v1.17：排程選擇器只列「啟用」） */
+  status: string;
 }
 
 interface UnitLite {
@@ -326,6 +328,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             id: d.id,
             name: typeof data.name === "string" ? data.name : "",
             groupId: typeof data.groupId === "string" ? data.groupId : "",
+            status: typeof data.status === "string" ? data.status : "",
           };
         })
         .sort((a, b) => a.id.localeCompare(b.id, "zh-Hant"));
@@ -1741,7 +1744,11 @@ function SelfAuditDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [indicatorId, setIndicatorId] = useState(indicators[0]?.id ?? "");
+  const [indicatorId, setIndicatorId] = useState(
+    () => indicators.find((i) => i.status === "啟用")?.id ?? "",
+  );
+  // v1.17：自審指標選擇器只列「啟用」的指標
+  const activeIndicators = indicators.filter((i) => i.status === "啟用");
   const [months, setMonths] = useState<number[]>([]);
   const caseCount = useCaseCountInput();
   const [reviewerIds, setReviewerIds] = useState<string[]>(() =>
@@ -1809,7 +1816,7 @@ function SelfAuditDialog({
             value={indicatorId}
             onChange={(e) => setIndicatorId(e.target.value)}
           >
-            {indicators.map((i) => (
+            {activeIndicators.map((i) => (
               <option key={i.id} value={i.id}>
                 {i.name}（{i.id}）
               </option>

@@ -15,6 +15,7 @@ import {
 } from "../../lib/db";
 import { getFirebaseDb } from "../../lib/firebase";
 import { correctTaskStatus } from "../../lib/reviewProgress";
+import { primaryThreshold } from "../../lib/indicators";
 import type {
   DashRecord,
   DashTask,
@@ -127,7 +128,11 @@ export function useDashboardData(): DashboardData {
             id: d.id,
             name: typeof v.name === "string" ? v.name : d.id,
             groupId: typeof v.groupId === "string" ? v.groupId : "",
-            threshold: typeof v.threshold === "number" ? v.threshold : 0,
+            // v1.17：頂層 threshold 存檔時已寫入基本資料閾值；舊資料缺值時 fallback 主閾值
+            threshold:
+              typeof v.threshold === "number"
+                ? v.threshold
+                : primaryThreshold(v),
             requireBedNo: v.requireBedNo === true,
           });
         });
@@ -184,6 +189,7 @@ export function useDashboardData(): DashboardData {
               itemText: String(a.itemText ?? ""),
               optionLabel: String(a.optionLabel ?? ""),
               score: Number(a.score ?? 0),
+              excluded: a.excluded === true,
               note: typeof a.note === "string" ? a.note : "",
             })),
             submittedAt: v.submittedAt,
