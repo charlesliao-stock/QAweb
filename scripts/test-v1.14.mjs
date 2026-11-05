@@ -93,8 +93,14 @@ const audit = src("features/AuditPage.tsx");
 t("AuditPage 不再引入 ReviewOverviewPage（v1.19 取代）", !audit.includes("ReviewOverviewPage"));
 t("AuditPage 為品管審查清單（v1.19）", audit.includes("進行中的審查排程"));
 const results = src("features/ResultsPage.tsx");
-t("ResultsPage 有季度分析頁籤", results.includes("quarterly"));
-t("ResultsPage 引入 QuarterResults", results.includes("QuarterResults"));
+t(
+  "ResultsPage 有四個新頁籤（v1.25.0）",
+  results.includes('"group"') &&
+    results.includes('"unit"') &&
+    results.includes('"indicator"') &&
+    results.includes('"import"'),
+);
+t("ResultsPage 不再引入 QuarterResults（v1.25.0）", !results.includes("QuarterResults"));
 const ui = src("components/ui.tsx");
 t("PAGE_COPY 有 reviewers", ui.includes("reviewers:"));
 
@@ -121,12 +127,11 @@ t("IndicatorsPage 無舊 reviews 集合引用", !ind.includes('"reviews"'));
 
 /* ---- 版本號 ---- */
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-t("package.json 版號 1.24.0", pkg.version === "1.24.0");
-t("version.ts 版號 1.24.0", src("version.ts").includes('VERSION = "1.24.0"'));
+t("package.json 版號 1.25.0", pkg.version === "1.25.0");
+t("version.ts 版號 1.25.0", src("version.ts").includes('VERSION = "1.25.0"'));
 
-/* ---- 4 檔存在 ---- */
+/* ---- 3 檔存在（v1.25.0：QuarterResults 已隨舊結果分析畫面移除） ---- */
 for (const f of [
-  "features/QuarterResults.tsx",
   "features/ReviewerManagement.tsx",
   "lib/access.ts",
   "lib/scheduleStatus.ts",

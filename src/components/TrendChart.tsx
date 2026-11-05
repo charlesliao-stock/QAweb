@@ -31,6 +31,8 @@ export function TrendChart({
   const pts = values.map((v, i) => ({ x: xOf(i), y: yOf(v) }));
   const line = pts.map((p) => `${p.x},${p.y}`).join(" ");
   const latest = values[n - 1] ?? 0;
+  /** Y 軸刻度（0／25／50／75／100，對齊 yOf 映射） */
+  const yTicks = [100, 75, 50, 25, 0].map((v) => ({ v, y: yOf(v) }));
   return (
     <div className="trend-chart-wrap">
       <div className="chart-legend">
@@ -55,15 +57,18 @@ export function TrendChart({
             <stop offset="100%" stopColor="#0f766e" stopOpacity="0" />
           </linearGradient>
         </defs>
-        {[35, 75, 115, 155].map((y) => (
-          <line
-            key={y}
-            x1="35"
-            x2="565"
-            y1={y}
-            y2={y}
-            className="chart-gridline"
-          />
+        {yTicks.map(({ v, y }) => (
+          <g key={v}>
+            <line x1="35" x2="565" y1={y} y2={y} className="chart-gridline" />
+            <text
+              x="30"
+              y={y + 4}
+              textAnchor="end"
+              className="chart-label"
+            >
+              {v}
+            </text>
+          </g>
         ))}
         <path
           d={`M${x0},170 L${line.replaceAll(" ", " L")} L${x1},170 L${x0},170 Z`}
@@ -80,7 +85,11 @@ export function TrendChart({
               index === n - 1 ? "chart-dot latest" : "chart-dot"
             }
           >
-            <title>{values[index]}%</title>
+            <title>
+              {labels[index]
+                ? `${labels[index]}：${values[index]}%`
+                : `${values[index]}%`}
+            </title>
           </circle>
         ))}
         {labels.map(
