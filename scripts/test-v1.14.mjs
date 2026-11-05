@@ -88,8 +88,8 @@ t("App 引入 ReviewerManagement", app.includes("ReviewerManagement"));
 t("審查員管理在組織與設定導覽", app.includes('"reviewers", label: "審查員管理"'));
 t("審查員管理用 can(manageRoles) gating", app.includes('can("manageRoles")'));
 const audit = src("features/AuditPage.tsx");
-t("AuditPage 引入 ReviewOverviewPage", audit.includes("ReviewOverviewPage"));
-t("AuditPage 有指標搜尋", audit.includes("搜尋指標"));
+t("AuditPage 不再引入 ReviewOverviewPage（v1.19 取代）", !audit.includes("ReviewOverviewPage"));
+t("AuditPage 為品管審查清單（v1.19）", audit.includes("進行中的審查排程"));
 const results = src("features/ResultsPage.tsx");
 t("ResultsPage 有季度分析頁籤", results.includes("quarterly"));
 t("ResultsPage 引入 QuarterResults", results.includes("QuarterResults"));
@@ -119,8 +119,8 @@ t("IndicatorsPage 無舊 reviews 集合引用", !ind.includes('"reviews"'));
 
 /* ---- 版本號 ---- */
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-t("package.json 版號 1.18.0", pkg.version === "1.18.0");
-t("version.ts 版號 1.18.0", src("version.ts").includes('VERSION = "1.18.0"'));
+t("package.json 版號 1.18.0", pkg.version === "1.19.0");
+t("version.ts 版號 1.18.0", src("version.ts").includes('VERSION = "1.19.0"'));
 
 /* ---- 4 檔存在 ---- */
 for (const f of [

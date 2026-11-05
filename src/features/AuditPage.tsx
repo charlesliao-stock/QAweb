@@ -1,19 +1,169 @@
 /**
- * 指標審查導覽（v1.14.0 改寫）：審查總覽入口。
- * 先列出指標清單（組別／名稱，可搜尋），點某指標進入
- * ReviewOverviewPage（各單位→各輪次→審查紀錄）。
+ * 品管審查（v1.19.0 改寫）：依權限列出「有排程且尚未結束」的指標排程。
+ * 取代舊的指標審查總覽入口（選指標→各單位各輪次）。
+ *
+ * 角色範圍（多重身分取聯集）：
+ * - 審查員：分工表中被指派的項目
+ * - 單位護理長／單位執行幹事：自審排程（selfReview）且受審單位含本人單位
+ * - 各組召集人／執行幹事：本人群組（users.groupIds）的指標排程
+ * - 督導／副主任／主任、系統管理員：全部
+ * 尚未結束＝今天≤最後區間結束月（含當月）且進度未達 100%
+ * （進度改以審查紀錄計算，不依賴任務表）。
  */
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, Search, ShieldCheck } from "lucide-react";
-import { collection, getDocs, limit, query } from "../lib/db";
+import { ArrowUpDown, ClipboardCheck, Eye, ShieldCheck, X } from "lucide-react";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  limit,
+  query,
+  where,
+} from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
-import { ReviewOverviewPage } from "./ReviewOverviewPage";
+import { useAuth } from "../lib/auth";
+import { maskName } from "../lib/mask";
+import {
+  normalizeAssignmentItem,
+  parseIndicatorSchedule,
+  type IndicatorSchedule,
+} from "../lib/scheduling";
+import {
+  computeIntervalProgress,
+  currentInterval,
+  intervalDisplay,
+  isProgressComplete,
+  recordYearMonth,
+  ymKey,
+  type IntervalProgress,
+  type ReviewInterval,
+} from "../lib/reviewActive";
+import { ReviewExecutePage, type ExecuteTarget } from "./ReviewExecutePage";
 
 interface IndicatorLite {
   id: string;
   name: string;
-  group: string;
+  groupId: string;
+}
+
+interface RecordRow {
+  id: string;
+  indicatorId: string;
+  unitId: string;
+  year: number;
+  month: number;
+  reviewDate: string;
+  reviewerName: string;
+  reviewedPersonName: string;
+  rate: number | null;
+}
+
+interface MonthOption {
+  month: number;
+  year: number;
+  label: string;
+}
+
+interface ActiveRow {
+  sched: IndicatorSchedule;
+  indicatorId: string;
+  indicatorName: string;
+  groupId: string;
+  groupName: string;
+  interval: ReviewInterval;
+  intervalLabel: string;
+  progress: IntervalProgress;
+  reviewMonthCount: number;
+  /** 本人被指派的單位（分工表）；空＝未被指派 */
+  assignedUnitIds: string[];
+  monthOptions: MonthOption[];
+  /** 該指標本區間的審查紀錄（檢視用） */
+  records: RecordRow[];
+  unitNameOf: (code: string) => string;
+}
+
+type SortKey = "group" | "name" | "interval" | "person" | "unit";
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  return "讀寫失敗，請檢查網路連線後再試";
+}
+
+function fmtTs(ts: unknown): string {
+  if (ts && typeof (ts as { toDate?: unknown }).toDate === "function") {
+    try {
+      return (ts as { toDate: () => Date })
+        .toDate()
+        .toLocaleString("zh-TW", { hour12: false });
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function fmtPct(p: number | null): string {
+  return p == null ? "—" : `${p}%`;
+}
+
+function calendarYearFor(
+  sched: IndicatorSchedule,
+  month: number,
+  now: Date,
+): number {
+  if (sched.category === "temp" && sched.refYear != null) return sched.refYear;
+  if (sched.category === "academic") {
+    const p = parseInt(sched.period, 10);
+    const roc = Number.isFinite(p)
+      ? p
+      : now.getMonth() + 1 >= 8
+        ? now.getFullYear() - 1911
+        : now.getFullYear() - 1912;
+    return month >= 8 ? roc + 1911 : roc + 1912;
+  }
+  if (sched.category === "temp") {
+    const t = Number(sched.period);
+    if (Number.isFinite(t) && t > 0) return new Date(t).getFullYear();
+    return now.getFullYear();
+  }
+  const y = parseInt(sched.period, 10);
+  return Number.isFinite(y) ? y : now.getFullYear();
+}
+
+function schedLike(s: IndicatorSchedule) {
+  return {
+    category: s.category,
+    period: s.period,
+    months: s.months,
+    frequency: s.frequency,
+    intervalMonths: s.intervalMonths,
+    refYear: s.refYear,
+  };
+}
+
+function ProgressCell({
+  done,
+  total,
+  pct,
+}: {
+  done: number;
+  total: number | null;
+  pct: number | null;
+}) {
+  if (total == null) return <span className="muted-text">—</span>;
+  const w = Math.min(100, Math.max(0, pct ?? 0));
+  return (
+    <div>
+      <div>
+        {done}／{total}（{fmtPct(pct)}）
+      </div>
+      <div className="progress-track" aria-hidden="true">
+        <div className="progress-fill" style={{ width: `${w}%` }} />
+      </div>
+    </div>
+  );
 }
 
 export function AuditPage({
@@ -21,59 +171,386 @@ export function AuditPage({
 }: {
   onAction: (message: string) => void;
 }) {
-  const [indicators, setIndicators] = useState<IndicatorLite[]>([]);
-  const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<IndicatorLite | null>(null);
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState<ActiveRow[]>([]);
+  const [sortKey, setSortKey] = useState<SortKey>("group");
+  const [sortDir, setSortDir] = useState<1 | -1>(1);
+  const [fGroup, setFGroup] = useState("");
+  const [fName, setFName] = useState("");
+  const [fInterval, setFInterval] = useState("");
+  const [viewRow, setViewRow] = useState<ActiveRow | null>(null);
+  const [execRow, setExecRow] = useState<ActiveRow | null>(null);
+  const [execUnit, setExecUnit] = useState("");
+  const [execMonth, setExecMonth] = useState("");
+  const [execBusy, setExecBusy] = useState(false);
+  const [executing, setExecuting] = useState<ExecuteTarget | null>(null);
 
   useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      setRows([]);
+      return;
+    }
+    let cancelled = false;
     (async () => {
+      setLoading(true);
       try {
         const db = getFirebaseDb();
-        const snap = await getDocs(
-          query(collection(db, "indicators"), limit(500)),
-        );
-        const list: IndicatorLite[] = [];
-        snap.docs.forEach((d) => {
-          const data = d.data() as Record<string, unknown>;
-          const name =
-            typeof data.name === "string" && data.name ? data.name : d.id;
-          const group =
-            typeof data.groupName === "string" && data.groupName
-              ? data.groupName
-              : typeof data.group === "string" && data.group
-                ? data.group
-                : "未分類";
-          list.push({ id: d.id, name, group });
+        const staffId = user.staffId;
+        const today = new Date();
+        const [iSnap, gSnap, uSnap, sSnap, aSnap, meSnap] = await Promise.all([
+          getDocs(query(collection(db, "indicators"), limit(500))),
+          getDocs(query(collection(db, "groups"), limit(200))),
+          getDocs(query(collection(db, "units"), limit(2000))),
+          getDocs(query(collection(db, "indicatorSchedules"), limit(500))),
+          getDocs(query(collection(db, "indicatorAssignments"), limit(500))),
+          getDoc(doc(db, "users", staffId)),
+        ]);
+        if (cancelled) return;
+
+        const indicators = new Map<string, IndicatorLite>();
+        iSnap.docs.forEach((d) => {
+          const v = d.data() as Record<string, unknown>;
+          indicators.set(d.id, {
+            id: d.id,
+            name: typeof v.name === "string" && v.name ? v.name : d.id,
+            groupId: typeof v.groupId === "string" ? v.groupId : "",
+          });
         });
-        list.sort(
-          (a, b) =>
-            a.group.localeCompare(b.group, "zh-Hant") ||
-            a.name.localeCompare(b.name, "zh-Hant"),
+        const groupName = new Map<string, string>();
+        gSnap.docs.forEach((d) => {
+          const v = d.data() as Record<string, unknown>;
+          groupName.set(
+            d.id,
+            typeof v.name === "string" && v.name ? v.name : d.id,
+          );
+        });
+        const unitName = new Map<string, string>();
+        uSnap.docs.forEach((d) => {
+          const v = d.data() as Record<string, unknown>;
+          unitName.set(
+            d.id,
+            typeof v.name === "string" && v.name ? v.name : d.id,
+          );
+        });
+        const unitNameOf = (code: string): string =>
+          unitName.get(code) ?? code;
+        const schedules: IndicatorSchedule[] = [];
+        sSnap.docs.forEach((d) => {
+          const s = parseIndicatorSchedule(d.data());
+          if (s) schedules.push(s);
+        });
+        // 分工表：指標 → 審查員 → 單位
+        const reviewerOf = new Map<string, Map<string, string[]>>();
+        aSnap.docs.forEach((d) => {
+          const v = d.data() as Record<string, unknown>;
+          const indicatorId =
+            typeof v.indicatorId === "string" ? v.indicatorId : d.id;
+          const items = Array.isArray(v.items)
+            ? v.items
+                .map((it) => normalizeAssignmentItem(it))
+                .filter((it) => it !== null)
+            : [];
+          const m = new Map<string, string[]>();
+          items.forEach((it) => {
+            if (it) m.set(it.reviewerId, it.units.map((u) => u.unitId));
+          });
+          reviewerOf.set(indicatorId, m);
+        });
+        const meData = meSnap.exists()
+          ? (meSnap.data() as Record<string, unknown>)
+          : {};
+        const myGroupIds = Array.isArray(meData.groupIds)
+          ? (meData.groupIds as unknown[]).filter(
+              (g): g is string => typeof g === "string",
+            )
+          : [];
+
+        // ---- 角色範圍（多重身分取聯集） ----
+        const roles = user.roles ?? [];
+        const title = user.title ?? "";
+        const isAdmin = roles.includes("系統管理員");
+        const isSenior = title.includes("主任") || title.includes("督導");
+        const isReviewer = roles.includes("審查員");
+        const isHeadNurse =
+          title.includes("護理長") || title.includes("執行幹事");
+        const isConvener = roles.some(
+          (r) => r.includes("召集人") || r.includes("執行幹事"),
         );
-        setIndicators(list);
-      } catch {
-        setIndicators([]);
+
+        interface Cand {
+          sched: IndicatorSchedule;
+          assigned: string[];
+        }
+        const cands: Cand[] = [];
+        for (const s of schedules) {
+          const ind = indicators.get(s.indicatorId);
+          if (!ind) continue;
+          let visible = false;
+          const assigned: string[] = [];
+          if (isAdmin || isSenior) visible = true;
+          if (isReviewer) {
+            const units = reviewerOf.get(s.indicatorId)?.get(staffId);
+            if (units) {
+              visible = true;
+              assigned.push(...units);
+            }
+          }
+          if (
+            isHeadNurse &&
+            s.selfReview &&
+            user.unitCode &&
+            s.unitIds.includes(user.unitCode)
+          ) {
+            visible = true;
+          }
+          if (isConvener && ind.groupId && myGroupIds.includes(ind.groupId)) {
+            visible = true;
+          }
+          if (!visible) continue;
+          const iv = currentInterval(schedLike(s), today);
+          if (!iv) continue; // 已過最後區間結束月
+          cands.push({ sched: s, assigned: [...new Set(assigned)] });
+        }
+        if (cancelled) return;
+
+        // ---- 審查紀錄（每支指標一個查詢，單一 where 避免複合索引） ----
+        const indicatorIds = [...new Set(cands.map((c) => c.sched.indicatorId))];
+        const recordsByIndicator = new Map<string, RecordRow[]>();
+        await Promise.all(
+          indicatorIds.map(async (iid) => {
+            try {
+              const rsnap = await getDocs(
+                query(
+                  collection(db, "reviewRecords"),
+                  where("indicatorId", "==", iid),
+                  limit(2000),
+                ),
+              );
+              const list: RecordRow[] = [];
+              rsnap.docs.forEach((d) => {
+                const v = d.data() as Record<string, unknown>;
+                const ym = recordYearMonth(v);
+                if (!ym) return;
+                const rate =
+                  typeof v.rate === "number" && Number.isFinite(v.rate)
+                    ? v.rate
+                    : null;
+                list.push({
+                  id: d.id,
+                  indicatorId: iid,
+                  unitId: typeof v.unitId === "string" ? v.unitId : "",
+                  year: ym.year,
+                  month: ym.month,
+                  reviewDate:
+                    typeof v.reviewDate === "string" ? v.reviewDate : "",
+                  reviewerName:
+                    typeof v.reviewerName === "string" ? v.reviewerName : "",
+                  reviewedPersonName:
+                    typeof v.reviewedPersonName === "string"
+                      ? v.reviewedPersonName
+                      : "",
+                  rate,
+                });
+              });
+              if (!cancelled) recordsByIndicator.set(iid, list);
+            } catch {
+              if (!cancelled) recordsByIndicator.set(iid, []);
+            }
+          }),
+        );
+        if (cancelled) return;
+
+        const out: ActiveRow[] = [];
+        for (const { sched: s, assigned } of cands) {
+          const ind = indicators.get(s.indicatorId);
+          if (!ind) continue;
+          const iv = currentInterval(schedLike(s), today);
+          if (!iv) continue;
+          const keys = new Set(iv.allMonths.map(ymKey));
+          const inRecords = (recordsByIndicator.get(s.indicatorId) ?? []).filter(
+            (r) => keys.has(ymKey({ year: r.year, month: r.month })),
+          );
+          const reviewMonthCount = iv.reviewMonths.length;
+          const progress = computeIntervalProgress({
+            unitCount: s.unitIds.length,
+            caseCount: s.caseCount,
+            reviewMonthCount,
+            records: inRecords,
+            intervalMonthKeys: keys,
+          });
+          if (isProgressComplete(progress)) continue; // 已達 100%
+          const monthOptions: MonthOption[] = s.months.map((m) => {
+            const y = calendarYearFor(s, m, today);
+            return { month: m, year: y, label: `${y}年${m}月` };
+          });
+          out.push({
+            sched: s,
+            indicatorId: s.indicatorId,
+            indicatorName: ind.name,
+            groupId: ind.groupId,
+            groupName: groupName.get(ind.groupId) ?? "未分類",
+            interval: iv,
+            intervalLabel: intervalDisplay(iv, s.category),
+            progress,
+            reviewMonthCount,
+            assignedUnitIds: assigned,
+            monthOptions,
+            records: [...inRecords].sort(
+              (a, b) =>
+                a.year - b.year ||
+                a.month - b.month ||
+                a.unitId.localeCompare(b.unitId, "zh-Hant"),
+            ),
+            unitNameOf,
+          });
+        }
+        setRows(out);
+      } catch (e) {
+        if (!cancelled) onAction(`讀取品管審查清單失敗：${toErrorMessage(e)}`);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.staffId]);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return indicators;
-    return indicators.filter((item) =>
-      `${item.name} ${item.group} ${item.id}`.toLowerCase().includes(q),
+    const g = fGroup.trim().toLowerCase();
+    const n = fName.trim().toLowerCase();
+    const iv = fInterval.trim().toLowerCase();
+    const list = rows.filter(
+      (r) =>
+        (!g || r.groupName.toLowerCase().includes(g)) &&
+        (!n ||
+          r.indicatorName.toLowerCase().includes(n) ||
+          r.indicatorId.toLowerCase().includes(n)) &&
+        (!iv || r.intervalLabel.toLowerCase().includes(iv)),
     );
-  }, [indicators, search]);
+    const dir = sortDir;
+    const val = (r: ActiveRow): number | string => {
+      switch (sortKey) {
+        case "name":
+          return r.indicatorName;
+        case "interval":
+          return r.interval.start.year * 100 + r.interval.start.month;
+        case "person":
+          return r.progress.personPct == null ? -1 : r.progress.personPct;
+        case "unit":
+          return r.progress.unitPct;
+        case "group":
+        default:
+          return r.groupName;
+      }
+    };
+    return [...list].sort((a, b) => {
+      const va = val(a);
+      const vb = val(b);
+      let c: number;
+      if (typeof va === "number" && typeof vb === "number") c = va - vb;
+      else
+        c =
+          String(va).localeCompare(String(vb), "zh-Hant") ||
+          a.indicatorName.localeCompare(b.indicatorName, "zh-Hant");
+      return c * dir;
+    });
+  }, [rows, fGroup, fName, fInterval, sortKey, sortDir]);
 
-  if (selected) {
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDir((d) => (d === 1 ? -1 : 1));
+    else {
+      setSortKey(key);
+      setSortDir(1);
+    }
+  }
+
+  function SortTh({ label, k }: { label: string; k: SortKey }) {
+    const active = sortKey === k;
     return (
-      <ReviewOverviewPage
-        indicatorId={selected.id}
-        indicatorName={selected.name}
-        onBack={() => setSelected(null)}
+      <th>
+        <button
+          type="button"
+          className={`th-sort${active ? " active" : ""}`}
+          onClick={() => toggleSort(k)}
+          aria-label={`依${label}排序`}
+        >
+          {label}
+          <ArrowUpDown size={13} />
+          {active && (sortDir === 1 ? " ▲" : " ▼")}
+        </button>
+      </th>
+    );
+  }
+
+  function openExec(row: ActiveRow) {
+    setExecRow(row);
+    const units =
+      row.assignedUnitIds.length > 0 ? row.assignedUnitIds : row.sched.unitIds;
+    setExecUnit(units[0] ?? "");
+    const firstReview = row.interval.reviewMonths[0];
+    const defMonth =
+      (firstReview != null
+        ? row.monthOptions.find(
+            (o) => o.year === firstReview.year && o.month === firstReview.month,
+          )
+        : undefined) ?? row.monthOptions[0];
+    setExecMonth(defMonth ? `${defMonth.year}-${defMonth.month}` : "");
+    setExecBusy(false);
+  }
+
+  async function confirmExec() {
+    if (!execRow || !execUnit || !execMonth) return;
+    const [y, m] = execMonth.split("-").map(Number);
+    if (!y || !m) return;
+    setExecBusy(true);
+    try {
+      const db = getFirebaseDb();
+      // 單一 where 避免複合索引，其餘前端過濾
+      const snap = await getDocs(
+        query(
+          collection(db, "reviewTasks"),
+          where("indicatorId", "==", execRow.indicatorId),
+          limit(2000),
+        ),
+      );
+      const mine: string[] = [];
+      const others: string[] = [];
+      snap.docs.forEach((d) => {
+        const v = d.data() as Record<string, unknown>;
+        if (
+          String(v.unitId ?? "") === execUnit &&
+          Number(v.year ?? 0) === y &&
+          Number(v.month ?? 0) === m
+        ) {
+          if (String(v.reviewerId ?? "") === (user?.staffId ?? "")) mine.push(d.id);
+          else others.push(d.id);
+        }
+      });
+      const taskId = mine[0] ?? others[0];
+      if (!taskId) {
+        onAction(
+          "找不到該單位該月份的審查任務，請先到「品管審查排程」產生排程",
+        );
+        return;
+      }
+      setExecRow(null);
+      setExecuting({ mode: "task", taskId });
+    } catch (e) {
+      onAction(`開啟審查失敗：${toErrorMessage(e)}`);
+    } finally {
+      setExecBusy(false);
+    }
+  }
+
+  if (executing) {
+    return (
+      <ReviewExecutePage
+        target={executing}
+        onBack={() => setExecuting(null)}
         onAction={onAction}
       />
     );
@@ -91,49 +568,334 @@ export function AuditPage({
       </div>
       <section className="panel">
         <SectionTitle
-          title="選擇指標"
-          note="點選指標進入審查總覽（各單位→各輪次→審查紀錄）"
+          title="進行中的審查排程"
+          note="依您的身分列出有排程且尚未結束的指標；點標題可排序"
         />
-        <label className="search-box audit-search">
-          <Search size={16} />
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="搜尋指標名稱、組別或編號"
-            aria-label="搜尋指標"
-          />
-        </label>
         {loading ? (
           <p className="muted-text" role="status">
             載入中…
           </p>
-        ) : filtered.length === 0 ? (
+        ) : rows.length === 0 ? (
           <EmptyState
-            title="沒有符合的指標"
-            description="請調整關鍵字，或先到指標管理建立指標。"
+            title="目前沒有進行中的審查排程"
+            description="可能尚無排程、排程皆已結束，或您的身分沒有被指派審查項目。"
           />
         ) : (
-          <ul className="audit-indicator-list">
-            {filtered.map((item) => (
-              <li key={item.id}>
-                <button
-                  type="button"
-                  className="audit-indicator-row"
-                  onClick={() => setSelected(item)}
-                >
-                  <span className="audit-indicator-main">
-                    <b>{item.name}</b>
-                    <small>
-                      {item.group}・{item.id}
-                    </small>
-                  </span>
-                  <ChevronRight size={18} aria-hidden />
-                </button>
-              </li>
-            ))}
-          </ul>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <SortTh label="組別" k="group" />
+                  <SortTh label="指標名稱" k="name" />
+                  <SortTh label="審核區間" k="interval" />
+                  <SortTh label="審核進度（人次）" k="person" />
+                  <SortTh label="審核進度（單位次）" k="unit" />
+                  <th>操作</th>
+                </tr>
+                <tr className="filter-row">
+                  <th>
+                    <input
+                      value={fGroup}
+                      onChange={(e) => setFGroup(e.target.value)}
+                      placeholder="篩選組別"
+                      aria-label="篩選組別"
+                    />
+                  </th>
+                  <th>
+                    <input
+                      value={fName}
+                      onChange={(e) => setFName(e.target.value)}
+                      placeholder="篩選指標"
+                      aria-label="篩選指標"
+                    />
+                  </th>
+                  <th>
+                    <input
+                      value={fInterval}
+                      onChange={(e) => setFInterval(e.target.value)}
+                      placeholder="篩選區間"
+                      aria-label="篩選區間"
+                    />
+                  </th>
+                  <th />
+                  <th />
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((r) => (
+                  <tr
+                    key={`${r.indicatorId}__${r.sched.category}__${r.sched.period}`}
+                  >
+                    <td>{r.groupName}</td>
+                    <td>
+                      <b>{r.indicatorName}</b>
+                      <div className="muted-text">{r.indicatorId}</div>
+                      {r.sched.category === "temp" && (
+                        <span className="badge">臨時</span>
+                      )}
+                    </td>
+                    <td>{r.intervalLabel}</td>
+                    <td>
+                      <ProgressCell
+                        done={r.progress.donePersons}
+                        total={r.progress.totalPersons}
+                        pct={r.progress.personPct}
+                      />
+                    </td>
+                    <td>
+                      <ProgressCell
+                        done={r.progress.doneUnits}
+                        total={r.progress.totalUnits}
+                        pct={r.progress.unitPct}
+                      />
+                    </td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => setViewRow(r)}
+                        >
+                          <Eye size={14} /> 檢視
+                        </button>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => openExec(r)}
+                        >
+                          <ClipboardCheck size={14} /> 審查
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
+
+      {viewRow && (
+        <div className="reviewer-modal-backdrop" onClick={() => setViewRow(null)}>
+          <div
+            className="reviewer-modal panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="審查結果檢視"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="reviewer-modal-head">
+              <div>
+                <h2>審查結果</h2>
+                <p>
+                  {viewRow.indicatorName}・{viewRow.intervalLabel}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="button button-ghost"
+                onClick={() => setViewRow(null)}
+                aria-label="關閉"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <SectionTitle title="排程設定摘要" />
+            <dl className="detail-list">
+              <div>
+                <dt>組別</dt>
+                <dd>{viewRow.groupName}</dd>
+              </div>
+              <div>
+                <dt>年別</dt>
+                <dd>
+                  {viewRow.sched.category === "temp"
+                    ? "臨時"
+                    : viewRow.sched.periodLabel}
+                </dd>
+              </div>
+              <div>
+                <dt>審核區間</dt>
+                <dd>{viewRow.intervalLabel}</dd>
+              </div>
+              <div>
+                <dt>審查月份</dt>
+                <dd>
+                  {viewRow.monthOptions.map((o) => o.label).join("、") || "—"}
+                </dd>
+              </div>
+              <div>
+                <dt>受審單位</dt>
+                <dd>
+                  {viewRow.sched.unitIds.length} 個：
+                  {viewRow.sched.unitIds
+                    .map((c) => viewRow.unitNameOf(c))
+                    .join("、") || "—"}
+                </dd>
+              </div>
+              <div>
+                <dt>每輪件數</dt>
+                <dd>
+                  {viewRow.sched.caseCount != null
+                    ? `${viewRow.sched.caseCount} 件`
+                    : "未設定"}
+                </dd>
+              </div>
+              <div>
+                <dt>審查頻次／區間</dt>
+                <dd>
+                  {viewRow.sched.frequency != null
+                    ? `${viewRow.sched.frequency}次/年`
+                    : "—"}
+                  ／
+                  {viewRow.sched.intervalMonths != null
+                    ? `${viewRow.sched.intervalMonths}個月`
+                    : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt>最後編輯</dt>
+                <dd>
+                  {viewRow.sched.updatedByName || viewRow.sched.updatedBy || "—"}
+                  {fmtTs(viewRow.sched.updatedAt)
+                    ? `・${fmtTs(viewRow.sched.updatedAt)}`
+                    : ""}
+                </dd>
+              </div>
+            </dl>
+            <SectionTitle
+              title="已提交審查紀錄（本區間）"
+              note={`${viewRow.records.length} 筆，唯讀`}
+            />
+            {viewRow.records.length === 0 ? (
+              <p className="muted-text">本區間尚無提交紀錄。</p>
+            ) : (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>年月</th>
+                      <th>單位</th>
+                      <th>審查日期</th>
+                      <th>審查人員</th>
+                      <th>受審人員</th>
+                      <th>正確率</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {viewRow.records.map((r) => (
+                      <tr key={r.id}>
+                        <td>
+                          {r.year}年{r.month}月
+                        </td>
+                        <td>{viewRow.unitNameOf(r.unitId)}</td>
+                        <td>{r.reviewDate || "—"}</td>
+                        <td>{maskName(r.reviewerName) || "—"}</td>
+                        <td>{maskName(r.reviewedPersonName) || "—"}</td>
+                        <td>{r.rate == null ? "—" : `${r.rate}%`}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="form-actions">
+              <button
+                type="button"
+                className="button button-ghost"
+                onClick={() => setViewRow(null)}
+              >
+                關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {execRow && (
+        <div className="reviewer-modal-backdrop" onClick={() => setExecRow(null)}>
+          <div
+            className="reviewer-modal panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="選擇審查單位與月份"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="reviewer-modal-head">
+              <div>
+                <h2>進行品管審查</h2>
+                <p>
+                  {execRow.indicatorName}・{execRow.intervalLabel}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="button button-ghost"
+                onClick={() => setExecRow(null)}
+                aria-label="關閉"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="form-field">
+              <label className="field-label">
+                受審單位
+                {execRow.assignedUnitIds.length > 0
+                  ? "（您的被指派單位）"
+                  : "（本排程受審單位）"}
+              </label>
+              <div className="select-wrap">
+                <select
+                  value={execUnit}
+                  onChange={(e) => setExecUnit(e.target.value)}
+                >
+                  {(execRow.assignedUnitIds.length > 0
+                    ? execRow.assignedUnitIds
+                    : execRow.sched.unitIds
+                  ).map((c) => (
+                    <option key={c} value={c}>
+                      {execRow.unitNameOf(c)}（{c}）
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="form-field">
+              <label className="field-label">審查月份</label>
+              <div className="select-wrap">
+                <select
+                  value={execMonth}
+                  onChange={(e) => setExecMonth(e.target.value)}
+                >
+                  {execRow.monthOptions.map((o) => (
+                    <option key={`${o.year}-${o.month}`} value={`${o.year}-${o.month}`}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="form-actions">
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={execBusy || !execUnit || !execMonth}
+                onClick={confirmExec}
+              >
+                {execBusy ? "開啟中…" : "開始審查"}
+              </button>
+              <button
+                type="button"
+                className="button button-ghost"
+                onClick={() => setExecRow(null)}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

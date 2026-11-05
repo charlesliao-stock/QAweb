@@ -17,8 +17,8 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
       description: "設定指標審查排程（年度／學年度／臨時）、分工表並產生審查任務",
     },
     audit: {
-      title: "指標審查",
-      description: "依指標檢視各單位、各輪次的審查進度與紀錄",
+      title: "品管審查",
+      description: "依權限列出進行中的審查排程，追蹤審核進度並執行品管審查",
     },
     results: {
       title: "結果分析",

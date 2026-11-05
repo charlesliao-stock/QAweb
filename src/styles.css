@@ -4443,3 +4443,61 @@ button:disabled {
   font-size: 12px;
   margin-top: 4px;
 }
+
+/* 品管審查進度條（v1.19.0） */
+.progress-track {
+  height: 6px;
+  border-radius: 3px;
+  background: #eef1f1;
+  margin-top: 4px;
+  min-width: 90px;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--color-primary, #0e7c7b);
+}
+/* 表頭篩選列（v1.19.0） */
+.filter-row input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 12px;
+  border: 1px solid #dfe4e4;
+  border-radius: 6px;
+}
+/* 定義列表（檢視彈窗摘要，v1.19.0） */
+.detail-list {
+  margin: 0 0 16px;
+}
+.detail-list > div {
+  display: flex;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid #f0f2f2;
+}
+.detail-list dt {
+  flex: 0 0 110px;
+  color: #8a9699;
+  font-size: 13px;
+}
+.detail-list dd {
+  margin: 0;
+  flex: 1;
+}
+/* 操作按鈕橫排（v1.19.0） */
+.row-actions {
+  display: flex;
+  gap: 8px;
+  white-space: nowrap;
+}
+/* 小徽章（v1.19.0） */
+.badge {
+  display: inline-block;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: #3b5bdb;
+  margin-top: 4px;
+}
