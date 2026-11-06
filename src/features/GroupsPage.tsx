@@ -27,6 +27,7 @@ import {
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
+import { getDocsCacheFirst } from "../lib/cacheFirst";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import { SEED_GROUP_NAMES, SEED_ROLES, SEED_TITLES } from "../lib/seed";
@@ -797,7 +798,7 @@ export function GroupsPage({
   const loadRoles = useCallback(async () => {
     try {
       const snap = await getCachedRefCollection("roles", () =>
-        getDocs(collection(getFirebaseDb(), "roles")),
+        getDocsCacheFirst(collection(getFirebaseDb(), "roles")),
       );
       setRoleOptions(
         snap.docs.map((d) => {
@@ -820,10 +821,10 @@ export function GroupsPage({
       const db = getFirebaseDb();
       const [gsnap, usnap] = await Promise.all([
         getCachedRefCollection("groups", () =>
-          getDocs(collection(db, "groups")),
+          getDocsCacheFirst(collection(db, "groups")),
         ),
         getCachedRefCollection("units", () =>
-          getDocs(collection(db, "units")),
+          getDocsCacheFirst(collection(db, "units")),
         ),
       ]);
       const groupList = gsnap.docs
@@ -838,7 +839,7 @@ export function GroupsPage({
       const counts = new Map<string, number>();
       try {
         const usersSnap = await getCachedRefCollection("users", () =>
-          getDocs(collection(getFirebaseDb(), "users")),
+          getDocsCacheFirst(collection(getFirebaseDb(), "users")),
         );
         usersSnap.docs.forEach((d) => {
           const uc = d.data().unitCode;
@@ -891,7 +892,7 @@ export function GroupsPage({
     try {
       const db = getFirebaseDb();
       const snap = await getCachedRefCollection("titles", () =>
-        getDocs(collection(db, "titles")),
+        getDocsCacheFirst(collection(db, "titles")),
       );
       const list = snap.docs
         .map((d) => {
@@ -908,7 +909,7 @@ export function GroupsPage({
       let titleCounts = new Map<string, number>();
       try {
         const usnap = await getCachedRefCollection("users", () =>
-          getDocs(collection(getFirebaseDb(), "users")),
+          getDocsCacheFirst(collection(getFirebaseDb(), "users")),
         );
         usnap.docs.forEach((d) => {
           const t = d.data().title;
@@ -938,7 +939,7 @@ export function GroupsPage({
     setUsersLoading(true);
     try {
       const snap = await getCachedRefCollection("users", () =>
-        getDocs(collection(getFirebaseDb(), "users")),
+        getDocsCacheFirst(collection(getFirebaseDb(), "users")),
       );
       usersLoadedRef.current = true;
       const list: UserRow[] = snap.docs
@@ -985,13 +986,13 @@ export function GroupsPage({
       const me = user?.staffId ?? "";
       const [rSnap, tSnap, gSnap] = await Promise.all([
         getCachedRefCollection("roles", () =>
-          getDocs(collection(db, "roles")),
+          getDocsCacheFirst(collection(db, "roles")),
         ),
         getCachedRefCollection("titles", () =>
-          getDocs(collection(db, "titles")),
+          getDocsCacheFirst(collection(db, "titles")),
         ),
         getCachedRefCollection("groups", () =>
-          getDocs(collection(db, "groups")),
+          getDocsCacheFirst(collection(db, "groups")),
         ),
       ]);
       const roleNames = new Set(

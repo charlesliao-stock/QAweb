@@ -23,7 +23,6 @@ import {
 import {
   collection,
   doc,
-  getDoc,
   getDocs,
   query,
   serverTimestamp,
@@ -37,6 +36,7 @@ import {
   getCachedRefCollection,
   SYSTEM_CONFIG_KEY,
 } from "../lib/refCache";
+import { getDocCacheFirst, getDocsCacheFirst } from "../lib/cacheFirst";
 import { indicatorCodeOf } from "../lib/indicators";
 import { buildTaskIndex } from "../lib/taskIndex";
 import { hasSchedulePermission } from "../lib/roleIdentity";
@@ -332,7 +332,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     (async () => {
       try {
         const snap = await getCachedRef(SYSTEM_CONFIG_KEY, () =>
-          getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+          getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
         );
         const data = snap.data() as Record<string, unknown> | undefined;
         setStatsCycle(data?.statsCycle === "academic" ? "academic" : "year");
@@ -351,17 +351,17 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
       const [isnap, gsnap, asnap, usnap, unsnap, rsnap, scheds] =
         await Promise.all([
           getCachedRefCollection("indicators", () =>
-            getDocs(collection(db, "indicators")),
+            getDocsCacheFirst(collection(db, "indicators")),
           ),
           getCachedRefCollection("groups", () =>
-            getDocs(collection(db, "groups")),
+            getDocsCacheFirst(collection(db, "groups")),
           ),
           getDocs(collection(db, "indicatorAssignments")),
           getCachedRefCollection("units", () =>
-            getDocs(collection(db, "units")),
+            getDocsCacheFirst(collection(db, "units")),
           ),
           getCachedRefCollection("users", () =>
-            getDocs(collection(db, "users")),
+            getDocsCacheFirst(collection(db, "users")),
           ),
           getDocs(collection(db, "reviewReviewers")),
           listSchedules(db),

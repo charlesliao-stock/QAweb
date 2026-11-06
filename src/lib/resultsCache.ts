@@ -26,13 +26,19 @@ export function resultsScopeKey(scope: ResultsCacheScope): string {
   return `staff:${scope.unitCode}`;
 }
 
-/** 快取鍵：`{collection}:{year}:{scopeKind}:{scopeId}` */
+/**
+ * 快取鍵：`{collection}:{year}:{scopeKind}:{scopeId}`；指標限縮查詢另加
+ * `:ind:{indicatorId}` 後綴（v1.28 階段 7 B7），與按年全量快取分開存放，
+ * 避免窄查詢的結果污染全量快取（反之亦然）。
+ */
 export function resultsCacheKey(
   collection: ResultsCacheCollection,
   year: number,
   scope: ResultsCacheScope,
+  indicatorId?: string,
 ): string {
-  return `${collection}:${year}:${resultsScopeKey(scope)}`;
+  const base = `${collection}:${year}:${resultsScopeKey(scope)}`;
+  return indicatorId ? `${base}:ind:${indicatorId}` : base;
 }
 
 interface CacheEntry<T> {
@@ -50,8 +56,9 @@ export function setCachedYear<T>(
   year: number,
   scope: ResultsCacheScope,
   docs: T[],
+  indicatorId?: string,
 ): void {
-  cache.set(resultsCacheKey(collection, year, scope), {
+  cache.set(resultsCacheKey(collection, year, scope, indicatorId), {
     year,
     docs,
     fetchedAt: Date.now(),
@@ -71,13 +78,14 @@ export function getCachedYears<T>(
   collection: ResultsCacheCollection,
   years: number[],
   scope: ResultsCacheScope,
+  indicatorId?: string,
 ): CachedYears<T> {
   const hits = new Map<number, T[]>();
   const missing: number[] = [];
   let fetchedAt: number | null = null;
   for (const y of years) {
     const entry = cache.get(
-      resultsCacheKey(collection, y, scope),
+      resultsCacheKey(collection, y, scope, indicatorId),
     ) as CacheEntry<T> | undefined;
     if (entry) {
       hits.set(y, entry.docs);
@@ -108,12 +116,20 @@ export function mergeYearDocs<T>(
   return out;
 }
 
+/**
+ * 失效某年快取：刪 exact 鍵＋該鍵後綴的所有指標限縮鍵（`:ind:…`），
+ * 避免窄查詢的舊資料殘留。比對用 exact 或 `key + ":"` 前綴，
+ * 不會誤刪其他權限範圍（例如 reviewer:emp1 不會刪到 reviewer:emp12）。
+ */
 export function invalidateCachedYear(
   collection: ResultsCacheCollection,
   year: number,
   scope: ResultsCacheScope,
 ): void {
-  cache.delete(resultsCacheKey(collection, year, scope));
+  const prefix = resultsCacheKey(collection, year, scope);
+  for (const key of [...cache.keys()]) {
+    if (key === prefix || key.startsWith(`${prefix}:`)) cache.delete(key);
+  }
 }
 
 export function invalidateCachedYears(

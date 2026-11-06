@@ -14,6 +14,7 @@ import {
 import { EmptyState, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
+import { getDocsCacheFirst } from "../lib/cacheFirst";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import {
@@ -266,7 +267,7 @@ export function ReviewExecutePage({
         // 人員清單（審查人員／受審人員搜尋用）
         try {
           const psnap = await getCachedRefCollection("users", () =>
-            getDocs(collection(db, "users")),
+            getDocsCacheFirst(collection(db, "users")),
           );
           const list: PersonOption[] = [];
           psnap.docs.forEach((d) => {

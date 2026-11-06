@@ -32,6 +32,7 @@ import {
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
+import { getDocsCacheFirst } from "../lib/cacheFirst";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import { logAudit } from "../lib/audit";
@@ -738,7 +739,7 @@ export function IndicatorsPage({
   const loadMeta = useCallback(async () => {
     try {
       const gsnap = await getCachedRefCollection("groups", () =>
-        getDocs(collection(getFirebaseDb(), "groups")),
+        getDocsCacheFirst(collection(getFirebaseDb(), "groups")),
       );
       const gm = new Map<string, string>();
       gsnap.docs.forEach((d) => {
@@ -751,7 +752,7 @@ export function IndicatorsPage({
     }
     try {
       const usnap = await getCachedRefCollection("users", () =>
-        getDocs(collection(getFirebaseDb(), "users")),
+        getDocsCacheFirst(collection(getFirebaseDb(), "users")),
       );
       const sm = new Map<string, StaffOption>();
       usnap.docs.forEach((d) => {
@@ -773,7 +774,7 @@ export function IndicatorsPage({
     setLoading(true);
     try {
       const snap = await getCachedRefCollection("indicators", () =>
-        getDocs(collection(getFirebaseDb(), "indicators")),
+        getDocsCacheFirst(collection(getFirebaseDb(), "indicators")),
       );
       const list: IndicatorRow[] = snap.docs.map((d) => {
         const data = d.data();

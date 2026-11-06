@@ -24,6 +24,7 @@ import {
 } from "../../lib/db";
 import { getFirebaseDb } from "../../lib/firebase";
 import { getCachedRefCollection } from "../../lib/refCache";
+import { getDocsCacheFirst } from "../../lib/cacheFirst";
 import { correctTaskStatus } from "../../lib/reviewProgress";
 import {
   markCorrectionWritten,
@@ -184,13 +185,13 @@ export function useDashboardData(): DashboardData {
         const today = todayStr();
         const [isnap, gsnap, usnap, monthTsnap, nextTsnap, lockedTsnap, monthRsnap, alertRsnap, usnap2] = await Promise.all([
           getCachedRefCollection("indicators", () =>
-            getDocs(collection(db, "indicators")),
+            getDocsCacheFirst(collection(db, "indicators")),
           ),
           getCachedRefCollection("groups", () =>
-            getDocs(collection(db, "groups")),
+            getDocsCacheFirst(collection(db, "groups")),
           ),
           getCachedRefCollection("units", () =>
-            getDocs(collection(db, "units")),
+            getDocsCacheFirst(collection(db, "units")),
           ),
           // v1.28 階段 2：任務只拉本月（年＋月兩個等號，不需複合索引）
           getDocs(
