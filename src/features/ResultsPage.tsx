@@ -74,6 +74,13 @@ import {
   type PassRate,
 } from "../lib/analysisRates";
 import { YEAR_FILTER_OPTIONS, yearOptionLabel } from "../lib/scheduling";
+import {
+  getCachedYears,
+  invalidateCachedYears,
+  mergeYearDocs,
+  setCachedYear,
+  type ResultsCacheScope,
+} from "../lib/resultsCache";
 
 interface IndicatorOpt {
   id: string;
@@ -195,8 +202,22 @@ export function ResultsPage({
   const [tasks, setTasks] = useState<
     { id: string; unitId: string; reviewerId: string }[]
   >([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
+  /**
+   * 已生效的查詢條件（null＝尚未查詢，顯示空白頁）。
+   * 篩選器一變只改 live 值，不觸發查詢；按「查詢」才把當下條件生效。
+   */
+  const [applied, setApplied] = useState<{
+    years: number[];
+    cycle: AnalysisCycle;
+    startYear: number;
+    yearCount: number;
+    interval: AnalysisInterval;
+    sub: AnalysisSub;
+  } | null>(null);
+  /** 資料時間（本次顯示年份中最新的抓取時間；快取命中沿用原抓取時間） */
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const [tab, setTab] = useState<TabId>("group");
   /** 統計週期（系統參數 systemParams.statsCycle；載入後套為年別預設） */
   const [statsCycle, setStatsCycle] = useState<AnalysisCycle | null>(null);
@@ -238,6 +259,15 @@ export function ResultsPage({
     if (user) return { kind: "staff" as const, unitCode: user.unitCode };
     return { kind: "admin" as const };
   }, [user]);
+
+  /** 按年份快取的權限範圍鍵（與 scope 同義，格式見 resultsCache） */
+  const cacheScope: ResultsCacheScope = useMemo(() => {
+    if (scope.kind === "reviewer")
+      return { kind: "reviewer", staffId: scope.staffId };
+    if (scope.kind === "staff")
+      return { kind: "staff", unitCode: scope.unitCode };
+    return { kind: "admin" };
+  }, [scope]);
 
   // 指標／組別／單位／統計週期（掛載時載入一次）
   useEffect(() => {
@@ -317,7 +347,7 @@ export function ResultsPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statsCycle]);
 
-  // 期間欄（年份為起算年，年數往後數）
+  // 期間欄（年份為起算年，年數往後數；live 值，只供「查詢」按鈕取年份）
   const columns = useMemo(
     () =>
       expandAnalysisColumns({
@@ -330,80 +360,141 @@ export function ResultsPage({
     [cycle, startYear, yearCount, interval, sub],
   );
   const queryYears = useMemo(() => calendarYearsOf(columns), [columns]);
-  const yearsKey = queryYears.join(",");
+  /** 已生效的期間欄：未查詢前沿用 live 值（畫面為空白頁，不渲染矩陣） */
+  const appliedColumns = useMemo(
+    () =>
+      applied
+        ? expandAnalysisColumns({
+            cycle: applied.cycle,
+            startYear: applied.startYear,
+            yearCount: applied.yearCount,
+            interval: applied.interval,
+            sub: applied.sub,
+          })
+        : columns,
+    [applied, columns],
+  );
+  const appliedYearsKey = applied ? applied.years.join(",") : "";
   const allMonths = useMemo(
-    () => columns.flatMap((c) => c.months),
-    [columns],
+    () => appliedColumns.flatMap((c) => c.months),
+    [appliedColumns],
   );
 
-  // 審查紀錄（依期間欄涵蓋的曆年查詢；審查員範圍另查任務）
+  // 審查紀錄（查詢閘門＋按年份快取）：
+  // 未按「查詢」不觸發（applied 為 null）；已查過的年份直接吃記憶體快取，
+  // 缺的年份才按年發查詢，併回後畫面永遠從合併後的快取渲染。
+  // 快取鍵含權限範圍（見 resultsCache），不同範圍不共用。
   useEffect(() => {
+    if (!applied) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
       try {
         const db = getFirebaseDb();
-        const snaps = await Promise.all(
-          queryYears.map((y) =>
-            getDocs(
-              query(collection(db, "reviewRecords"), where("year", "==", y)),
-            ),
-          ),
+        const years = applied.years;
+        const recCached = getCachedYears<AnalysisRecord>(
+          "reviewRecords",
+          years,
+          cacheScope,
         );
-        const rl: AnalysisRecord[] = [];
-        snaps.forEach((snap) =>
-          snap.docs.forEach((d) => {
-            const v = d.data() as Record<string, unknown>;
-            const answers = Array.isArray(v.answers)
-              ? v.answers.map((a) => {
-                  const r = (a ?? {}) as Record<string, unknown>;
-                  return {
-                    questionId:
-                      typeof r.questionId === "string" ? r.questionId : "",
-                    itemText:
-                      typeof r.itemText === "string" ? r.itemText : "",
-                    optionLabel:
-                      typeof r.optionLabel === "string" ? r.optionLabel : "",
-                    score: typeof r.score === "number" ? r.score : 0,
-                    excluded: r.excluded === true,
-                  };
-                })
-              : [];
-            rl.push({
-              indicatorId: String(v.indicatorId ?? ""),
-              unitId: String(v.unitId ?? ""),
-              year: Number(v.year ?? 0),
-              month: Number(v.month ?? 0),
-              rate: typeof v.rate === "number" ? v.rate : null,
-              answers,
-              personEmpNo: String(v.reviewedPersonEmpNo ?? ""),
-              personName: String(v.reviewedPersonName ?? ""),
-            });
-          }),
-        );
-        let tl: { id: string; unitId: string; reviewerId: string }[] = [];
-        if (scope.kind === "reviewer") {
-          const tsnaps = await Promise.all(
-            queryYears.map((y) =>
+        const recFresh = new Map<number, AnalysisRecord[]>();
+        if (recCached.missing.length > 0) {
+          const snaps = await Promise.all(
+            recCached.missing.map((y) =>
               getDocs(
-                query(collection(db, "reviewTasks"), where("year", "==", y)),
+                query(
+                  collection(db, "reviewRecords"),
+                  where("year", "==", y),
+                ),
               ),
             ),
           );
-          tsnaps.forEach((snap) =>
+          snaps.forEach((snap, i) => {
+            const y = recCached.missing[i];
+            const docs: AnalysisRecord[] = [];
             snap.docs.forEach((d) => {
               const v = d.data() as Record<string, unknown>;
-              tl.push({
-                id: d.id,
+              const answers = Array.isArray(v.answers)
+                ? v.answers.map((a) => {
+                    const r = (a ?? {}) as Record<string, unknown>;
+                    return {
+                      questionId:
+                        typeof r.questionId === "string" ? r.questionId : "",
+                      itemText:
+                        typeof r.itemText === "string" ? r.itemText : "",
+                      optionLabel:
+                        typeof r.optionLabel === "string" ? r.optionLabel : "",
+                      score: typeof r.score === "number" ? r.score : 0,
+                      excluded: r.excluded === true,
+                    };
+                  })
+                : [];
+              docs.push({
+                indicatorId: String(v.indicatorId ?? ""),
                 unitId: String(v.unitId ?? ""),
-                reviewerId: String(v.reviewerId ?? ""),
+                year: Number(v.year ?? 0),
+                month: Number(v.month ?? 0),
+                rate: typeof v.rate === "number" ? v.rate : null,
+                answers,
+                personEmpNo: String(v.reviewedPersonEmpNo ?? ""),
+                personName: String(v.reviewedPersonName ?? ""),
               });
-            }),
-          );
+            });
+            setCachedYear("reviewRecords", y, cacheScope, docs);
+            recFresh.set(y, docs);
+          });
+        }
+        const rl = mergeYearDocs(recCached.hits, recFresh);
+        let tl: { id: string; unitId: string; reviewerId: string }[] = [];
+        let taskFetchedAt: number | null = null;
+        if (scope.kind === "reviewer") {
+          const taskCached = getCachedYears<{
+            id: string;
+            unitId: string;
+            reviewerId: string;
+          }>("reviewTasks", years, cacheScope);
+          const taskFresh = new Map<
+            number,
+            { id: string; unitId: string; reviewerId: string }[]
+          >();
+          if (taskCached.missing.length > 0) {
+            const tsnaps = await Promise.all(
+              taskCached.missing.map((y) =>
+                getDocs(
+                  query(
+                    collection(db, "reviewTasks"),
+                    where("year", "==", y),
+                  ),
+                ),
+              ),
+            );
+            tsnaps.forEach((snap, i) => {
+              const y = taskCached.missing[i];
+              const docs: {
+                id: string;
+                unitId: string;
+                reviewerId: string;
+              }[] = [];
+              snap.docs.forEach((d) => {
+                const v = d.data() as Record<string, unknown>;
+                docs.push({
+                  id: d.id,
+                  unitId: String(v.unitId ?? ""),
+                  reviewerId: String(v.reviewerId ?? ""),
+                });
+              });
+              setCachedYear("reviewTasks", y, cacheScope, docs);
+              taskFresh.set(y, docs);
+            });
+          }
+          tl = mergeYearDocs(taskCached.hits, taskFresh);
+          taskFetchedAt = taskCached.fetchedAt;
         }
         if (cancelled) return;
         setRecords(rl);
         setTasks(tl);
+        const at = Math.max(recCached.fetchedAt ?? 0, taskFetchedAt ?? 0);
+        setFetchedAt(at > 0 ? at : Date.now());
       } catch {
         if (!cancelled) {
           setRecords([]);
@@ -417,7 +508,27 @@ export function ResultsPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [yearsKey, reloadNonce, scope.kind, scope.kind === "reviewer" ? scope.staffId : ""]);
+  }, [appliedYearsKey, reloadNonce, scope.kind, scope.kind === "reviewer" ? scope.staffId : ""]);
+
+  /** 按「查詢」：把當下期間條件生效（同年份重按不重拉，吃快取） */
+  function handleQuery() {
+    setApplied({
+      years: queryYears,
+      cycle,
+      startYear,
+      yearCount,
+      interval,
+      sub,
+    });
+  }
+
+  /** 重新整理：失效已查年份的快取（紀錄＋任務），再重拉一次 */
+  function handleRefresh() {
+    if (!applied) return;
+    invalidateCachedYears("reviewRecords", applied.years, cacheScope);
+    invalidateCachedYears("reviewTasks", applied.years, cacheScope);
+    setReloadNonce((n) => n + 1);
+  }
 
   // 範圍內紀錄（依權限範圍過濾）
   const scopedRecords = useMemo(() => {
@@ -536,23 +647,28 @@ export function ResultsPage({
       setSelIndU("all");
   }, [unitIndOptions, selIndU]);
 
-  // 期間說明文字（modal 副標共用）
+  // 期間說明文字（modal 副標共用；顯示已生效的查詢條件）
   const periodDesc = useMemo(() => {
-    const cycleLabel = cycle === "academic" ? "學年度" : "年度";
+    const pc = applied?.cycle ?? cycle;
+    const ps = applied?.startYear ?? startYear;
+    const py = applied?.yearCount ?? yearCount;
+    const pi = applied?.interval ?? interval;
+    const pb = applied?.sub ?? sub;
+    const cycleLabel = pc === "academic" ? "學年度" : "年度";
     const subLabel =
-      sub === "all"
-        ? interval === "month"
+      pb === "all"
+        ? pi === "month"
           ? "月・全部"
-          : interval === "quarter"
+          : pi === "quarter"
             ? "季・全部"
             : "年・全部"
-        : interval === "quarter"
-          ? QUARTER_LABELS[sub as QuarterSub]
-          : sub === "half"
+        : pi === "quarter"
+          ? QUARTER_LABELS[pb as QuarterSub]
+          : pb === "half"
             ? "半年"
             : "一年";
-    return `${cycleLabel} ${startYear} 起 ${yearCount} 年・${subLabel}`;
-  }, [cycle, startYear, yearCount, interval, sub]);
+    return `${cycleLabel} ${ps} 起 ${py} 年・${subLabel}`;
+  }, [applied, cycle, startYear, yearCount, interval, sub]);
 
   function handleCycleChange(v: string) {
     const c = v as AnalysisCycle;
@@ -611,7 +727,7 @@ export function ResultsPage({
     const labels: string[] = [];
     const tips: string[] = [];
     const cols: AnalysisPeriodColumn[] = [];
-    for (const col of columns) {
+    for (const col of appliedColumns) {
       const c = cellValue(indicatorId, col, unitId, mode);
       if (c.rate != null) {
         values.push(c.rate);
@@ -705,15 +821,15 @@ export function ResultsPage({
     const th = indSel.threshold;
     const unitIds = new Set(indRecs.map((r) => r.unitId));
     // 單位正確率：unit-period 計（一個單位在兩個期間欄受審＝兩筆審查）
-    const unitPr = unitPeriodPassRate(indRecs, columns, th);
+    const unitPr = unitPeriodPassRate(indRecs, appliedColumns, th);
     const merged = passRateOf(indRecs, th);
     const perColumn =
       indUnit === "unit"
-        ? columns.map((c) => ({
+        ? appliedColumns.map((c) => ({
             column: c,
             pr: unitPassRate(recordsInMonths(indRecs, c.months), th),
           }))
-        : columns.map((c) => ({
+        : appliedColumns.map((c) => ({
             column: c,
             pr: passRateOf(recordsInMonths(indRecs, c.months), th),
           }));
@@ -734,7 +850,7 @@ export function ResultsPage({
       chartCols: pts.map((p) => p.column),
       optionRows: optionDetailRows(indRecs, indSel.questions),
     };
-  }, [indRecs, indSel, indUnit, columns]);
+  }, [indRecs, indSel, indUnit, appliedColumns]);
 
   return (
     <div className="results-page">
@@ -832,7 +948,37 @@ export function ResultsPage({
               ]}
             />
           )}
+          <div className="results-query-actions">
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={handleQuery}
+              disabled={loading}
+            >
+              {applied ? "重新查詢" : "查詢"}
+            </button>
+            {applied && (
+              <button
+                type="button"
+                className="button button-outline"
+                onClick={handleRefresh}
+                disabled={loading}
+                title="清除已查年份的快取並重新讀取"
+              >
+                重新整理
+              </button>
+            )}
+          </div>
         </div>
+      )}
+      {tab !== "import" && applied && fetchedAt != null && !loading && (
+        <p className="results-data-time">
+          資料時間：
+          {new Date(fetchedAt).toLocaleString("zh-Hant-TW", {
+            hour12: false,
+          })}
+          （他人異動不會自動更新，請按「重新整理」）
+        </p>
       )}
 
       {tab === "group" && (
@@ -857,7 +1003,12 @@ export function ResultsPage({
               ]}
             />
           </div>
-          {loading ? (
+          {!applied ? (
+            <EmptyState
+              title="尚未查詢"
+              description="請先選擇期間，再按「查詢」開始分析。只想匯入結果，可直接切換至「結果匯入」頁籤，不需查詢。"
+            />
+          ) : loading ? (
             <EmptyState title="載入中" description="正在讀取審查紀錄…" />
           ) : groupIndicators.length === 0 ? (
             <EmptyState
@@ -875,7 +1026,7 @@ export function ResultsPage({
                   id: i.id,
                   label: `${i.code}・${i.name}`,
                 }))}
-                columns={columns}
+                columns={appliedColumns}
                 cellOf={(id, col) =>
                   cellValue(id, col, undefined, groupUnit)
                 }
@@ -930,7 +1081,12 @@ export function ResultsPage({
               ]}
             />
           </div>
-          {loading ? (
+          {!applied ? (
+            <EmptyState
+              title="尚未查詢"
+              description="請先選擇期間，再按「查詢」開始分析。只想匯入結果，可直接切換至「結果匯入」頁籤，不需查詢。"
+            />
+          ) : loading ? (
             <EmptyState title="載入中" description="正在讀取審查紀錄…" />
           ) : unitIndicators.length === 0 ? (
             <EmptyState
@@ -948,7 +1104,7 @@ export function ResultsPage({
                   id: i.id,
                   label: `${i.code}・${i.name}`,
                 }))}
-                columns={columns}
+                columns={appliedColumns}
                 cellOf={(id, col) =>
                   cellValue(id, col, selUnit, "person")
                 }
@@ -1058,7 +1214,12 @@ export function ResultsPage({
               ]}
             />
           </div>
-          {loading ? (
+          {!applied ? (
+            <EmptyState
+              title="尚未查詢"
+              description="請先選擇期間，再按「查詢」開始分析。只想匯入結果，可直接切換至「結果匯入」頁籤，不需查詢。"
+            />
+          ) : loading ? (
             <EmptyState title="載入中" description="正在讀取審查紀錄…" />
           ) : !indSel || !indSummary ? (
             <EmptyState
@@ -1133,7 +1294,13 @@ export function ResultsPage({
           indicators={indicators}
           user={user ? { staffId: user.staffId, name: user.name } : null}
           onAction={onAction}
-          onDone={() => setReloadNonce((n) => n + 1)}
+          onDone={(years) => {
+            // 尚未查詢：不觸發重拉，否則匯入完又把整年紀錄拉回來、閘門白做。
+            // 已查過：只失效匯入年份的快取，下次 effect 只補查該年。
+            if (!applied) return;
+            invalidateCachedYears("reviewRecords", years, cacheScope);
+            setReloadNonce((n) => n + 1);
+          }}
         />
       )}
 
@@ -1633,7 +1800,7 @@ function ResultImportPanel({
   indicators: IndicatorOpt[];
   user: { staffId: string; name: string } | null;
   onAction: (m: string) => void;
-  onDone: () => void;
+  onDone: (years: number[]) => void;
 }) {
   const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
   const [unitCodes, setUnitCodes] = useState<Set<string>>(new Set());
@@ -1807,7 +1974,8 @@ function ResultImportPanel({
       const msg = `審查結果匯入：成功 ${ok.length} 筆、跳過 ${bad.length} 列`;
       setSummary(msg);
       onAction(msg);
-      if (ok.length > 0) onDone();
+      if (ok.length > 0)
+        onDone([...new Set(ok.map((r) => r.values!.year))]);
     } catch (error) {
       setErrors([
         `讀取檔案失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
