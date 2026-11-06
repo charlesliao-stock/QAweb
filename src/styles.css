@@ -4665,8 +4665,8 @@ button:disabled {
 }
 .analysis-indicator-name {
   min-width: 0;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .analysis-indicator-actions {
   display: inline-flex;
