@@ -1048,8 +1048,38 @@ button:disabled {
 .trend-chart {
   display: block;
   width: 100%;
-  height: 152px;
+  max-width: 640px;
+  height: auto;
+  margin: 0 auto;
   overflow: visible;
+}
+.chart-svg-wrap {
+  position: relative;
+}
+.chart-tip {
+  position: absolute;
+  transform: translate(-50%, -135%);
+  background: #1f2a2a;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 4px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 5;
+}
+.chart-threshold {
+  stroke: #dc2626;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.chart-threshold-label {
+  font-size: 11px;
+  fill: #dc2626;
+}
+.chart-dot.clickable {
+  cursor: pointer;
 }
 .chart-gridline {
   stroke: #edf1f1;
@@ -2788,9 +2818,6 @@ button:disabled {
   .section-title h2 {
     font-size: var(--font-small);
   }
-  .trend-chart {
-    height: 130px;
-  }
   .unit-table-head,
   .unit-table-row {
     grid-template-columns: minmax(100px, 1.15fr) 0.67fr 0.42fr 0.55fr;
@@ -4319,6 +4346,42 @@ button:disabled {
 .analysis-matrix td.rate-cell {
   text-align: center;
   white-space: nowrap;
+}
+.analysis-matrix td.rate-cell.clickable {
+  cursor: pointer;
+}
+.analysis-matrix td.rate-cell.clickable:hover {
+  background: #eef6f4;
+  text-decoration: underline;
+}
+:root[data-mode="dark"] .analysis-matrix td.rate-cell.clickable:hover {
+  background: #22302e;
+}
+/* v1.27.0：矩陣下方展開面板（單位分析曲線圖／選項明細） */
+.analysis-below-panel {
+  margin-top: 12px;
+  border: 1px solid var(--line, #e3e9e8);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.analysis-below-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.analysis-below-head h3 {
+  margin: 0;
+  font-size: var(--font-base, 15px);
+}
+.analysis-below-head p {
+  margin: 2px 0 0;
+  color: #8a9493;
+  font-size: var(--font-small, 13px);
+}
+.drill-back {
+  margin-bottom: 8px;
 }
 .analysis-matrix th.ind-col,
 .analysis-matrix td.ind-col {

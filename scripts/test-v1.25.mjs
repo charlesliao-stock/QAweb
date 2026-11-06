@@ -23,7 +23,7 @@ import {
 import {
   isPassing,
   passRateOf,
-  averageUnitPassRate,
+  unitPassRate,
   recordsInMonths,
   optionDetailRows,
 } from "${ROOT}/src/lib/analysisRates";
@@ -34,7 +34,7 @@ export {
   rangeLabel,
   isPassing,
   passRateOf,
-  averageUnitPassRate,
+  unitPassRate,
   recordsInMonths,
   optionDetailRows,
 };
@@ -244,15 +244,14 @@ const mkRec = (unitId, rate, year = 2026, month = 1) => ({
   assert("合併人次率 33.3%", pr.rate === 33.3);
   const empty = L.passRateOf([], 80);
   assert("無資料 rate null", empty.rate === null && empty.total === 0);
-  const avg = L.averageUnitPassRate(
+  const upr = L.unitPassRate(
     [mkRec("U1", 90), mkRec("U1", 70), mkRec("U2", 100)],
     80,
   );
-  assert("單位平均率 75%（50% 與 100% 平均）", avg.rate === 75);
-  assert("單位平均計入 2 單位", avg.unitCount === 2);
-  assert("單位平均總人次 3", avg.total === 3);
-  const avgEmpty = L.averageUnitPassRate([], 80);
-  assert("單位平均無資料", avgEmpty.rate === null && avgEmpty.unitCount === 0);
+  assert("單位率 50%（U1 未達標、U2 達標）", upr.rate === 50);
+  assert("單位率 達標 1／總 2 單位", upr.pass === 1 && upr.total === 2);
+  const uprEmpty = L.unitPassRate([], 80);
+  assert("單位率無資料", uprEmpty.rate === null && uprEmpty.total === 0);
 }
 
 /* ---- 月份過濾 ---- */

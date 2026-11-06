@@ -8,9 +8,10 @@
  * 權限：can("resultQuery")；資料範圍：管理員全部、審查員只看負責單位、
  * 一般人員只看自己單位（沿用舊頁規則）。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown,
+  ChevronLeft,
   Download,
   FileText,
   TrendingUp,
@@ -59,13 +60,19 @@ import {
   type YearSub,
 } from "../lib/analysisPeriod";
 import {
-  averageUnitPassRate,
+  formatPassRate,
   optionDetailRows,
   passRateOf,
+  personOptionRows,
   recordsInMonths,
+  unitPassRate,
+  unitPeriodPassRate,
+  unitsForDrill,
   type AnalysisRecord,
   type OptionDetailRow,
+  type PassRate,
 } from "../lib/analysisRates";
+import { maskName } from "../lib/mask";
 import { YEAR_FILTER_OPTIONS, yearOptionLabel } from "../lib/scheduling";
 
 interface IndicatorOpt {
@@ -92,8 +99,7 @@ interface UnitOpt {
 type TabId = "group" | "unit" | "indicator" | "import";
 type UnitMode = "person" | "unit";
 
-interface CellValue {
-  rate: number | null;
+interface CellValue extends PassRate {
   title: string;
 }
 
@@ -102,12 +108,32 @@ interface ChartModalData {
   subtitle: string;
   values: number[];
   labels: string[];
+  /** hover 提示（與 values 對齊）：期間＋正確率＋（正確數／審查數） */
+  tips: string[];
+  /** 閾值（紅色虛線）；null 表示不畫 */
+  threshold: number | null;
 }
 
 interface DocModalData {
   title: string;
   subtitle: string;
   rows: OptionDetailRow[];
+}
+
+/** 下探狀態：L1 單位矩陣（l2UnitId 為 null）；L2 人員各選項結果（l2UnitId 有值） */
+interface DrillState {
+  indicatorId: string;
+  column: AnalysisPeriodColumn;
+  mode: UnitMode;
+  /** 單位分析限定該單位；組別／指標分析為 undefined（全部單位） */
+  scopeUnitId?: string;
+  l2UnitId: string | null;
+}
+
+/** 矩陣下方展開面板（僅單位分析）：曲線圖／選項明細 */
+interface UnitPanel {
+  kind: "chart" | "doc";
+  indicatorId: string;
 }
 
 const QUARTER_LABELS: Record<QuarterSub, string> = {
@@ -119,6 +145,11 @@ const QUARTER_LABELS: Record<QuarterSub, string> = {
 
 function fmtRate(rate: number | null): string {
   return rate == null ? "—" : `${rate.toFixed(1)}%`;
+}
+
+/** 矩陣格格式：75%(3/4)；無資料 — */
+function fmtCell(cell: CellValue): string {
+  return formatPassRate(cell);
 }
 
 function SelectField({
@@ -184,6 +215,8 @@ export function ResultsPage({
   const [groupUnit, setGroupUnit] = useState<UnitMode>("person");
   // 單位分析
   const [selUnit, setSelUnit] = useState("");
+  const [selGroupU, setSelGroupU] = useState("");
+  const [selIndU, setSelIndU] = useState("all");
   // 指標分析
   const [selGroup2, setSelGroup2] = useState("");
   const [selIndicator, setSelIndicator] = useState("");
@@ -191,6 +224,10 @@ export function ResultsPage({
   // Modal
   const [chartModal, setChartModal] = useState<ChartModalData | null>(null);
   const [docModal, setDocModal] = useState<DocModalData | null>(null);
+  // 下探（L1 單位矩陣／L2 人員各選項結果）
+  const [drill, setDrill] = useState<DrillState | null>(null);
+  // 單位分析矩陣下方展開面板（曲線圖／選項明細）
+  const [unitPanel, setUnitPanel] = useState<UnitPanel | null>(null);
 
   // 資料範圍（沿用舊頁規則）
   const scope = useMemo(() => {
@@ -339,6 +376,8 @@ export function ResultsPage({
               month: Number(v.month ?? 0),
               rate: typeof v.rate === "number" ? v.rate : null,
               answers,
+              personEmpNo: String(v.reviewedPersonEmpNo ?? ""),
+              personName: String(v.reviewedPersonName ?? ""),
             });
           }),
         );
@@ -458,8 +497,8 @@ export function ResultsPage({
       setSelIndicator(indTabIndicators[0].id);
   }, [indTabIndicators, selIndicator]);
 
-  // 單位分析：該單位在所選期間審查過的指標（依編號排序）
-  const unitIndicators = useMemo(() => {
+  // 單位分析：該單位在所選期間審查過的指標（依編號排序，再經組別／指標過濾）
+  const unitIndicatorsBase = useMemo(() => {
     const periodRecs = recordsInMonths(
       scopedRecords.filter((r) => r.unitId === selUnit),
       allMonths,
@@ -470,6 +509,32 @@ export function ResultsPage({
       .filter((i): i is IndicatorOpt => i != null)
       .sort((a, b) => a.code.localeCompare(b.code, "zh-Hant"));
   }, [scopedRecords, selUnit, allMonths, indOf]);
+  const unitIndicators = useMemo(
+    () =>
+      unitIndicatorsBase.filter(
+        (i) =>
+          (selGroupU === "all" || i.groupId === selGroupU) &&
+          (selIndU === "all" || i.id === selIndU),
+      ),
+    [unitIndicatorsBase, selGroupU, selIndU],
+  );
+  // 單位分析指標下拉選項（依組別過濾＋全部）
+  const unitIndOptions = useMemo(
+    () =>
+      unitIndicatorsBase.filter(
+        (i) => selGroupU === "all" || i.groupId === selGroupU,
+      ),
+    [unitIndicatorsBase, selGroupU],
+  );
+  // 單位分析組別預設第一個組別；組別變動時指標重設為全部
+  useEffect(() => {
+    if (scopedGroups.length > 0 && !scopedGroups.some((g) => g.id === selGroupU) && selGroupU !== "all")
+      setSelGroupU(scopedGroups[0].id);
+  }, [scopedGroups, selGroupU]);
+  useEffect(() => {
+    if (selIndU !== "all" && !unitIndOptions.some((i) => i.id === selIndU))
+      setSelIndU("all");
+  }, [unitIndOptions, selIndU]);
 
   // 期間說明文字（modal 副標共用）
   const periodDesc = useMemo(() => {
@@ -507,7 +572,7 @@ export function ResultsPage({
     );
   }
 
-  /** 單格達閾值率（人次＝合併；單位＝各單位率平均） */
+  /** 單格達閾值率（人次＝合併；單位＝達閾值單位數／總審查單位數） */
   function cellValue(
     indicatorId: string,
     col: AnalysisPeriodColumn,
@@ -520,38 +585,42 @@ export function ResultsPage({
     if (unitId) recs = recs.filter((r) => r.unitId === unitId);
     recs = recordsInMonths(recs, col.months);
     if (mode === "unit") {
-      const avg = averageUnitPassRate(recs, th);
+      const ur = unitPassRate(recs, th);
       return {
-        rate: avg.rate,
+        ...ur,
         title:
-          avg.rate == null
+          ur.rate == null
             ? "無資料"
-            : `各單位率平均（${avg.unitCount} 單位）`,
+            : `達閾值 ${ur.pass}／${ur.total} 單位`,
       };
     }
     const pr = passRateOf(recs, th);
     return {
-      rate: pr.rate,
-      title: pr.total === 0 ? "無資料" : `${pr.pass}/${pr.total}`,
+      ...pr,
+      title: pr.total === 0 ? "無資料" : `達閾值 ${pr.pass}／${pr.total} 人次`,
     };
   }
 
-  /** 曲線圖數列（只取有資料的欄） */
+  /** 曲線圖數列（只取有資料的欄；附 hover 提示文字） */
   function chartSeries(
     indicatorId: string,
     unitId: string | undefined,
     mode: UnitMode,
-  ): { values: number[]; labels: string[] } {
+  ): { values: number[]; labels: string[]; tips: string[]; cols: AnalysisPeriodColumn[] } {
     const values: number[] = [];
     const labels: string[] = [];
+    const tips: string[] = [];
+    const cols: AnalysisPeriodColumn[] = [];
     for (const col of columns) {
       const c = cellValue(indicatorId, col, unitId, mode);
       if (c.rate != null) {
         values.push(c.rate);
         labels.push(col.label);
+        tips.push(`${col.label}：${formatPassRate(c, true)}`);
+        cols.push(col);
       }
     }
-    return { values, labels };
+    return { values, labels, tips, cols };
   }
 
   function openChart(
@@ -562,14 +631,34 @@ export function ResultsPage({
   ) {
     const ind = indOf.get(indicatorId);
     if (!ind) return;
-    const { values, labels } = chartSeries(indicatorId, unitId, mode);
+    const { values, labels, tips } = chartSeries(indicatorId, unitId, mode);
     setChartModal({
       title: `${ind.code}・${ind.name} 達閾值率曲線`,
       subtitle: `${periodDesc}・${scopeLabel}・${
-        mode === "unit" ? "單位（各單位率平均）" : "人次（合併）"
+        mode === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"
       }`,
       values,
       labels,
+      tips,
+      threshold: ind.threshold > 0 ? ind.threshold : null,
+    });
+  }
+
+  /** 下探 L1：開啟單位矩陣（只有點選的那一個期間欄） */
+  function openDrill(
+    indicatorId: string,
+    col: AnalysisPeriodColumn,
+    mode: UnitMode,
+    scopeUnitId?: string,
+  ) {
+    const cell = cellValue(indicatorId, col, scopeUnitId, mode);
+    if (cell.rate == null) return;
+    setDrill({
+      indicatorId,
+      column: col,
+      mode,
+      scopeUnitId,
+      l2UnitId: null,
     });
   }
 
@@ -615,28 +704,34 @@ export function ResultsPage({
     if (!indSel) return null;
     const th = indSel.threshold;
     const unitIds = new Set(indRecs.map((r) => r.unitId));
-    const avg = averageUnitPassRate(indRecs, th);
+    // 單位正確率：unit-period 計（一個單位在兩個期間欄受審＝兩筆審查）
+    const unitPr = unitPeriodPassRate(indRecs, columns, th);
     const merged = passRateOf(indRecs, th);
     const perColumn =
       indUnit === "unit"
-        ? columns.map((c) => {
-            const recs = recordsInMonths(indRecs, c.months);
-            return averageUnitPassRate(recs, th).rate;
-          })
-        : columns.map((c) => {
-            const recs = recordsInMonths(indRecs, c.months);
-            return passRateOf(recs, th).rate;
-          });
-    const pts = columns
-      .map((c, i) => ({ label: c.label, value: perColumn[i] }))
-      .filter((p): p is { label: string; value: number } => p.value != null);
+        ? columns.map((c) => ({
+            column: c,
+            pr: unitPassRate(recordsInMonths(indRecs, c.months), th),
+          }))
+        : columns.map((c) => ({
+            column: c,
+            pr: passRateOf(recordsInMonths(indRecs, c.months), th),
+          }));
+    const pts = perColumn.filter(
+      (p): p is { column: AnalysisPeriodColumn; pr: PassRate } & { pr: { rate: number } } =>
+        p.pr.rate != null,
+    );
     return {
       unitCount: unitIds.size,
       total: indRecs.length,
-      unitRate: avg.rate,
-      personRate: merged.rate,
-      chartValues: pts.map((p) => p.value),
-      chartLabels: pts.map((p) => p.label),
+      unitPr,
+      personPr: merged,
+      chartValues: pts.map((p) => p.pr.rate as number),
+      chartLabels: pts.map((p) => p.column.label),
+      chartTips: pts.map(
+        (p) => `${p.column.label}：${formatPassRate(p.pr, true)}`,
+      ),
+      chartCols: pts.map((p) => p.column),
       optionRows: optionDetailRows(indRecs, indSel.questions),
     };
   }, [indRecs, indSel, indUnit, columns]);
@@ -773,7 +868,7 @@ export function ResultsPage({
             <section className="panel">
               <SectionTitle
                 title={`${groupNameOf.get(selGroup) ?? selGroup}・達閾值率`}
-                note={`${periodDesc}・單元：${groupUnit === "unit" ? "單位（各單位率平均）" : "人次（合併）"}`}
+                note={`${periodDesc}・單元：${groupUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}`}
               />
               <RateMatrix
                 rows={groupIndicators.map((i) => ({
@@ -784,6 +879,7 @@ export function ResultsPage({
                 cellOf={(id, col) =>
                   cellValue(id, col, undefined, groupUnit)
                 }
+                onCell={(id, col) => openDrill(id, col, groupUnit)}
                 onChart={(id) =>
                   openChart(id, undefined, groupUnit, "全部單位")
                 }
@@ -798,6 +894,21 @@ export function ResultsPage({
         <>
           <div className="results-filters">
             <SelectField
+              label="組別"
+              value={selGroupU}
+              onChange={(v) => {
+                setSelGroupU(v);
+                setSelIndU("all");
+              }}
+              options={[
+                { value: "all", label: "全部組別" },
+                ...scopedGroups.map((g) => ({
+                  value: g.id,
+                  label: g.name,
+                })),
+              ]}
+            />
+            <SelectField
               label="單位"
               value={selUnit}
               onChange={setSelUnit}
@@ -805,6 +916,18 @@ export function ResultsPage({
                 value: u.code,
                 label: `${u.code}・${u.name}`,
               }))}
+            />
+            <SelectField
+              label="指標"
+              value={selIndU}
+              onChange={setSelIndU}
+              options={[
+                { value: "all", label: "全部指標" },
+                ...unitIndOptions.map((i) => ({
+                  value: i.id,
+                  label: `${i.code}・${i.name}`,
+                })),
+              ]}
             />
           </div>
           {loading ? (
@@ -829,11 +952,76 @@ export function ResultsPage({
                 cellOf={(id, col) =>
                   cellValue(id, col, selUnit, "person")
                 }
-                onChart={(id) =>
-                  openChart(id, selUnit, "person", `單位：${selUnit}`)
+                onCell={(id, col) =>
+                  openDrill(id, col, "person", selUnit)
                 }
-                onDoc={(id) => openDoc(id, selUnit, `單位：${selUnit}`)}
+                onChart={(id) =>
+                  setUnitPanel((p) =>
+                    p?.kind === "chart" && p.indicatorId === id
+                      ? null
+                      : { kind: "chart", indicatorId: id },
+                  )
+                }
+                onDoc={(id) =>
+                  setUnitPanel((p) =>
+                    p?.kind === "doc" && p.indicatorId === id
+                      ? null
+                      : { kind: "doc", indicatorId: id },
+                  )
+                }
               />
+              {unitPanel &&
+                (() => {
+                  const ind = indOf.get(unitPanel.indicatorId);
+                  if (!ind) return null;
+                  if (unitPanel.kind === "chart") {
+                    const s = chartSeries(
+                      ind.id,
+                      selUnit,
+                      "person",
+                    );
+                    return (
+                      <UnitBelowPanel
+                        title={`${ind.code}・${ind.name} 達閾值率曲線`}
+                        subtitle={`${periodDesc}・單位：${selUnit}・人次（合併）`}
+                        onClose={() => setUnitPanel(null)}
+                      >
+                        {s.values.length === 0 ? (
+                          <div className="chart-empty">尚無資料</div>
+                        ) : (
+                          <TrendChart
+                            values={s.values}
+                            labels={s.labels}
+                            tooltips={s.tips}
+                            threshold={
+                              ind.threshold > 0 ? ind.threshold : null
+                            }
+                            legend="達閾值率"
+                            currentLabel={s.labels[s.labels.length - 1]}
+                          />
+                        )}
+                      </UnitBelowPanel>
+                    );
+                  }
+                  const recs = recordsInMonths(
+                    scopedRecords.filter(
+                      (r) =>
+                        r.indicatorId === ind.id && r.unitId === selUnit,
+                    ),
+                    allMonths,
+                  );
+                  return (
+                    <UnitBelowPanel
+                      title={`${ind.code}・${ind.name} 各選項得分狀況`}
+                      subtitle={`${periodDesc}・單位：${selUnit}・共 ${recs.length} 人次`}
+                      onClose={() => setUnitPanel(null)}
+                    >
+                      <OptionDetailTable
+                        rows={optionDetailRows(recs, ind.questions)}
+                      />
+                    </UnitBelowPanel>
+                  );
+                })()}
             </section>
           )}
         </>
@@ -892,19 +1080,19 @@ export function ResultsPage({
                 />
                 <SummaryCell
                   label="單位正確率"
-                  value={fmtRate(indSummary.unitRate)}
-                  note="各單位率平均"
+                  value={formatPassRate(indSummary.unitPr, true)}
+                  note="達閾值單位數／審查單位數（unit-period 計）"
                 />
                 <SummaryCell
                   label="人員正確率"
-                  value={fmtRate(indSummary.personRate)}
-                  note="合併人次率"
+                  value={formatPassRate(indSummary.personPr, true)}
+                  note="達閾值人次／總人次"
                 />
               </div>
               <section className="panel">
                 <SectionTitle
                   title="通過率"
-                  note={`${indSel.code}・${indSel.name}・${periodDesc}・單元：${indUnit === "unit" ? "單位（各單位率平均）" : "人次（合併）"}`}
+                  note={`${indSel.code}・${indSel.name}・${periodDesc}・單元：${indUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}`}
                 />
                 {indSummary.chartValues.length === 0 ? (
                   <div className="chart-empty">尚無資料</div>
@@ -912,9 +1100,18 @@ export function ResultsPage({
                   <TrendChart
                     values={indSummary.chartValues}
                     labels={indSummary.chartLabels}
+                    tooltips={indSummary.chartTips}
+                    threshold={indSel.threshold > 0 ? indSel.threshold : null}
                     legend="正確率"
                     currentLabel={
                       indSummary.chartLabels[indSummary.chartLabels.length - 1]
+                    }
+                    onPointClick={(i) =>
+                      openDrill(
+                        selIndicator,
+                        indSummary.chartCols[i],
+                        indUnit,
+                      )
                     }
                   />
                 )}
@@ -971,6 +1168,8 @@ export function ResultsPage({
               <TrendChart
                 values={chartModal.values}
                 labels={chartModal.labels}
+                tooltips={chartModal.tips}
+                threshold={chartModal.threshold}
                 legend="達閾值率"
                 currentLabel={
                   chartModal.labels[chartModal.labels.length - 1]
@@ -1010,6 +1209,18 @@ export function ResultsPage({
           </div>
         </div>
       )}
+
+      {drill && (
+        <DrillModal
+          drill={drill}
+          onClose={() => setDrill(null)}
+          onBackToL1={() => setDrill({ ...drill, l2UnitId: null })}
+          onSelectUnit={(unitId) => setDrill({ ...drill, l2UnitId: unitId })}
+          scopedRecords={scopedRecords}
+          indOf={indOf}
+          unitNameOf={unitNameOf}
+        />
+      )}
     </div>
   );
 }
@@ -1020,12 +1231,14 @@ function RateMatrix({
   rows,
   columns,
   cellOf,
+  onCell,
   onChart,
   onDoc,
 }: {
   rows: { id: string; label: string }[];
   columns: AnalysisPeriodColumn[];
   cellOf: (rowId: string, col: AnalysisPeriodColumn) => CellValue;
+  onCell?: (rowId: string, col: AnalysisPeriodColumn) => void;
   onChart: (rowId: string) => void;
   onDoc: (rowId: string) => void;
 }) {
@@ -1050,9 +1263,29 @@ function RateMatrix({
               <td className="ind-col">{row.label}</td>
               {columns.map((c) => {
                 const cell = cellOf(row.id, c);
+                const clickable = cell.rate != null && onCell != null;
                 return (
-                  <td key={c.key} className="rate-cell" title={cell.title}>
-                    {fmtRate(cell.rate)}
+                  <td
+                    key={c.key}
+                    className={`rate-cell${clickable ? " clickable" : ""}`}
+                    title={clickable ? `${cell.title}（點選下探）` : cell.title}
+                    onClick={
+                      clickable ? () => onCell(row.id, c) : undefined
+                    }
+                    role={clickable ? "button" : undefined}
+                    tabIndex={clickable ? 0 : undefined}
+                    onKeyDown={
+                      clickable
+                        ? (e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              onCell(row.id, c);
+                            }
+                          }
+                        : undefined
+                    }
+                  >
+                    {fmtCell(cell)}
                   </td>
                 );
               })}
@@ -1082,6 +1315,242 @@ function RateMatrix({
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/* ================= 單位分析矩陣下方展開面板 ================= */
+
+function UnitBelowPanel({
+  title,
+  subtitle,
+  onClose,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="analysis-below-panel">
+      <div className="analysis-below-head">
+        <div>
+          <h3>{title}</h3>
+          <p>{subtitle}</p>
+        </div>
+        <button
+          type="button"
+          className="button button-ghost"
+          onClick={onClose}
+          aria-label="關閉"
+        >
+          <X size={16} />
+        </button>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/* ================= 下探：L1 單位矩陣 → L2 人員各選項結果 ================= */
+
+function DrillModal({
+  drill,
+  onClose,
+  onBackToL1,
+  onSelectUnit,
+  scopedRecords,
+  indOf,
+  unitNameOf,
+}: {
+  drill: DrillState;
+  onClose: () => void;
+  onBackToL1: () => void;
+  onSelectUnit: (unitId: string) => void;
+  scopedRecords: AnalysisRecord[];
+  indOf: Map<string, IndicatorOpt>;
+  unitNameOf: Map<string, string>;
+}) {
+  const ind = indOf.get(drill.indicatorId);
+  const th = ind?.threshold ?? 0;
+  const col = drill.column;
+  // L1 列：分母單元的單位（該指標該期間欄內有審查紀錄的單位）
+  const l1Units = useMemo(() => {
+    let recs = scopedRecords.filter((r) => r.indicatorId === drill.indicatorId);
+    if (drill.scopeUnitId) recs = recs.filter((r) => r.unitId === drill.scopeUnitId);
+    return unitsForDrill(recs, col.months);
+  }, [scopedRecords, drill.indicatorId, drill.scopeUnitId, col]);
+  const l1Cells = useMemo(() => {
+    const map = new Map<string, CellValue>();
+    for (const unitId of l1Units) {
+      const recs = recordsInMonths(
+        scopedRecords.filter(
+          (r) => r.indicatorId === drill.indicatorId && r.unitId === unitId,
+        ),
+        col.months,
+      );
+      const pr = passRateOf(recs, th);
+      map.set(unitId, {
+        ...pr,
+        title: pr.total === 0 ? "無資料" : `達閾值 ${pr.pass}／${pr.total} 人次`,
+      });
+    }
+    return map;
+  }, [scopedRecords, drill.indicatorId, l1Units, col, th]);
+  // L2 列：該單位該期間被審人員在各選項的審查結果
+  const l2Rows = useMemo(() => {
+    if (!drill.l2UnitId) return [];
+    const recs = recordsInMonths(
+      scopedRecords.filter(
+        (r) =>
+          r.indicatorId === drill.indicatorId &&
+          r.unitId === drill.l2UnitId,
+      ),
+      col.months,
+    );
+    return personOptionRows(recs, th);
+  }, [scopedRecords, drill.indicatorId, drill.l2UnitId, col, th]);
+
+  if (!ind) return null;
+  const title = `${ind.code}・${ind.name}`;
+  return (
+    <div
+      className="reviewer-modal-backdrop"
+      onClick={onClose}
+    >
+      <div
+        className="reviewer-modal wide panel"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <div className="reviewer-modal-head">
+          <div>
+            <h2>{title}</h2>
+            <p>
+              {drill.l2UnitId
+                ? `${col.label}・${drill.l2UnitId}・${unitNameOf.get(drill.l2UnitId) ?? ""}・被審人員各選項結果`
+                : `${col.label}・各單位審查結果（點選格子看被審人員）`}
+            </p>
+          </div>
+          <button
+            className="button button-ghost"
+            onClick={onClose}
+            aria-label="關閉"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        {drill.l2UnitId == null ? (
+          <div className="analysis-table-wrap">
+            <table className="data-table analysis-matrix">
+              <thead>
+                <tr>
+                  <th className="ind-col">單位</th>
+                  <th className="rate-col">{col.label}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {l1Units.length === 0 ? (
+                  <tr>
+                    <td colSpan={2}>無資料</td>
+                  </tr>
+                ) : (
+                  l1Units.map((unitId) => {
+                    const cell = l1Cells.get(unitId);
+                    const clickable = cell != null && cell.rate != null;
+                    return (
+                      <tr key={unitId}>
+                        <td className="ind-col">
+                          {unitId}・{unitNameOf.get(unitId) ?? ""}
+                        </td>
+                        <td
+                          className={`rate-cell${clickable ? " clickable" : ""}`}
+                          title={
+                            clickable
+                              ? `${cell.title}（點選看被審人員）`
+                              : (cell?.title ?? "無資料")
+                          }
+                          onClick={
+                            clickable ? () => onSelectUnit(unitId) : undefined
+                          }
+                          role={clickable ? "button" : undefined}
+                          tabIndex={clickable ? 0 : undefined}
+                          onKeyDown={
+                            clickable
+                              ? (e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    onSelectUnit(unitId);
+                                  }
+                                }
+                              : undefined
+                          }
+                        >
+                          {cell ? fmtCell(cell) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <>
+            <div className="drill-back">
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={onBackToL1}
+              >
+                <ChevronLeft size={15} /> 返回單位列表
+              </button>
+            </div>
+            {l2Rows.length === 0 ? (
+              <EmptyState title="無資料" description="該單位該期間尚無審查紀錄。" />
+            ) : (
+              <div className="analysis-table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>被審人員</th>
+                      <th>月份</th>
+                      {ind.questions.map((q) => (
+                        <th key={q.id}>{q.itemText}</th>
+                      ))}
+                      <th>正確率</th>
+                      <th>達閾值</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {l2Rows.map((row, i) => (
+                      <tr key={`${row.personEmpNo}-${row.year}-${row.month}-${i}`}>
+                        <td>
+                          {maskName(row.personName) || "—"}
+                          {row.personEmpNo ? `（${row.personEmpNo}）` : ""}
+                        </td>
+                        <td>
+                          {row.year}/{row.month}
+                        </td>
+                        {ind.questions.map((q) => (
+                          <td key={q.id}>
+                            {row.answers.get(q.id) || "—"}
+                          </td>
+                        ))}
+                        <td>{fmtRate(row.rate)}</td>
+                        <td>{row.passing ? "是" : "否"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
