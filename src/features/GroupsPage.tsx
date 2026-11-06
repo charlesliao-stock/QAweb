@@ -26,6 +26,7 @@ import {
 } from "../lib/db";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
+import { getCachedRefCollection } from "../lib/refCache";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import { SEED_GROUP_NAMES, SEED_ROLES, SEED_TITLES } from "../lib/seed";
@@ -517,18 +518,10 @@ function MemberChecklist({
 // ================= 主頁 =================
 
 /**
- * v1.27.2：同時發出的 users 全量讀取共用同一個 Promise（只在進行中去重，不留快取，
- * 所以不會讀到過期資料）。進頁時 loadMaster／loadTitles／loadUsers 原本各讀 800 筆。
+ * v1.28 階段 4：users 全量讀取走參考資料共用快取（getCachedRefCollection）。
+ * v1.27.2 的 usersInflight（只去重、不留快取）由它取代：進行中去重＋命中後
+ * 跨頁共用；自己寫入後由 db.ts 統一出口自動失效，存檔後的 loadUsers 會重查。
  */
-let usersInflight: ReturnType<typeof getDocs> | null = null;
-function fetchUsersShared() {
-  if (!usersInflight) {
-    usersInflight = getDocs(collection(getFirebaseDb(), "users")).finally(() => {
-      usersInflight = null;
-    });
-  }
-  return usersInflight;
-}
 
 export function GroupsPage({
   onAction,
@@ -781,7 +774,9 @@ export function GroupsPage({
 
   const loadRoles = useCallback(async () => {
     try {
-      const snap = await getDocs(collection(getFirebaseDb(), "roles"));
+      const snap = await getCachedRefCollection("roles", () =>
+        getDocs(collection(getFirebaseDb(), "roles")),
+      );
       setRoleOptions(
         snap.docs.map((d) => {
           const data = d.data();
@@ -802,8 +797,12 @@ export function GroupsPage({
     try {
       const db = getFirebaseDb();
       const [gsnap, usnap] = await Promise.all([
-        getDocs(collection(db, "groups")),
-        getDocs(collection(db, "units")),
+        getCachedRefCollection("groups", () =>
+          getDocs(collection(db, "groups")),
+        ),
+        getCachedRefCollection("units", () =>
+          getDocs(collection(db, "units")),
+        ),
       ]);
       const groupList = gsnap.docs
         .map((d) => ({
@@ -816,7 +815,9 @@ export function GroupsPage({
       // 各單位人數（非管理員無 users 查詢權限，顯示「—」）
       const counts = new Map<string, number>();
       try {
-        const usersSnap = await fetchUsersShared();
+        const usersSnap = await getCachedRefCollection("users", () =>
+          getDocs(collection(getFirebaseDb(), "users")),
+        );
         usersSnap.docs.forEach((d) => {
           const uc = d.data().unitCode;
           if (typeof uc === "string" && uc) {
@@ -867,7 +868,9 @@ export function GroupsPage({
     setTitlesLoading(true);
     try {
       const db = getFirebaseDb();
-      const snap = await getDocs(collection(db, "titles"));
+      const snap = await getCachedRefCollection("titles", () =>
+        getDocs(collection(db, "titles")),
+      );
       const list = snap.docs
         .map((d) => {
           const data = d.data();
@@ -882,7 +885,9 @@ export function GroupsPage({
       // 各職稱使用人數（僅管理員可查 users）
       let titleCounts = new Map<string, number>();
       try {
-        const usnap = await fetchUsersShared();
+        const usnap = await getCachedRefCollection("users", () =>
+          getDocs(collection(getFirebaseDb(), "users")),
+        );
         usnap.docs.forEach((d) => {
           const t = d.data().title;
           if (typeof t === "string" && t) {
@@ -910,7 +915,9 @@ export function GroupsPage({
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
     try {
-      const snap = await fetchUsersShared();
+      const snap = await getCachedRefCollection("users", () =>
+        getDocs(collection(getFirebaseDb(), "users")),
+      );
       usersLoadedRef.current = true;
       const list: UserRow[] = snap.docs
         .map((d) => {
@@ -955,9 +962,15 @@ export function GroupsPage({
       const db = getFirebaseDb();
       const me = user?.staffId ?? "";
       const [rSnap, tSnap, gSnap] = await Promise.all([
-        getDocs(collection(db, "roles")),
-        getDocs(collection(db, "titles")),
-        getDocs(collection(db, "groups")),
+        getCachedRefCollection("roles", () =>
+          getDocs(collection(db, "roles")),
+        ),
+        getCachedRefCollection("titles", () =>
+          getDocs(collection(db, "titles")),
+        ),
+        getCachedRefCollection("groups", () =>
+          getDocs(collection(db, "groups")),
+        ),
       ]);
       const roleNames = new Set(
         rSnap.docs.map((d) => String(d.data().name ?? "")),

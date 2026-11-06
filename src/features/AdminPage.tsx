@@ -27,6 +27,11 @@ import {
 } from "../lib/db";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
+import {
+  getCachedRef,
+  getCachedRefCollection,
+  SYSTEM_CONFIG_KEY,
+} from "../lib/refCache";
 import { isDemoMode } from "../lib/demoMode";
 import { useAuth } from "../lib/auth";
 import { applyTheme } from "../lib/uiPrefs";
@@ -88,7 +93,9 @@ function SystemInitSection({
 
   useEffect(() => {
     let cancelled = false;
-    getDoc(doc(getFirebaseDb(), "systemParams", "config"))
+    getCachedRef(SYSTEM_CONFIG_KEY, () =>
+        getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+      )
       .then((snap) => {
         if (!cancelled) setParams(snap.exists() ? (snap.data() as SystemParams) : null);
       })
@@ -105,7 +112,9 @@ function SystemInitSection({
     setSeeding(true);
     try {
       await runSystemSeed(getFirebaseDb(), user.staffId);
-      const snap = await getDoc(doc(getFirebaseDb(), "systemParams", "config"));
+      const snap = await getCachedRef(SYSTEM_CONFIG_KEY, () =>
+        getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+      );
       setParams(snap.exists() ? (snap.data() as SystemParams) : null);
       onAction("系統初始化完成：已寫入預設參數與 7 個角色");
     } catch {
@@ -174,7 +183,9 @@ function SystemInitSection({
       updates.updatedAt = serverTimestamp();
       updates.updatedBy = user.staffId;
       await updateDoc(doc(getFirebaseDb(), "systemParams", "config"), updates);
-      const snap = await getDoc(doc(getFirebaseDb(), "systemParams", "config"));
+      const snap = await getCachedRef(SYSTEM_CONFIG_KEY, () =>
+        getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+      );
       setParams(snap.exists() ? (snap.data() as SystemParams) : params);
       setEditing(false);
       onAction("系統參數已更新");
@@ -379,8 +390,12 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
     try {
       const db = getFirebaseDb();
       const [rsnap, tsnap] = await Promise.all([
-        getDocs(collection(db, "roles")),
-        getDocs(collection(db, "titles")),
+        getCachedRefCollection("roles", () =>
+          getDocs(collection(db, "roles")),
+        ),
+        getCachedRefCollection("titles", () =>
+          getDocs(collection(db, "titles")),
+        ),
       ]);
       const seedIds = new Set(SEED_ROLES.map((r) => r.id));
       setRoles(

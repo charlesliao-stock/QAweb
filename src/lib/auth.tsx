@@ -17,6 +17,7 @@ import {
 import { doc, getDoc, updateDoc } from "./db";
 import { getFirebaseAuth, getFirebaseDb } from "./firebase";
 import { isDemoMode, setDemoMode } from "./demoMode";
+import { clearRefCache } from "./refCache";
 
 /** 登入用 email 合成規則：職編即帳號，phase 1 不寄信故用內部網域 */
 export function staffEmail(staffId: string): string {
@@ -210,6 +211,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    // v1.28 階段 4：登出清空參考快取（換帳號不沿用上一人的記憶體快取）
+    clearRefCache();
     if (isDemoMode()) {
       setDemoMode(false);
       setUser(null);
