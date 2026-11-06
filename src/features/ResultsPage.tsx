@@ -1405,14 +1405,36 @@ function RateMatrix({
                 {c.label}
               </th>
             ))}
-            <th className="icon-col">曲線圖</th>
-            <th className="icon-col">明細</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => (
             <tr key={row.id}>
-              <td className="ind-col">{row.label}</td>
+              <td className="ind-col">
+                <div className="analysis-indicator-sticky">
+                  <span className="analysis-indicator-name">{row.label}</span>
+                  <span className="analysis-indicator-actions">
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title="曲線圖"
+                      aria-label={`${row.label} 曲線圖`}
+                      onClick={() => onChart(row.id)}
+                    >
+                      <TrendingUp size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title="各選項得分狀況"
+                      aria-label={`${row.label} 各選項得分狀況`}
+                      onClick={() => onDoc(row.id)}
+                    >
+                      <FileText size={16} />
+                    </button>
+                  </span>
+                </div>
+              </td>
               {columns.map((c) => {
                 const cell = cellOf(row.id, c);
                 const clickable = cell.rate != null && onCell != null;
@@ -1441,28 +1463,6 @@ function RateMatrix({
                   </td>
                 );
               })}
-              <td className="icon-col">
-                <button
-                  type="button"
-                  className="icon-button"
-                  title="曲線圖"
-                  aria-label={`${row.label} 曲線圖`}
-                  onClick={() => onChart(row.id)}
-                >
-                  <TrendingUp size={16} />
-                </button>
-              </td>
-              <td className="icon-col">
-                <button
-                  type="button"
-                  className="icon-button"
-                  title="各選項得分狀況"
-                  aria-label={`${row.label} 各選項得分狀況`}
-                  onClick={() => onDoc(row.id)}
-                >
-                  <FileText size={16} />
-                </button>
-              </td>
             </tr>
           ))}
         </tbody>
@@ -1698,7 +1698,7 @@ function DrillModal({
                         {qr.values.map((v, i) => (
                           <td
                             key={i}
-                            className={v === "否" ? "drill-option-no" : undefined}
+                            className={v.trim() === "否" ? "drill-option-no" : undefined}
                           >
                             {v}
                           </td>

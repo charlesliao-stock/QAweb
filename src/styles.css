@@ -4608,13 +4608,13 @@ button:disabled {
 :root[data-mode="dark"] .drill-person-rate.pass {
   color: #63b89e;
 }
-.drill-option-no,
-.drill-person-rate.below {
+.data-table td.drill-option-no,
+.data-table td.drill-person-rate.below {
   color: #b42318;
   font-weight: 600;
 }
-:root[data-mode="dark"] .drill-option-no,
-:root[data-mode="dark"] .drill-person-rate.below {
+:root[data-mode="dark"] .data-table td.drill-option-no,
+:root[data-mode="dark"] .data-table td.drill-person-rate.below {
   color: #ff8a83;
 }
 /* v1.27.0：矩陣下方展開面板（單位分析曲線圖／選項明細） */
@@ -4657,10 +4657,22 @@ button:disabled {
 .analysis-matrix td.ind-col {
   z-index: 1;
 }
-.analysis-matrix th.icon-col,
-.analysis-matrix td.icon-col {
-  text-align: center;
-  white-space: nowrap;
+.analysis-indicator-sticky {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.analysis-indicator-name {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.analysis-indicator-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
 }
 .icon-button {
   display: inline-flex;
