@@ -19,6 +19,7 @@ import {
   ChevronDown,
   ClipboardCheck,
   Eye,
+  Pencil,
   ShieldCheck,
   X,
 } from "lucide-react";
@@ -79,6 +80,7 @@ interface IndicatorLite {
 
 interface RecordRow {
   id: string;
+  taskId: string;
   indicatorId: string;
   unitId: string;
   year: number;
@@ -188,6 +190,7 @@ export function AuditPage({
   const [selIndicator, setSelIndicator] = useState("");
   const [keyword, setKeyword] = useState("");
   const [viewRow, setViewRow] = useState<ActiveRow | null>(null);
+  const [selectedUnitFilter, setSelectedUnitFilter] = useState("");
   /** 檢視 modal：該指標題目（逐題明細分組＋指引用；v1.24） */
   const [viewQuestions, setViewQuestions] = useState<AuditQuestion[]>([]);
   const [viewShowGroups, setViewShowGroups] = useState(false);
@@ -198,6 +201,7 @@ export function AuditPage({
   const [expandedAnswers, setExpandedAnswers] = useState<ReviewAnswer[] | null>(
     null,
   );
+  const [expandedEditHistory, setExpandedEditHistory] = useState<Record<string, unknown>[]>([]);
   const [expandedLoading, setExpandedLoading] = useState(false);
   const [execRow, setExecRow] = useState<ActiveRow | null>(null);
   const [execUnit, setExecUnit] = useState("");
@@ -390,6 +394,7 @@ export function AuditPage({
                 : null;
             const row: RecordRow = {
               id: d.id,
+              taskId: typeof v.taskId === "string" ? v.taskId : d.id,
               indicatorId: iid,
               unitId: typeof v.unitId === "string" ? v.unitId : "",
               year: ym.year,
@@ -481,6 +486,8 @@ export function AuditPage({
   useEffect(() => {
     setExpandedRecordId(null);
     setExpandedAnswers(null);
+    setExpandedEditHistory([]);
+    setSelectedUnitFilter("");
     if (!viewRow) {
       setViewQuestions([]);
       setViewShowGroups(false);
@@ -512,6 +519,7 @@ export function AuditPage({
     if (expandedRecordId === rec.id) {
       setExpandedRecordId(null);
       setExpandedAnswers(null);
+      setExpandedEditHistory([]);
       return;
     }
     setExpandedRecordId(rec.id);
@@ -526,8 +534,14 @@ export function AuditPage({
       setExpandedAnswers(
         Array.isArray(v.answers) ? (v.answers as ReviewAnswer[]) : [],
       );
+      setExpandedEditHistory(
+        Array.isArray(v.editHistory)
+          ? (v.editHistory as Record<string, unknown>[]).slice().reverse()
+          : [],
+      );
     } catch {
       setExpandedAnswers([]);
+      setExpandedEditHistory([]);
     } finally {
       setExpandedLoading(false);
     }
@@ -588,6 +602,43 @@ export function AuditPage({
       return c * dir;
     });
   }, [rows, selGroup, selIndicator, keyword, sortKey, sortDir]);
+
+  const viewUnitSummaries = useMemo(() => {
+    if (!viewRow) return [];
+    const summaries = new Map<string, { count: number; rates: number[] }>();
+    viewRow.sched.unitIds.forEach((unitId) =>
+      summaries.set(unitId, { count: 0, rates: [] }),
+    );
+    viewRow.records.forEach((record) => {
+      const summary = summaries.get(record.unitId) ?? { count: 0, rates: [] };
+      summary.count += 1;
+      if (record.rate != null) summary.rates.push(record.rate);
+      summaries.set(record.unitId, summary);
+    });
+    return [...summaries.entries()].map(([unitId, summary]) => ({
+      unitId,
+      count: summary.count,
+      planned:
+        viewRow.sched.caseCount == null
+          ? null
+          : viewRow.sched.caseCount * viewRow.reviewMonthCount,
+      average:
+        summary.rates.length > 0
+          ? Math.round(
+              (summary.rates.reduce((sum, rate) => sum + rate, 0) /
+                summary.rates.length) *
+                10,
+            ) / 10
+          : null,
+    }));
+  }, [viewRow]);
+  const viewRecords = useMemo(
+    () =>
+      viewRow?.records.filter(
+        (record) => !selectedUnitFilter || record.unitId === selectedUnitFilter,
+      ) ?? [],
+    [viewRow, selectedUnitFilter],
+  );
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === 1 ? -1 : 1));
@@ -848,7 +899,7 @@ export function AuditPage({
       {viewRow && (
         <div className="reviewer-modal-backdrop" onClick={() => setViewRow(null)}>
           <div
-            className="reviewer-modal panel"
+            className="reviewer-modal wide panel"
             role="dialog"
             aria-modal="true"
             aria-label="審查結果檢視"
@@ -934,10 +985,55 @@ export function AuditPage({
               </div>
             </dl>
             <SectionTitle
-              title="已提交審查紀錄（本區間）"
-              note={`${viewRow.records.length} 筆，唯讀`}
+              title="排程指定單位自審摘要"
+              note="摘要僅彙總目前最新的審查結果；修改歷程不重複計入"
             />
-            {viewRow.records.length === 0 ? (
+            {viewUnitSummaries.length === 0 ? (
+              <p className="muted-text">本區間尚無單位審查結果。</p>
+            ) : (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>排程單位</th>
+                      <th>已審件數</th>
+                      <th>平均正確率</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {viewUnitSummaries.map((summary) => (
+                      <tr key={summary.unitId}>
+                        <td data-label="排程單位">{viewRow.unitNameOf(summary.unitId)}</td>
+                        <td data-label="已審／應審件數">{summary.count}／{summary.planned ?? "—"} 件</td>
+                        <td data-label="平均正確率">{summary.average == null ? "—" : `${summary.average}%`}</td>
+                        <td data-label="操作">
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() =>
+                              setSelectedUnitFilter((current) =>
+                                current === summary.unitId ? "" : summary.unitId,
+                              )
+                            }
+                          >
+                            <Eye size={14} />
+                            {selectedUnitFilter === summary.unitId
+                              ? "顯示全部"
+                              : "檢視明細"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <SectionTitle
+              title="審查明細"
+              note={`${selectedUnitFilter ? `${viewRow.unitNameOf(selectedUnitFilter)}・` : ""}${viewRecords.length} 筆`}
+            />
+            {viewRecords.length === 0 ? (
               <p className="muted-text">本區間尚無提交紀錄。</p>
             ) : (
               <div className="table-scroll">
@@ -950,22 +1046,22 @@ export function AuditPage({
                       <th>審查人員</th>
                       <th>受審人員</th>
                       <th>正確率</th>
-                      <th>明細</th>
+                      <th>檢視</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {viewRow.records.map((r) => (
+                    {viewRecords.map((r) => (
                       <Fragment key={r.id}>
                         <tr>
-                          <td>
+                          <td data-label="年月">
                             {r.year}年{r.month}月
                           </td>
-                          <td>{viewRow.unitNameOf(r.unitId)}</td>
-                          <td>{r.reviewDate || "—"}</td>
-                          <td>{maskName(r.reviewerName) || "—"}</td>
-                          <td>{maskName(r.reviewedPersonName) || "—"}</td>
-                          <td>{r.rate == null ? "—" : `${r.rate}%`}</td>
-                          <td>
+                          <td data-label="單位">{viewRow.unitNameOf(r.unitId)}</td>
+                          <td data-label="審查日期">{r.reviewDate || "—"}</td>
+                          <td data-label="審查人員">{maskName(r.reviewerName) || "—"}</td>
+                          <td data-label="受審人員">{maskName(r.reviewedPersonName) || "—"}</td>
+                          <td data-label="正確率">{r.rate == null ? "—" : `${r.rate}%`}</td>
+                          <td data-label="檢視">
                             <button
                               type="button"
                               className="text-button"
@@ -977,21 +1073,94 @@ export function AuditPage({
                           </td>
                         </tr>
                         {expandedRecordId === r.id ? (
-                          <tr>
-                            <td colSpan={7}>
+                          <tr className="review-record-expanded">
+                            <td className="review-record-expanded" colSpan={7}>
                               {expandedLoading || expandedAnswers == null ? (
                                 <p className="muted-text">載入明細中…</p>
-                              ) : expandedAnswers.length === 0 ? (
-                                <p className="muted-text">
-                                  此筆紀錄沒有逐題作答資料。
-                                </p>
                               ) : (
-                                <ReviewQuestionList
-                                  mode="view"
-                                  questions={viewQuestions}
-                                  showGroups={viewShowGroups}
-                                  answers={expandedAnswers}
-                                />
+                                <>
+                                  {expandedAnswers.length === 0 ? (
+                                    <p className="muted-text">
+                                      此筆紀錄沒有逐題作答資料。
+                                    </p>
+                                  ) : (
+                                    <ReviewQuestionList
+                                      mode="view"
+                                      questions={viewQuestions}
+                                      showGroups={viewShowGroups}
+                                      answers={expandedAnswers}
+                                    />
+                                  )}
+                                  <div className="form-actions">
+                                    <button
+                                      type="button"
+                                      className="button button-primary"
+                                      onClick={() => {
+                                        setViewRow(null);
+                                        setExecuting({
+                                          mode: "task",
+                                          taskId: r.taskId,
+                                          editRecordId: r.id,
+                                        });
+                                      }}
+                                    >
+                                      <Pencil size={15} /> 編輯審查結果
+                                    </button>
+                                  </div>
+                                  <SectionTitle
+                                    title="修改紀錄"
+                                    note={`${expandedEditHistory.length} 次修改`}
+                                  />
+                                  {expandedEditHistory.length === 0 ? (
+                                    <p className="muted-text">尚無修改紀錄；送出後的首次修改會記錄變更前後內容。</p>
+                                  ) : (
+                                    <div className="review-edit-history">
+                                      {expandedEditHistory.map((entry, index) => {
+                                        const changes =
+                                          entry.changes && typeof entry.changes === "object"
+                                            ? (entry.changes as Record<string, { before?: unknown; after?: unknown }>)
+                                            : {};
+                                        const labels: Record<string, string> = {
+                                          answers: "逐題作答",
+                                          totalScore: "總得分",
+                                          maxScore: "計分題數",
+                                          rate: "正確率",
+                                          reviewDate: "審查日期",
+                                          reviewerEmpNo: "審查人員職編",
+                                          reviewerName: "審查人員",
+                                          reviewedPersonEmpNo: "受審人員職編",
+                                          reviewedPersonName: "受審人員",
+                                          bedNo: "床號",
+                                          auditItem: "審核項目",
+                                        };
+                                        const stamp = typeof entry.editedAt === "string"
+                                          ? new Date(entry.editedAt).toLocaleString("zh-TW", { hour12: false })
+                                          : "時間未記錄";
+                                        return (
+                                          <article className="review-edit-history-item" key={`${String(entry.editedAt)}-${index}`}>
+                                            <b>{String(entry.actorName ?? entry.actorId ?? "未知修改者")}</b>
+                                            <span>{stamp}</span>
+                                            <ul>
+                                              {Object.entries(changes).map(([key, change]) => (
+                                                <li key={key}>
+                                                  <strong>{labels[key] ?? key}</strong>
+                                                  {key === "answers" ? (
+                                                    <details>
+                                                      <summary>查看逐題內容前後差異</summary>
+                                                      <pre>{JSON.stringify(change, null, 2)}</pre>
+                                                    </details>
+                                                  ) : (
+                                                    <span>{JSON.stringify(change.before)} → {JSON.stringify(change.after)}</span>
+                                                  )}
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          </article>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </>
                               )}
                             </td>
                           </tr>

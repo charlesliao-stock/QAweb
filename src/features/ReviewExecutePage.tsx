@@ -537,7 +537,11 @@ export function ReviewExecutePage({
         target.mode === "task" ? (target.editRecordId ?? editingId) : editingId;
       if (editId) {
         // 單件更新：不增加件數
-        await updateDoc(doc(db, "reviewRecords", editId), {
+        const recordRef = doc(db, "reviewRecords", editId);
+        const previousSnap = await getDoc(recordRef);
+        if (!previousSnap.exists()) throw new Error("找不到要修改的審查紀錄");
+        const previous = previousSnap.data() as Record<string, unknown>;
+        const nextValues: Record<string, unknown> = {
           answers: answerList,
           totalScore,
           maxScore,
@@ -549,6 +553,36 @@ export function ReviewExecutePage({
           reviewedPersonName: personName.trim(),
           bedNo: bedNo.trim(),
           auditItem: selectedAuditItem,
+        };
+        const changes: Record<string, { before: unknown; after: unknown }> = {};
+        for (const [key, after] of Object.entries(nextValues)) {
+          const before = previous[key] ?? (key === "answers" ? [] : "");
+          if (JSON.stringify(before) !== JSON.stringify(after)) {
+            changes[key] = { before, after };
+          }
+        }
+        const editedAt = new Date().toISOString();
+        const editHistory = Array.isArray(previous.editHistory)
+          ? [...previous.editHistory]
+          : [];
+        if (Object.keys(changes).length > 0) {
+          editHistory.push({
+            actorId: staffId,
+            actorName: user?.name ?? staffId,
+            editedAt,
+            changes,
+          });
+        }
+        await updateDoc(recordRef, {
+          ...nextValues,
+          ...(Object.keys(changes).length > 0
+            ? {
+                editHistory,
+                lastModifiedAt: serverTimestamp(),
+                lastModifiedBy: staffId,
+                lastModifiedByName: user?.name ?? staffId,
+              }
+            : {}),
         });
         const recs = await loadCaseRecords(task.id);
         setRecords(recs);

@@ -4997,7 +4997,94 @@ button:disabled {
 }
 /* v1.20：查閱視窗 2 倍寬（原 560px → 1120px） */
 .reviewer-modal.wide {
-  width: min(1120px, 100%);
+  width: min(1600px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+}
+.reviewer-modal.wide .table-scroll {
+  width: 100%;
+  overflow-x: hidden;
+}
+.reviewer-modal.wide .data-table {
+  width: 100%;
+  table-layout: fixed;
+}
+.reviewer-modal.wide .data-table th,
+.reviewer-modal.wide .data-table td {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.review-edit-history {
+  display: grid;
+  gap: 10px;
+}
+.review-edit-history-item {
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+.review-edit-history-item > span {
+  color: var(--muted, #6b7a7d);
+  font-size: 12px;
+}
+.review-edit-history-item ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.review-edit-history-item li {
+  margin: 6px 0;
+}
+.review-edit-history-item li > span {
+  margin-left: 6px;
+  overflow-wrap: anywhere;
+}
+.review-edit-history-item pre {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .reviewer-modal.wide {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+  }
+  .reviewer-modal.wide .table-scroll .data-table,
+  .reviewer-modal.wide .table-scroll .data-table tbody {
+    display: block;
+    width: 100%;
+  }
+  .reviewer-modal.wide .table-scroll .data-table thead {
+    display: none;
+  }
+  .reviewer-modal.wide .table-scroll .data-table tbody tr:not(.review-record-expanded) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0 0 10px;
+    padding: 10px;
+    border: 1px solid var(--line, #e6ebec);
+    border-radius: 10px;
+  }
+  .reviewer-modal.wide .table-scroll .data-table tbody td {
+    display: block;
+    min-width: 0;
+    padding: 4px;
+    border: 0;
+  }
+  .reviewer-modal.wide .table-scroll .data-table tbody td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    color: var(--muted, #6b7a7d);
+    font-size: 11px;
+  }
+  .reviewer-modal.wide .table-scroll .data-table tbody tr.review-record-expanded,
+  .reviewer-modal.wide .table-scroll .data-table tbody tr.review-record-expanded td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
 }
 .field-error {
   color: #b91c1c;
