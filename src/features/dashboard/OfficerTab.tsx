@@ -7,6 +7,10 @@ import { doc, serverTimestamp, updateDoc } from "../../lib/db";
 import { getFirebaseDb } from "../../lib/firebase";
 import { SectionTitle } from "../../components/ui";
 import { lagLights } from "../../lib/dashboardStats";
+import {
+  DEFAULT_DASHBOARD_SECTIONS,
+  type DashboardSections,
+} from "../../lib/dashboardSections";
 import { progressLabel } from "../../lib/reviewProgress";
 import { todayStr } from "../../lib/scheduling";
 import type { DashboardData } from "./useDashboardData";
@@ -15,10 +19,13 @@ export function OfficerTab({
   data,
   staffId,
   onAction,
+  sections = DEFAULT_DASHBOARD_SECTIONS,
 }: {
   data: DashboardData;
   staffId: string;
   onAction: (message: string) => void;
+  /** v1.28 階段 2：顯示設定旗標（預設落後燈號／鎖定清單／解鎖審核全留） */
+  sections?: DashboardSections;
 }) {
   const now = new Date();
   const curYear = now.getFullYear();
@@ -64,11 +71,12 @@ export function OfficerTab({
 
   return (
     <>
-      <section className="panel">
-        <SectionTitle
-          title="全院進度落後預警"
-          note="截止日 5 天內：完成度＜50% 紅燈、＜80% 黃燈"
-        />
+      {sections.lagLights && (
+        <section className="panel">
+          <SectionTitle
+            title="全院進度落後預警"
+            note="截止日 5 天內：完成度＜50% 紅燈、＜80% 黃燈"
+          />
         {data.loading ? (
           <p className="settings-note">讀取中…</p>
         ) : lags.length === 0 ? (
@@ -110,13 +118,15 @@ export function OfficerTab({
             </table>
           </div>
         )}
-      </section>
+        </section>
+      )}
 
-      <section className="panel">
-        <SectionTitle
-          title="逾期鎖定清單"
-          note={`共 ${locked.length} 筆`}
-        />
+      {sections.overdueLocked && (
+        <section className="panel">
+          <SectionTitle
+            title="逾期鎖定清單"
+            note={`共 ${locked.length} 筆`}
+          />
         {locked.length === 0 ? (
           <p className="settings-note">目前無鎖定任務。</p>
         ) : (
@@ -141,7 +151,12 @@ export function OfficerTab({
                       {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                     </td>
                     <td>{t.unitId}</td>
-                    <td>{progressLabel(t.doneCount, t.caseCount)}</td>
+                    {/* v1.28 階段 2：補紀錄超過上限者進度未知，顯示「—」而非錯誤的 0 */}
+                    <td>
+                      {t.doneCountUnknown
+                        ? "—"
+                        : progressLabel(t.doneCount, t.caseCount)}
+                    </td>
                     <td>{t.deadline}</td>
                   </tr>
                 ))}
@@ -149,13 +164,15 @@ export function OfficerTab({
             </table>
           </div>
         )}
-      </section>
+        </section>
+      )}
 
-      <section className="panel">
-        <SectionTitle
-          title="解鎖待辦"
-          note={`共 ${data.unlockPending.length} 筆待審核`}
-        />
+      {sections.unlockReview && (
+        <section className="panel">
+          <SectionTitle
+            title="解鎖待辦"
+            note={`共 ${data.unlockPending.length} 筆待審核`}
+          />
         {data.unlockPending.length === 0 ? (
           <p className="settings-note">目前無待審核的解鎖申請。</p>
         ) : (
@@ -208,7 +225,8 @@ export function OfficerTab({
             </table>
           </div>
         )}
-      </section>
+        </section>
+      )}
     </>
   );
 }

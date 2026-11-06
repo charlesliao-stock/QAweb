@@ -8,6 +8,10 @@ import { SectionTitle } from "../../components/ui";
 import { isOverdue, todayStr } from "../../lib/scheduling";
 import { progressLabel, requiredCases } from "../../lib/reviewProgress";
 import { daysBetween } from "../../lib/dashboardStats";
+import {
+  DEFAULT_DASHBOARD_SECTIONS,
+  type DashboardSections,
+} from "../../lib/dashboardSections";
 import type { DashboardData } from "./useDashboardData";
 import type { ExecuteTarget } from "../ReviewExecutePage";
 
@@ -15,10 +19,13 @@ export function ReviewerTab({
   data,
   staffId,
   onExecute,
+  sections = DEFAULT_DASHBOARD_SECTIONS,
 }: {
   data: DashboardData;
   staffId: string;
   onExecute: (t: ExecuteTarget) => void;
+  /** v1.28 階段 2：顯示設定旗標（預設本月待辦／逾期補審／次月預告全留） */
+  sections?: DashboardSections;
 }) {
   const now = new Date();
   const curYear = now.getFullYear();
@@ -230,7 +237,8 @@ export function ReviewerTab({
       </section>
 
       {/* 逾期補審區（v1.15.0） */}
-      {(lockedTasks.length > 0 || dueSoon.length > 0) && (
+      {sections.overdueLocked &&
+        (lockedTasks.length > 0 || dueSoon.length > 0) && (
         <section className="panel">
           <SectionTitle title="逾期補審" note="鎖定任務可申請解鎖；7 天內到期請儘速完成" />
           {lockedTasks.length > 0 && (
@@ -290,11 +298,12 @@ export function ReviewerTab({
       )}
 
       {/* 次月預告（v1.15.0） */}
-      <section className="panel">
-        <SectionTitle
-          title={`次月預告（${nextYear}/${String(nextMonth).padStart(2, "0")}）`}
-          note={`共 ${upcomingTasks.length} 筆任務`}
-        />
+      {sections.nextMonthPreview && (
+        <section className="panel">
+          <SectionTitle
+            title={`次月預告（${nextYear}/${String(nextMonth).padStart(2, "0")}）`}
+            note={`共 ${upcomingTasks.length} 筆任務`}
+          />
         {upcomingTasks.length === 0 ? (
           <p className="settings-note">次月尚無排定任務。</p>
         ) : (
@@ -322,8 +331,9 @@ export function ReviewerTab({
               </tbody>
             </table>
           </div>
-        )}
-      </section>
+          )}
+        </section>
+      )}
     </>
   );
 }

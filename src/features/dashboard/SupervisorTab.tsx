@@ -10,6 +10,10 @@ import {
   unitMonthAvgs,
 } from "../../lib/dashboardStats";
 import { avgRateOf, ragStatus, type StatsCycle } from "../../lib/resultAnalysis";
+import {
+  DEFAULT_DASHBOARD_SECTIONS,
+  type DashboardSections,
+} from "../../lib/dashboardSections";
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
 
@@ -21,11 +25,14 @@ export function SupervisorTab({
   data,
   districtGroupIds,
   cycle = "year",
+  sections = DEFAULT_DASHBOARD_SECTIONS,
 }: {
   data: DashboardData;
   districtGroupIds: string[];
   /** 統計週期（系統參數；預設曆年） */
   cycle?: StatsCycle;
+  /** v1.28 階段 2：顯示設定旗標（預設只留轄區單位進度，3 個月趨勢關閉） */
+  sections?: DashboardSections;
 }) {
   const now = new Date();
   const curYear = now.getFullYear();
@@ -106,9 +113,11 @@ export function SupervisorTab({
 
   return (
     <>
-      {alerts.length > 0 && (
-        <section className="panel" style={{ borderColor: "#e0a3a3" }}>
-          <SectionTitle title="品質警訊" note="連續下滑或未達標單位" />
+      {/* v1.28 階段 2：近 3 個月趨勢警訊改去「結果分析」看，程式保留、旗標關閉 */}
+      {sections.trendAlerts ? (
+        alerts.length > 0 && (
+          <section className="panel" style={{ borderColor: "#e0a3a3" }}>
+            <SectionTitle title="品質警訊" note="連續下滑或未達標單位" />
           <ul style={{ margin: 0, paddingLeft: 20 }}>
             {alerts.map((a) => (
               <li key={`${a.unitId}-${a.kind}`} style={{ marginBottom: 6 }}>
@@ -116,14 +125,19 @@ export function SupervisorTab({
               </li>
             ))}
           </ul>
-        </section>
+          </section>
+        )
+      ) : (
+        <p className="settings-note">近 3 個月趨勢警訊已移至「結果分析」查看。</p>
       )}
 
-      <section className="panel">
-        <SectionTitle
-          title={`轄區單位進度（${ym.replace("-", "/")}）`}
-          note={`共 ${districtUnits.length} 個單位`}
-        />
+      {sections.unitProgress && (
+        <>
+          <section className="panel">
+            <SectionTitle
+              title={`轄區單位進度（${ym.replace("-", "/")}）`}
+            note={`共 ${districtUnits.length} 個單位`}
+          />
         {unitRows.length === 0 ? (
           <p className="settings-note">轄區內尚無單位。</p>
         ) : (
@@ -211,7 +225,9 @@ export function SupervisorTab({
             </div>
           </div>
         ))}
-      </div>
+        </div>
+        </>
+      )}
     </>
   );
 }

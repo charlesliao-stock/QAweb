@@ -255,6 +255,11 @@ export function serverTimestamp(): DemoTimestamp {
   return new DemoTimestamp(Date.now());
 }
 
+/** v1.28 階段 2：48h 警示查詢用（submittedAt >= 指定毫秒時間戳） */
+export function timestampFromMs(ms: number): DemoTimestamp {
+  return new DemoTimestamp(ms);
+}
+
 export interface DemoWriteBatch {
   set: (ref: DemoDocRef, data: Record<string, unknown>) => DemoWriteBatch;
   update: (ref: DemoDocRef, data: Record<string, unknown>) => DemoWriteBatch;
