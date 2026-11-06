@@ -7,9 +7,10 @@
  * - 職稱曾儲存過權限矩陣 → 嚴格交集（角色聯集 AND 職稱）
  */
 import { useCallback, useEffect, useState } from "react";
-import { collection, getDocs } from "./db";
+import { collection } from "./db";
 import { getFirebaseDb } from "./firebase";
 import { getCachedRefCollection } from "./refCache";
+import { getDocsCacheFirst } from "./cacheFirst";
 import { useAuth } from "./auth";
 import {
   DEFAULT_ROLE_PERMS,
@@ -40,10 +41,10 @@ export function usePermissions() {
     // 自己寫入後由 db.ts 統一出口自動失效；demo 模式不快取）
     Promise.all([
       getCachedRefCollection("roles", () =>
-        getDocs(collection(getFirebaseDb(), "roles")),
+        getDocsCacheFirst(collection(getFirebaseDb(), "roles")),
       ),
       getCachedRefCollection("titles", () =>
-        getDocs(collection(getFirebaseDb(), "titles")),
+        getDocsCacheFirst(collection(getFirebaseDb(), "titles")),
       ),
     ])
       .then(([rsnap, tsnap]) => {

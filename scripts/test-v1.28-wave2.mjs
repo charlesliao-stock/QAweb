@@ -88,17 +88,21 @@ const fvSize = fvJs ? sizeOf(`dist/assets/${fvJs}`) : 0;
 const lvSize = lvJs ? sizeOf(`dist/assets/${lvJs}`) : 0;
 a(`A1 產物：入口 JS ${entrySize} < 400,000（改前 1,068,099）`, entrySize < 400000);
 a(
-  `A1 產物：首屏三 chunk 合計 ${entrySize + fvSize + lvSize} < 900,000（改前 1,068,099）`,
-  entrySize + fvSize + lvSize < 900000,
+  `A1 產物：首屏三 chunk 合計 ${entrySize + fvSize + lvSize} < 950,000（改前 1,068,099；B3 持久快取使 firebase-vendor 膨脹，門檻由 900,000 放寬至 950,000，Charles 選項 A 批准）`,
+  entrySize + fvSize + lvSize < 950000,
 );
 for (const p of LAZY_PAGES) {
   a(`A1 產物：${p} 獨立 chunk 存在`, !!jsOf(new RegExp(`^${p}-.*\\.js$`)));
 }
 a(
-  "A1 產物：每個 JS chunk < 500,000（無 Vite 大 chunk 警告門檻）",
+  "A1 產物：每個 JS chunk < 500,000（無 Vite 大 chunk 警告門檻），firebase-vendor 例外放寬至 600,000（B3 持久快取代價，Charles 選項 A 批准）",
   assets
     .filter((n) => n.endsWith(".js"))
-    .every((n) => sizeOf(`dist/assets/${n}`) < 500000),
+    .every(
+      (n) =>
+        sizeOf(`dist/assets/${n}`) <
+        (/^firebase-vendor-/.test(n) ? 600000 : 500000),
+    ),
 );
 const entryText = entryJs ? readFileSync(resolve(ROOT, "dist/assets", entryJs), "utf8") : "";
 a("A1 產物：入口不含 SheetJS（xlsx 未包進首屏）", !entryText.includes("SheetJS"));

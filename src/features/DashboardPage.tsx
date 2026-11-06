@@ -8,8 +8,9 @@ import { Download } from "lucide-react";
 import { PageHeading } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import { getFirebaseDb } from "../lib/firebase";
-import { doc, getDoc } from "../lib/db";
+import { doc } from "../lib/db";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
+import { getDocCacheFirst } from "../lib/cacheFirst";
 import {
   getDashboardVariants,
   VARIANT_LABELS,
@@ -64,7 +65,7 @@ export function DashboardPage({
         // v1.28 階段 5（B4 收尾）：systemParams/config 走參考資料共用快取，
         // 與 App.tsx 同次載入只讀一次（原直接 getDoc 繞過快取，同一頁讀 2 次）
         const snap = await getCachedRef(SYSTEM_CONFIG_KEY, () =>
-          getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+          getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
         );
         const v = snap.data()?.statsCycle;
         setStatsCycle(v === "academic" ? "academic" : "year");

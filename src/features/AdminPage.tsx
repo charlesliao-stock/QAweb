@@ -15,7 +15,6 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDoc,
   getDocs,
   limit,
   orderBy,
@@ -32,6 +31,7 @@ import {
   getCachedRefCollection,
   SYSTEM_CONFIG_KEY,
 } from "../lib/refCache";
+import { getDocCacheFirst, getDocsCacheFirst } from "../lib/cacheFirst";
 import { isDemoMode } from "../lib/demoMode";
 import { useAuth } from "../lib/auth";
 import { applyTheme } from "../lib/uiPrefs";
@@ -94,7 +94,7 @@ function SystemInitSection({
   useEffect(() => {
     let cancelled = false;
     getCachedRef(SYSTEM_CONFIG_KEY, () =>
-        getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+        getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
       )
       .then((snap) => {
         if (!cancelled) setParams(snap.exists() ? (snap.data() as SystemParams) : null);
@@ -113,7 +113,7 @@ function SystemInitSection({
     try {
       await runSystemSeed(getFirebaseDb(), user.staffId);
       const snap = await getCachedRef(SYSTEM_CONFIG_KEY, () =>
-        getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+        getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
       );
       setParams(snap.exists() ? (snap.data() as SystemParams) : null);
       onAction("系統初始化完成：已寫入預設參數與 7 個角色");
@@ -184,7 +184,7 @@ function SystemInitSection({
       updates.updatedBy = user.staffId;
       await updateDoc(doc(getFirebaseDb(), "systemParams", "config"), updates);
       const snap = await getCachedRef(SYSTEM_CONFIG_KEY, () =>
-        getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+        getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
       );
       setParams(snap.exists() ? (snap.data() as SystemParams) : params);
       setEditing(false);
@@ -391,10 +391,10 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
       const db = getFirebaseDb();
       const [rsnap, tsnap] = await Promise.all([
         getCachedRefCollection("roles", () =>
-          getDocs(collection(db, "roles")),
+          getDocsCacheFirst(collection(db, "roles")),
         ),
         getCachedRefCollection("titles", () =>
-          getDocs(collection(db, "titles")),
+          getDocsCacheFirst(collection(db, "titles")),
         ),
       ]);
       const seedIds = new Set(SEED_ROLES.map((r) => r.id));

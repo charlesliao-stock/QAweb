@@ -3,6 +3,9 @@ import { getAuth, type Auth } from "firebase/auth";
 import {
   arrayUnion,
   getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   type Firestore,
 } from "firebase/firestore";
 import {
@@ -15,6 +18,7 @@ import {
   where,
 } from "./db";
 import { getCachedRefCollection } from "./refCache";
+import { getDocsCacheFirst } from "./cacheFirst";
 import { fetchAllPaged } from "./pagedQuery";
 import {
   isConvenerRole,
@@ -57,8 +61,38 @@ export function getFirebaseAuth(): Auth {
   return authInstance;
 }
 
+/**
+ * v1.28 階段 7（B3）：Firestore 持久快取狀態。
+ * - "persistent"：IndexedDB 持久快取已啟用（多分頁共用）。
+ * - "fallback"：初始化失敗（例如 Safari 私密模式 IndexedDB 不可用、
+ *   或 Firestore 已先被初始化），已退回預設行為（記憶體快取），整站不受影響。
+ * demo 模式不走 Firestore SDK，狀態值與 demo 路徑無關（見 cacheFirst.ts 的隔離測試）。
+ */
+export type FirestoreCacheStatus = "persistent" | "fallback";
+let firestoreCacheStatus: FirestoreCacheStatus = "fallback";
+
+export function getFirestoreCacheStatus(): FirestoreCacheStatus {
+  return firestoreCacheStatus;
+}
+
 export function getFirebaseDb(): Firestore {
-  dbInstance ??= getFirestore(getFirebaseApp());
+  if (dbInstance) return dbInstance;
+  const app = getFirebaseApp();
+  try {
+    // 持久快取（Web 為 IndexedDB）：多分頁共用，關分頁、重整頁面後仍在。
+    // 只開開關不省錢，必須搭配 cacheFirst.ts 的先讀快取才計費生效。
+    dbInstance = initializeFirestore(app, {
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
+    });
+    firestoreCacheStatus = "persistent";
+  } catch {
+    // Safari 私密模式 IndexedDB 不可用、或已初始化：退回預設 getFirestore，
+    // 絕不讓初始化失敗拖垮整站（快取未命中時走伺服器，行為與改前一致）。
+    dbInstance = getFirestore(app);
+    firestoreCacheStatus = "fallback";
+  }
   return dbInstance;
 }
 
@@ -189,7 +223,7 @@ export async function readReviewRecords(
       ];
       if (groupIds.length) {
         const unitSnap = await getCachedRefCollection("units", () =>
-          getDocs(query(collection(db, "units"), limit(2000))),
+          getDocsCacheFirst(query(collection(db, "units"), limit(2000))),
         );
         const ids = new Set<string>();
         unitSnap.docs.forEach((u) => {
@@ -322,12 +356,12 @@ export async function readFirebaseUsersForReviewerManagement(): Promise<
 > {
   const db = getFirebaseDb();
   const snapshot = await getCachedRefCollection("users", () =>
-    getDocs(query(collection(db, "users"), limit(1000))),
+    getDocsCacheFirst(query(collection(db, "users"), limit(1000))),
   );
   let groupByUnit = new Map<string, string>();
   try {
     const units = await getCachedRefCollection("units", () =>
-      getDocs(query(collection(db, "units"), limit(2000))),
+      getDocsCacheFirst(query(collection(db, "units"), limit(2000))),
     );
     groupByUnit = new Map(
       units.docs.flatMap((unit) => {
@@ -378,7 +412,7 @@ export async function readFirebaseGroupsForReviewerManagement(): Promise<
 > {
   const db = getFirebaseDb();
   const snapshot = await getCachedRefCollection("groups", () =>
-    getDocs(query(collection(db, "groups"), limit(500))),
+    getDocsCacheFirst(query(collection(db, "groups"), limit(500))),
   );
   return snapshot.docs
     .map((document) => ({

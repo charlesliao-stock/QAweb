@@ -21,7 +21,6 @@ import {
 import {
   collection,
   doc,
-  getDoc,
   getDocs,
   query,
   serverTimestamp,
@@ -87,6 +86,17 @@ import {
   getCachedRefCollection,
   SYSTEM_CONFIG_KEY,
 } from "../lib/refCache";
+import { getDocCacheFirst, getDocsCacheFirst } from "../lib/cacheFirst";
+import {
+  dbIndexedQueryApi,
+  fetchYearDocs,
+} from "../lib/indexedRecords";
+import {
+  buildRecordIndex,
+  recordsForIndex,
+  type RecordIndex,
+} from "../lib/resultsMatrix";
+import { forceServerRefetch } from "../lib/cacheFirst";
 
 interface IndicatorOpt {
   id: string;
@@ -226,6 +236,12 @@ export function ResultsPage({
   } | null>(null);
   /** 資料時間（本次顯示年份中最新的抓取時間；快取命中沿用原抓取時間） */
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
+  /**
+   * v1.28 階段 7（B7）：上次查詢是否因複合索引未就緒而退化。
+   * true 時畫面顯示一次性提示（結果與改前一致，只是沒省到讀取）。
+   */
+  const [indexFallback, setIndexFallback] = useState(false);
+  const [indexFallbackDismissed, setIndexFallbackDismissed] = useState(false);
   const [tab, setTab] = useState<TabId>("group");
   /** 統計週期（系統參數 systemParams.statsCycle；載入後套為年別預設） */
   const [statsCycle, setStatsCycle] = useState<AnalysisCycle | null>(null);
@@ -277,6 +293,19 @@ export function ResultsPage({
     return { kind: "admin" };
   }, [scope]);
 
+  /**
+   * v1.28 階段 7（B7）：單一指標限縮查詢的指標。
+   * - 指標分析頁籤：永遠只看一支指標（selIndicator）。
+   * - 單位分析頁籤：選了特定指標（selIndU ≠ "all"）時限縮；選「全部」時不加條件。
+   * - 組別分析／匯入頁籤：矩陣要看整組指標，不限縮，維持按年查詢。
+   * 限縮只影響「查回哪些紀錄」，不影響權限範圍（scopedRecords 照舊過濾）。
+   */
+  const singleIndicatorId = useMemo(() => {
+    if (tab === "indicator") return selIndicator || null;
+    if (tab === "unit" && selIndU !== "all") return selIndU;
+    return null;
+  }, [tab, selIndicator, selIndU]);
+
   // 指標／組別／單位／統計週期（掛載時載入一次）
   useEffect(() => {
     let cancelled = false;
@@ -285,16 +314,16 @@ export function ResultsPage({
         const db = getFirebaseDb();
         const [isnap, gsnap, usnap, cfg] = await Promise.all([
           getCachedRefCollection("indicators", () =>
-            getDocs(collection(db, "indicators")),
+            getDocsCacheFirst(collection(db, "indicators")),
           ),
           getCachedRefCollection("groups", () =>
-            getDocs(collection(db, "groups")),
+            getDocsCacheFirst(collection(db, "groups")),
           ),
           getCachedRefCollection("units", () =>
-            getDocs(collection(db, "units")),
+            getDocsCacheFirst(collection(db, "units")),
           ),
           getCachedRef(SYSTEM_CONFIG_KEY, () =>
-            getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+            getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
           ).catch(() => null),
         ]);
         if (cancelled) return;
@@ -407,24 +436,29 @@ export function ResultsPage({
       try {
         const db = getFirebaseDb();
         const years = applied.years;
+        // v1.28 階段 7（B7）：單一指標限縮時改走 indicatorId＋year 複合索引
+        // 查詢；索引未就緒時 fetchYearDocs 自動退回舊查詢＋前端過濾。
+        const indFilter = singleIndicatorId ?? undefined;
         const recCached = getCachedYears<AnalysisRecord>(
           "reviewRecords",
           years,
           cacheScope,
+          indFilter,
         );
         const recFresh = new Map<number, AnalysisRecord[]>();
+        let fellBack = false;
         if (recCached.missing.length > 0) {
           const snaps = await Promise.all(
             recCached.missing.map((y) =>
-              getDocs(
-                query(
-                  collection(db, "reviewRecords"),
-                  where("year", "==", y),
-                ),
+              fetchYearDocs(
+                dbIndexedQueryApi,
+                collection(db, "reviewRecords"),
+                { indicatorId: indFilter, year: y },
               ),
             ),
           );
           snaps.forEach((snap, i) => {
+            if (snap.fellBack) fellBack = true;
             const y = recCached.missing[i];
             const docs: AnalysisRecord[] = [];
             snap.docs.forEach((d) => {
@@ -455,7 +489,7 @@ export function ResultsPage({
                 personName: String(v.reviewedPersonName ?? ""),
               });
             });
-            setCachedYear("reviewRecords", y, cacheScope, docs);
+            setCachedYear("reviewRecords", y, cacheScope, docs, indFilter);
             recFresh.set(y, docs);
           });
         }
@@ -508,6 +542,15 @@ export function ResultsPage({
         if (cancelled) return;
         setRecords(rl);
         setTasks(tl);
+        if (fellBack) {
+          console.warn(
+            "結果分析：複合索引 (indicatorId, year) 尚未就緒，已自動退回按年查詢＋前端過濾（結果一致）。請至 Firebase Console → Firestore → 索引建立該索引，之後查詢會更快。",
+          );
+          setIndexFallback(true);
+          setIndexFallbackDismissed(false);
+        } else {
+          setIndexFallback(false);
+        }
         const at = Math.max(recCached.fetchedAt ?? 0, taskFetchedAt ?? 0);
         setFetchedAt(at > 0 ? at : Date.now());
       } catch {
@@ -523,7 +566,7 @@ export function ResultsPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appliedYearsKey, reloadNonce, scope.kind, scope.kind === "reviewer" ? scope.staffId : ""]);
+  }, [appliedYearsKey, reloadNonce, scope.kind, scope.kind === "reviewer" ? scope.staffId : "", tab, singleIndicatorId]);
 
   /** 按「查詢」：把當下期間條件生效（同年份重按不重拉，吃快取） */
   function handleQuery() {
@@ -544,6 +587,9 @@ export function ResultsPage({
     invalidateCachedYears("reviewTasks", applied.years, cacheScope);
     // v1.28 階段 4：參考快取也失效，meta effect（refNonce）重跑才拉最新
     clearRefCache();
+    // v1.28 階段 7（B3）：其後 30 秒參考資料強制走伺服器，否則會命中
+    // 可能過期的持久快取，重新整理就拿不到最新資料。
+    forceServerRefetch();
     setRefNonce((n) => n + 1);
     setReloadNonce((n) => n + 1);
   }
@@ -560,6 +606,16 @@ export function ResultsPage({
     );
     return records.filter((r) => unitIds.has(r.unitId));
   }, [records, tasks, scope]);
+
+  /**
+   * v1.28 階段 7（A3）：矩陣索引——進資料時預建一次
+   * Map<指標, Map<曆年月, 紀錄[]>>，cellValue／曲線／明細／下探改查表，
+   * 不再每格對全部 scopedRecords 做 filter。
+   */
+  const recordIndex = useMemo(
+    () => buildRecordIndex(scopedRecords),
+    [scopedRecords],
+  );
 
   const scopedUnitCodes = useMemo(() => {
     if (scope.kind === "admin") return new Set(units.map((u) => u.code));
@@ -715,9 +771,8 @@ export function ResultsPage({
   ): CellValue {
     const ind = indOf.get(indicatorId);
     const th = ind?.threshold ?? 0;
-    let recs = scopedRecords.filter((r) => r.indicatorId === indicatorId);
-    if (unitId) recs = recs.filter((r) => r.unitId === unitId);
-    recs = recordsInMonths(recs, col.months);
+    // A3：查表取該指標該期間欄（可再限單位）的紀錄，不再全量 filter。
+    const recs = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
     if (mode === "unit") {
       const ur = unitPassRate(recs, th);
       return {
@@ -803,9 +858,8 @@ export function ResultsPage({
   ) {
     const ind = indOf.get(indicatorId);
     if (!ind) return;
-    let recs = scopedRecords.filter((r) => r.indicatorId === indicatorId);
-    if (unitId) recs = recs.filter((r) => r.unitId === unitId);
-    recs = recordsInMonths(recs, allMonths);
+    // A3：查表取該指標全部期間的紀錄（可再限單位）。
+    const recs = recordsForIndex(recordIndex, indicatorId, allMonths, unitId);
     setDocModal({
       title: `${ind.code}・${ind.name} 各選項得分狀況`,
       subtitle: `${periodDesc}・${scopeLabel}・共 ${recs.length} 人次`,
@@ -828,11 +882,9 @@ export function ResultsPage({
   // 指標分析：所選期間內有使用該指標審查的人員、單位皆列入
   const indRecs = useMemo(() => {
     if (!selIndicator) return [];
-    return recordsInMonths(
-      scopedRecords.filter((r) => r.indicatorId === selIndicator),
-      allMonths,
-    );
-  }, [scopedRecords, selIndicator, allMonths]);
+    // A3：查表取該指標全部期間的紀錄。
+    return recordsForIndex(recordIndex, selIndicator, allMonths);
+  }, [recordIndex, selIndicator, allMonths]);
   const indSel = indOf.get(selIndicator);
   const indSummary = useMemo(() => {
     if (!indSel) return null;
@@ -998,6 +1050,23 @@ export function ResultsPage({
           （他人異動不會自動更新，請按「重新整理」）
         </p>
       )}
+      {tab !== "import" &&
+        applied &&
+        indexFallback &&
+        !indexFallbackDismissed &&
+        !loading && (
+          <p className="results-data-time">
+            提示：複合索引 (indicatorId, year)
+            尚未就緒，本次查詢已自動改用舊方式（結果一致）。請管理員至 Firebase
+            Console → Firestore → 索引建立該索引，之後查詢會更快。
+            <button
+              type="button"
+              onClick={() => setIndexFallbackDismissed(true)}
+            >
+              知道了
+            </button>
+          </p>
+        )}
 
       {tab === "group" && (
         <>
@@ -1177,12 +1246,12 @@ export function ResultsPage({
                       </UnitBelowPanel>
                     );
                   }
-                  const recs = recordsInMonths(
-                    scopedRecords.filter(
-                      (r) =>
-                        r.indicatorId === ind.id && r.unitId === selUnit,
-                    ),
+                  // A3：查表取該指標該單位全部期間的紀錄（取代 JSX 內即時 IIFE 過濾）。
+                  const recs = recordsForIndex(
+                    recordIndex,
+                    ind.id,
                     allMonths,
+                    selUnit,
                   );
                   return (
                     <UnitBelowPanel
@@ -1401,7 +1470,7 @@ export function ResultsPage({
           onClose={() => setDrill(null)}
           onBackToL1={() => setDrill({ ...drill, l2UnitId: null })}
           onSelectUnit={(unitId) => setDrill({ ...drill, l2UnitId: unitId })}
-          scopedRecords={scopedRecords}
+          recordIndex={recordIndex}
           indOf={indOf}
           unitNameOf={unitNameOf}
         />
@@ -1545,7 +1614,7 @@ function DrillModal({
   onClose,
   onBackToL1,
   onSelectUnit,
-  scopedRecords,
+  recordIndex,
   indOf,
   unitNameOf,
 }: {
@@ -1553,7 +1622,7 @@ function DrillModal({
   onClose: () => void;
   onBackToL1: () => void;
   onSelectUnit: (unitId: string) => void;
-  scopedRecords: AnalysisRecord[];
+  recordIndex: RecordIndex;
   indOf: Map<string, IndicatorOpt>;
   unitNameOf: Map<string, string>;
 }) {
@@ -1562,18 +1631,23 @@ function DrillModal({
   const col = drill.column;
   // L1 列：分母單元的單位（該指標該期間欄內有審查紀錄的單位）
   const l1Units = useMemo(() => {
-    let recs = scopedRecords.filter((r) => r.indicatorId === drill.indicatorId);
-    if (drill.scopeUnitId) recs = recs.filter((r) => r.unitId === drill.scopeUnitId);
+    // A3：查表取該指標該期間欄的紀錄（可再限單位）。
+    const recs = recordsForIndex(
+      recordIndex,
+      drill.indicatorId,
+      col.months,
+      drill.scopeUnitId,
+    );
     return unitsForDrill(recs, col.months);
-  }, [scopedRecords, drill.indicatorId, drill.scopeUnitId, col]);
+  }, [recordIndex, drill.indicatorId, drill.scopeUnitId, col]);
   const l1Cells = useMemo(() => {
     const map = new Map<string, CellValue>();
     for (const unitId of l1Units) {
-      const recs = recordsInMonths(
-        scopedRecords.filter(
-          (r) => r.indicatorId === drill.indicatorId && r.unitId === unitId,
-        ),
+      const recs = recordsForIndex(
+        recordIndex,
+        drill.indicatorId,
         col.months,
+        unitId,
       );
       const pr = passRateOf(recs, th);
       map.set(unitId, {
@@ -1582,20 +1656,18 @@ function DrillModal({
       });
     }
     return map;
-  }, [scopedRecords, drill.indicatorId, l1Units, col, th]);
+  }, [recordIndex, drill.indicatorId, l1Units, col, th]);
   // L2 列：該單位該期間被審人員在各選項的審查結果
   const l2Rows = useMemo(() => {
     if (!drill.l2UnitId) return [];
-    const recs = recordsInMonths(
-      scopedRecords.filter(
-        (r) =>
-          r.indicatorId === drill.indicatorId &&
-          r.unitId === drill.l2UnitId,
-      ),
+    const recs = recordsForIndex(
+      recordIndex,
+      drill.indicatorId,
       col.months,
+      drill.l2UnitId,
     );
     return personOptionRows(recs, th);
-  }, [scopedRecords, drill.indicatorId, drill.l2UnitId, col, th]);
+  }, [recordIndex, drill.indicatorId, drill.l2UnitId, col, th]);
   // L2 轉置（v1.27.1）：直向＝題目、橫向＝人員姓名，中間＝審查結果
   const l2Matrix = useMemo(
     () =>
@@ -1837,13 +1909,13 @@ function ResultImportPanel({
         const db = getFirebaseDb();
         const [gSnap, uSnap, sSnap] = await Promise.all([
           getCachedRefCollection("groups", () =>
-            getDocs(collection(db, "groups")),
+            getDocsCacheFirst(collection(db, "groups")),
           ),
           getCachedRefCollection("units", () =>
-            getDocs(collection(db, "units")),
+            getDocsCacheFirst(collection(db, "units")),
           ),
           getCachedRefCollection("users", () =>
-            getDocs(collection(db, "users")),
+            getDocsCacheFirst(collection(db, "users")),
           ),
         ]);
         setGroups(

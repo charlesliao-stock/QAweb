@@ -16,9 +16,10 @@ import {
   X,
 } from "lucide-react";
 import { AuthProvider, useAuth } from "../lib/auth";
-import { doc, getDoc } from "../lib/db";
+import { doc } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
+import { getDocCacheFirst } from "../lib/cacheFirst";
 import {
   applyTheme,
   applyUiPrefs,
@@ -373,7 +374,7 @@ function Shell() {
   useEffect(() => {
     applyUiPrefs();
     getCachedRef(SYSTEM_CONFIG_KEY, () =>
-      getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+      getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
     )
       .then((snap) => {
         const t = snap.exists()

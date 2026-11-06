@@ -16,6 +16,7 @@ import { collection, doc, getDoc, getDocs, query, where } from "../lib/db";
 import { EmptyState, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
+import { getDocsCacheFirst } from "../lib/cacheFirst";
 import { maskName } from "../lib/mask";
 import {
   MONTH_LABELS,
@@ -136,7 +137,7 @@ export function ReviewOverviewPage({
           ),
         ),
         getCachedRefCollection("users", () =>
-          getDocs(collection(db, "users")),
+          getDocsCacheFirst(collection(db, "users")),
         ),
       ]);
 
