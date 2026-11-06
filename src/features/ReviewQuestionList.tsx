@@ -23,8 +23,10 @@ export type ReviewQuestionListProps =
       questions: AuditQuestion[];
       showGroups: boolean;
       answers: Record<string, number>;
+      commonErrorAnswers: Record<string, string[]>;
       notes: Record<string, string>;
       onAnswer: (qid: string, idx: number) => void;
+      onCommonErrors: (qid: string, values: string[]) => void;
       onNote: (qid: string, text: string) => void;
     }
   | {
@@ -98,14 +100,21 @@ function QuestionRow({
 
 export function ReviewQuestionList(props: ReviewQuestionListProps) {
   /** questionId → 指引是否展開（每題獨立） */
-  const [openGuidance, setOpenGuidance] = useState<Record<string, boolean>>(
-    {},
-  );
+  const [openGuidance, setOpenGuidance] = useState<Record<string, boolean>>({});
   const toggleGuidance = (qid: string) =>
     setOpenGuidance((prev) => ({ ...prev, [qid]: !prev[qid] }));
 
   if (props.mode === "edit") {
-    const { questions, showGroups, answers, notes, onAnswer, onNote } = props;
+    const {
+      questions,
+      showGroups,
+      answers,
+      commonErrorAnswers,
+      notes,
+      onAnswer,
+      onCommonErrors,
+      onNote,
+    } = props;
     const numById = new Map(questions.map((q, i) => [q.id, i + 1]));
     const sections = groupQuestionsIntoSections(questions, showGroups);
     return (
@@ -130,25 +139,63 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                     onToggleGuidance={() => toggleGuidance(q.id)}
                     missing={sel == null}
                     optionsNode={
-                      <div
-                        className="radio-group"
-                        role="radiogroup"
-                        aria-label={q.itemText}
-                      >
-                        {optionLabelsOf(q.optionSet).map((label, oi) => (
-                          <label
-                            key={oi}
-                            className={`check-row${sel === oi ? " checked" : ""}`}
-                          >
-                            <input
-                              type="radio"
-                              name={`q-${q.id}`}
-                              checked={sel === oi}
-                              onChange={() => onAnswer(q.id, oi)}
-                            />
-                            <span>{label}</span>
-                          </label>
-                        ))}
+                      <div className="review-answer-options">
+                        <div
+                          className="radio-group"
+                          role="radiogroup"
+                          aria-label={q.itemText}
+                        >
+                          {optionLabelsOf(q.optionSet).map((label, oi) => (
+                            <label
+                              key={oi}
+                              className={`check-row${sel === oi ? " checked" : ""}`}
+                            >
+                              <input
+                                type="radio"
+                                name={`q-${q.id}`}
+                                checked={sel === oi}
+                                onChange={() => onAnswer(q.id, oi)}
+                              />
+                              <span>{label}</span>
+                            </label>
+                          ))}
+                        </div>
+                        {(q.commonErrors ?? []).length > 0 && (
+                          <fieldset className="common-error-fieldset">
+                            <legend>常見錯誤（可複選）</legend>
+                            <div className="common-error-options">
+                              {q.commonErrors.map((error) => {
+                                const checked = (
+                                  commonErrorAnswers[q.id] ?? []
+                                ).includes(error);
+                                return (
+                                  <label
+                                    key={error}
+                                    className={checked ? "checked" : ""}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() => {
+                                        const current =
+                                          commonErrorAnswers[q.id] ?? [];
+                                        onCommonErrors(
+                                          q.id,
+                                          checked
+                                            ? current.filter(
+                                                (item) => item !== error,
+                                              )
+                                            : [...current, error],
+                                        );
+                                      }}
+                                    />
+                                    <span>{error}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </fieldset>
+                        )}
                       </div>
                     }
                     noteNode={
@@ -190,11 +237,23 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                 open={!!openGuidance[r.questionId]}
                 onToggleGuidance={() => toggleGuidance(r.questionId)}
                 optionsNode={
-                  <span className="q-option-result">{r.optionLabel}</span>
+                  <div className="review-answer-options">
+                    <span className="q-option-result">{r.optionLabel}</span>
+                    {(
+                      props.answers.find(
+                        (answer) => answer.questionId === r.questionId,
+                      )?.commonErrors ?? []
+                    ).length > 0 && (
+                      <div className="common-error-results">
+                        <b>常見錯誤：</b>
+                        {props.answers
+                          .find((answer) => answer.questionId === r.questionId)
+                          ?.commonErrors?.join("、")}
+                      </div>
+                    )}
+                  </div>
                 }
-                noteNode={
-                  <span className="q-note-text">{r.note || "—"}</span>
-                }
+                noteNode={<span className="q-note-text">{r.note || "—"}</span>}
               />
             ))}
           </section>

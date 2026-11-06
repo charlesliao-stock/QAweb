@@ -16,6 +16,8 @@ export interface ReviewAnswer {
   excluded?: boolean;
   /** 該題備註（v1.15.0 新增，選填） */
   note?: string;
+  /** 此題勾選的常見錯誤（可複選；不影響分數） */
+  commonErrors?: string[];
 }
 
 export interface ReviewRecord {
@@ -39,6 +41,8 @@ export interface ReviewRecord {
   reviewedPersonName: string;
   /** 病人床號（v1.15.0 新增；僅指標 requireBedNo 時必填） */
   bedNo: string;
+  /** 指標設定的審核項目（單選） */
+  auditItem?: string;
   answers: ReviewAnswer[];
   totalScore: number;
   maxScore: number;
@@ -136,8 +140,7 @@ export function resolveReviewViewSections(
       note: (a.note ?? "").trim(),
       guidance: q?.guidance ?? "",
       groupId: showGroups ? (q?.groupId ?? null) : null,
-      groupName:
-        showGroups && q?.groupId ? q.groupName || "未命名分組" : "",
+      groupName: showGroups && q?.groupId ? q.groupName || "未命名分組" : "",
     };
   });
   // 有對應題號者依題號排，無對應者排最後（維持作答順序）

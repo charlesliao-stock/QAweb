@@ -158,7 +158,9 @@ button:disabled {
 .login-card h1 {
   margin: 16px 0 12px;
   color: #203b3a;
-  font-size: var(--font-title); /* 原 clamp(29px,3vw,38px) 登入主標，統一為標題級 */
+  font-size: var(
+    --font-title
+  ); /* 原 clamp(29px,3vw,38px) 登入主標，統一為標題級 */
   line-height: 1.36;
   letter-spacing: -0.04em;
   font-weight: 700;
@@ -2427,6 +2429,59 @@ button:disabled {
   min-width: 850px;
   text-align: center;
 }
+.audit-option-editor {
+  min-width: 190px;
+  text-align: left;
+}
+.audit-option-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+.audit-option-chips .chip {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.audit-option-add {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.audit-option-add .text-input {
+  min-width: 0;
+  height: 34px;
+  padding: 6px 8px;
+}
+.audit-option-add .button {
+  flex: none;
+  padding: 7px 9px;
+  font-size: var(--font-small);
+}
+.audit-items-setting {
+  margin: 14px 0 18px;
+  padding: 13px 14px;
+  border: 1px solid #e8eeee;
+  border-radius: 9px;
+  background: #fbfdfd;
+}
+.audit-items-setting > .settings-note {
+  margin: 0 0 8px;
+}
+.audit-item-selection {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.audit-item-selection .field-label {
+  margin: 0;
+  flex: none;
+}
+.audit-item-selection select {
+  max-width: 420px;
+}
 .permission-table th {
   padding: 11px 12px;
   color: #98a4a6;
@@ -4112,6 +4167,60 @@ button:disabled {
   flex-direction: row;
   flex-wrap: wrap;
   gap: 6px;
+}
+.review-answer-options {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.common-error-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 7px 8px 8px;
+  border: 1px solid #e4ecea;
+  border-radius: 8px;
+}
+.common-error-fieldset legend {
+  padding: 0 4px;
+  color: #7e918e;
+  font-size: var(--font-small);
+}
+.common-error-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.common-error-options label {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 250px;
+  padding: 5px 7px;
+  color: #687a77;
+  background: #f7faf9;
+  border: 1px solid #e8efed;
+  border-radius: 7px;
+  font-size: var(--font-small);
+  cursor: pointer;
+}
+.common-error-options label.checked {
+  color: #286e64;
+  background: #edf7f4;
+  border-color: #b9d9d2;
+}
+.common-error-options input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.common-error-options span {
+  overflow-wrap: anywhere;
+}
+.common-error-results {
+  margin-top: 6px;
+  color: #637572;
+  font-size: var(--font-small);
+  white-space: normal;
 }
 .review-qrow .check-row {
   padding: 8px 10px;

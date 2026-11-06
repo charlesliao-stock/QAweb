@@ -47,6 +47,8 @@ export interface AuditQuestion {
   optionSet: OptionSet;
   /** 審核指引（多行） */
   guidance: string;
+  /** 常見錯誤（可複選；不納入指標分數） */
+  commonErrors: string[];
   /** 所屬題目分組 id；null＝未分組（扁平） */
   groupId: string | null;
   /** 分組名稱（冗餘儲存，讀取容錯） */
@@ -74,6 +76,7 @@ export function emptyAuditQuestion(
     itemText: "",
     optionSet: defaultOptionSet(),
     guidance: "",
+    commonErrors: [],
     groupId,
     groupName,
     order: 0,
@@ -86,9 +89,7 @@ export function emptyAuditQuestion(
  * 新增分組：只產生一個新分組。未分組題目只是「無分組題目」的虛擬顯示區，
  * 不是真正的 QuestionGroup，不得在此產生額外的未分組群組。
  */
-export function createQuestionGroup(
-  existing: QuestionGroup[],
-): QuestionGroup {
+export function createQuestionGroup(existing: QuestionGroup[]): QuestionGroup {
   return {
     id: newQid(),
     name: `分組 ${existing.length + 1}`,
@@ -281,7 +282,12 @@ export interface TenSteps {
   step3: string;
   step4: { basis: string; subIndicators: SubIndicator[] };
   step5: { thresholds: NamedThreshold[] };
-  step6: { caseCount: string; auditors: string; auditDate: string; auditMethod: string };
+  step6: {
+    caseCount: string;
+    auditors: string;
+    auditDate: string;
+    auditMethod: string;
+  };
   step7: string;
   step8: string;
   step9: string;
@@ -527,8 +533,7 @@ export function validateBasicThreshold(value: number | ""): string {
   if (value === "") return "請填寫閾值（%）";
   if (typeof value !== "number" || !Number.isFinite(value))
     return "閾值須為數字";
-  if (!Number.isInteger(value) || value <= 0)
-    return "閾值須為大於 0 的正整數";
+  if (!Number.isInteger(value) || value <= 0) return "閾值須為大於 0 的正整數";
   if (value > 100) return "閾值不可大於 100";
   return "";
 }
@@ -549,12 +554,12 @@ export interface NormalizedQuestions {
  *   舊 group 字串（題組名）會轉為真正的分組並啟用分組。
  */
 export function normalizeQuestions(raw: unknown): NormalizedQuestions {
-  if (!Array.isArray(raw)) return { questions: [], groups: [], useGroups: false };
+  if (!Array.isArray(raw))
+    return { questions: [], groups: [], useGroups: false };
   const groupByName = new Map<string, QuestionGroup>();
   const questions: AuditQuestion[] = raw.map((q, i) => {
     const r = (q ?? {}) as Record<string, unknown>;
-    const isNew =
-      typeof r.itemText === "string" || Array.isArray(r.options);
+    const isNew = typeof r.itemText === "string" || Array.isArray(r.options);
     let groupId: string | null = null;
     let groupName = "";
     if (isNew) {
@@ -585,6 +590,9 @@ export function normalizeQuestions(raw: unknown): NormalizedQuestions {
       itemText: isNew ? asString(r.itemText) : asString(r.text),
       optionSet: asOptionSet(r.optionSet),
       guidance: asString(r.guidance),
+      commonErrors: Array.isArray(r.commonErrors)
+        ? r.commonErrors.map(asString).filter(Boolean)
+        : [],
       groupId,
       groupName,
       order: Number.isFinite(ord) ? ord : i,
