@@ -182,6 +182,19 @@ export function ReviewExecutePage({
   const [unlocking, setUnlocking] = useState(false);
 
   const doneCount = records.length;
+  const liveScore = useMemo(() => {
+    const selections = questions.flatMap((question) => {
+      const selectedIndex = answers[question.id];
+      if (selectedIndex == null) return [];
+      const label = optionLabelsOf(question.optionSet)[selectedIndex];
+      if (!label) return [];
+      return [{ score: label === "是" ? 1 : 0, excluded: label === "不適用" }];
+    });
+    return {
+      ...computeOptionSetScore(selections),
+      answeredCount: selections.length,
+    };
+  }, [questions, answers]);
 
   /* ---------- 載入：該 task 的逐件紀錄 ---------- */
   const loadCaseRecords = useCallback(
@@ -1019,6 +1032,12 @@ export function ReviewExecutePage({
                   setNotes((prev) => ({ ...prev, [qid]: text }))
                 }
               />
+
+              <p className="settings-note" aria-live="polite">
+                {editingId ? "修改後即時正確率" : "目前已答題正確率"}：
+                {liveScore.rate == null ? "—" : `${liveScore.rate}%`}
+                {`（已答 ${liveScore.answeredCount}/${questions.length} 題；不適用不計入分母）`}
+              </p>
 
               <div className="form-actions" style={{ marginBottom: 24 }}>
                 <button

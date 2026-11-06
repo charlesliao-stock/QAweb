@@ -181,6 +181,7 @@ export function AuditPage({
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ActiveRow[]>([]);
+  const [dataRefreshKey, setDataRefreshKey] = useState(0);
   // v1.28 階段 6（B6）：審查紀錄分頁未拉完（觸及上限／分頁異常）時顯示可見提示
   const [recordsTruncated, setRecordsTruncated] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("group");
@@ -480,7 +481,7 @@ export function AuditPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.staffId]);
+  }, [user?.staffId, dataRefreshKey]);
 
   /* ---------- 檢視 modal：載入該指標題目（逐題明細分組＋指引用；v1.24） ---------- */
   useEffect(() => {
@@ -734,7 +735,10 @@ export function AuditPage({
     return (
       <ReviewExecutePage
         target={executing}
-        onBack={() => setExecuting(null)}
+        onBack={() => {
+          setExecuting(null);
+          setDataRefreshKey((key) => key + 1);
+        }}
         onAction={onAction}
       />
     );
