@@ -378,14 +378,12 @@ button:disabled {
 .sidebar-handle {
   position: fixed;
   z-index: 30;
-  top: 50%;
-  left: calc(var(--sidebar-width) - 17px);
-  width: 34px;
-  height: 42px;
-  transform: translateY(-50%);
+  top: 14px;
+  left: calc(var(--sidebar-width) - 42px);
+  width: 30px;
+  height: 30px;
   border: 1px solid #e5eceb;
-  border-left: 0;
-  border-radius: 0 9px 9px 0;
+  border-radius: 8px;
   color: #64827d;
   background: #fff;
   box-shadow: 5px 2px 14px rgba(28, 56, 53, 0.08);
@@ -2612,7 +2610,6 @@ button:disabled {
   display: grid;
   place-items: center;
 }
-.mobile-menu,
 .mobile-bottom-nav,
 .mobile-scrim {
   display: none;
@@ -2765,14 +2762,18 @@ button:disabled {
     height: 56px;
     padding: 0 15px;
   }
-  .mobile-menu {
-    display: inline-grid;
-    width: 30px;
-    height: 30px;
-    margin-right: 7px;
-  }
   .sidebar-handle {
-    display: none;
+    display: grid;
+    z-index: 45;
+    top: 12px;
+    left: 0;
+    border-left: 0;
+    border-radius: 0 8px 8px 0;
+  }
+  .sidebar-handle.mobile-open {
+    left: calc(270px - 42px);
+    border-left: 1px solid #e5eceb;
+    border-radius: 8px;
   }
   .topbar-crumb {
     flex: 1;
