@@ -65,6 +65,7 @@ import {
   passRateOf,
   personOptionRows,
   recordsInMonths,
+  transposePersonOptionRows,
   unitPassRate,
   unitPeriodPassRate,
   unitsForDrill,
@@ -72,7 +73,6 @@ import {
   type OptionDetailRow,
   type PassRate,
 } from "../lib/analysisRates";
-import { maskName } from "../lib/mask";
 import { YEAR_FILTER_OPTIONS, yearOptionLabel } from "../lib/scheduling";
 
 interface IndicatorOpt {
@@ -1411,6 +1411,14 @@ function DrillModal({
     );
     return personOptionRows(recs, th);
   }, [scopedRecords, drill.indicatorId, drill.l2UnitId, col, th]);
+  // L2 轉置（v1.27.1）：直向＝題目、橫向＝人員姓名，中間＝審查結果
+  const l2Matrix = useMemo(
+    () =>
+      ind
+        ? transposePersonOptionRows(l2Rows, ind.questions)
+        : { headers: [] as string[], rows: [], rates: [] },
+    [l2Rows, ind],
+  );
 
   if (!ind) return null;
   const title = `${ind.code}・${ind.name}`;
@@ -1516,34 +1524,40 @@ function DrillModal({
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>被審人員</th>
-                      <th>月份</th>
-                      {ind.questions.map((q) => (
-                        <th key={q.id}>{q.itemText}</th>
+                      <th>題目</th>
+                      {l2Matrix.headers.map((h, i) => (
+                        <th
+                          key={`${l2Rows[i].personEmpNo}-${l2Rows[i].year}-${l2Rows[i].month}-${i}`}
+                        >
+                          {h}
+                        </th>
                       ))}
-                      <th>正確率</th>
-                      <th>達閾值</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {l2Rows.map((row, i) => (
-                      <tr key={`${row.personEmpNo}-${row.year}-${row.month}-${i}`}>
+                    {l2Matrix.rows.map((qr, qi) => (
+                      <tr key={qr.questionId}>
                         <td>
-                          {maskName(row.personName) || "—"}
-                          {row.personEmpNo ? `（${row.personEmpNo}）` : ""}
+                          {qi + 1}. {qr.itemText}
                         </td>
-                        <td>
-                          {row.year}/{row.month}
-                        </td>
-                        {ind.questions.map((q) => (
-                          <td key={q.id}>
-                            {row.answers.get(q.id) || "—"}
-                          </td>
+                        {qr.values.map((v, i) => (
+                          <td key={i}>{v}</td>
                         ))}
-                        <td>{fmtRate(row.rate)}</td>
-                        <td>{row.passing ? "是" : "否"}</td>
                       </tr>
                     ))}
+                    <tr>
+                      <td>正確率</td>
+                      {l2Matrix.rates.map((r, i) => (
+                        <td
+                          key={i}
+                          className={`drill-person-rate${r.passing ? " pass" : ""}`}
+                          title={r.passing ? "達閾值" : "未達閾值"}
+                        >
+                          {fmtRate(r.rate)}
+                          {r.passing ? " ✓" : ""}
+                        </td>
+                      ))}
+                    </tr>
                   </tbody>
                 </table>
               </div>

@@ -14,6 +14,7 @@
  * - 矩陣格格式：正確率＋（正確數／審查數），例 75%(3/4)。
  */
 import type { AuditQuestion } from "./indicators";
+import { maskName } from "./mask";
 
 export interface AnalysisAnswer {
   questionId: string;
@@ -184,6 +185,37 @@ export function personOptionRows(
       passing: isPassing(r.rate, threshold),
       answers: new Map(r.answers.map((a) => [a.questionId, a.optionLabel])),
     }));
+}
+
+export interface TransposedPersonMatrix {
+  /** 每欄一人（順序＝ personOptionRows 的順序）：欄位標頭顯示文字（遮罩姓名，無姓名則職編） */
+  headers: string[];
+  /** 每列一題：題目文字＋每欄的作答（是／否／不適用；無作答為 "—"） */
+  rows: { questionId: string; itemText: string; values: string[] }[];
+  /** 最下方「正確率」列：每欄的得分（null 表無分數）與達閾值標示 */
+  rates: { rate: number | null; passing: boolean }[];
+}
+
+/**
+ * 下探 L2 轉置（v1.27.1）：直向＝選項（題目，每列一題），橫向＝人員姓名
+ * （每欄一人，順序維持 personOptionRows 的順序），中間＝審查結果。
+ * 欄位標頭為遮罩後姓名，無姓名則顯示職編。
+ */
+export function transposePersonOptionRows(
+  rows: PersonOptionRow[],
+  questions: AuditQuestion[],
+): TransposedPersonMatrix {
+  return {
+    headers: rows.map(
+      (r) => maskName(r.personName) || r.personEmpNo || "—",
+    ),
+    rows: questions.map((q) => ({
+      questionId: q.id,
+      itemText: q.itemText,
+      values: rows.map((r) => r.answers.get(q.id) || "—"),
+    })),
+    rates: rows.map((r) => ({ rate: r.rate, passing: r.passing })),
+  };
 }
 
 /** 曆年月鍵（過濾用） */
