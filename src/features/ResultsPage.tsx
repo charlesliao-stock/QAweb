@@ -49,14 +49,9 @@ import { EmptyState, PageHeading, SectionTitle, SummaryCell } from "../component
 import { TrendChart } from "../components/TrendChart";
 import {
   calendarYearsOf,
-  currentQuarterSub,
-  expandAnalysisColumns,
-  type AnalysisCycle,
-  type AnalysisInterval,
+  expandMonthRangeColumns,
+  type AnalysisGranularity,
   type AnalysisPeriodColumn,
-  type AnalysisSub,
-  type QuarterSub,
-  type YearSub,
 } from "../lib/analysisPeriod";
 import {
   formatPassRate,
@@ -72,7 +67,6 @@ import {
   type OptionDetailRow,
   type PassRate,
 } from "../lib/analysisRates";
-import { YEAR_FILTER_OPTIONS, yearOptionLabel } from "../lib/scheduling";
 import {
   getCachedYears,
   invalidateCachedYears,
@@ -82,11 +76,9 @@ import {
 } from "../lib/resultsCache";
 import {
   clearRefCache,
-  getCachedRef,
   getCachedRefCollection,
-  SYSTEM_CONFIG_KEY,
 } from "../lib/refCache";
-import { getDocCacheFirst, getDocsCacheFirst } from "../lib/cacheFirst";
+import { getDocsCacheFirst } from "../lib/cacheFirst";
 import {
   dbIndexedQueryApi,
   fetchYearDocs,
@@ -159,13 +151,6 @@ interface UnitPanel {
   indicatorId: string;
 }
 
-const QUARTER_LABELS: Record<QuarterSub, string> = {
-  1: "第一季",
-  2: "第二季",
-  3: "第三季",
-  4: "第四季",
-};
-
 function fmtRate(rate: number | null): string {
   return rate == null ? "—" : `${rate.toFixed(1)}%`;
 }
@@ -228,11 +213,9 @@ export function ResultsPage({
    */
   const [applied, setApplied] = useState<{
     years: number[];
-    cycle: AnalysisCycle;
-    startYear: number;
-    yearCount: number;
-    interval: AnalysisInterval;
-    sub: AnalysisSub;
+    startMonth: string;
+    endMonth: string;
+    interval: AnalysisGranularity;
   } | null>(null);
   /** 資料時間（本次顯示年份中最新的抓取時間；快取命中沿用原抓取時間） */
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
@@ -243,18 +226,14 @@ export function ResultsPage({
   const [indexFallback, setIndexFallback] = useState(false);
   const [indexFallbackDismissed, setIndexFallbackDismissed] = useState(false);
   const [tab, setTab] = useState<TabId>("group");
-  /** 統計週期（系統參數 systemParams.statsCycle；載入後套為年別預設） */
-  const [statsCycle, setStatsCycle] = useState<AnalysisCycle | null>(null);
-  const statsAppliedRef = useRef(false);
-
   // 期間篩選（四個頁籤共用）
-  const [cycle, setCycle] = useState<AnalysisCycle>("year");
-  const [startYear, setStartYear] = useState(now.getFullYear());
-  const [yearCount, setYearCount] = useState(1);
-  const [interval, setInterval] = useState<AnalysisInterval>("quarter");
-  const [sub, setSub] = useState<AnalysisSub>(
-    currentQuarterSub("year"),
+  const [startMonth, setStartMonth] = useState(
+    `${now.getFullYear()}-01`,
   );
+  const [endMonth, setEndMonth] = useState(
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`,
+  );
+  const [interval, setInterval] = useState<AnalysisGranularity>("quarter");
   // 組別分析
   const [selGroup, setSelGroup] = useState("");
   const [groupUnit, setGroupUnit] = useState<UnitMode>("person");
@@ -306,13 +285,13 @@ export function ResultsPage({
     return null;
   }, [tab, selIndicator, selIndU]);
 
-  // 指標／組別／單位／統計週期（掛載時載入一次）
+  // 指標／組別／單位（掛載時載入一次）
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const db = getFirebaseDb();
-        const [isnap, gsnap, usnap, cfg] = await Promise.all([
+        const [isnap, gsnap, usnap] = await Promise.all([
           getCachedRefCollection("indicators", () =>
             getDocsCacheFirst(collection(db, "indicators")),
           ),
@@ -322,9 +301,6 @@ export function ResultsPage({
           getCachedRefCollection("units", () =>
             getDocsCacheFirst(collection(db, "units")),
           ),
-          getCachedRef(SYSTEM_CONFIG_KEY, () =>
-            getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
-          ).catch(() => null),
         ]);
         if (cancelled) return;
         const list: IndicatorOpt[] = [];
@@ -365,14 +341,11 @@ export function ResultsPage({
             })
             .sort((a, b) => a.code.localeCompare(b.code, "zh-Hant")),
         );
-        const v = cfg?.data()?.statsCycle;
-        setStatsCycle(v === "academic" ? "academic" : "year");
       } catch {
         if (!cancelled) {
           setIndicators([]);
           setGroups([]);
           setUnits([]);
-          setStatsCycle("year");
         }
       }
     })();
@@ -382,39 +355,22 @@ export function ResultsPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refNonce]);
 
-  // 統計週期載入後套為年別預設（只套一次，不蓋掉使用者已改的值）
-  useEffect(() => {
-    if (statsCycle == null || statsAppliedRef.current) return;
-    statsAppliedRef.current = true;
-    setCycle(statsCycle);
-    if (interval === "quarter") setSub(currentQuarterSub(statsCycle));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statsCycle]);
-
-  // 期間欄（年份為起算年，年數往後數；live 值，只供「查詢」按鈕取年份）
+  const rangeValid = Boolean(startMonth && endMonth && startMonth <= endMonth);
+  // 期間欄只取所選年月範圍內的月份，再依月／季／半年／年分組。
   const columns = useMemo(
-    () =>
-      expandAnalysisColumns({
-        cycle,
-        startYear,
-        yearCount,
-        interval,
-        sub,
-      }),
-    [cycle, startYear, yearCount, interval, sub],
+    () => expandMonthRangeColumns(startMonth, endMonth, interval),
+    [startMonth, endMonth, interval],
   );
   const queryYears = useMemo(() => calendarYearsOf(columns), [columns]);
   /** 已生效的期間欄：未查詢前沿用 live 值（畫面為空白頁，不渲染矩陣） */
   const appliedColumns = useMemo(
     () =>
       applied
-        ? expandAnalysisColumns({
-            cycle: applied.cycle,
-            startYear: applied.startYear,
-            yearCount: applied.yearCount,
-            interval: applied.interval,
-            sub: applied.sub,
-          })
+        ? expandMonthRangeColumns(
+            applied.startMonth,
+            applied.endMonth,
+            applied.interval,
+          )
         : columns,
     [applied, columns],
   );
@@ -570,13 +526,12 @@ export function ResultsPage({
 
   /** 按「查詢」：把當下期間條件生效（同年份重按不重拉，吃快取） */
   function handleQuery() {
+    if (!rangeValid) return;
     setApplied({
       years: queryYears,
-      cycle,
-      startYear,
-      yearCount,
+      startMonth,
+      endMonth,
       interval,
-      sub,
     });
   }
 
@@ -723,44 +678,20 @@ export function ResultsPage({
 
   // 期間說明文字（modal 副標共用；顯示已生效的查詢條件）
   const periodDesc = useMemo(() => {
-    const pc = applied?.cycle ?? cycle;
-    const ps = applied?.startYear ?? startYear;
-    const py = applied?.yearCount ?? yearCount;
-    const pi = applied?.interval ?? interval;
-    const pb = applied?.sub ?? sub;
-    const cycleLabel = pc === "academic" ? "學年度" : "年度";
-    const subLabel =
-      pb === "all"
-        ? pi === "month"
-          ? "月・全部"
-          : pi === "quarter"
-            ? "季・全部"
-            : "年・全部"
-        : pi === "quarter"
-          ? QUARTER_LABELS[pb as QuarterSub]
-          : pb === "half"
+    const from = applied?.startMonth ?? startMonth;
+    const to = applied?.endMonth ?? endMonth;
+    const granularity = applied?.interval ?? interval;
+    const display = (value: string) => value.replace("-", "/");
+    const label =
+      granularity === "month"
+        ? "月"
+        : granularity === "quarter"
+          ? "季"
+          : granularity === "halfYear"
             ? "半年"
-            : "一年";
-    return `${cycleLabel} ${ps} 起 ${py} 年・${subLabel}`;
-  }, [applied, cycle, startYear, yearCount, interval, sub]);
-
-  function handleCycleChange(v: string) {
-    const c = v as AnalysisCycle;
-    setCycle(c);
-    if (interval === "quarter") setSub(currentQuarterSub(c));
-  }
-  function handleIntervalChange(v: string) {
-    const iv = v as AnalysisInterval;
-    setInterval(iv);
-    // 區間切換時期間重設為預設值：月→全部；季→當前所在的季；年→一年
-    setSub(
-      iv === "month"
-        ? "all"
-        : iv === "quarter"
-          ? currentQuarterSub(cycle)
-          : "full",
-    );
-  }
+            : "年";
+    return `${display(from)} ~ ${display(to)}・單位：${label}`;
+  }, [applied, startMonth, endMonth, interval]);
 
   /** 單格達閾值率（人次＝合併；單位＝達閾值單位數／總審查單位數） */
   function cellValue(
@@ -950,80 +881,42 @@ export function ResultsPage({
 
       {tab !== "import" && (
         <div className="results-filters">
+          <label className="results-month-field">
+            <span>西元年/月</span>
+            <input
+              type="month"
+              value={startMonth}
+              onChange={(event) => setStartMonth(event.target.value)}
+              aria-label="起始西元年/月"
+            />
+          </label>
+          <span className="results-range-separator">~</span>
+          <label className="results-month-field">
+            <span>西元年/月</span>
+            <input
+              type="month"
+              value={endMonth}
+              onChange={(event) => setEndMonth(event.target.value)}
+              aria-label="結束西元年/月"
+            />
+          </label>
           <SelectField
-            label="年別"
-            value={cycle}
-            onChange={handleCycleChange}
-            options={[
-              { value: "year", label: "年度" },
-              { value: "academic", label: "學年度" },
-            ]}
-          />
-          <SelectField
-            label="年份"
-            value={startYear}
-            onChange={(v) => setStartYear(Number(v))}
-            options={YEAR_FILTER_OPTIONS.map((y) => ({
-              value: y,
-              label: yearOptionLabel(y),
-            }))}
-          />
-          <SelectField
-            label="年數"
-            value={yearCount}
-            onChange={(v) => setYearCount(Number(v))}
-            options={[1, 2, 3].map((n) => ({ value: n, label: `${n}年` }))}
-          />
-          <SelectField
-            label="區間"
+            label="單位"
             value={interval}
-            onChange={handleIntervalChange}
+            onChange={(value) => setInterval(value as AnalysisGranularity)}
             options={[
               { value: "month", label: "月" },
               { value: "quarter", label: "季" },
+              { value: "halfYear", label: "半年" },
               { value: "year", label: "年" },
             ]}
           />
-          {interval === "month" ? (
-            <SelectField
-              label="期間"
-              value={sub}
-              onChange={() => setSub("all")}
-              options={[{ value: "all", label: "全部" }]}
-            />
-          ) : interval === "quarter" ? (
-            <SelectField
-              label="季"
-              value={sub}
-              onChange={(v) =>
-                setSub(v === "all" ? "all" : (Number(v) as QuarterSub))
-              }
-              options={[
-                ...([1, 2, 3, 4] as QuarterSub[]).map((q) => ({
-                  value: q,
-                  label: QUARTER_LABELS[q],
-                })),
-                { value: "all", label: "全部" },
-              ]}
-            />
-          ) : (
-            <SelectField
-              label="期間"
-              value={sub}
-              onChange={(v) => setSub(v as YearSub | "all")}
-              options={[
-                { value: "half", label: "半年" },
-                { value: "full", label: "一年" },
-                { value: "all", label: "全部" },
-              ]}
-            />
-          )}
           <div className="results-query-actions">
             <button
               type="button"
               className="button button-primary"
               onClick={handleQuery}
-              disabled={loading}
+              disabled={loading || !rangeValid}
             >
               {applied ? "重新查詢" : "查詢"}
             </button>
@@ -1039,6 +932,11 @@ export function ResultsPage({
               </button>
             )}
           </div>
+          {!rangeValid && (
+            <span className="results-range-error" role="alert">
+              起始年月不可晚於結束年月。
+            </span>
+          )}
         </div>
       )}
       {tab !== "import" && applied && fetchedAt != null && !loading && (
@@ -1798,7 +1696,12 @@ function DrillModal({
                           {qi + 1}. {qr.itemText}
                         </td>
                         {qr.values.map((v, i) => (
-                          <td key={i}>{v}</td>
+                          <td
+                            key={i}
+                            className={v === "否" ? "drill-option-no" : undefined}
+                          >
+                            {v}
+                          </td>
                         ))}
                       </tr>
                     ))}
@@ -1807,7 +1710,7 @@ function DrillModal({
                       {l2Matrix.rates.map((r, i) => (
                         <td
                           key={i}
-                          className={`drill-person-rate${r.passing ? " pass" : ""}`}
+                          className={`drill-person-rate${r.rate != null && th > 0 && r.rate < th ? " below" : r.passing ? " pass" : ""}`}
                           title={r.passing ? "達閾值" : "未達閾值"}
                         >
                           {fmtRate(r.rate)}

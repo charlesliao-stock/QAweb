@@ -4397,6 +4397,42 @@ button:disabled {
   flex-wrap: wrap;
   margin-bottom: 16px;
 }
+.results-month-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 150px;
+  color: #51615f;
+  font-size: var(--font-small);
+  font-weight: 700;
+}
+.results-month-field input {
+  box-sizing: border-box;
+  min-width: 165px;
+  border: 1px solid #dce4e4;
+  border-radius: 9px;
+  background: #fff;
+  color: #314447;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 500;
+  margin: 0;
+}
+.results-month-field input:focus {
+  outline: none;
+  border-color: #6bb3a8;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 10%, transparent);
+}
+.results-range-separator {
+  align-self: flex-end;
+  padding-bottom: 11px;
+  color: #7b898b;
+}
+.results-range-error {
+  align-self: center;
+  color: #b42318;
+  font-size: var(--font-small);
+}
 .results-filters .field-label {
   display: flex;
   flex-direction: column;
@@ -4451,6 +4487,31 @@ button:disabled {
     min-width: 0;
     flex: 1 1 45%;
   }
+  .results-month-field {
+    min-width: 0;
+    flex: 1 1 42%;
+  }
+  .results-month-field input {
+    min-width: 0;
+    width: 100%;
+  }
+  .results-query-actions {
+    margin-left: 0;
+  }
+}
+:root[data-mode="dark"] .results-month-field {
+  color: #c4cfcd;
+}
+:root[data-mode="dark"] .results-month-field input {
+  border-color: #394744;
+  background: #17201f;
+  color: #e2e8e7;
+}
+:root[data-mode="dark"] .results-range-separator {
+  color: #9aa5a4;
+}
+:root[data-mode="dark"] .results-range-error {
+  color: #ff8a83;
 }
 :root[data-mode="dark"] .trend-chart .chart-label {
   fill: #7d8a89;
@@ -4546,6 +4607,15 @@ button:disabled {
 }
 :root[data-mode="dark"] .drill-person-rate.pass {
   color: #63b89e;
+}
+.drill-option-no,
+.drill-person-rate.below {
+  color: #b42318;
+  font-weight: 600;
+}
+:root[data-mode="dark"] .drill-option-no,
+:root[data-mode="dark"] .drill-person-rate.below {
+  color: #ff8a83;
 }
 /* v1.27.0：矩陣下方展開面板（單位分析曲線圖／選項明細） */
 .analysis-below-panel {

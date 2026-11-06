@@ -6,6 +6,7 @@
 
 export type AnalysisCycle = "year" | "academic";
 export type AnalysisInterval = "month" | "quarter" | "year";
+export type AnalysisGranularity = "month" | "quarter" | "halfYear" | "year";
 export type QuarterSub = 1 | 2 | 3 | 4;
 export type YearSub = "half" | "full";
 export type AnalysisSub = QuarterSub | YearSub | "all";
@@ -210,4 +211,48 @@ export function calendarYearsOf(columns: AnalysisPeriodColumn[]): number[] {
   return [
     ...new Set(columns.flatMap((c) => c.months.map((m) => m.year))),
   ].sort((a, b) => a - b);
+}
+
+/**
+ * 依使用者選取的西元年月範圍，產生月／季／半年／年資料欄。
+ * 首尾欄只包含落在所選範圍內的月份，避免查詢區間外的資料混入。
+ */
+export function expandMonthRangeColumns(
+  startMonth: string,
+  endMonth: string,
+  granularity: AnalysisGranularity,
+): AnalysisPeriodColumn[] {
+  const parse = (value: string): CalendarMonth | null => {
+    const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(value);
+    return match ? { year: Number(match[1]), month: Number(match[2]) } : null;
+  };
+  const start = parse(startMonth);
+  const end = parse(endMonth);
+  if (!start || !end) return [];
+  const startIndex = start.year * 12 + start.month - 1;
+  const endIndex = end.year * 12 + end.month - 1;
+  if (startIndex > endIndex) return [];
+
+  const buckets = new Map<string, CalendarMonth[]>();
+  for (let index = startIndex; index <= endIndex; index++) {
+    const year = Math.floor(index / 12);
+    const month = (index % 12) + 1;
+    const bucket =
+      granularity === "month"
+        ? `${year}-${month}`
+        : granularity === "quarter"
+          ? `${year}-Q${Math.floor((month - 1) / 3) + 1}`
+          : granularity === "halfYear"
+            ? `${year}-H${Math.floor((month - 1) / 6) + 1}`
+            : String(year);
+    const months = buckets.get(bucket) ?? [];
+    months.push({ year, month });
+    buckets.set(bucket, months);
+  }
+
+  return [...buckets.values()].map((months) => ({
+    key: `${months[0].year}-${months[0].month}`,
+    label: rangeLabel(months),
+    months,
+  }));
 }
