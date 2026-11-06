@@ -4357,6 +4357,14 @@ button:disabled {
 :root[data-mode="dark"] .analysis-matrix td.rate-cell.clickable:hover {
   background: #22302e;
 }
+/* v1.27.1：下探 L2 轉置矩陣（直向題目、橫向人員）正確率列達閾值標示 */
+.drill-person-rate.pass {
+  font-weight: 600;
+  color: #338675;
+}
+:root[data-mode="dark"] .drill-person-rate.pass {
+  color: #63b89e;
+}
 /* v1.27.0：矩陣下方展開面板（單位分析曲線圖／選項明細） */
 .analysis-below-panel {
   margin-top: 12px;
