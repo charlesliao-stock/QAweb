@@ -15,6 +15,7 @@ import {
   where,
 } from "./db";
 import { getCachedRefCollection } from "./refCache";
+import { fetchAllPaged } from "./pagedQuery";
 import {
   isConvenerRole,
   isOfficerRole,
@@ -163,14 +164,22 @@ export async function readReviewRecords(
   const unitScope = roles.has("護理長");
   const ownScope = isReviewerRole(profile.roles) || roles.has("一般人員");
 
-  // 單一 where 避免複合索引，年份與範圍在前端過濾（沿用 v1.13.0 模式）
-  const snapshot = await getDocs(
-    query(
-      collection(db, "reviewRecords"),
-      where("indicatorId", "==", indicatorId),
-      limit(2000),
-    ),
+  // v1.28 階段 6（B6）：單一指標查詢改游標分頁，取代舊 limit(2000) 靜默截斷。
+  // 維持單一 where（indicatorId 等號），年份仍在前端過濾：v1.14 測試明言
+  // 「移植函式用單一 where（避免複合索引）」，不再加 year 等號 where；
+  // 分頁 orderBy 用等號欄位 indicatorId（分頁 helper 內加），Firestore 以
+  // 索引合併支援，不需複合索引。分頁未拉完時拋錯（不回傳不完整統計），
+  // 由呼叫端顯示可見提示。
+  const { docs, truncated } = await fetchAllPaged(
+    collection(db, "reviewRecords"),
+    [where("indicatorId", "==", indicatorId)],
+    undefined,
+    { orderByField: "indicatorId" },
   );
+  if (truncated) {
+    throw new Error("審查紀錄未完整載入（分頁中斷），請稍後再試。");
+  }
+  const snapshot = { docs };
 
   let allowedUnitIds: Set<string> | null = null; // null＝不限
   if (!fullHospital) {

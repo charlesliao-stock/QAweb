@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -25,14 +25,37 @@ import {
 } from "../lib/uiPrefs";
 import { BrandMark } from "../components/ui";
 import { VERSION_LABEL } from "../version";
-import { AdminPage } from "../features/AdminPage";
-import { AuditPage } from "../features/AuditPage";
-import { CapaPage } from "../features/CapaPage";
 import { DashboardPage } from "../features/DashboardPage";
-import { GroupsPage } from "../features/GroupsPage";
-import { IndicatorsPage } from "../features/IndicatorsPage";
-import { ResultsPage } from "../features/ResultsPage";
-import { SchedulePage } from "../features/SchedulePage";
+// v1.28 階段 6（A1）：儀表板是登入後首頁，留在首屏 chunk；其餘 7 頁懶載入，
+// 切頁時才載入對應 chunk（首次切頁多一次請求，以 Suspense 顯示載入中、不空白卡住）。
+// 各頁皆為 named export，lazy 需轉為 default export。
+const AdminPage = lazy(() =>
+  import("../features/AdminPage").then((m) => ({ default: m.AdminPage })),
+);
+const AuditPage = lazy(() =>
+  import("../features/AuditPage").then((m) => ({ default: m.AuditPage })),
+);
+const CapaPage = lazy(() =>
+  import("../features/CapaPage").then((m) => ({ default: m.CapaPage })),
+);
+const GroupsPage = lazy(() =>
+  import("../features/GroupsPage").then((m) => ({ default: m.GroupsPage })),
+);
+const IndicatorsPage = lazy(() =>
+  import("../features/IndicatorsPage").then((m) => ({
+    default: m.IndicatorsPage,
+  })),
+);
+const ResultsPage = lazy(() =>
+  import("../features/ResultsPage").then((m) => ({
+    default: m.ResultsPage,
+  })),
+);
+const SchedulePage = lazy(() =>
+  import("../features/SchedulePage").then((m) => ({
+    default: m.SchedulePage,
+  })),
+);
 import type { PageId } from "../types";
 
 const NAV_GROUPS = [
@@ -400,14 +423,18 @@ function Shell() {
           >
             <Menu size={20} />
           </button>
-          {page === "dashboard" && <DashboardPage onAction={notify} />}
-          {page === "indicators" && <IndicatorsPage onAction={notify} />}
-          {page === "schedule" && <SchedulePage onAction={notify} />}
-          {page === "audit" && <AuditPage onAction={notify} />}
-          {page === "results" && <ResultsPage onAction={notify} />}
-          {page === "groups" && <GroupsPage onAction={notify} />}
-          {page === "capa" && <CapaPage onAction={notify} />}
-          {page === "admin" && <AdminPage onAction={notify} />}
+          <Suspense
+            fallback={<p className="settings-note">頁面載入中…</p>}
+          >
+            {page === "dashboard" && <DashboardPage onAction={notify} />}
+            {page === "indicators" && <IndicatorsPage onAction={notify} />}
+            {page === "schedule" && <SchedulePage onAction={notify} />}
+            {page === "audit" && <AuditPage onAction={notify} />}
+            {page === "results" && <ResultsPage onAction={notify} />}
+            {page === "groups" && <GroupsPage onAction={notify} />}
+            {page === "capa" && <CapaPage onAction={notify} />}
+            {page === "admin" && <AdminPage onAction={notify} />}
+          </Suspense>
         </div>
       </main>
       {toast && (

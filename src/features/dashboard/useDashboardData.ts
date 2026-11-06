@@ -25,6 +25,10 @@ import {
 import { getFirebaseDb } from "../../lib/firebase";
 import { getCachedRefCollection } from "../../lib/refCache";
 import { correctTaskStatus } from "../../lib/reviewProgress";
+import {
+  markCorrectionWritten,
+  shouldWriteCorrection,
+} from "../../lib/correctionThrottle";
 import { primaryThreshold } from "../../lib/indicators";
 import { todayStr } from "../../lib/scheduling";
 import type {
@@ -90,6 +94,11 @@ export interface DashboardData {
    * 畫面應顯示可見提示，提醒使用者稍後再試；其餘內容不受影響。
    */
   correctionSkipped: boolean;
+  /**
+   * v1.28 階段 6（B8）：狀態校正寫入失敗（batch.commit() 被拒）。
+   * 畫面應顯示可見提示；失敗的校正不記入節流，下次載入再試。
+   */
+  correctionFailed: boolean;
 }
 
 function parseTask(
@@ -160,6 +169,7 @@ export function useDashboardData(): DashboardData {
   const [unlockPending, setUnlockPending] = useState<DashUnlock[]>([]);
   const [loading, setLoading] = useState(true);
   const [correctionSkipped, setCorrectionSkipped] = useState(false);
+  const [correctionFailed, setCorrectionFailed] = useState(false);
   const [tick, setTick] = useState(0);
 
   const reload = useCallback(() => setTick((t) => t + 1), []);
@@ -168,6 +178,7 @@ export function useDashboardData(): DashboardData {
     let cancelled = false;
     (async () => {
       setLoading(true);
+      setCorrectionFailed(false); // 每輪載入重新計算寫入失敗狀態
       try {
         const db = getFirebaseDb();
         const today = todayStr();
@@ -353,6 +364,10 @@ export function useDashboardData(): DashboardData {
         }
         // 狀態自動校正（v1.12.2 模式＋v1.15.0 鎖定）
         // v1.27.2：只收集「真的不同」的任務，單一 writeBatch 提交（失敗不影響畫面，下次再試）
+        // v1.28 階段 6（B8）：再節流——同一任務一小時內已寫入過相同目標狀態
+        // 就不再重寫（記憶體節流，同一分頁工作階段有效；目標狀態變了仍寫）。
+        // 只有 commit 成功才記入節流；失敗時顯示可見提示（correctionFailed），
+        // 且不記入節流，下次載入再試。
         const fixes: { id: string; patch: Record<string, unknown> }[] = [];
         for (const t of list) {
           const right = correctTaskStatus(
@@ -365,19 +380,29 @@ export function useDashboardData(): DashboardData {
             t.status = right;
             const patch: Record<string, unknown> = { status: right };
             if (right === "done") patch.completedAt = serverTimestamp();
-            fixes.push({ id: t.id, patch });
+            if (shouldWriteCorrection(t.id, right)) {
+              fixes.push({ id: t.id, patch });
+            }
           }
         }
         if (fixes.length > 0) {
           const db2 = getFirebaseDb();
           for (let i = 0; i < fixes.length; i += 400) {
+            const chunk = fixes.slice(i, i + 400);
             const batch = writeBatch(db2);
-            fixes
-              .slice(i, i + 400)
-              .forEach((f) => batch.update(doc(db2, "reviewTasks", f.id), f.patch));
-            batch.commit().catch(() => {
-              /* 下次載入再試 */
-            });
+            chunk.forEach((f) =>
+              batch.update(doc(db2, "reviewTasks", f.id), f.patch),
+            );
+            batch
+              .commit()
+              .then(() => {
+                chunk.forEach((f) =>
+                  markCorrectionWritten(f.id, String(f.patch.status)),
+                );
+              })
+              .catch(() => {
+                if (!cancelled) setCorrectionFailed(true);
+              });
           }
         }
         const ups: DashUnlock[] = [];
@@ -437,5 +462,6 @@ export function useDashboardData(): DashboardData {
     loading,
     reload,
     correctionSkipped,
+    correctionFailed,
   };
 }

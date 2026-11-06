@@ -33,6 +33,7 @@ import {
 } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
+import { fetchAllPaged } from "../lib/pagedQuery";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
@@ -177,6 +178,8 @@ export function AuditPage({
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ActiveRow[]>([]);
+  // v1.28 階段 6（B6）：審查紀錄分頁未拉完（觸及上限／分頁異常）時顯示可見提示
+  const [recordsTruncated, setRecordsTruncated] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("group");
   const [sortDir, setSortDir] = useState<1 | -1>(1);
   // v1.20：清單上方篩選區（組別／指標／關鍵字）；表頭篩選列移除
@@ -357,52 +360,60 @@ export function AuditPage({
         }
         if (cancelled) return;
 
-        // ---- 審查紀錄（每支指標一個查詢，單一 where 避免複合索引） ----
-        const indicatorIds = [...new Set(cands.map((c) => c.sched.indicatorId))];
+        // ---- 審查紀錄（v1.28 階段 6 B6）：單一查詢＋游標分頁，前端按指標分組 ----
+        // 年份下限＝去年：今天所在的審核區間最多橫跨兩個曆年（學年度 8 月制），
+        // 區間起訖必落在去年／今年／明年；用 >= 取代任務書建議的 year == 當年——
+        // 當年等號會漏掉學年度區間在去年的月份（例如 2027-03 看 115 學年度
+        // 2026-08..2027-07，2026 年紀錄會被漏掉、進度算少）。前端仍以區間
+        // 月份鍵過濾，伺服器端年份只是預篩、不影響正確性。
+        // 單一範圍 where ＋ 同欄位 orderBy（分頁 helper 內加），不需複合索引；
+        // 分頁循序拉完，修掉舊 limit(2000) 靜默截斷。
         const recordsByIndicator = new Map<string, RecordRow[]>();
-        await Promise.all(
-          indicatorIds.map(async (iid) => {
-            try {
-              const rsnap = await getDocs(
-                query(
-                  collection(db, "reviewRecords"),
-                  where("indicatorId", "==", iid),
-                  limit(2000),
-                ),
-              );
-              const list: RecordRow[] = [];
-              rsnap.docs.forEach((d) => {
-                const v = d.data() as Record<string, unknown>;
-                const ym = recordYearMonth(v);
-                if (!ym) return;
-                const rate =
-                  typeof v.rate === "number" && Number.isFinite(v.rate)
-                    ? v.rate
-                    : null;
-                list.push({
-                  id: d.id,
-                  indicatorId: iid,
-                  unitId: typeof v.unitId === "string" ? v.unitId : "",
-                  year: ym.year,
-                  month: ym.month,
-                  reviewDate:
-                    typeof v.reviewDate === "string" ? v.reviewDate : "",
-                  reviewerName:
-                    typeof v.reviewerName === "string" ? v.reviewerName : "",
-                  reviewedPersonName:
-                    typeof v.reviewedPersonName === "string"
-                      ? v.reviewedPersonName
-                      : "",
-                  rate,
-                });
-              });
-              if (!cancelled) recordsByIndicator.set(iid, list);
-            } catch {
-              if (!cancelled) recordsByIndicator.set(iid, []);
-            }
-          }),
-        );
+        let recordsTruncated = false;
+        try {
+          const { docs, truncated } = await fetchAllPaged(
+            collection(db, "reviewRecords"),
+            [where("year", ">=", today.getFullYear() - 1)],
+          );
+          recordsTruncated = truncated;
+          docs.forEach((d) => {
+            const v = d.data() as Record<string, unknown>;
+            const iid =
+              typeof v.indicatorId === "string" ? v.indicatorId : "";
+            if (!iid) return;
+            const ym = recordYearMonth(v);
+            if (!ym) return;
+            const rate =
+              typeof v.rate === "number" && Number.isFinite(v.rate)
+                ? v.rate
+                : null;
+            const row: RecordRow = {
+              id: d.id,
+              indicatorId: iid,
+              unitId: typeof v.unitId === "string" ? v.unitId : "",
+              year: ym.year,
+              month: ym.month,
+              reviewDate:
+                typeof v.reviewDate === "string" ? v.reviewDate : "",
+              reviewerName:
+                typeof v.reviewerName === "string" ? v.reviewerName : "",
+              reviewedPersonName:
+                typeof v.reviewedPersonName === "string"
+                  ? v.reviewedPersonName
+                  : "",
+              rate,
+            };
+            const list = recordsByIndicator.get(iid) ?? [];
+            list.push(row);
+            recordsByIndicator.set(iid, list);
+          });
+        } catch {
+          // 單一查詢失敗：紀錄留空（進度暫顯示為 0），不讓整頁掛掉；
+          // 視為未拉完，畫面顯示可見提示。
+          recordsTruncated = true;
+        }
         if (cancelled) return;
+        if (!cancelled) setRecordsTruncated(recordsTruncated);
 
         const out: ActiveRow[] = [];
         for (const { sched: s, assigned } of cands) {
@@ -687,6 +698,14 @@ export function AuditPage({
           ：稽核時請勿拍攝病人臉部或可辨識身分之資訊。
         </span>
       </div>
+      {recordsTruncated && (
+        <p
+          className="settings-note"
+          style={{ color: "#b3372f", fontWeight: 600 }}
+        >
+          審查紀錄未完整載入（分頁中斷），進度可能低估；請重新整理後再確認。
+        </p>
+      )}
       <section className="panel">
         <SectionTitle
           title="進行中的審查排程"

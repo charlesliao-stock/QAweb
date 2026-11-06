@@ -29,12 +29,18 @@ interface DemoLimit {
   __demoQ: "limit";
   n: number;
 }
+interface DemoStartAfter {
+  __demoQ: "startAfter";
+  id: string;
+}
 export interface DemoQuery {
   __demo: "query";
   collPath: string;
   wheres: DemoWhere[];
   orderBys: DemoOrderBy[];
   limitN?: number;
+  /** v1.28 階段 6（B6）：游標文件 id（startAfter 用；對應真實模式的文件 snapshot 游標） */
+  startAfterId?: string;
 }
 
 /** 模擬 Firestore Timestamp：支援 toDate() 與數值比較 */
@@ -106,13 +112,25 @@ export function limit(n: number): DemoLimit {
   return { __demoQ: "limit", n };
 }
 
+/**
+ * v1.28 階段 6（B6）：游標分頁用。接受文件 snapshot（或含 id 的 ref），
+ * getDocs 會在排序後跳過游標文件（含）之前的所有文件，再套用 limit。
+ * 真實 Firestore 以 snapshot＋orderBy 定位游標；此處以 id 在排序後清單中的
+ * 位置等價實作（游標文件必來自同一查詢的前一頁，故必在清單內）。
+ */
+export function startAfter(
+  snapshot: { id?: string } | null | undefined,
+): DemoStartAfter {
+  return { __demoQ: "startAfter", id: snapshot?.id ?? "" };
+}
+
 export function query(
   ref: DemoCollectionRef,
-  ...constraints: Array<DemoWhere | DemoOrderBy | DemoLimit | unknown>
+  ...constraints: Array<DemoWhere | DemoOrderBy | DemoLimit | DemoStartAfter | unknown>
 ): DemoQuery {
   const q: DemoQuery = { __demo: "query", collPath: ref.path, wheres: [], orderBys: [] };
   for (const c of constraints) {
-    const cc = c as { __demoQ?: string; field?: string; op?: string; value?: unknown; dir?: "asc" | "desc"; n?: number } | null;
+    const cc = c as { __demoQ?: string; field?: string; op?: string; value?: unknown; dir?: "asc" | "desc"; n?: number; id?: string } | null;
     if (!cc || typeof cc.__demoQ !== "string") continue;
     if (cc.__demoQ === "where" && cc.field !== undefined && cc.op !== undefined) {
       q.wheres.push({ __demoQ: "where", field: cc.field, op: cc.op, value: cc.value });
@@ -120,6 +138,8 @@ export function query(
       q.orderBys.push({ __demoQ: "orderBy", field: cc.field, dir: cc.dir ?? "asc" });
     } else if (cc.__demoQ === "limit" && cc.n !== undefined) {
       q.limitN = cc.n;
+    } else if (cc.__demoQ === "startAfter" && cc.id !== undefined) {
+      q.startAfterId = cc.id;
     }
   }
   return q;
@@ -207,6 +227,13 @@ export function getDocs(ref: DemoCollectionRef | DemoQuery): DemoQuerySnap {
         if (va > vb) return 1 * dir;
         return 0;
       });
+    }
+    // v1.28 階段 6（B6）：游標分頁——跳過游標文件（含）之前的所有文件。
+    // 游標必來自同一查詢的前一頁；若找不到（資料中途被刪），視為游標失效、
+    // 從頭開始（上層以文件 id 去重，至多重複、不會漏算；頁數上限防無窮迴圈）。
+    if (ref.startAfterId !== undefined && ref.startAfterId !== "") {
+      const at = entries.findIndex(([id]) => id === ref.startAfterId);
+      if (at >= 0) entries = entries.slice(at + 1);
     }
     if (ref.limitN !== undefined) entries = entries.slice(0, ref.limitN);
   }

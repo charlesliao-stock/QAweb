@@ -676,26 +676,27 @@ function auditSchedule(
 }
 
 /**
- * 列出全部排程：讀新集合 indicatorSchedules，
- * 另讀舊集合 indicatorYearSchedules 轉為相容物件；
- * 兩邊同 indicatorId＋year 重複時以新集合為準。
+ * 列出全部排程：讀新集合 indicatorSchedules；
+ * 舊集合 indicatorYearSchedules 只在新集合完全無資料時才讀取 fallback
+ *（v1.28 階段 6 B5：現況每次雙集合並讀；遷移已於 v1.21 完成）。
+ * 注意：新集合已有任何資料時，舊集合殘留的排程不再併入。
  */
 export async function listSchedules(db: any): Promise<IndicatorSchedule[]> {
-  const [newSnap, oldSnap] = await Promise.all([
-    getDocs(collection(db, "indicatorSchedules")),
-    getDocs(collection(db, "indicatorYearSchedules")),
-  ]);
+  const newSnap = await getDocs(collection(db, "indicatorSchedules"));
   const byId = new Map<string, IndicatorSchedule>();
   newSnap.docs.forEach((d) => {
     const s = parseIndicatorSchedule(d.data());
     if (s) byId.set(scheduleDocId(s.indicatorId, s.category, s.period), s);
   });
-  oldSnap.docs.forEach((d) => {
-    const s = legacyYearScheduleToIndicatorSchedule(d.data());
-    if (!s) return;
-    const id = scheduleDocId(s.indicatorId, s.category, s.period);
-    if (!byId.has(id)) byId.set(id, s); // 新集合優先，舊資料只補缺
-  });
+  if (newSnap.empty) {
+    const oldSnap = await getDocs(collection(db, "indicatorYearSchedules"));
+    oldSnap.docs.forEach((d) => {
+      const s = legacyYearScheduleToIndicatorSchedule(d.data());
+      if (!s) return;
+      const id = scheduleDocId(s.indicatorId, s.category, s.period);
+      if (!byId.has(id)) byId.set(id, s); // 新集合優先，舊資料只補缺
+    });
+  }
   return [...byId.values()].sort((a, b) =>
     a.indicatorId.localeCompare(b.indicatorId, "zh-Hant") ||
     a.category.localeCompare(b.category) ||

@@ -22,6 +22,7 @@ import {
   query as fsQuery,
   serverTimestamp as fsServerTimestamp,
   setDoc as fsSetDoc,
+  startAfter as fsStartAfter,
   Timestamp as fsTimestamp,
   updateDoc as fsUpdateDoc,
   where as fsWhere,
@@ -95,6 +96,11 @@ export function orderBy(field: string, dir?: "asc" | "desc"): any {
 
 export function limit(n: number): any {
   return demoOn() ? demo.limit(n) : fsLimit(n);
+}
+
+/** v1.28 階段 6（B6）：游標分頁用。真實模式走 Firestore startAfter（文件 snapshot）；展示模式走 demoStore（以文件 id 定位游標）。 */
+export function startAfter(snapshot: any): any {
+  return demoOn() ? demo.startAfter(snapshot) : fsStartAfter(snapshot);
 }
 
 export function serverTimestamp(): any {
