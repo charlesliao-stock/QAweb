@@ -277,6 +277,8 @@ function BatchImporter({
   const [fileError, setFileError] = useState("");
   const [result, setResult] = useState("");
   const [importing, setImporting] = useState(false);
+  // v1.28 階段 5（A2）：xlsx 動態載入，首次讀 .xlsx 檔要多等一次 chunk 下載，顯示讀取中
+  const [readingFile, setReadingFile] = useState(false);
 
   function handlePick() {
     setFileError("");
@@ -290,6 +292,7 @@ function BatchImporter({
     if (!f) return;
     setPreview(null);
     setResult("");
+    setReadingFile(true);
     try {
       // v1.21：Excel／CSV 皆可（.xlsx 走 SheetJS，.csv 走自寫解析）
       const rows = await readSheetFile(f);
@@ -315,6 +318,8 @@ function BatchImporter({
       setPreview(await validateRows(data));
     } catch (error) {
       setFileError(`讀取檔案失敗：${toErrorMessage(error)}`);
+    } finally {
+      setReadingFile(false);
     }
   }
 
@@ -350,12 +355,24 @@ function BatchImporter({
     <>
       <button
         className="button button-outline"
-        onClick={() => downloadTemplate(sampleRows, "範本", sampleBaseName)}
+        onClick={() => {
+          // v1.28 階段 5：downloadTemplate 為 async；xlsx 元件載入失敗時退回 CSV，提示使用者
+          void downloadTemplate(sampleRows, "範本", sampleBaseName).then(
+            (fmt) => {
+              if (fmt === "csv")
+                onAction("Excel 元件載入失敗，已改下載 CSV 範例檔");
+            },
+          );
+        }}
       >
         <Download size={14} />
         下載範例檔
       </button>
-      <button className="button button-outline" onClick={handlePick}>
+      <button
+        className="button button-outline"
+        onClick={handlePick}
+        disabled={readingFile || importing}
+      >
         <Upload size={14} />
         批次上傳
       </button>
@@ -367,6 +384,11 @@ function BatchImporter({
         onChange={handleFile}
       />
       {fileError && <div className="login-error">{fileError}</div>}
+      {readingFile && (
+        <p className="settings-note" role="status">
+          讀取檔案中…
+        </p>
+      )}
       {result && <p className="settings-note">{result}</p>}
       {postImportNote && result && (
         <p className="settings-note">{postImportNote}</p>

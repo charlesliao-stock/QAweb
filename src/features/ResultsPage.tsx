@@ -1893,14 +1893,17 @@ function ResultImportPanel({
 
   function downloadCurrentTemplate() {
     if (!selInd) return;
-    downloadTemplate(
+    // v1.28 階段 5：downloadTemplate 為 async；xlsx 元件載入失敗時退回 CSV，提示使用者
+    void downloadTemplate(
       resultTemplateRows(
         selInd.code,
         selInd.questions.map((q) => q.itemText),
       ),
       "審查結果",
       `${selInd.code}_審查結果範本`,
-    );
+    ).then((fmt) => {
+      if (fmt === "csv") onAction("Excel 元件載入失敗，已改下載 CSV 範本");
+    });
   }
 
   async function handleImport(file: File) {
