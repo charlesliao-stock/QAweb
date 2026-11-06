@@ -5,10 +5,21 @@
 import { useMemo, useState } from "react";
 import { SectionTitle } from "../../components/ui";
 import { paretoTop3 } from "../../lib/dashboardStats";
+import {
+  DEFAULT_DASHBOARD_SECTIONS,
+  type DashboardSections,
+} from "../../lib/dashboardSections";
 import { avgRateOf } from "../../lib/resultAnalysis";
 import type { DashboardData } from "./useDashboardData";
 
-export function ConvenerTab({ data }: { data: DashboardData }) {
+export function ConvenerTab({
+  data,
+  sections = DEFAULT_DASHBOARD_SECTIONS,
+}: {
+  data: DashboardData;
+  /** v1.28 階段 2：顯示設定旗標（預設只留組別達標率，帕累托關閉） */
+  sections?: DashboardSections;
+}) {
   const now = new Date();
   const curYear = now.getFullYear();
   const curMonth = now.getMonth() + 1;
@@ -84,10 +95,11 @@ export function ConvenerTab({ data }: { data: DashboardData }) {
         </div>
       </section>
 
-      <section className="panel">
-        <SectionTitle
-          title={`本組指標全院達標率（${curYear}/${String(curMonth).padStart(2, "0")}）`}
-        />
+      {sections.groupPassRate && (
+        <section className="panel">
+          <SectionTitle
+            title={`本組指標全院達標率（${curYear}/${String(curMonth).padStart(2, "0")}）`}
+          />
         {stats.length === 0 ? (
           <p className="settings-note">該組別尚無指標。</p>
         ) : (
@@ -132,10 +144,13 @@ export function ConvenerTab({ data }: { data: DashboardData }) {
             </table>
           </div>
         )}
-      </section>
+        </section>
+      )}
 
-      <section className="panel">
-        <SectionTitle title="扣分柏拉圖 Top3" note="全院該組指標最常被扣分的題目" />
+      {/* v1.28 階段 2：扣分柏拉圖 Top3 改去「結果分析」看，程式保留、旗標關閉 */}
+      {sections.pareto ? (
+        <section className="panel">
+          <SectionTitle title="扣分柏拉圖 Top3" note="全院該組指標最常被扣分的題目" />
         {pareto.length === 0 ? (
           <p className="settings-note">尚無扣分紀錄。</p>
         ) : (
@@ -181,7 +196,10 @@ export function ConvenerTab({ data }: { data: DashboardData }) {
             </table>
           </div>
         )}
-      </section>
+        </section>
+      ) : (
+        <p className="settings-note">扣分柏拉圖 Top3 已移至「結果分析」查看。</p>
+      )}
     </>
   );
 }

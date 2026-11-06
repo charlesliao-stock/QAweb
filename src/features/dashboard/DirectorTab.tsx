@@ -5,6 +5,10 @@
 import { useMemo } from "react";
 import { SectionTitle } from "../../components/ui";
 import { radarMatrix } from "../../lib/dashboardStats";
+import {
+  DEFAULT_DASHBOARD_SECTIONS,
+  type DashboardSections,
+} from "../../lib/dashboardSections";
 import { avgRateOf } from "../../lib/resultAnalysis";
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
@@ -98,7 +102,14 @@ function RadarChart({
   );
 }
 
-export function DirectorTab({ data }: { data: DashboardData }) {
+export function DirectorTab({
+  data,
+  sections = DEFAULT_DASHBOARD_SECTIONS,
+}: {
+  data: DashboardData;
+  /** v1.28 階段 2：顯示設定旗標（預設只留全院戰情總覽，雷達／紅旗／高風險關閉） */
+  sections?: DashboardSections;
+}) {
   const now = new Date();
   const curYear = now.getFullYear();
   const curMonth = now.getMonth() + 1;
@@ -199,10 +210,11 @@ export function DirectorTab({ data }: { data: DashboardData }) {
 
   return (
     <>
-      <section className="panel">
-        <SectionTitle
-          title={`全院品質戰情總覽（${curYear}/${String(curMonth).padStart(2, "0")}）`}
-        />
+      {sections.overview && (
+        <section className="panel">
+          <SectionTitle
+            title={`全院品質戰情總覽（${curYear}/${String(curMonth).padStart(2, "0")}）`}
+          />
         <div className="table-scroll">
           <table className="data-table">
             <thead>
@@ -233,48 +245,62 @@ export function DirectorTab({ data }: { data: DashboardData }) {
             </tbody>
           </table>
         </div>
-      </section>
+        </section>
+      )}
 
-      <section className="panel">
-        <SectionTitle title="各科部品質雷達圖" note="系列＝單位群組、軸＝指標分類組別、值＝平均正確率" />
-        {data.loading ? (
-          <p className="settings-note">讀取中…</p>
-        ) : (
-          <RadarChart axes={radar.axes} series={radar.series} />
-        )}
-      </section>
+      {/* v1.28 階段 2：雷達圖／紅旗／高風險單位改去「結果分析」看，程式保留、旗標關閉 */}
+      {sections.radar ? (
+        <section className="panel">
+          <SectionTitle title="各科部品質雷達圖" note="系列＝單位群組、軸＝指標分類組別、值＝平均正確率" />
+          {data.loading ? (
+            <p className="settings-note">讀取中…</p>
+          ) : (
+            <RadarChart axes={radar.axes} series={radar.series} />
+          )}
+        </section>
+      ) : (
+        <p className="settings-note">科部雷達圖已移至「結果分析」查看。</p>
+      )}
 
-      <section className="panel">
-        <SectionTitle title="紅旗指標 Top3" note="達標率最低的指標" />
-        {redFlags.length === 0 ? (
-          <p className="settings-note">尚無資料。</p>
-        ) : (
-          <ol style={{ margin: 0, paddingLeft: 22 }}>
-            {redFlags.map((r) => (
-              <li key={r.id} style={{ marginBottom: 6 }}>
-                <b style={{ color: "#b3372f" }}>{r.name}</b>
-                <span className="muted-text">（達標率 {r.passRate}%）</span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </section>
+      {sections.redFlags ? (
+        <section className="panel">
+          <SectionTitle title="紅旗指標 Top3" note="達標率最低的指標" />
+          {redFlags.length === 0 ? (
+            <p className="settings-note">尚無資料。</p>
+          ) : (
+            <ol style={{ margin: 0, paddingLeft: 22 }}>
+              {redFlags.map((r) => (
+                <li key={r.id} style={{ marginBottom: 6 }}>
+                  <b style={{ color: "#b3372f" }}>{r.name}</b>
+                  <span className="muted-text">（達標率 {r.passRate}%）</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      ) : (
+        <p className="settings-note">紅旗指標 Top3 已移至「結果分析」查看。</p>
+      )}
 
-      <section className="panel">
-        <SectionTitle title="高風險單位 Top3" note="平均正確率最低的單位" />
-        {riskyUnits.length === 0 ? (
-          <p className="settings-note">尚無資料。</p>
-        ) : (
-          <ol style={{ margin: 0, paddingLeft: 22 }}>
-            {riskyUnits.map((r) => (
-              <li key={r.unitId} style={{ marginBottom: 6 }}>
-                <b style={{ color: "#b3372f" }}>{r.unitId}</b>
-                <span className="muted-text">（平均 {r.avg}%）</span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </section>
+      {sections.riskyUnits ? (
+        <section className="panel">
+          <SectionTitle title="高風險單位 Top3" note="平均正確率最低的單位" />
+          {riskyUnits.length === 0 ? (
+            <p className="settings-note">尚無資料。</p>
+          ) : (
+            <ol style={{ margin: 0, paddingLeft: 22 }}>
+              {riskyUnits.map((r) => (
+                <li key={r.unitId} style={{ marginBottom: 6 }}>
+                  <b style={{ color: "#b3372f" }}>{r.unitId}</b>
+                  <span className="muted-text">（平均 {r.avg}%）</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      ) : (
+        <p className="settings-note">高風險單位 Top3 已移至「結果分析」查看。</p>
+      )}
     </>
   );
 }

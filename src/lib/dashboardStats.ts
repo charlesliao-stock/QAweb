@@ -20,6 +20,11 @@ export interface DashTask {
   deadline: string;
   status: "pending" | "done" | "locked";
   doneCount: number;
+  /**
+   * v1.28 階段 2：鎖定／逾期任務的紀錄以 taskId in 查詢分批補（每批 30 個、
+   * 上限 90 個任務）；超過上限者完成進度未知，畫面顯示「—」而非錯誤的 0。
+   */
+  doneCountUnknown?: boolean;
 }
 
 /** 儀表板用的逐件紀錄列 */
@@ -64,6 +69,62 @@ export function daysBetween(a: string, b: string): number {
   const da = new Date(`${a}T00:00:00`);
   const db = new Date(`${b}T00:00:00`);
   return Math.round((db.getTime() - da.getTime()) / 86400000);
+}
+
+/* ---------- v1.28 階段 2：儀表板瘦身查詢窗口 ---------- */
+export interface DashboardMonthWindow {
+  curYear: number;
+  curMonth: number;
+  nextYear: number;
+  nextMonth: number;
+  prevYear: number;
+  prevMonth: number;
+  /** 48h 警示起點（毫秒時間戳；查詢 submittedAt >= 此值） */
+  alertSinceMs: number;
+}
+
+/**
+ * 瘦身查詢窗口：本月＋次月（任務）／本月＋48h（紀錄）。
+ * 12 月→次年 1 月、1 月→上年 12 月的跨年邊界由這裡統一處理。
+ */
+export function dashboardMonthWindow(now: Date = new Date()): DashboardMonthWindow {
+  const curYear = now.getFullYear();
+  const curMonth = now.getMonth() + 1;
+  const nextYear = curMonth === 12 ? curYear + 1 : curYear;
+  const nextMonth = curMonth === 12 ? 1 : curMonth + 1;
+  const prevYear = curMonth === 1 ? curYear - 1 : curYear;
+  const prevMonth = curMonth === 1 ? 12 : curMonth - 1;
+  return {
+    curYear,
+    curMonth,
+    nextYear,
+    nextMonth,
+    prevYear,
+    prevMonth,
+    alertSinceMs: now.getTime() - 48 * 3600 * 1000,
+  };
+}
+
+/** 多來源任務合併（本月＋次月＋鎖定＋逾期）：依 id 去重，先出現者優先 */
+export function mergeDashTasks(...lists: DashTask[][]): DashTask[] {
+  const seen = new Map<string, DashTask>();
+  for (const list of lists) {
+    for (const t of list) {
+      if (!seen.has(t.id)) seen.set(t.id, t);
+    }
+  }
+  return [...seen.values()];
+}
+
+/** 紀錄依 taskId 計數（doneCount 來源；呼叫端先依紀錄 id 去重再傳入） */
+export function countRecordsByTask(
+  records: Pick<DashRecord, "taskId">[],
+): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const r of records) {
+    m.set(r.taskId, (m.get(r.taskId) ?? 0) + 1);
+  }
+  return m;
 }
 
 /* ---------- 護理師：個人受審得分走勢（近 N 次） ---------- */

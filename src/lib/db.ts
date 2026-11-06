@@ -21,6 +21,7 @@ import {
   query as fsQuery,
   serverTimestamp as fsServerTimestamp,
   setDoc as fsSetDoc,
+  Timestamp as fsTimestamp,
   updateDoc as fsUpdateDoc,
   where as fsWhere,
   writeBatch as fsWriteBatch,
@@ -94,6 +95,13 @@ export function limit(n: number): any {
 
 export function serverTimestamp(): any {
   return demoOn() ? demo.serverTimestamp() : fsServerTimestamp();
+}
+
+/** v1.28 階段 2：48h 警示查詢用（submittedAt >= 指定毫秒時間戳） */
+export function timestampFromMs(ms: number): any {
+  return demoOn()
+    ? demo.timestampFromMs(ms)
+    : fsTimestamp.fromMillis(ms);
 }
 
 export function writeBatch(db: any): any {

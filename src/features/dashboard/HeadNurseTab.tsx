@@ -10,15 +10,22 @@ import {
   staffAvgRate,
   unitPassRate,
 } from "../../lib/dashboardStats";
+import {
+  DEFAULT_DASHBOARD_SECTIONS,
+  type DashboardSections,
+} from "../../lib/dashboardSections";
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
 
 export function HeadNurseTab({
   data,
   unitCode,
+  sections = DEFAULT_DASHBOARD_SECTIONS,
 }: {
   data: DashboardData;
   unitCode: string;
+  /** v1.28 階段 2：顯示設定旗標（預設只留 48h 警示／次月預告／超額加審） */
+  sections?: DashboardSections;
 }) {
   const now = new Date();
   const curYear = now.getFullYear();
@@ -87,8 +94,9 @@ export function HeadNurseTab({
 
   return (
     <>
-      <section className="panel" style={{ borderColor: "#e0a3a3" }}>
-        <SectionTitle title="即時缺失通報（48 小時內）" note="紅字警示：審查員勾選不符合的細項" />
+      {sections.alert48h && (
+        <section className="panel" style={{ borderColor: "#e0a3a3" }}>
+          <SectionTitle title="即時缺失通報（48 小時內）" note="紅字警示：審查員勾選不符合的細項" />
         {alerts.length === 0 ? (
           <p className="settings-note">近 48 小時無不符合紀錄。</p>
         ) : (
@@ -114,12 +122,14 @@ export function HeadNurseTab({
             </div>
           ))
         )}
-      </section>
+        </section>
+      )}
 
-      <section className="panel">
-        <SectionTitle
-          title={`次月受審預告（${nextYear}/${String(nextMonth).padStart(2, "0")}）`}
-        />
+      {sections.nextMonthPreview && (
+        <section className="panel">
+          <SectionTitle
+            title={`次月受審預告（${nextYear}/${String(nextMonth).padStart(2, "0")}）`}
+          />
         {nextAudits.length === 0 ? (
           <p className="settings-note">次月本單位尚無排定審查。</p>
         ) : (
@@ -146,13 +156,16 @@ export function HeadNurseTab({
             </table>
           </div>
         )}
-      </section>
+        </section>
+      )}
 
-      <section className="panel">
-        <SectionTitle
-          title={`本單位 vs 全院基準（${curYear}/${String(curMonth).padStart(2, "0")}）`}
-          note="僅顯示全院平均，不顯示其他單位數值"
-        />
+      {/* v1.28 階段 2：單位 vs 全院平均改去「結果分析」看，程式保留、旗標關閉 */}
+      {sections.unitAvg ? (
+        <section className="panel">
+          <SectionTitle
+            title={`本單位 vs 全院基準（${curYear}/${String(curMonth).padStart(2, "0")}）`}
+            note="僅顯示全院平均，不顯示其他單位數值"
+          />
         <div className="table-scroll">
           <table className="data-table">
             <thead>
@@ -177,9 +190,12 @@ export function HeadNurseTab({
             </tbody>
           </table>
         </div>
-      </section>
+        </section>
+      ) : (
+        <p className="settings-note">單位 vs 全院平均已移至「結果分析」查看。</p>
+      )}
 
-      {overAudits.length > 0 && (
+      {sections.overAudit && overAudits.length > 0 && (
         <section className="panel">
           <SectionTitle title="超額加審提醒" note="完成數超過應審件數" />
           <ul style={{ margin: 0, paddingLeft: 20 }}>

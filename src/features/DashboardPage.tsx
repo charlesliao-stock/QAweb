@@ -14,6 +14,12 @@ import {
   VARIANT_LABELS,
   type DashboardVariant,
 } from "../lib/dashboardVariant";
+import {
+  getPersonalDashboardSections,
+  parseDashboardSections,
+  resolveDashboardSections,
+  type DashboardSections,
+} from "../lib/dashboardSections";
 import { useDashboardData } from "./dashboard/useDashboardData";
 import {
   ReviewExecutePage,
@@ -39,6 +45,17 @@ export function DashboardPage({
   const [vtab, setVtab] = useState<DashboardVariant | null>(null);
   /** 統計週期（系統參數 systemParams.statsCycle；缺值預設 'year'） */
   const [statsCycle, setStatsCycle] = useState<StatsCycle>("year");
+  /**
+   * v1.28 階段 2：顯示設定旗標接口——管理員統一定義（systemParams/config 的
+   * dashboardSections 欄位）＋個人偏好（本機 localStorage）；這階段只留接口，
+   * 不做設定 UI。
+   */
+  const [adminSections, setAdminSections] = useState<Partial<DashboardSections>>({});
+  const [personalSections] = useState(getPersonalDashboardSections);
+  const sections = useMemo(
+    () => resolveDashboardSections(adminSections, personalSections),
+    [adminSections, personalSections],
+  );
 
   useEffect(() => {
     (async () => {
@@ -48,6 +65,7 @@ export function DashboardPage({
         );
         const v = snap.data()?.statsCycle;
         setStatsCycle(v === "academic" ? "academic" : "year");
+        setAdminSections(parseDashboardSections(snap.data()?.dashboardSections));
       } catch {
         setStatsCycle("year");
       }
@@ -135,11 +153,20 @@ export function DashboardPage({
         <p className="settings-note">讀取儀表板資料中…</p>
       ) : (
         <>
+          {data.correctionSkipped && (
+            <p
+              className="settings-note"
+              style={{ color: "#b3372f", fontWeight: 600 }}
+            >
+              逾期任務自動校正暫時無法執行（索引建立中），請稍後重新整理；其他內容不受影響。
+            </p>
+          )}
           {active === "reviewer" && (
             <ReviewerTab
               data={data}
               staffId={user?.staffId ?? ""}
               onExecute={setExecuting}
+              sections={sections}
             />
           )}
           {active === "nurse" && (
@@ -147,27 +174,34 @@ export function DashboardPage({
               data={data}
               staffId={user?.staffId ?? ""}
               unitCode={user?.unitCode ?? ""}
+              sections={sections}
             />
           )}
           {active === "headNurse" && (
-            <HeadNurseTab data={data} unitCode={user?.unitCode ?? ""} />
+            <HeadNurseTab
+              data={data}
+              unitCode={user?.unitCode ?? ""}
+              sections={sections}
+            />
           )}
           {active === "officer" && (
             <OfficerTab
               data={data}
               staffId={user?.staffId ?? ""}
               onAction={onAction}
+              sections={sections}
             />
           )}
-          {active === "convener" && <ConvenerTab data={data} />}
+          {active === "convener" && <ConvenerTab data={data} sections={sections} />}
           {active === "supervisor" && (
             <SupervisorTab
               data={data}
               districtGroupIds={user?.districtGroupIds ?? []}
               cycle={statsCycle}
+              sections={sections}
             />
           )}
-          {active === "director" && <DirectorTab data={data} />}
+          {active === "director" && <DirectorTab data={data} sections={sections} />}
         </>
       )}
     </>
