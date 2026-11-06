@@ -4236,6 +4236,18 @@ button:disabled {
 .results-filters .select-wrap {
   min-width: 150px;
 }
+/* v1.28 階段 3：查詢按鈕放篩選列最右端 */
+.results-query-actions {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  margin-left: auto;
+}
+.results-data-time {
+  color: #7b898b;
+  font-size: var(--font-small);
+  margin: -8px 0 16px;
+}
 .rag-badge.rag-gray i {
   background: #9aa5a4;
 }
