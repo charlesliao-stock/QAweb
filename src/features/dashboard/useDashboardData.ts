@@ -23,6 +23,7 @@ import {
   writeBatch,
 } from "../../lib/db";
 import { getFirebaseDb } from "../../lib/firebase";
+import { getCachedRefCollection } from "../../lib/refCache";
 import { correctTaskStatus } from "../../lib/reviewProgress";
 import { primaryThreshold } from "../../lib/indicators";
 import { todayStr } from "../../lib/scheduling";
@@ -171,9 +172,15 @@ export function useDashboardData(): DashboardData {
         const db = getFirebaseDb();
         const today = todayStr();
         const [isnap, gsnap, usnap, monthTsnap, nextTsnap, lockedTsnap, monthRsnap, alertRsnap, usnap2] = await Promise.all([
-          getDocs(collection(db, "indicators")),
-          getDocs(collection(db, "groups")),
-          getDocs(collection(db, "units")),
+          getCachedRefCollection("indicators", () =>
+            getDocs(collection(db, "indicators")),
+          ),
+          getCachedRefCollection("groups", () =>
+            getDocs(collection(db, "groups")),
+          ),
+          getCachedRefCollection("units", () =>
+            getDocs(collection(db, "units")),
+          ),
           // v1.28 階段 2：任務只拉本月（年＋月兩個等號，不需複合索引）
           getDocs(
             query(

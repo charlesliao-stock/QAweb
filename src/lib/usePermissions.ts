@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { collection, getDocs } from "./db";
 import { getFirebaseDb } from "./firebase";
+import { getCachedRefCollection } from "./refCache";
 import { useAuth } from "./auth";
 import {
   DEFAULT_ROLE_PERMS,
@@ -35,9 +36,15 @@ export function usePermissions() {
 
   useEffect(() => {
     let cancelled = false;
+    // v1.28 階段 4：roles／titles 走參考資料共用快取（跨頁只讀一次，
+    // 自己寫入後由 db.ts 統一出口自動失效；demo 模式不快取）
     Promise.all([
-      getDocs(collection(getFirebaseDb(), "roles")),
-      getDocs(collection(getFirebaseDb(), "titles")),
+      getCachedRefCollection("roles", () =>
+        getDocs(collection(getFirebaseDb(), "roles")),
+      ),
+      getCachedRefCollection("titles", () =>
+        getDocs(collection(getFirebaseDb(), "titles")),
+      ),
     ])
       .then(([rsnap, tsnap]) => {
         if (cancelled) return;

@@ -32,6 +32,11 @@ import {
 } from "../lib/db";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
+import {
+  getCachedRef,
+  getCachedRefCollection,
+  SYSTEM_CONFIG_KEY,
+} from "../lib/refCache";
 import { indicatorCodeOf } from "../lib/indicators";
 import { hasSchedulePermission } from "../lib/roleIdentity";
 import { usePermissions } from "../lib/usePermissions";
@@ -325,7 +330,9 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
   useEffect(() => {
     (async () => {
       try {
-        const snap = await getDoc(doc(getFirebaseDb(), "systemParams", "config"));
+        const snap = await getCachedRef(SYSTEM_CONFIG_KEY, () =>
+          getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+        );
         const data = snap.data() as Record<string, unknown> | undefined;
         setStatsCycle(data?.statsCycle === "academic" ? "academic" : "year");
         const dd = data?.supplementDeadlineDay;
@@ -342,11 +349,19 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
       const db = getFirebaseDb();
       const [isnap, gsnap, asnap, usnap, unsnap, rsnap, scheds] =
         await Promise.all([
-          getDocs(collection(db, "indicators")),
-          getDocs(collection(db, "groups")),
+          getCachedRefCollection("indicators", () =>
+            getDocs(collection(db, "indicators")),
+          ),
+          getCachedRefCollection("groups", () =>
+            getDocs(collection(db, "groups")),
+          ),
           getDocs(collection(db, "indicatorAssignments")),
-          getDocs(collection(db, "units")),
-          getDocs(collection(db, "users")),
+          getCachedRefCollection("units", () =>
+            getDocs(collection(db, "units")),
+          ),
+          getCachedRefCollection("users", () =>
+            getDocs(collection(db, "users")),
+          ),
           getDocs(collection(db, "reviewReviewers")),
           listSchedules(db),
         ]);

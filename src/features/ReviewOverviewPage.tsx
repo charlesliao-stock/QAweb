@@ -15,6 +15,7 @@ import {
 import { collection, doc, getDoc, getDocs, query, where } from "../lib/db";
 import { EmptyState, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
+import { getCachedRefCollection } from "../lib/refCache";
 import { maskName } from "../lib/mask";
 import {
   MONTH_LABELS,
@@ -134,7 +135,9 @@ export function ReviewOverviewPage({
             where("year", "==", year),
           ),
         ),
-        getDocs(collection(db, "users")),
+        getCachedRefCollection("users", () =>
+          getDocs(collection(db, "users")),
+        ),
       ]);
 
       const scheds: IndicatorYearSchedule[] = [];

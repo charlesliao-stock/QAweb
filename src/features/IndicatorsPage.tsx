@@ -31,6 +31,7 @@ import {
 } from "../lib/db";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
+import { getCachedRefCollection } from "../lib/refCache";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import { logAudit } from "../lib/audit";
@@ -736,7 +737,9 @@ export function IndicatorsPage({
 
   const loadMeta = useCallback(async () => {
     try {
-      const gsnap = await getDocs(collection(getFirebaseDb(), "groups"));
+      const gsnap = await getCachedRefCollection("groups", () =>
+        getDocs(collection(getFirebaseDb(), "groups")),
+      );
       const gm = new Map<string, string>();
       gsnap.docs.forEach((d) => {
         const n = d.data().name;
@@ -747,7 +750,9 @@ export function IndicatorsPage({
       /* 群組讀取失敗時下拉為空，表單會提示 */
     }
     try {
-      const usnap = await getDocs(collection(getFirebaseDb(), "users"));
+      const usnap = await getCachedRefCollection("users", () =>
+        getDocs(collection(getFirebaseDb(), "users")),
+      );
       const sm = new Map<string, StaffOption>();
       usnap.docs.forEach((d) => {
         const data = d.data();
@@ -767,7 +772,9 @@ export function IndicatorsPage({
   const loadList = useCallback(async () => {
     setLoading(true);
     try {
-      const snap = await getDocs(collection(getFirebaseDb(), "indicators"));
+      const snap = await getCachedRefCollection("indicators", () =>
+        getDocs(collection(getFirebaseDb(), "indicators")),
+      );
       const list: IndicatorRow[] = snap.docs.map((d) => {
         const data = d.data();
         return {

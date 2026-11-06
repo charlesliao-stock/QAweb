@@ -14,6 +14,7 @@ import {
   updateDoc,
   where,
 } from "./db";
+import { getCachedRefCollection } from "./refCache";
 import {
   isConvenerRole,
   isOfficerRole,
@@ -178,8 +179,8 @@ export async function readReviewRecords(
         ...new Set([...profile.groupIds, profile.groupId].filter(Boolean)),
       ];
       if (groupIds.length) {
-        const unitSnap = await getDocs(
-          query(collection(db, "units"), limit(2000)),
+        const unitSnap = await getCachedRefCollection("units", () =>
+          getDocs(query(collection(db, "units"), limit(2000))),
         );
         const ids = new Set<string>();
         unitSnap.docs.forEach((u) => {
@@ -311,10 +312,14 @@ export async function readFirebaseUsersForReviewerManagement(): Promise<
   FirebaseUserRow[]
 > {
   const db = getFirebaseDb();
-  const snapshot = await getDocs(query(collection(db, "users"), limit(1000)));
+  const snapshot = await getCachedRefCollection("users", () =>
+    getDocs(query(collection(db, "users"), limit(1000))),
+  );
   let groupByUnit = new Map<string, string>();
   try {
-    const units = await getDocs(query(collection(db, "units"), limit(2000)));
+    const units = await getCachedRefCollection("units", () =>
+      getDocs(query(collection(db, "units"), limit(2000))),
+    );
     groupByUnit = new Map(
       units.docs.flatMap((unit) => {
         const data = unit.data() as Record<string, unknown>;
@@ -363,7 +368,9 @@ export async function readFirebaseGroupsForReviewerManagement(): Promise<
   FirebaseGroupOption[]
 > {
   const db = getFirebaseDb();
-  const snapshot = await getDocs(query(collection(db, "groups"), limit(500)));
+  const snapshot = await getCachedRefCollection("groups", () =>
+    getDocs(query(collection(db, "groups"), limit(500))),
+  );
   return snapshot.docs
     .map((document) => ({
       id: document.id,

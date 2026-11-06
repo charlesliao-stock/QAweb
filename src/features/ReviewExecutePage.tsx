@@ -13,6 +13,7 @@ import {
 } from "../lib/db";
 import { EmptyState, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
+import { getCachedRefCollection } from "../lib/refCache";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import {
@@ -264,7 +265,9 @@ export function ReviewExecutePage({
         const db = getFirebaseDb();
         // 人員清單（審查人員／受審人員搜尋用）
         try {
-          const psnap = await getDocs(collection(db, "users"));
+          const psnap = await getCachedRefCollection("users", () =>
+            getDocs(collection(db, "users")),
+          );
           const list: PersonOption[] = [];
           psnap.docs.forEach((d) => {
             const data = d.data() as Record<string, unknown>;

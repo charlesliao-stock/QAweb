@@ -81,6 +81,12 @@ import {
   setCachedYear,
   type ResultsCacheScope,
 } from "../lib/resultsCache";
+import {
+  clearRefCache,
+  getCachedRef,
+  getCachedRefCollection,
+  SYSTEM_CONFIG_KEY,
+} from "../lib/refCache";
 
 interface IndicatorOpt {
   id: string;
@@ -204,6 +210,8 @@ export function ResultsPage({
   >([]);
   const [loading, setLoading] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
+  // v1.28 階段 4：按「重新整理」時 meta effect 重跑、拉最新參考資料
+  const [refNonce, setRefNonce] = useState(0);
   /**
    * 已生效的查詢條件（null＝尚未查詢，顯示空白頁）。
    * 篩選器一變只改 live 值，不觸發查詢；按「查詢」才把當下條件生效。
@@ -276,12 +284,18 @@ export function ResultsPage({
       try {
         const db = getFirebaseDb();
         const [isnap, gsnap, usnap, cfg] = await Promise.all([
-          getDocs(collection(db, "indicators")),
-          getDocs(collection(db, "groups")),
-          getDocs(collection(db, "units")),
-          getDoc(doc(getFirebaseDb(), "systemParams", "config")).catch(
-            () => null,
+          getCachedRefCollection("indicators", () =>
+            getDocs(collection(db, "indicators")),
           ),
+          getCachedRefCollection("groups", () =>
+            getDocs(collection(db, "groups")),
+          ),
+          getCachedRefCollection("units", () =>
+            getDocs(collection(db, "units")),
+          ),
+          getCachedRef(SYSTEM_CONFIG_KEY, () =>
+            getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+          ).catch(() => null),
         ]);
         if (cancelled) return;
         const list: IndicatorOpt[] = [];
@@ -336,7 +350,8 @@ export function ResultsPage({
     return () => {
       cancelled = true;
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refNonce]);
 
   // 統計週期載入後套為年別預設（只套一次，不蓋掉使用者已改的值）
   useEffect(() => {
@@ -522,11 +537,14 @@ export function ResultsPage({
     });
   }
 
-  /** 重新整理：失效已查年份的快取（紀錄＋任務），再重拉一次 */
+  /** 重新整理：失效已查年份的快取（紀錄＋任務）＋參考快取，再重拉一次 */
   function handleRefresh() {
     if (!applied) return;
     invalidateCachedYears("reviewRecords", applied.years, cacheScope);
     invalidateCachedYears("reviewTasks", applied.years, cacheScope);
+    // v1.28 階段 4：參考快取也失效，meta effect（refNonce）重跑才拉最新
+    clearRefCache();
+    setRefNonce((n) => n + 1);
     setReloadNonce((n) => n + 1);
   }
 
@@ -1818,9 +1836,15 @@ function ResultImportPanel({
       try {
         const db = getFirebaseDb();
         const [gSnap, uSnap, sSnap] = await Promise.all([
-          getDocs(collection(db, "groups")),
-          getDocs(collection(db, "units")),
-          getDocs(collection(db, "users")),
+          getCachedRefCollection("groups", () =>
+            getDocs(collection(db, "groups")),
+          ),
+          getCachedRefCollection("units", () =>
+            getDocs(collection(db, "units")),
+          ),
+          getCachedRefCollection("users", () =>
+            getDocs(collection(db, "users")),
+          ),
         ]);
         setGroups(
           gSnap.docs

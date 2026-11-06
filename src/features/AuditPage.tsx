@@ -32,6 +32,7 @@ import {
   where,
 } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
+import { getCachedRefCollection } from "../lib/refCache";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
@@ -214,9 +215,15 @@ export function AuditPage({
         const staffId = user.staffId;
         const today = new Date();
         const [iSnap, gSnap, uSnap, sSnap, aSnap, meSnap] = await Promise.all([
-          getDocs(query(collection(db, "indicators"), limit(500))),
-          getDocs(query(collection(db, "groups"), limit(200))),
-          getDocs(query(collection(db, "units"), limit(2000))),
+          getCachedRefCollection("indicators", () =>
+            getDocs(query(collection(db, "indicators"), limit(500))),
+          ),
+          getCachedRefCollection("groups", () =>
+            getDocs(query(collection(db, "groups"), limit(200))),
+          ),
+          getCachedRefCollection("units", () =>
+            getDocs(query(collection(db, "units"), limit(2000))),
+          ),
           getDocs(query(collection(db, "indicatorSchedules"), limit(500))),
           getDocs(query(collection(db, "indicatorAssignments"), limit(500))),
           getDoc(doc(db, "users", staffId)),

@@ -18,6 +18,7 @@ import {
 import { AuthProvider, useAuth } from "../lib/auth";
 import { doc, getDoc } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
+import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
 import {
   applyTheme,
   applyUiPrefs,
@@ -348,7 +349,9 @@ function Shell() {
   // 個人顯示設定（本機）＋ 全院主題配色（系統參數）
   useEffect(() => {
     applyUiPrefs();
-    getDoc(doc(getFirebaseDb(), "systemParams", "config"))
+    getCachedRef(SYSTEM_CONFIG_KEY, () =>
+      getDoc(doc(getFirebaseDb(), "systemParams", "config")),
+    )
       .then((snap) => {
         const t = snap.exists()
           ? (snap.data() as { uiTheme?: unknown }).uiTheme
