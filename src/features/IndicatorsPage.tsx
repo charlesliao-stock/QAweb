@@ -2092,6 +2092,8 @@ function BatchAddDialog({
   // v1.20：匯入（基本資料／審核表，Excel／CSV）＋範本下載
   const [importSummary, setImportSummary] = useState<string | null>(null);
   const [importErrors, setImportErrors] = useState<string[]>([]);
+  // v1.28 階段 5（A2）：xlsx 動態載入，首次讀 .xlsx 檔要多等一次 chunk 下載，顯示讀取中
+  const [importing, setImporting] = useState(false);
   const basicFileRef = useRef<HTMLInputElement>(null);
   const auditFileRef = useRef<HTMLInputElement>(null);
 
@@ -2108,6 +2110,7 @@ function BatchAddDialog({
   async function handleImportBasic(file: File) {
     setImportSummary(null);
     setImportErrors([]);
+    setImporting(true);
     try {
       const sheet = await readSheetFile(file);
       const { headerErrors, data } = parseBasicSheet(sheet);
@@ -2156,12 +2159,15 @@ function BatchAddDialog({
       onAction(msg);
     } catch (error) {
       setImportErrors([`讀取檔案失敗：${toErrorMessage(error)}`]);
+    } finally {
+      setImporting(false);
     }
   }
 
   async function handleImportAudit(file: File) {
     setImportSummary(null);
     setImportErrors([]);
+    setImporting(true);
     try {
       const sheet = await readSheetFile(file);
       const { headerErrors, data } = parseAuditSheet(sheet);
@@ -2246,6 +2252,8 @@ function BatchAddDialog({
       onAction(msg);
     } catch (error) {
       setImportErrors([`讀取檔案失敗：${toErrorMessage(error)}`]);
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -2440,36 +2448,54 @@ function BatchAddDialog({
           <button
             className="button button-outline button-sm"
             onClick={() => basicFileRef.current?.click()}
+            disabled={importing}
           >
             <Upload size={14} /> 匯入基本資料
           </button>
           <button
             className="button button-outline button-sm"
-            onClick={() =>
-              downloadTemplate(
+            onClick={() => {
+              // v1.28 階段 5：downloadTemplate 為 async；xlsx 元件載入失敗時退回 CSV，提示使用者
+              void downloadTemplate(
                 basicTemplateRows(),
                 "基本資料",
                 "指標基本資料範本",
-              )
-            }
+              ).then((fmt) => {
+                if (fmt === "csv")
+                  onAction("Excel 元件載入失敗，已改下載 CSV 範本");
+              });
+            }}
           >
             <Download size={14} /> 下載基本資料範本
           </button>
           <button
             className="button button-outline button-sm"
             onClick={() => auditFileRef.current?.click()}
+            disabled={importing}
           >
             <Upload size={14} /> 匯入審核表
           </button>
           <button
             className="button button-outline button-sm"
-            onClick={() =>
-              downloadTemplate(auditTemplateRows(), "審核表", "指標審核表範本")
-            }
+            onClick={() => {
+              void downloadTemplate(
+                auditTemplateRows(),
+                "審核表",
+                "指標審核表範本",
+              ).then((fmt) => {
+                if (fmt === "csv")
+                  onAction("Excel 元件載入失敗，已改下載 CSV 範本");
+              });
+            }}
           >
             <Download size={14} /> 下載審核表範本
           </button>
           <span className="muted-text">共 {rows.length} 列</span>
+          {importing && (
+            <span className="muted-text" role="status">
+              讀取檔案中…
+            </span>
+          )}
           <input
             ref={basicFileRef}
             type="file"
