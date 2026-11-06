@@ -359,6 +359,7 @@ function Shell() {
   const { user, loading, needsPasswordChange, logout } = useAuth();
   const [page, setPage] = useState<PageId>("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
   const [toast, setToast] = useState("");
 
   // v1.27.2：notify 必須是穩定引用。若每次渲染都產生新函式，各頁以 onAction 為依賴的
@@ -407,7 +408,7 @@ function Shell() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${sidebarHidden ? " sidebar-hidden" : ""}`}>
       <Sidebar
         page={page}
         onPage={setPage}
@@ -415,6 +416,15 @@ function Shell() {
         mobileOpen={mobileOpen}
         onClose={() => setMobileOpen(false)}
       />
+      <button
+        className="sidebar-handle icon-button"
+        type="button"
+        aria-label={sidebarHidden ? "顯示側邊功能表" : "隱藏側邊功能表"}
+        title={sidebarHidden ? "顯示側邊功能表" : "隱藏側邊功能表"}
+        onClick={() => setSidebarHidden((hidden) => !hidden)}
+      >
+        {sidebarHidden ? <Menu size={18} /> : <X size={18} />}
+      </button>
       <main className="main-area">
         <div className="page-content">
           <button

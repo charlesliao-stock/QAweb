@@ -1379,24 +1379,7 @@ export function IndicatorsPage({
       <PageHeading
         page="indicators"
         action={
-          view.kind === "list" ? (
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <button
-                className="button button-primary"
-                onClick={openCreate}
-              >
-                <Plus size={16} />
-                新增指標
-              </button>
-              <button
-                className="button button-outline"
-                onClick={() => setBatchOpen(true)}
-              >
-                <Plus size={16} />
-                批次新增
-              </button>
-            </div>
-          ) : (
+          view.kind !== "list" ? (
             <button
               className="button button-outline"
               onClick={() => setView({ kind: "list" })}
@@ -1404,7 +1387,7 @@ export function IndicatorsPage({
               <X size={15} />
               返回清單
             </button>
-          )
+          ) : undefined
         }
       />
 
@@ -1434,6 +1417,22 @@ export function IndicatorsPage({
             value={searchKw}
             onChange={(e) => setSearchKw(e.target.value)}
           />
+          <div className="indicator-filter-actions">
+            <button
+              className="button button-primary"
+              onClick={openCreate}
+            >
+              <Plus size={16} />
+              新增指標
+            </button>
+            <button
+              className="button button-outline"
+              onClick={() => setBatchOpen(true)}
+            >
+              <Plus size={16} />
+              批次新增
+            </button>
+          </div>
         </div>
       )}
 
@@ -1445,7 +1444,7 @@ export function IndicatorsPage({
         ) : rows.length === 0 ? (
           <EmptyState
             title="尚無指標"
-            description="使用右上角「新增指標」建立第一支指標，分類組別、編號、名稱、負責人與閾值為必填。"
+            description="使用上方工具列的「新增指標」建立第一支指標，分類組別、編號、名稱、負責人與閾值為必填。"
           />
         ) : (
           <section className="panel data-panel">
