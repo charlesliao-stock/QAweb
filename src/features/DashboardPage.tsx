@@ -164,6 +164,14 @@ export function DashboardPage({
               逾期任務自動校正暫時無法執行（索引建立中），請稍後重新整理；其他內容不受影響。
             </p>
           )}
+          {data.correctionFailed && (
+            <p
+              className="settings-note"
+              style={{ color: "#b3372f", fontWeight: 600 }}
+            >
+              部分任務狀態自動校正寫入失敗，下次載入會再試；若持續出現請通知系統管理員。
+            </p>
+          )}
           {active === "reviewer" && (
             <ReviewerTab
               data={data}

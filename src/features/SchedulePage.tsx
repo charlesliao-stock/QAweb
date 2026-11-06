@@ -38,6 +38,7 @@ import {
   SYSTEM_CONFIG_KEY,
 } from "../lib/refCache";
 import { indicatorCodeOf } from "../lib/indicators";
+import { buildTaskIndex } from "../lib/taskIndex";
 import { hasSchedulePermission } from "../lib/roleIdentity";
 import { usePermissions } from "../lib/usePermissions";
 import { useAuth } from "../lib/auth";
@@ -447,35 +448,21 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
       );
       setReviewersByGroup(rbm);
 
-      // 任務索引（單欄位 where，不需複合索引）
-      const idx = new Map<string, Map<string, { pending: number; done: number }>>();
-      await Promise.all(
-        inds.map(async (ind) => {
-          try {
-            const tsnap = await getDocs(
-              query(
-                collection(db, "reviewTasks"),
-                where("indicatorId", "==", ind.id),
-              ),
-            );
-            const m = new Map<string, { pending: number; done: number }>();
-            tsnap.docs.forEach((d) => {
-              const v = d.data() as Record<string, unknown>;
-              const y = Number(v.year ?? 0);
-              const mo = Number(v.month ?? 0);
-              if (!y || !mo) return;
-              const k = `${y}-${mo}`;
-              const e = m.get(k) ?? { pending: 0, done: 0 };
-              if (v.status === "done") e.done += 1;
-              else e.pending += 1;
-              m.set(k, e);
-            });
-            idx.set(ind.id, m);
-          } catch {
-            /* 單一指標失敗不影響其他 */
-          }
-        }),
-      );
+      // 任務索引（v1.28 階段 6 B5）：一次拉全部 reviewTasks、前端按 indicatorId 分組，
+      // 取代每支指標一次查詢（N+1 → 1）。不加年份 where：排程頁可切換檢視年份
+      //（filterYear）且臨時排程可屬任何年份；全量單查與改前讀取文件數相同。
+      // 分組規則見 src/lib/taskIndex.ts（純函式，測試逐筆對照改前演算法）。
+      let idx = new Map<string, Map<string, { pending: number; done: number }>>();
+      try {
+        const tsnap = await getDocs(collection(db, "reviewTasks"));
+        idx = buildTaskIndex(
+          tsnap.docs as unknown as Array<{
+            data: () => Record<string, unknown>;
+          }>,
+        );
+      } catch {
+        /* 任務索引讀取失敗：索引留空，任務數顯示為 0，不影響其他資料 */
+      }
       setTaskIndex(idx);
     } catch (error) {
       onAction(`讀取排程資料失敗：${toErrorMessage(error)}`);
