@@ -127,8 +127,8 @@ t("IndicatorsPage 無舊 reviews 集合引用", !ind.includes('"reviews"'));
 
 /* ---- 版本號 ---- */
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-t("package.json 版號 1.26.0", pkg.version === "1.26.0");
-t("version.ts 版號 1.26.0", src("version.ts").includes('VERSION = "1.26.0"'));
+t("package.json 版號 1.27.0", pkg.version === "1.27.0");
+t("version.ts 版號 1.27.0", src("version.ts").includes('VERSION = "1.27.0"'));
 
 /* ---- 3 檔存在（v1.25.0：QuarterResults 已隨舊結果分析畫面移除） ---- */
 for (const f of [

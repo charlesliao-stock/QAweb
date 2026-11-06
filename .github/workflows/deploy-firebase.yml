@@ -1,0 +1,56 @@
+name: Deploy to Firebase Hosting
+
+on:
+  push:
+    branches:
+      - firebase-mvp
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and deploy to Firebase
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.25.0
+          run_install: false
+          cache: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build static site
+        run: pnpm build
+        env:
+          # Firebase Web SDK 公開設定（nurseboard-492316，與 .env.example 相同；
+          # Web key 為公開設計，真正防護靠 Firestore rules 與 Auth。
+          # 建置時必須帶入，否則產出的站台無 Firebase 設定、真實登入無法運作。
+          VITE_FIREBASE_API_KEY: AIzaSyC0l6Ci4qCYiZwWMEK-ppImCtxP8o4Q_4I
+          VITE_FIREBASE_AUTH_DOMAIN: nurseboard-492316.firebaseapp.com
+          VITE_FIREBASE_PROJECT_ID: nurseboard-492316
+          VITE_FIREBASE_STORAGE_BUCKET: nurseboard-492316.firebasestorage.app
+          VITE_FIREBASE_MESSAGING_SENDER_ID: "807521931394"
+          VITE_FIREBASE_APP_ID: "1:807521931394:web:5f5c1c51cf157bc5f0249b"
+
+      - name: Install firebase-tools
+        run: npm install -g firebase-tools
+
+      - name: Deploy to Firebase Hosting
+        run: firebase deploy --only hosting,firestore:rules --non-interactive --token "${{ secrets.FIREBASE_TOKEN }}"
