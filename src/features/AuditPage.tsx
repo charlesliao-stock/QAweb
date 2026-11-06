@@ -619,12 +619,16 @@ export function AuditPage({
     setExecBusy(true);
     try {
       const db = getFirebaseDb();
-      // 單一 where 避免複合索引，其餘前端過濾
+      // v1.27.2：純等號條件（Firestore 以單欄位索引合併，不需複合索引），
+      // 只取「該指標／該年／該月／該單位」的任務；原本拉該指標跨年全部任務（最多 2000 筆）。
       const snap = await getDocs(
         query(
           collection(db, "reviewTasks"),
           where("indicatorId", "==", execRow.indicatorId),
-          limit(2000),
+          where("year", "==", y),
+          where("month", "==", m),
+          where("unitId", "==", execUnit),
+          limit(50),
         ),
       );
       const mine: string[] = [];

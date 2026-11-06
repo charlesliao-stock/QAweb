@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -336,10 +336,14 @@ function Shell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [toast, setToast] = useState("");
 
-  const notify = (message: string) => {
+  // v1.27.2：notify 必須是穩定引用。若每次渲染都產生新函式，各頁以 onAction 為依賴的
+  // 載入 effect 會在 toast 顯示／消失（2 次重渲染）時整頁重拉 Firestore。
+  const toastTimer = useRef<number | undefined>(undefined);
+  const notify = useCallback((message: string) => {
     setToast(message);
-    window.setTimeout(() => setToast(""), 2600);
-  };
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(""), 2600);
+  }, []);
 
   // 個人顯示設定（本機）＋ 全院主題配色（系統參數）
   useEffect(() => {

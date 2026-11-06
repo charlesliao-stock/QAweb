@@ -60,6 +60,10 @@ export function correctTaskStatus(
   today: string = todayStr(),
 ): ReviewTaskStatus {
   if (isTaskComplete(doneCount, caseCount)) return "done";
+  // v1.27.2：已鎖定且未完成者維持 locked。
+  // 舊寫法對 locked 任務回傳 pending（shouldLockTask 對 locked 為 false），
+  // 下次載入又被改回 locked，儀表板每載入一次就對每筆逾期未完成任務寫一次庫。
+  if (status === "locked") return "locked";
   if (shouldLockTask(deadline, status, today)) return "locked";
   return "pending";
 }

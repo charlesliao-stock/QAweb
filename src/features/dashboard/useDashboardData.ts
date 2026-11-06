@@ -10,8 +10,8 @@ import {
   getDocs,
   query,
   serverTimestamp,
-  updateDoc,
   where,
+  writeBatch,
 } from "../../lib/db";
 import { getFirebaseDb } from "../../lib/firebase";
 import { correctTaskStatus } from "../../lib/reviewProgress";
@@ -111,8 +111,13 @@ export function useDashboardData(): DashboardData {
           getDocs(collection(db, "indicators")),
           getDocs(collection(db, "groups")),
           getDocs(collection(db, "units")),
-          getDocs(collection(db, "reviewTasks")),
-          getDocs(collection(db, "reviewRecords")),
+          // v1.27.2：年份下推（單欄位 where，不需複合索引）；前端 year 過濾保留作保險
+          getDocs(
+            query(collection(db, "reviewTasks"), where("year", ">=", curYear - 1)),
+          ),
+          getDocs(
+            query(collection(db, "reviewRecords"), where("year", ">=", curYear - 1)),
+          ),
           getDocs(
             query(
               collection(db, "unlockRequests"),
@@ -206,7 +211,8 @@ export function useDashboardData(): DashboardData {
           });
         });
         // 狀態自動校正（v1.12.2 模式＋v1.15.0 鎖定）
-        const db2 = getFirebaseDb();
+        // v1.27.2：只收集「真的不同」的任務，單一 writeBatch 提交（失敗不影響畫面，下次再試）
+        const fixes: { id: string; patch: Record<string, unknown> }[] = [];
         for (const t of list) {
           const right = correctTaskStatus(
             t.doneCount,
@@ -218,7 +224,17 @@ export function useDashboardData(): DashboardData {
             t.status = right;
             const patch: Record<string, unknown> = { status: right };
             if (right === "done") patch.completedAt = serverTimestamp();
-            updateDoc(doc(db2, "reviewTasks", t.id), patch).catch(() => {
+            fixes.push({ id: t.id, patch });
+          }
+        }
+        if (fixes.length > 0) {
+          const db2 = getFirebaseDb();
+          for (let i = 0; i < fixes.length; i += 400) {
+            const batch = writeBatch(db2);
+            fixes
+              .slice(i, i + 400)
+              .forEach((f) => batch.update(doc(db2, "reviewTasks", f.id), f.patch));
+            batch.commit().catch(() => {
               /* 下次載入再試 */
             });
           }

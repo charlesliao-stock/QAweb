@@ -516,6 +516,20 @@ function MemberChecklist({
 
 // ================= 主頁 =================
 
+/**
+ * v1.27.2：同時發出的 users 全量讀取共用同一個 Promise（只在進行中去重，不留快取，
+ * 所以不會讀到過期資料）。進頁時 loadMaster／loadTitles／loadUsers 原本各讀 800 筆。
+ */
+let usersInflight: ReturnType<typeof getDocs> | null = null;
+function fetchUsersShared() {
+  if (!usersInflight) {
+    usersInflight = getDocs(collection(getFirebaseDb(), "users")).finally(() => {
+      usersInflight = null;
+    });
+  }
+  return usersInflight;
+}
+
 export function GroupsPage({
   onAction,
 }: {
@@ -763,6 +777,8 @@ export function GroupsPage({
     [units, managingGroupId],
   );
 
+  const usersLoadedRef = useRef(false);
+
   const loadRoles = useCallback(async () => {
     try {
       const snap = await getDocs(collection(getFirebaseDb(), "roles"));
@@ -800,7 +816,7 @@ export function GroupsPage({
       // 各單位人數（非管理員無 users 查詢權限，顯示「—」）
       const counts = new Map<string, number>();
       try {
-        const usersSnap = await getDocs(collection(db, "users"));
+        const usersSnap = await fetchUsersShared();
         usersSnap.docs.forEach((d) => {
           const uc = d.data().unitCode;
           if (typeof uc === "string" && uc) {
@@ -866,7 +882,7 @@ export function GroupsPage({
       // 各職稱使用人數（僅管理員可查 users）
       let titleCounts = new Map<string, number>();
       try {
-        const usnap = await getDocs(collection(db, "users"));
+        const usnap = await fetchUsersShared();
         usnap.docs.forEach((d) => {
           const t = d.data().title;
           if (typeof t === "string" && t) {
@@ -894,7 +910,8 @@ export function GroupsPage({
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
     try {
-      const snap = await getDocs(collection(getFirebaseDb(), "users"));
+      const snap = await fetchUsersShared();
+      usersLoadedRef.current = true;
       const list: UserRow[] = snap.docs
         .map((d) => {
           const data = d.data();
@@ -1017,7 +1034,8 @@ export function GroupsPage({
   }, [loadMaster, loadRoles, loadTitles, isAdmin, ensureSeeds]);
 
   useEffect(() => {
-    if (tab === "users" && isAdmin) {
+    // v1.27.2：掛載時已預載人員，切回頁籤不重拉（存檔後各 handler 會自行 loadUsers）
+    if (tab === "users" && isAdmin && !usersLoadedRef.current) {
       loadUsers();
     }
   }, [tab, isAdmin, loadUsers]);
