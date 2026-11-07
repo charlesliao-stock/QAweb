@@ -5109,6 +5109,12 @@ button:disabled {
   display: grid;
   gap: 10px;
 }
+.review-record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
 .review-edit-history-item {
   border: 1px solid var(--line, #e6ebec);
   border-radius: 10px;

@@ -531,6 +531,13 @@ export function AuditPage({
     }
   }
 
+  function editRecord(rec: RecordRow) {
+    setViewRow(null);
+    setDetailListOpen(false);
+    setExpandedRecordId(null);
+    setExecuting({ mode: "task", taskId: rec.taskId, editRecordId: rec.id });
+  }
+
   // 篩選區選項：組別＝清單內的組別；指標＝清單內的指標（隨組別連動）
   const groupOptions = useMemo(() => {
     const m = new Map<string, string>();
@@ -934,7 +941,7 @@ export function AuditPage({
                               setDetailListOpen(true);
                             }}
                           >
-                            <Eye size={14} /> 檢視明細
+                            <Eye size={14} /> 檢視個人結果
                           </button>
                         </td>
                       </tr>
@@ -982,7 +989,7 @@ export function AuditPage({
                       <th>審查人員</th>
                       <th>受審人員</th>
                       <th>正確率</th>
-                      <th>明細</th>
+                      <th>個人結果</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -993,10 +1000,15 @@ export function AuditPage({
                         <td data-label="審查人員">{maskName(record.reviewerName) || "—"}</td>
                         <td data-label="受審人員">{maskName(record.reviewedPersonName) || "—"}</td>
                         <td data-label="正確率">{record.rate == null ? "—" : `${record.rate}%`}</td>
-                        <td data-label="明細">
-                          <button type="button" className="text-button" onClick={() => void toggleRecordDetail(record)}>
-                            <Eye size={14} /> 明細
-                          </button>
+                        <td data-label="個人結果">
+                          <div className="review-record-actions">
+                            <button type="button" className="text-button" onClick={() => void toggleRecordDetail(record)}>
+                              <Eye size={14} /> 檢視
+                            </button>
+                            <button type="button" className="text-button" onClick={() => editRecord(record)}>
+                              <Pencil size={14} /> 修改
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1052,10 +1064,7 @@ export function AuditPage({
                     onClick={() => {
                       const record = viewRecords.find((item) => item.id === expandedRecordId);
                       if (!record) return;
-                      setViewRow(null);
-                      setDetailListOpen(false);
-                      setExpandedRecordId(null);
-                      setExecuting({ mode: "task", taskId: record.taskId, editRecordId: record.id });
+                      editRecord(record);
                     }}
                   >
                     <Pencil size={15} /> 編輯審查結果
