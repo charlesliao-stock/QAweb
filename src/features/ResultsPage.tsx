@@ -971,8 +971,110 @@ export function ResultsPage({
         ))}
       </div>
 
+      {/* v1.30.3：篩選器兩條橫向，第一條＝主體選擇器、第二條＝年／期間＋查詢（最右端） */}
+      {tab !== "import" && (
+        <div className="results-filters results-filters-main">
+          {tab === "group" && (
+            <SelectField
+              label="組別"
+              value={selGroup}
+              onChange={setSelGroup}
+              options={scopedGroups.map((g) => ({
+                value: g.id,
+                label: g.name,
+              }))}
+            />
+          )}
+          {tab === "unit" && (
+            <SelectField
+              label="單位"
+              value={selUnit}
+              onChange={setSelUnit}
+              options={scopedUnits.map((u) => ({
+                value: u.code,
+                label: `${u.code}・${u.name}`,
+              }))}
+            />
+          )}
+          {tab === "indicator" && (
+            <SelectField
+              label="指標"
+              value={selIndicator}
+              onChange={setSelIndicator}
+              options={indTabIndicators.map((i) => ({
+                value: i.id,
+                label: `${i.code}・${i.name}`,
+              }))}
+            />
+          )}
+        </div>
+      )}
       {tab !== "import" && (
         <div className="results-filters">
+          {tab === "group" && (
+            <SelectField
+              label="單元"
+              value={groupUnit}
+              onChange={(v) => setGroupUnit(v as UnitMode)}
+              options={[
+                { value: "person", label: "人次" },
+                { value: "unit", label: "單位" },
+              ]}
+            />
+          )}
+          {tab === "unit" && (
+            <>
+              <SelectField
+                label="組別"
+                value={selGroupU}
+                onChange={(v) => {
+                  setSelGroupU(v);
+                  setSelIndU("all");
+                }}
+                options={[
+                  { value: "all", label: "全部組別" },
+                  ...scopedGroups.map((g) => ({
+                    value: g.id,
+                    label: g.name,
+                  })),
+                ]}
+              />
+              <SelectField
+                label="指標"
+                value={selIndU}
+                onChange={setSelIndU}
+                options={[
+                  { value: "all", label: "全部指標" },
+                  ...unitIndOptions.map((i) => ({
+                    value: i.id,
+                    label: `${i.code}・${i.name}`,
+                  })),
+                ]}
+              />
+            </>
+          )}
+          {tab === "indicator" && (
+            <>
+              <SelectField
+                label="組別"
+                value={selGroup2}
+                onChange={setSelGroup2}
+                options={scopedGroups.map((g) => ({
+                  value: g.id,
+                  label: g.name,
+                }))}
+              />
+              <SelectField
+                label="單元"
+                value={indUnit}
+                onChange={(v) => setIndUnit(v as UnitMode)}
+                options={[
+                  { value: "person", label: "人次" },
+                  { value: "unit", label: "單位" },
+                ]}
+              />
+            </>
+          )}
           <ResultMonthPicker
             label="西元年/月"
             value={startMonth}
@@ -1054,26 +1156,6 @@ export function ResultsPage({
 
       {tab === "group" && (
         <>
-          <div className="results-filters">
-            <SelectField
-              label="組別"
-              value={selGroup}
-              onChange={setSelGroup}
-              options={scopedGroups.map((g) => ({
-                value: g.id,
-                label: g.name,
-              }))}
-            />
-            <SelectField
-              label="單元"
-              value={groupUnit}
-              onChange={(v) => setGroupUnit(v as UnitMode)}
-              options={[
-                { value: "person", label: "人次" },
-                { value: "unit", label: "單位" },
-              ]}
-            />
-          </div>
           {!applied ? (
             <EmptyState
               title="尚未查詢"
@@ -1114,44 +1196,6 @@ export function ResultsPage({
 
       {tab === "unit" && (
         <>
-          <div className="results-filters">
-            <SelectField
-              label="組別"
-              value={selGroupU}
-              onChange={(v) => {
-                setSelGroupU(v);
-                setSelIndU("all");
-              }}
-              options={[
-                { value: "all", label: "全部組別" },
-                ...scopedGroups.map((g) => ({
-                  value: g.id,
-                  label: g.name,
-                })),
-              ]}
-            />
-            <SelectField
-              label="單位"
-              value={selUnit}
-              onChange={setSelUnit}
-              options={scopedUnits.map((u) => ({
-                value: u.code,
-                label: `${u.code}・${u.name}`,
-              }))}
-            />
-            <SelectField
-              label="指標"
-              value={selIndU}
-              onChange={setSelIndU}
-              options={[
-                { value: "all", label: "全部指標" },
-                ...unitIndOptions.map((i) => ({
-                  value: i.id,
-                  label: `${i.code}・${i.name}`,
-                })),
-              ]}
-            />
-          </div>
           {!applied ? (
             <EmptyState
               title="尚未查詢"
@@ -1256,35 +1300,6 @@ export function ResultsPage({
 
       {tab === "indicator" && (
         <>
-          <div className="results-filters">
-            <SelectField
-              label="組別"
-              value={selGroup2}
-              onChange={setSelGroup2}
-              options={scopedGroups.map((g) => ({
-                value: g.id,
-                label: g.name,
-              }))}
-            />
-            <SelectField
-              label="指標"
-              value={selIndicator}
-              onChange={setSelIndicator}
-              options={indTabIndicators.map((i) => ({
-                value: i.id,
-                label: `${i.code}・${i.name}`,
-              }))}
-            />
-            <SelectField
-              label="單元"
-              value={indUnit}
-              onChange={(v) => setIndUnit(v as UnitMode)}
-              options={[
-                { value: "person", label: "人次" },
-                { value: "unit", label: "單位" },
-              ]}
-            />
-          </div>
           {!applied ? (
             <EmptyState
               title="尚未查詢"

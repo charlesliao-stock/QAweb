@@ -4392,6 +4392,7 @@ button:disabled {
 }
 
 /* ============ 結果分析頁（v1.13.0） ============ */
+/* v1.30.3：結果分析篩選器兩條橫向（第一條＝主體選擇器、第二條＝年／期間＋查詢） */
 .results-filters {
   display: flex;
   gap: 14px;
@@ -4516,12 +4517,22 @@ button:disabled {
 .results-filters .select-wrap {
   min-width: 150px;
 }
-/* v1.28 階段 3：查詢按鈕放篩選列最右端 */
+/* v1.28 階段 3：查詢按鈕放篩選列最右端（v1.30.3 維持不變，第二條最後面） */
 .results-query-actions {
   display: flex;
   gap: 10px;
   align-items: flex-end;
   margin-left: auto;
+}
+/* v1.30.3：結果匯入頁籤第一條＝組別＋指標橫向一排（僅限結果分析頁，不動其他頁的 .form-stack） */
+.results-page .form-stack {
+  flex-direction: row;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.results-page .form-stack .form-field {
+  flex: 1 1 200px;
+  min-width: 150px;
 }
 .results-data-time {
   color: #7b898b;
@@ -4560,6 +4571,11 @@ button:disabled {
   .results-filters .select-wrap {
     min-width: 0;
     flex: 1 1 45%;
+  }
+  /* v1.30.3：第一條只有主體選擇器一個欄位，窄螢幕改全寬 */
+  .results-filters-main .field-label,
+  .results-filters-main .select-wrap {
+    flex: 1 1 100%;
   }
   .results-month-field {
     min-width: 0;
