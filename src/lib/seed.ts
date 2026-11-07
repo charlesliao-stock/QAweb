@@ -168,6 +168,7 @@ export const UI_THEMES: { id: string; name: string }[] = [
   { id: "blue-3", name: "醫療藍" },
   { id: "teal-orange-3", name: "青橘" },
   { id: "purple-4", name: "沉穩紫" },
+  { id: "printmax-green", name: "薄荷綠橘" },
 ];
 
 export function themeName(id: string): string {

@@ -3706,6 +3706,36 @@ button:disabled {
   --accent2-soft: #faf3e4;
 }
 
+/* ============ 第 5 套主題「薄荷綠橘」（v1.31.0，方案 B） ============
+   概念借鑑自 Printmax 23167（T 恤電商模板，非後台）：只借視覺概念、自行重寫 CSS，
+   未下載／複製模板原始碼、圖片、字體。模板授權僅供學習參考、請勿商用。
+   模板原色（薄荷綠 #35D49B／蜜桃橘 #FFB08A／米白 #F5F3E8）對比太弱，
+   主綠與橘皆調深（白字對比皆 ≥4.5:1），橘只作點綴（.live-dot／強調小元素），不作大面積底色。
+   殼層（膠囊按鈕／卡片圓角 16px）只在此主題下生效，不動其他 4 套主題；
+   不改側邊欄寬、表格結構、審查「一題一列」、手機 bottom nav、字體大小；RAG 燈號不動。
+   深色模式：沿用現有 dark 覆寫（主色變數不動，沿用各主題既有行為），
+   此主題的 --teal-soft／--accent-soft 與 --teal-deep 對比約 7:1，深色下仍可讀。 */
+:root[data-theme="printmax-green"] {
+  --teal: #0b7a5f;
+  --teal-deep: #095c48;
+  --teal-soft: #e3f5ec;
+  --accent: #12836a;
+  --accent-deep: #0e6b53;
+  --accent-soft: #e6f6ef;
+  --accent2: #b4531a;
+  --accent2-deep: #8a3f14;
+  --accent2-soft: #fdf0e3;
+}
+:root[data-theme="printmax-green"] .button:not(.login-action) {
+  border-radius: 999px;
+  padding-left: 18px;
+  padding-right: 18px;
+}
+:root[data-theme="printmax-green"] .panel {
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(30, 54, 60, 0.06);
+}
+
 /* ============ 深色模式（個人顯示設定；RAG 燈號色相不變） ============ */
 :root[data-mode="dark"] {
   --bg: #0e1518;
