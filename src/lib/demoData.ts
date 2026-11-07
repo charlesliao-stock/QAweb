@@ -3,6 +3,7 @@
  * collectionPath → { docId: data }；子集合 path 如 "indicators/g-ward__QI-001/versions"
  */
 import {
+  BUILT_IN_THEMES,
   DEFAULT_SYSTEM_PARAMS,
   SEED_ROLES,
   SEED_TITLES,
@@ -200,6 +201,11 @@ export function getDemoData(): Record<string, Record<string, unknown>> {
     systemParams: {
       config: { ...DEFAULT_SYSTEM_PARAMS },
     },
+    // v1.32.0：UI 主題定義（資料驅動）。demo 下新增／編輯／刪除只寫記憶體，
+    // 關分頁即消失，與現有 demo 行為一致。
+    uiThemes: Object.fromEntries(
+      BUILT_IN_THEMES.map(({ id, ...rest }) => [id, rest]),
+    ),
     users: {
       demo: {
         name: "展示管理員",

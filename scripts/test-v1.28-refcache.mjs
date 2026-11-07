@@ -17,7 +17,7 @@ let f = 0;
 const a = (n, c) => { if (!c) { f++; console.error("FAIL:", n); } };
 
 // 範圍：六個參考集合＋systemParams/config
-a("範圍：六集合", JSON.stringify(L.REF_COLLECTIONS) === JSON.stringify(["indicators", "groups", "units", "users", "roles", "titles"]));
+a("範圍：七集合（v1.32.0 加 uiThemes）", JSON.stringify(L.REF_COLLECTIONS) === JSON.stringify(["indicators", "groups", "units", "users", "roles", "titles", "uiThemes"]));
 a("範圍：config 鍵", L.SYSTEM_CONFIG_KEY === "systemParams/config");
 
 // 命中／未命中：同一集合第二次不重查

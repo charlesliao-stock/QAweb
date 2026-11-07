@@ -21,7 +21,18 @@
   --teal-soft: #e9f5f3;
   --surface: #fff;
   --bg: #f5f7f8;
-  /* 輔助色：由 [data-theme] 主題覆寫（green-2 雙色主題預設與主色同系） */
+  /* 主題殼層變數（v1.32.0 資料驅動：由 applyTheme 依主題定義動態寫入；
+     此處為 green-2 預設值，JS 尚未執行時的首屏 fallback） */
+  --radius-btn: 8px;
+  --radius-card: 10px;
+  --lift: 0;
+  --grad: none;
+  --shadow-hover: 0 4px 12px color-mix(in srgb, var(--teal) 12%, transparent);
+  --shadow-card-hover: 0 2px 7px rgba(30, 54, 60, 0.018);
+  --btn-hover-bg: var(--teal-deep);
+  --btn-hover-color: #fff;
+  --row-hover: #fcfdfd;
+  --nav-hover: #f5f8f8;
   --accent: #4d7f78;
   --accent-deep: #3d6660;
   --accent-soft: #edf4f2;
@@ -236,14 +247,15 @@ button:disabled {
   align-items: center;
   justify-content: center;
   gap: 9px;
-  border-radius: 8px;
+  border-radius: var(--radius-btn, 8px);
   padding: 10px 14px;
   font-size: var(--font-small);
   font-weight: 700;
   transition:
     background 0.16s ease,
     border 0.16s ease,
-    transform 0.16s ease;
+    transform 0.16s ease,
+    box-shadow 0.16s ease;
   white-space: nowrap;
 }
 .button:hover {
@@ -255,7 +267,9 @@ button:disabled {
   box-shadow: 0 4px 12px color-mix(in srgb, var(--teal) 12%, transparent);
 }
 .button-primary:hover {
-  background: var(--teal-deep);
+  background: var(--btn-hover-bg, var(--teal-deep));
+  color: var(--btn-hover-color, #fff);
+  box-shadow: var(--shadow-hover, 0 4px 12px color-mix(in srgb, var(--teal) 12%, transparent));
 }
 .button-outline {
   color: var(--accent-deep);
@@ -492,7 +506,7 @@ button:disabled {
     background 0.16s ease;
 }
 .nav-item:hover {
-  background: #f5f8f8;
+  background: var(--nav-hover, #f5f8f8);
   color: #42625e;
 }
 .nav-item.active {
@@ -984,10 +998,38 @@ button:disabled {
   min-width: 0;
   background: #fff;
   border: 1px solid #e8eeee;
-  border-radius: 10px;
+  border-radius: var(--radius-card, 10px);
   box-shadow: 0 2px 7px rgba(30, 54, 60, 0.018);
   /* 版面邊界統一（2026-11-03）：內容面板預設內距，文字不貼邊 */
   padding: 22px 26px;
+  /* v1.32.0：position: relative 供卡片頂條 ::before 定位；已核對——
+     .panel 內的 absolute 子元素（.chart-tip／.suggest-list／.display-pop／
+     .results-month-popover 等）各有更近的 relative 父層，不受影響。 */
+  position: relative;
+  transition:
+    transform 0.16s ease,
+    box-shadow 0.16s ease;
+}
+/* 卡片頂條（主題漸層；--grad: none 時無頂條，hover 時淡入） */
+.panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--grad, none);
+  border-radius: var(--radius-card, 10px) var(--radius-card, 10px) 0 0;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+  pointer-events: none;
+}
+.panel:hover::before {
+  opacity: 1;
+}
+.panel:hover {
+  transform: translateY(calc(var(--lift, 0) * -1px));
+  box-shadow: var(--shadow-card-hover, 0 2px 7px rgba(30, 54, 60, 0.018));
 }
 /* data-panel 內放滿版表格／工具列時維持貼邊，由內部元素自帶內距 */
 .panel.data-panel {
@@ -1561,7 +1603,7 @@ button:disabled {
   border-bottom: 0;
 }
 .data-table tbody tr:hover {
-  background: #fcfdfd;
+  background: var(--row-hover, #fcfdfd);
 }
 .indicator-title {
   display: flex;
@@ -3670,71 +3712,11 @@ button:disabled {
   }
 }
 
-/* ============ 主題配色（管理員於系統參數設定，全院統一） ============ */
-/* green-2 雅致綠為 :root 預設值，不需覆寫 */
-:root[data-theme="blue-3"] {
-  --teal: #1e6fb8;
-  --teal-deep: #175a95;
-  --teal-soft: #e9f2fb;
-  --accent: #2f9fd8;
-  --accent-deep: #237fae;
-  --accent-soft: #e6f4fc;
-  --accent2: #2f9fd8;
-  --accent2-deep: #237fae;
-  --accent2-soft: #e6f4fc;
-}
-:root[data-theme="teal-orange-3"] {
-  --teal: #0f766e;
-  --teal-deep: #0d625c;
-  --teal-soft: #e9f5f3;
-  --accent: #d97a2b;
-  --accent-deep: #b25f1d;
-  --accent-soft: #fdf0e2;
-  --accent2: #d97a2b;
-  --accent2-deep: #b25f1d;
-  --accent2-soft: #fdf0e2;
-}
-:root[data-theme="purple-4"] {
-  --teal: #6d4fa3;
-  --teal-deep: #573d85;
-  --teal-soft: #f0eaf8;
-  --accent: #0f766e;
-  --accent-deep: #0d625c;
-  --accent-soft: #e9f5f3;
-  --accent2: #c08a2d;
-  --accent2-deep: #9a6e22;
-  --accent2-soft: #faf3e4;
-}
-
-/* ============ 第 5 套主題「薄荷綠橘」（v1.31.0，方案 B） ============
-   概念借鑑自 Printmax 23167（T 恤電商模板，非後台）：只借視覺概念、自行重寫 CSS，
-   未下載／複製模板原始碼、圖片、字體。模板授權僅供學習參考、請勿商用。
-   模板原色（薄荷綠 #35D49B／蜜桃橘 #FFB08A／米白 #F5F3E8）對比太弱，
-   主綠與橘皆調深（白字對比皆 ≥4.5:1），橘只作點綴（.live-dot／強調小元素），不作大面積底色。
-   殼層（膠囊按鈕／卡片圓角 16px）只在此主題下生效，不動其他 4 套主題；
-   不改側邊欄寬、表格結構、審查「一題一列」、手機 bottom nav、字體大小；RAG 燈號不動。
-   深色模式：沿用現有 dark 覆寫（主色變數不動，沿用各主題既有行為），
-   此主題的 --teal-soft／--accent-soft 與 --teal-deep 對比約 7:1，深色下仍可讀。 */
-:root[data-theme="printmax-green"] {
-  --teal: #0b7a5f;
-  --teal-deep: #095c48;
-  --teal-soft: #e3f5ec;
-  --accent: #12836a;
-  --accent-deep: #0e6b53;
-  --accent-soft: #e6f6ef;
-  --accent2: #b4531a;
-  --accent2-deep: #8a3f14;
-  --accent2-soft: #fdf0e3;
-}
-:root[data-theme="printmax-green"] .button:not(.login-action) {
-  border-radius: 999px;
-  padding-left: 18px;
-  padding-right: 18px;
-}
-:root[data-theme="printmax-green"] .panel {
-  border-radius: 16px;
-  box-shadow: 0 4px 16px rgba(30, 54, 60, 0.06);
-}
+/* ============ 主題配色（v1.32.0 資料驅動） ============
+   不再有 :root[data-theme="…"] 寫死區塊；主題定義在 Firestore uiThemes，
+   applyTheme 以 JS 動態寫入 CSS 變數（見 src/lib/themeRegistry.ts）。
+   :root 保留 green-2 預設值（首屏、JS 尚未執行時的 fallback）。
+   舊 4 套主題的殼層變數填現行值，改版後外觀與改版前相同。 */
 
 /* ============ 深色模式（個人顯示設定；RAG 燈號色相不變） ============ */
 :root[data-mode="dark"] {

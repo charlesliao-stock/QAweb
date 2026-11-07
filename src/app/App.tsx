@@ -22,6 +22,7 @@ import { doc } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
 import { getDocCacheFirst } from "../lib/cacheFirst";
+import { loadThemes } from "../lib/themeRegistry";
 import {
   applyTheme,
   applyUiPrefs,
@@ -387,12 +388,17 @@ function Shell() {
   }, []);
 
   // 個人顯示設定（本機）＋ 全院主題配色（系統參數）
+  // v1.32.0：主題改資料驅動，config 與 uiThemes 並行讀取後再套用；
+  // loadThemes 失敗時回內建常數，applyTheme 仍有 fallback，不擋登入。
   useEffect(() => {
     applyUiPrefs();
-    getCachedRef(SYSTEM_CONFIG_KEY, () =>
-      getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
-    )
-      .then((snap) => {
+    Promise.all([
+      getCachedRef(SYSTEM_CONFIG_KEY, () =>
+        getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
+      ),
+      loadThemes(),
+    ])
+      .then(([snap]) => {
         const t = snap.exists()
           ? (snap.data() as { uiTheme?: unknown }).uiTheme
           : undefined;

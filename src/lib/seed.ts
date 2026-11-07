@@ -162,17 +162,302 @@ export interface SystemParams {
   statsCycle: "year" | "academic";
 }
 
-/** 主題配色選項（id 需與 styles.css 的 [data-theme] 對應） */
-export const UI_THEMES: { id: string; name: string }[] = [
-  { id: "green-2", name: "雅致綠" },
-  { id: "blue-3", name: "醫療藍" },
-  { id: "teal-orange-3", name: "青橘" },
-  { id: "purple-4", name: "沉穩紫" },
-  { id: "printmax-green", name: "薄荷綠橘" },
+/**
+ * 主題定義（v1.32.0，資料驅動架構，設計 v2 §1.2）。
+ * 運行時唯一來源是 Firestore `uiThemes` 集合（每套主題一份文件，doc id＝主題 id）；
+ * 此處 `BUILT_IN_THEMES` 只是種子來源＋離線／空庫 fallback，不是第二份運行時真相。
+ * 內建主題改色只改此常數，再跑一次種子（或管理介面「補齊內建模板」）；管理員想改色
+ * 請用「複製成自訂模板再改」。
+ * 亮色（#35D49B／#FFB08A／#FFDE5D／#F6AB4A）絕不作白字按鈕底，只出現在淡底／描邊／
+ * 光暈／頂條，或配深字；白字主色對比皆以 WCAG 公式實算 ≥4.5:1。
+ */
+export interface UiThemeDef {
+  id: string;
+  name: string;
+  source: string;
+  builtIn: boolean;
+  hidden: boolean;
+  order: number;
+  teal: string;
+  tealDeep: string;
+  tealSoft: string;
+  accent: string;
+  accentDeep: string;
+  accentSoft: string;
+  accent2: string;
+  accent2Deep: string;
+  accent2Soft: string;
+  /** 頁面底（淺色模式；深色模式由 dark 覆寫接管，不寫入 inline） */
+  bg: string;
+  radiusBtn: number;
+  radiusCard: number;
+  /** 卡片 hover 上浮 px（0＝不浮） */
+  lift: number;
+  /** 卡片頂條漸層 CSS 字串，"none"＝無頂條 */
+  grad: string;
+  /** 主按鈕 hover 陰影，"none"＝不加光暈（舊主題填按鈕原陰影，外觀不變） */
+  shadowHover: string;
+  /** 卡片 hover 陰影（舊主題填卡片原陰影，外觀不變） */
+  shadowCardHover: string;
+  btnHoverBg: string;
+  btnHoverColor: string;
+  rowHover: string;
+  navHover: string;
+  updatedAt?: unknown;
+  updatedBy?: string;
+}
+
+/** 舊主題的殼層預設（v1.32.0 前外觀）：按鈕圓角 8px、卡片 10px、不浮起、無頂條 */
+const LEGACY_SHELL = {
+  radiusBtn: 8,
+  radiusCard: 10,
+  lift: 0,
+  grad: "none",
+  shadowHover:
+    "0 4px 12px color-mix(in srgb, var(--teal) 12%, transparent)",
+  shadowCardHover: "0 2px 7px rgba(30,54,60,.018)",
+  rowHover: "#fcfdfd",
+  navHover: "#f5f8f8",
+} as const;
+
+/** 9 套內建主題（舊 4 套 9 變數沿用現行值，改版後外觀與改版前相同；
+   僅兩處為通過 §2.4 對比驗證而調深一階，肉眼幾乎無差：blue-3 accentDeep
+   #237fae→#1f709e（原白字 4.45／淡底 3.97），teal-orange-3 accentDeep
+   #b25f1d→#a05518（原淡底 4.12）） */
+export const BUILT_IN_THEMES: UiThemeDef[] = [
+  {
+    id: "green-2",
+    name: "雅致綠",
+    source: "內建預設",
+    builtIn: true,
+    hidden: false,
+    order: 0,
+    teal: "#0f766e",
+    tealDeep: "#0d625c",
+    tealSoft: "#e9f5f3",
+    accent: "#4d7f78",
+    accentDeep: "#3d6660",
+    accentSoft: "#edf4f2",
+    accent2: "#4d7f78",
+    accent2Deep: "#3d6660",
+    accent2Soft: "#edf4f2",
+    bg: "#f5f7f8",
+    ...LEGACY_SHELL,
+    btnHoverBg: "#0d625c",
+    btnHoverColor: "#ffffff",
+  },
+  {
+    id: "blue-3",
+    name: "醫療藍",
+    source: "內建預設",
+    builtIn: true,
+    hidden: false,
+    order: 1,
+    teal: "#1e6fb8",
+    tealDeep: "#175a95",
+    tealSoft: "#e9f2fb",
+    accent: "#2f9fd8",
+    accentDeep: "#1f709e",
+    accentSoft: "#e6f4fc",
+    accent2: "#2f9fd8",
+    accent2Deep: "#237fae",
+    accent2Soft: "#e6f4fc",
+    bg: "#f5f7f8",
+    ...LEGACY_SHELL,
+    btnHoverBg: "#175a95",
+    btnHoverColor: "#ffffff",
+  },
+  {
+    id: "teal-orange-3",
+    name: "青橘",
+    source: "內建預設",
+    builtIn: true,
+    hidden: false,
+    order: 2,
+    teal: "#0f766e",
+    tealDeep: "#0d625c",
+    tealSoft: "#e9f5f3",
+    accent: "#d97a2b",
+    accentDeep: "#a05518",
+    accentSoft: "#fdf0e2",
+    accent2: "#d97a2b",
+    accent2Deep: "#b25f1d",
+    accent2Soft: "#fdf0e2",
+    bg: "#f5f7f8",
+    ...LEGACY_SHELL,
+    btnHoverBg: "#0d625c",
+    btnHoverColor: "#ffffff",
+  },
+  {
+    id: "purple-4",
+    name: "沉穩紫",
+    source: "內建預設",
+    builtIn: true,
+    hidden: false,
+    order: 3,
+    teal: "#6d4fa3",
+    tealDeep: "#573d85",
+    tealSoft: "#f0eaf8",
+    accent: "#0f766e",
+    accentDeep: "#0d625c",
+    accentSoft: "#e9f5f3",
+    accent2: "#c08a2d",
+    accent2Deep: "#9a6e22",
+    accent2Soft: "#faf3e4",
+    bg: "#f5f7f8",
+    ...LEGACY_SHELL,
+    btnHoverBg: "#573d85",
+    btnHoverColor: "#ffffff",
+  },
+  {
+    id: "printmax-green",
+    name: "薄荷綠橘",
+    source: "借鑑 mobanwang 23167",
+    builtIn: true,
+    hidden: false,
+    order: 4,
+    teal: "#0e856c",
+    tealDeep: "#0a6e57",
+    tealSoft: "#d8f3e6",
+    accent: "#12836a",
+    accentDeep: "#0e6b53",
+    accentSoft: "#e6f6ef",
+    accent2: "#b4531a",
+    accent2Deep: "#8a3f14",
+    accent2Soft: "#fdf0e3",
+    bg: "#eef8f1",
+    radiusBtn: 999,
+    radiusCard: 16,
+    lift: 2,
+    grad: "linear-gradient(90deg,#35d49b,#ffb08a)",
+    shadowHover: "0 6px 18px rgba(53,212,155,.45)",
+    shadowCardHover: "0 8px 24px rgba(11,122,95,.14)",
+    btnHoverBg: "#0e856c",
+    btnHoverColor: "#ffffff",
+    rowHover: "#e6f6ef",
+    navHover: "#d8f3e6",
+  },
+  {
+    id: "dexon-mint",
+    name: "薄荷亮黃",
+    source: "借鑑 mobanwang 23160",
+    builtIn: true,
+    hidden: false,
+    order: 5,
+    teal: "#0e7a5f",
+    tealDeep: "#0a5c48",
+    tealSoft: "#d9f2e6",
+    accent: "#0b6b52",
+    accentDeep: "#084d3c",
+    accentSoft: "#d9f2e6",
+    accent2: "#8a6d1a",
+    accent2Deep: "#6b5413",
+    accent2Soft: "#fbf3d3",
+    bg: "#eaf9f4",
+    radiusBtn: 999,
+    radiusCard: 16,
+    lift: 2,
+    grad: "linear-gradient(90deg,#35d49b,#ffde5d)",
+    shadowHover: "0 6px 18px rgba(255,222,93,.5)",
+    shadowCardHover: "0 8px 24px rgba(14,122,95,.14)",
+    btnHoverBg: "#ffde5d",
+    btnHoverColor: "#101210",
+    rowHover: "#d9f2e6",
+    navHover: "#d9f2e6",
+  },
+  {
+    id: "edu-blue",
+    name: "教育寶藍",
+    source: "借鑑 mobanwang 23152",
+    builtIn: true,
+    hidden: false,
+    order: 6,
+    teal: "#4361ee",
+    tealDeep: "#3a0ca3",
+    tealSoft: "#e6ebff",
+    accent: "#4361ee",
+    accentDeep: "#2e3fa8",
+    accentSoft: "#e6ebff",
+    accent2: "#c9184a",
+    accent2Deep: "#9e1239",
+    accent2Soft: "#fde8ef",
+    bg: "#f4f6ff",
+    radiusBtn: 999,
+    radiusCard: 14,
+    lift: 2,
+    grad: "linear-gradient(90deg,#4361ee,#3a0ca3)",
+    shadowHover: "0 6px 18px rgba(67,97,238,.35)",
+    shadowCardHover: "0 8px 24px rgba(67,97,238,.16)",
+    btnHoverBg: "#3a0ca3",
+    btnHoverColor: "#ffffff",
+    rowHover: "#e6ebff",
+    navHover: "#e6ebff",
+  },
+  {
+    id: "bistro-brown",
+    name: "陶土棕",
+    source: "借鑑 mobanwang 23137",
+    builtIn: true,
+    hidden: false,
+    order: 7,
+    teal: "#a85f36",
+    tealDeep: "#7e4a2b",
+    tealSoft: "#f7ebe2",
+    accent: "#a85f36",
+    accentDeep: "#7e4a2b",
+    accentSoft: "#f7ebe2",
+    accent2: "#96600f",
+    accent2Deep: "#75500c",
+    accent2Soft: "#faf0d9",
+    bg: "#fbfaf7",
+    radiusBtn: 12,
+    radiusCard: 14,
+    lift: 2,
+    grad: "linear-gradient(90deg,#c17c54,#b36c48)",
+    shadowHover: "0 6px 18px rgba(193,124,84,.35)",
+    shadowCardHover: "0 8px 24px rgba(168,95,54,.14)",
+    btnHoverBg: "#7e4a2b",
+    btnHoverColor: "#ffffff",
+    rowHover: "#f7ebe2",
+    navHover: "#f7ebe2",
+  },
+  {
+    id: "paw-orange",
+    name: "暖橘酒紅",
+    source: "借鑑 mobanwang 23149",
+    builtIn: true,
+    hidden: false,
+    order: 8,
+    teal: "#9c6210",
+    tealDeep: "#8a5510",
+    tealSoft: "#fbeed3",
+    accent: "#7d4b4e",
+    accentDeep: "#5f383b",
+    accentSoft: "#f3e6e7",
+    accent2: "#a06a12",
+    accent2Deep: "#7a4e0c",
+    accent2Soft: "#fdf0d8",
+    bg: "#fff8e8",
+    radiusBtn: 999,
+    radiusCard: 16,
+    lift: 2,
+    grad: "linear-gradient(90deg,#f6ab4a,#7d4b4e)",
+    shadowHover: "0 6px 18px rgba(246,171,74,.45)",
+    shadowCardHover: "0 8px 24px rgba(156,98,16,.14)",
+    btnHoverBg: "#8a5510",
+    btnHoverColor: "#ffffff",
+    rowHover: "#fbeed3",
+    navHover: "#fbeed3",
+  },
 ];
 
+/** 主題配色選項（相容舊呼叫端；新程式請走 themeRegistry 的 loadThemes） */
+export const UI_THEMES: { id: string; name: string }[] = BUILT_IN_THEMES.map(
+  ({ id, name }) => ({ id, name }),
+);
+
 export function themeName(id: string): string {
-  return UI_THEMES.find((t) => t.id === id)?.name ?? id;
+  return BUILT_IN_THEMES.find((t) => t.id === id)?.name ?? id;
 }
 
 /** 系統參數預設值（需求規格書 v2.1） */
@@ -269,5 +554,18 @@ export async function runSystemSeed(
       },
       { merge: true },
     );
+  }
+  // v1.32.0：內建主題種子（uiThemes 集合，僅缺失時寫入，不覆蓋已自訂／已隱藏狀態）
+  for (const theme of BUILT_IN_THEMES) {
+    const ref = doc(db, "uiThemes", theme.id);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      await setDoc(ref, {
+        ...theme,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: staffId,
+      });
+    }
   }
 }
