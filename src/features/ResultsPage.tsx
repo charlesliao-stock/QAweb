@@ -23,6 +23,7 @@ import {
   collection,
   doc,
   getDocs,
+  getDocsFromServer,
   query,
   serverTimestamp,
   where,
@@ -1919,7 +1920,7 @@ function ResultImportPanel({
             getDocsCacheFirst(collection(db, "units")),
           ),
           getCachedRefCollection("users", () =>
-            getDocsCacheFirst(collection(db, "users")),
+            getDocsFromServer(collection(db, "users")),
           ),
         ]);
         setGroups(

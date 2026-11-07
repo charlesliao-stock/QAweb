@@ -12,6 +12,7 @@ import {
   collection,
   doc,
   getDocs,
+  getDocsFromServer,
   limit,
   query,
   updateDoc,
@@ -356,7 +357,7 @@ export async function readFirebaseUsersForReviewerManagement(): Promise<
 > {
   const db = getFirebaseDb();
   const snapshot = await getCachedRefCollection("users", () =>
-    getDocsCacheFirst(query(collection(db, "users"), limit(1000))),
+    getDocsFromServer(query(collection(db, "users"), limit(1000))),
   );
   let groupByUnit = new Map<string, string>();
   try {

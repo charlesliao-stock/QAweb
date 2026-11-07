@@ -6,8 +6,10 @@
  * 只開快取開關不改讀法是省不到錢的（getDocs() 預設先問伺服器，一定計費），
  * 故參考資料改走本模組：先讀快取、命中免計費、未命中回伺服器。
  *
- * 範圍（收斂）：只走 refCache 漏斗的參考資料——指標／群組／單位／人員／
- * 角色／職稱六集合＋systemParams/config（變化慢）。reviewRecords／
+ * 範圍（收斂）：只走 refCache 漏斗的參考資料——指標／群組／單位／
+ * 角色／職稱集合＋systemParams/config（變化慢）。users 全集合查詢改走
+ * getDocsFromServer：Firestore 本機 query cache 可能只包含先前讀過的文件，
+ * 不能保證是完整人員名單。reviewRecords／
  * reviewTasks 保持伺服器優先（變化快、正確性優先），不擴大範圍。
  * 呼叫端不需逐處改寫：遷移方式是把 refCache fetcher 內的 getDocs／getDoc
  * 換成本模組的 getDocsCacheFirst／getDocCacheFirst。

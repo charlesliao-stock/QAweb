@@ -12,11 +12,10 @@ import {
   Pencil,
   Plus,
 } from "lucide-react";
-import { collection, doc, getDoc, getDocs, query, where } from "../lib/db";
+import { collection, doc, getDoc, getDocs, getDocsFromServer, query, where } from "../lib/db";
 import { EmptyState, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
-import { getDocsCacheFirst } from "../lib/cacheFirst";
 import { maskName } from "../lib/mask";
 import {
   MONTH_LABELS,
@@ -137,7 +136,7 @@ export function ReviewOverviewPage({
           ),
         ),
         getCachedRefCollection("users", () =>
-          getDocsCacheFirst(collection(db, "users")),
+          getDocsFromServer(collection(db, "users")),
         ),
       ]);
 

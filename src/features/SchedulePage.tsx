@@ -24,6 +24,7 @@ import {
   collection,
   doc,
   getDocs,
+  getDocsFromServer,
   query,
   serverTimestamp,
   setDoc,
@@ -361,7 +362,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             getDocsCacheFirst(collection(db, "units")),
           ),
           getCachedRefCollection("users", () =>
-            getDocsCacheFirst(collection(db, "users")),
+            getDocsFromServer(collection(db, "users")),
           ),
           getDocs(collection(db, "reviewReviewers")),
           listSchedules(db),
@@ -2946,4 +2947,3 @@ function AssignmentEditor({
     </>
   );
 }
-

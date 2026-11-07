@@ -21,6 +21,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  getDocsFromServer,
   limit,
   orderBy,
   query,
@@ -835,7 +836,7 @@ export function IndicatorsPage({
     }
     try {
       const usnap = await getCachedRefCollection("users", () =>
-        getDocsCacheFirst(collection(getFirebaseDb(), "users")),
+        getDocsFromServer(collection(getFirebaseDb(), "users")),
       );
       const sm = new Map<string, StaffOption>();
       usnap.docs.forEach((d) => {

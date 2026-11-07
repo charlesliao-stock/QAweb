@@ -15,6 +15,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  getDocsFromServer,
   limit,
   query,
   serverTimestamp,
@@ -839,7 +840,7 @@ export function GroupsPage({
       const counts = new Map<string, number>();
       try {
         const usersSnap = await getCachedRefCollection("users", () =>
-          getDocsCacheFirst(collection(getFirebaseDb(), "users")),
+          getDocsFromServer(collection(getFirebaseDb(), "users")),
         );
         usersSnap.docs.forEach((d) => {
           const uc = d.data().unitCode;
@@ -909,7 +910,7 @@ export function GroupsPage({
       let titleCounts = new Map<string, number>();
       try {
         const usnap = await getCachedRefCollection("users", () =>
-          getDocsCacheFirst(collection(getFirebaseDb(), "users")),
+          getDocsFromServer(collection(getFirebaseDb(), "users")),
         );
         usnap.docs.forEach((d) => {
           const t = d.data().title;
@@ -939,7 +940,7 @@ export function GroupsPage({
     setUsersLoading(true);
     try {
       const snap = await getCachedRefCollection("users", () =>
-        getDocsCacheFirst(collection(getFirebaseDb(), "users")),
+        getDocsFromServer(collection(getFirebaseDb(), "users")),
       );
       usersLoadedRef.current = true;
       const list: UserRow[] = snap.docs

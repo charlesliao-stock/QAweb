@@ -17,6 +17,7 @@ import {
   doc as fsDoc,
   getDoc as fsGetDoc,
   getDocs as fsGetDocs,
+  getDocsFromServer as fsGetDocsFromServer,
   limit as fsLimit,
   orderBy as fsOrderBy,
   query as fsQuery,
@@ -57,6 +58,13 @@ export function getDocs(ref: any): Promise<QuerySnapshot> {
   return demoOn()
     ? Promise.resolve(demo.getDocs(ref) as unknown as QuerySnapshot)
     : fsGetDocs(ref);
+}
+
+/** 需要完整清單時繞過可能不完整的本機 IndexedDB 查詢快取。 */
+export function getDocsFromServer(ref: any): Promise<QuerySnapshot> {
+  return demoOn()
+    ? Promise.resolve(demo.getDocs(ref) as unknown as QuerySnapshot)
+    : fsGetDocsFromServer(ref);
 }
 
 export function setDoc(ref: any, data: any, options?: any): Promise<void> {
