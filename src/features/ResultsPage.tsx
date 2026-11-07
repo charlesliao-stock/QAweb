@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Download,
   FileText,
   TrendingUp,
@@ -153,6 +154,97 @@ interface UnitPanel {
 
 function fmtRate(rate: number | null): string {
   return rate == null ? "—" : `${rate.toFixed(1)}%`;
+}
+
+function ResultMonthPicker({
+  label,
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [displayYear, setDisplayYear] = useState(() => Number(value.slice(0, 4)));
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const [year, month] = value.split("-").map(Number);
+  const months = Array.from({ length: 12 }, (_, index) => index + 1);
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: MouseEvent) => {
+      if (event.target instanceof Node && !pickerRef.current?.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+  return (
+    <div className="results-month-field" ref={pickerRef}>
+      <span>{label}</span>
+      <span className="results-month-picker">
+        <button
+          type="button"
+          className="results-month-trigger"
+          aria-label={ariaLabel}
+          aria-expanded={open}
+          onClick={() => {
+            setDisplayYear(year || new Date().getFullYear());
+            setOpen((current) => !current);
+          }}
+        >
+          {year}年{String(month).padStart(2, "0")}月
+          <ChevronDown size={15} />
+        </button>
+        {open && (
+          <div className="results-month-popover" role="dialog" aria-label={`${ariaLabel}選擇器`}>
+            <span className="results-month-year">
+              <button
+                type="button"
+                aria-label="前一年"
+                onClick={() => setDisplayYear((current) => current - 1)}
+              >
+                <ChevronLeft size={17} />
+              </button>
+              <strong>{displayYear}年</strong>
+              <button
+                type="button"
+                aria-label="下一年"
+                onClick={() => setDisplayYear((current) => current + 1)}
+              >
+                <ChevronRight size={17} />
+              </button>
+            </span>
+            <span className="results-month-grid">
+              {months.map((item) => (
+                <button
+                  type="button"
+                  key={item}
+                  className={year === displayYear && month === item ? "active" : ""}
+                  onClick={() => {
+                    onChange(`${displayYear}-${String(item).padStart(2, "0")}`);
+                    setOpen(false);
+                  }}
+                >
+                  {item}月
+                </button>
+              ))}
+            </span>
+          </div>
+        )}
+      </span>
+    </div>
+  );
 }
 
 /** 矩陣格格式：75%(3/4)；無資料 — */
@@ -881,25 +973,19 @@ export function ResultsPage({
 
       {tab !== "import" && (
         <div className="results-filters">
-          <label className="results-month-field">
-            <span>西元年/月</span>
-            <input
-              type="month"
-              value={startMonth}
-              onChange={(event) => setStartMonth(event.target.value)}
-              aria-label="起始西元年/月"
-            />
-          </label>
+          <ResultMonthPicker
+            label="西元年/月"
+            value={startMonth}
+            onChange={setStartMonth}
+            ariaLabel="起始西元年/月"
+          />
           <span className="results-range-separator">~</span>
-          <label className="results-month-field">
-            <span>西元年/月</span>
-            <input
-              type="month"
-              value={endMonth}
-              onChange={(event) => setEndMonth(event.target.value)}
-              aria-label="結束西元年/月"
-            />
-          </label>
+          <ResultMonthPicker
+            label="西元年/月"
+            value={endMonth}
+            onChange={setEndMonth}
+            ariaLabel="結束西元年/月"
+          />
           <SelectField
             label="單位"
             value={interval}
