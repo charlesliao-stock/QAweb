@@ -5275,3 +5275,140 @@ button:disabled {
   color: #3b5bdb;
   margin-top: 4px;
 }
+
+/* ============ v1.32.1：RWD 修復（P0＋P1＋P2，稽核報告 §5 第 1–15 項） ============ */
+/* P2-9：橫向溢出兜底。overflow-x: clip（非 hidden）不建立捲動容器，sticky topbar 不受影響。 */
+body {
+  overflow-x: clip;
+}
+
+/* P2-8：觸控目標 ≥40px。彈窗關閉鈕獨立尺寸。 */
+.button {
+  min-height: 40px;
+}
+.reviewer-modal-head > .button {
+  min-width: 40px;
+  min-height: 40px;
+}
+
+/* P1-5：頁籤列可橫捲，頁籤不被擠壓。 */
+.tabs {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  max-width: 100%;
+}
+.tabs .tab {
+  flex-shrink: 0;
+}
+
+/* P2-12：標題列可換行。 */
+.page-heading {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 760px) {
+  /* P1-7：權限矩陣手機版——精簡欄寬＋首欄 sticky。矩陣為多欄勾選，不適用卡片轉換，
+     保留橫捲但縮短捲動距離，名稱欄 sticky 保持可辨識。 */
+  .permission-table {
+    min-width: 620px;
+  }
+  .permission-table th,
+  .permission-table td {
+    padding: 8px 6px;
+    font-size: 12px;
+  }
+  .permission-table th:first-child,
+  .permission-table td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    box-shadow: 1px 0 0 var(--line, #e6ebec);
+  }
+  .permission-table td:first-child {
+    background: var(--surface, #fff);
+  }
+  :root[data-mode="dark"] .permission-table td:first-child {
+    background: #1b2a2e;
+  }
+  /* P2-8：觸控目標（手機）。另兩處 760px 反縮 padding 在此補回 40px 高度。 */
+  .icon-button {
+    width: 40px;
+    height: 40px;
+  }
+  .text-button {
+    min-height: 40px;
+    padding: 10px 4px;
+  }
+  .page-heading .button,
+  .audit-bottom .button {
+    min-height: 40px;
+    padding: 11px 12px;
+  }
+  .permission-table input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (max-width: 640px) {
+  /* P1-3：結果矩陣首欄 220px → 120px，保留 sticky。 */
+  .analysis-matrix th.ind-col,
+  .analysis-matrix td.ind-col {
+    min-width: 120px;
+  }
+  /* P1-4：分工勾選 3 欄 → 2 欄。 */
+  .unit-check-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* P1-6：標準／batch 彈窗近滿版（backdrop padding 同步縮為 8px，寬度才放得下）。 */
+  .reviewer-modal-backdrop {
+    padding: 8px;
+  }
+  .reviewer-modal,
+  .reviewer-modal.batch-modal {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+  /* P2-10：popover 縮減；月份 popover 改靠右對齊，避免溢出欄位右緣。 */
+  .results-month-popover {
+    left: auto;
+    right: 0;
+    width: min(260px, calc(100vw - 24px));
+  }
+  .display-pop {
+    width: min(240px, calc(100vw - 24px));
+  }
+  /* P2-11：月份格 3 欄 → 2 欄。 */
+  .results-month-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* P2-12：topbar 高度改 auto＋換行（桌機維持固定 64/56px）。 */
+  .topbar {
+    height: auto;
+    min-height: 56px;
+    flex-wrap: wrap;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  /* P2-13：分數輸入不設 240px 下限。 */
+  .fraction {
+    min-width: 0;
+    width: 100%;
+  }
+  /* P2-14：radio／checkbox 觸控放大（整列可點不動）。 */
+  .check-row input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+  }
+  .radio-group .check-row input[type="radio"] {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+@media (max-width: 380px) {
+  /* P1-4：分工勾選 2 欄 → 1 欄。 */
+  .unit-check-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

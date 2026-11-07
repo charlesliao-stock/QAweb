@@ -2546,20 +2546,20 @@ function ScheduleDetailModal({
           <tbody>
             <tr>
               <td style={{ whiteSpace: "nowrap" }}><b>期間</b></td>
-              <td>
+              <td data-label="期間">
                 {sched.periodLabel}
                 {sched.refYear != null && `（${sched.refYear}年加審）`}
               </td>
             </tr>
             <tr>
               <td style={{ whiteSpace: "nowrap" }}><b>審查月份</b></td>
-              <td>{intervalRangeText || monthLabels || "—"}</td>
+              <td data-label="審查月份">{intervalRangeText || monthLabels || "—"}</td>
             </tr>
             {!isTemp && (
               <>
                 <tr>
                   <td style={{ whiteSpace: "nowrap" }}><b>審查頻次</b></td>
-                  <td>
+                  <td data-label="審查頻次">
                     {sched.frequency != null
                       ? frequencyLabel(sched.frequency)
                       : "—"}
@@ -2567,7 +2567,7 @@ function ScheduleDetailModal({
                 </tr>
                 <tr>
                   <td style={{ whiteSpace: "nowrap" }}><b>審查區間</b></td>
-                  <td>
+                  <td data-label="審查區間">
                     {sched.intervalMonths != null
                       ? intervalLabel(sched.intervalMonths)
                       : "—"}
@@ -2577,7 +2577,7 @@ function ScheduleDetailModal({
             )}
             <tr>
               <td style={{ whiteSpace: "nowrap" }}><b>受審單位</b></td>
-              <td>
+              <td data-label="受審單位">
                 {sched.unitIds.length === 0
                   ? "—"
                   : sched.unitIds
@@ -2589,19 +2589,19 @@ function ScheduleDetailModal({
             </tr>
             <tr>
               <td style={{ whiteSpace: "nowrap" }}><b>審查件數</b></td>
-              <td>
+              <td data-label="審查件數">
                 {sched.caseCount != null ? `${sched.caseCount} 件/輪` : "—"}
               </td>
             </tr>
             {sched.notes && (
               <tr>
                 <td style={{ whiteSpace: "nowrap" }}><b>備註</b></td>
-                <td>{sched.notes}</td>
+                <td data-label="備註">{sched.notes}</td>
               </tr>
             )}
             <tr>
               <td style={{ whiteSpace: "nowrap" }}><b>最後編輯</b></td>
-              <td>
+              <td data-label="最後編輯">
                 {sched.updatedByName || "—"}・{fmtTs(sched.updatedAt)}
               </td>
             </tr>
@@ -2639,11 +2639,11 @@ function ScheduleDetailModal({
             <tbody>
               {assignment.items.map((it) => (
                 <tr key={it.reviewerId}>
-                  <td>
+                  <td data-label="審查員">
                     <b>{maskName(usersMap.get(it.reviewerId) ?? it.reviewerId)}</b>
                     <div className="muted-text">{it.reviewerId}</div>
                   </td>
-                  <td>
+                  <td data-label="負責單位">
                     {it.units
                       .map((u) => `${unitNameOf(u.unitId)}（${u.unitId}）`)
                       .join("、")}
