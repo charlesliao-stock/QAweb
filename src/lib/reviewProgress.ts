@@ -35,6 +35,18 @@ export function nextCaseSeq(existingCount: number): number {
   return existingCount + 1;
 }
 
+/** 週期共享配額：在固定的 1..N 名額中找第一個空位，刪除紀錄後可重用。 */
+export function nextAvailableQuotaSlot(
+  occupiedSlots: Iterable<number>,
+  maxSlots: number,
+): number | null {
+  const occupied = new Set(occupiedSlots);
+  for (let slot = 1; slot <= maxSlots; slot += 1) {
+    if (!occupied.has(slot)) return slot;
+  }
+  return null;
+}
+
 /**
  * 頁籤分類（v1.12.2）：純粹以計數判斷——完成數 ≧ 應審件數 → done；否則 pending。
  * 不再參考 task.status：舊版（v1.10.x）單筆提交會把 status 寫成 done，

@@ -1,6 +1,6 @@
 /**
  * 結果分析頁（v1.25.0：取代舊畫面）。
- * 四個頁籤：組別分析、單位分析、指標分析、結果匯入。
+ * 四個分析／匯入頁籤；系統管理員另可使用審查結果管理。
  * 期間模型：年別／年份（起算年）／年數（往後數）／區間（月／季／年）／子選項
  * （月→只有全部；季→第一～四季／全部；年→半年／一年／全部），矩陣欄＝期間欄。
  * 達閾值＝紀錄 rate ≥ 指標閾值（紀錄無自帶達標旗標，一律以當前閾值計算；
@@ -76,10 +76,7 @@ import {
   setCachedYear,
   type ResultsCacheScope,
 } from "../lib/resultsCache";
-import {
-  clearRefCache,
-  getCachedRefCollection,
-} from "../lib/refCache";
+import { getCachedRefCollection } from "../lib/refCache";
 import { getDocsCacheFirst } from "../lib/cacheFirst";
 import {
   dbIndexedQueryApi,
@@ -90,7 +87,6 @@ import {
   recordsForIndex,
   type RecordIndex,
 } from "../lib/resultsMatrix";
-import { forceServerRefetch } from "../lib/cacheFirst";
 
 interface IndicatorOpt {
   id: string;
@@ -113,7 +109,7 @@ interface UnitOpt {
   groupId: string;
 }
 
-type TabId = "group" | "unit" | "indicator" | "import";
+type TabId = "group" | "unit" | "indicator" | "import" | "manage";
 type UnitMode = "person" | "unit";
 
 interface CellValue extends PassRate {
@@ -298,8 +294,6 @@ export function ResultsPage({
   >([]);
   const [loading, setLoading] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
-  // v1.28 階段 4：按「重新整理」時 meta effect 重跑、拉最新參考資料
-  const [refNonce, setRefNonce] = useState(0);
   /**
    * 已生效的查詢條件（null＝尚未查詢，顯示空白頁）。
    * 篩選器一變只改 live 值，不觸發查詢；按「查詢」才把當下條件生效。
@@ -319,6 +313,7 @@ export function ResultsPage({
   const [indexFallback, setIndexFallback] = useState(false);
   const [indexFallbackDismissed, setIndexFallbackDismissed] = useState(false);
   const [tab, setTab] = useState<TabId>("group");
+  const isAdmin = Boolean(user?.roles?.includes("系統管理員"));
   // 期間篩選（四個頁籤共用）
   const [startMonth, setStartMonth] = useState(
     `${now.getFullYear()}-01`,
@@ -446,7 +441,7 @@ export function ResultsPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refNonce]);
+  }, []);
 
   const rangeValid = Boolean(startMonth && endMonth && startMonth <= endMonth);
   // 期間欄只取所選年月範圍內的月份，再依月／季／半年／年分組。
@@ -478,7 +473,7 @@ export function ResultsPage({
   // 缺的年份才按年發查詢，併回後畫面永遠從合併後的快取渲染。
   // 快取鍵含權限範圍（見 resultsCache），不同範圍不共用。
   useEffect(() => {
-    if (!applied) return;
+    if (!applied || tab === "manage" || tab === "import") return;
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -617,31 +612,14 @@ export function ResultsPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appliedYearsKey, reloadNonce, scope.kind, scope.kind === "reviewer" ? scope.staffId : "", tab, singleIndicatorId]);
 
-  /** 按「查詢」：把當下期間條件生效（同年份重按不重拉，吃快取） */
+  /** 每次查詢皆失效所選年份，避免再次查詢命中過期快取。 */
   function handleQuery() {
-    if (!rangeValid) return;
-    setApplied({
-      years: queryYears,
-      startMonth,
-      endMonth,
-      interval,
-    });
-  }
-
-  /** 重新整理：失效已查年份的快取（紀錄＋任務）＋參考快取，再重拉一次 */
-  function handleRefresh() {
-    if (!applied) return;
-    invalidateCachedYears("reviewRecords", applied.years, cacheScope);
-    invalidateCachedYears("reviewTasks", applied.years, cacheScope);
-    // v1.28 階段 4：參考快取也失效，meta effect（refNonce）重跑才拉最新
-    clearRefCache();
-    // v1.28 階段 7（B3）：其後 30 秒參考資料強制走伺服器，否則會命中
-    // 可能過期的持久快取，重新整理就拿不到最新資料。
-    forceServerRefetch();
-    setRefNonce((n) => n + 1);
+    if (!rangeValid || tab === "manage") return;
+    invalidateCachedYears("reviewRecords", queryYears, cacheScope);
+    invalidateCachedYears("reviewTasks", queryYears, cacheScope);
+    setApplied({ years: queryYears, startMonth, endMonth, interval });
     setReloadNonce((n) => n + 1);
   }
-
   // 範圍內紀錄（依權限範圍過濾）
   const scopedRecords = useMemo(() => {
     if (scope.kind === "admin") return records;
@@ -891,7 +869,7 @@ export function ResultsPage({
     });
   }
 
-  if (!can("resultQuery")) {
+  if (!can("resultQuery") && !isAdmin) {
     return (
       <>
         <PageHeading page="results" />
@@ -957,6 +935,7 @@ export function ResultsPage({
             ["unit", "單位分析"],
             ["indicator", "指標分析"],
             ["import", "結果匯入"],
+            ...(isAdmin ? [["manage", "審查結果管理"] as [TabId, string]] : []),
           ] as [TabId, string][]
         ).map(([id, label]) => (
           <button
@@ -972,73 +951,49 @@ export function ResultsPage({
         ))}
       </div>
 
-      {/* v1.30.3：篩選器兩條橫向，第一條＝主體選擇器、第二條＝年／期間＋查詢（最右端） */}
-      {tab !== "import" && (
-        <div className="results-filters results-filters-main">
+      {tab !== "import" && tab !== "manage" && (
+        <div className="results-filters results-analysis-filters">
           {tab === "group" && (
-            <SelectField
-              label="組別"
-              value={selGroup}
-              onChange={setSelGroup}
-              options={scopedGroups.map((g) => ({
-                value: g.id,
-                label: g.name,
-              }))}
-            />
-          )}
-          {tab === "unit" && (
-            <SelectField
-              label="單位"
-              value={selUnit}
-              onChange={setSelUnit}
-              options={scopedUnits.map((u) => ({
-                value: u.code,
-                label: `${u.code}・${u.name}`,
-              }))}
-            />
-          )}
-          {tab === "indicator" && (
-            <SelectField
-              label="指標"
-              value={selIndicator}
-              onChange={setSelIndicator}
-              options={indTabIndicators.map((i) => ({
-                value: i.id,
-                label: `${i.code}・${i.name}`,
-              }))}
-            />
-          )}
-        </div>
-      )}
-      {tab !== "import" && (
-        <div className="results-filters">
-          {tab === "group" && (
-            <SelectField
-              label="單元"
-              value={groupUnit}
-              onChange={(v) => setGroupUnit(v as UnitMode)}
-              options={[
-                { value: "person", label: "人次" },
-                { value: "unit", label: "單位" },
-              ]}
-            />
+            <>
+              <SelectField
+                label="組別"
+                value={selGroup}
+                onChange={setSelGroup}
+                options={scopedGroups.map((g) => ({ value: g.id, label: g.name }))}
+              />
+              <SelectField
+                label="單元"
+                value={groupUnit}
+                onChange={(value) => setGroupUnit(value as UnitMode)}
+                options={[
+                  { value: "person", label: "人次" },
+                  { value: "unit", label: "單位" },
+                ]}
+              />
+            </>
           )}
           {tab === "unit" && (
             <>
               <SelectField
                 label="組別"
                 value={selGroupU}
-                onChange={(v) => {
-                  setSelGroupU(v);
+                onChange={(value) => {
+                  setSelGroupU(value);
                   setSelIndU("all");
                 }}
                 options={[
                   { value: "all", label: "全部組別" },
-                  ...scopedGroups.map((g) => ({
-                    value: g.id,
-                    label: g.name,
-                  })),
+                  ...scopedGroups.map((g) => ({ value: g.id, label: g.name })),
                 ]}
+              />
+              <SelectField
+                label="單位"
+                value={selUnit}
+                onChange={setSelUnit}
+                options={scopedUnits.map((unit) => ({
+                  value: unit.code,
+                  label: `${unit.code}・${unit.name}`,
+                }))}
               />
               <SelectField
                 label="指標"
@@ -1046,9 +1001,9 @@ export function ResultsPage({
                 onChange={setSelIndU}
                 options={[
                   { value: "all", label: "全部指標" },
-                  ...unitIndOptions.map((i) => ({
-                    value: i.id,
-                    label: `${i.code}・${i.name}`,
+                  ...unitIndOptions.map((indicator) => ({
+                    value: indicator.id,
+                    label: `${indicator.code}・${indicator.name}`,
                   })),
                 ]}
               />
@@ -1060,15 +1015,21 @@ export function ResultsPage({
                 label="組別"
                 value={selGroup2}
                 onChange={setSelGroup2}
-                options={scopedGroups.map((g) => ({
-                  value: g.id,
-                  label: g.name,
+                options={scopedGroups.map((g) => ({ value: g.id, label: g.name }))}
+              />
+              <SelectField
+                label="指標"
+                value={selIndicator}
+                onChange={setSelIndicator}
+                options={indTabIndicators.map((indicator) => ({
+                  value: indicator.id,
+                  label: `${indicator.code}・${indicator.name}`,
                 }))}
               />
               <SelectField
                 label="單元"
                 value={indUnit}
-                onChange={(v) => setIndUnit(v as UnitMode)}
+                onChange={(value) => setIndUnit(value as UnitMode)}
                 options={[
                   { value: "person", label: "人次" },
                   { value: "unit", label: "單位" },
@@ -1090,7 +1051,7 @@ export function ResultsPage({
             ariaLabel="結束西元年/月"
           />
           <SelectField
-            label="單位"
+            label="區間單位"
             value={interval}
             onChange={(value) => setInterval(value as AnalysisGranularity)}
             options={[
@@ -1107,19 +1068,8 @@ export function ResultsPage({
               onClick={handleQuery}
               disabled={loading || !rangeValid}
             >
-              {applied ? "重新查詢" : "查詢"}
+              查詢
             </button>
-            {applied && (
-              <button
-                type="button"
-                className="button button-outline"
-                onClick={handleRefresh}
-                disabled={loading}
-                title="清除已查年份的快取並重新讀取"
-              >
-                重新整理
-              </button>
-            )}
           </div>
           {!rangeValid && (
             <span className="results-range-error" role="alert">
@@ -1128,16 +1078,28 @@ export function ResultsPage({
           )}
         </div>
       )}
-      {tab !== "import" && applied && fetchedAt != null && !loading && (
+      {tab === "manage" && isAdmin && (
+        <ReviewResultManager
+          units={units}
+          groups={groups}
+          indicators={indicators}
+          user={user ? { staffId: user.staffId, name: user.name } : null}
+          onAction={onAction}
+          onDone={(years) => {
+            invalidateCachedYears("reviewRecords", years, cacheScope);
+            if (applied) setReloadNonce((nonce) => nonce + 1);
+          }}
+        />
+      )}
+      {tab !== "import" && tab !== "manage" && applied && fetchedAt != null && !loading && (
         <p className="results-data-time">
           資料時間：
           {new Date(fetchedAt).toLocaleString("zh-Hant-TW", {
             hour12: false,
           })}
-          （他人異動不會自動更新，請按「重新整理」）
         </p>
       )}
-      {tab !== "import" &&
+      {tab !== "import" && tab !== "manage" &&
         applied &&
         indexFallback &&
         !indexFallbackDismissed &&
@@ -1477,6 +1439,378 @@ export function ResultsPage({
       )}
     </div>
   );
+}
+
+interface ManagedResult {
+  id: string;
+  year: number;
+  month: number;
+  unitId: string;
+  indicatorId: string;
+  rate: number | null;
+  reviewerName: string;
+  reviewedPersonName: string;
+  submittedAt: unknown;
+}
+
+function ReviewResultManager({
+  units,
+  groups,
+  indicators,
+  user,
+  onAction,
+  onDone,
+}: {
+  units: UnitOpt[];
+  groups: GroupOpt[];
+  indicators: IndicatorOpt[];
+  user: { staffId: string; name: string } | null;
+  onAction: (message: string) => void;
+  onDone: (years: number[]) => void;
+}) {
+  const now = new Date();
+  const [unitId, setUnitId] = useState("");
+  const [groupId, setGroupId] = useState("");
+  const [indicatorId, setIndicatorId] = useState("");
+  const [start, setStart] = useState(`${now.getFullYear()}-01`);
+  const [end, setEnd] = useState(
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`,
+  );
+  const [rows, setRows] = useState<ManagedResult[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [queried, setQueried] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setRows([]);
+    setSelected([]);
+    setQueried(false);
+    setError("");
+  }, [unitId, groupId, indicatorId, start, end]);
+
+  const unitName = (id: string) =>
+    units.find((unit) => unit.code === id)?.name ?? id;
+  const indicatorName = (id: string) =>
+    indicators.find((indicator) => indicator.id === id)?.name ?? id;
+
+  const queryResults = async () => {
+    if (busy || !start || !end || start > end) return;
+    setBusy(true);
+    setError("");
+    setSelected([]);
+    try {
+      const db = getFirebaseDb();
+      const firstYear = Number(start.slice(0, 4));
+      const lastYear = Number(end.slice(0, 4));
+      const years = Array.from(
+        { length: lastYear - firstYear + 1 },
+        (_, index) => firstYear + index,
+      );
+      const snaps = await Promise.all(
+        years.map((year) =>
+          getDocsFromServer(
+            query(
+              collection(db, "reviewRecords"),
+              where("year", "==", year),
+            ),
+          ),
+        ),
+      );
+      const result: ManagedResult[] = [];
+      snaps.forEach((snapshot) => {
+        snapshot.docs.forEach((document) => {
+          const value = document.data() as Record<string, unknown>;
+          const year = Number(value.year ?? 0);
+          const month = Number(value.month ?? 0);
+          const yearMonth = `${year}-${String(month).padStart(2, "0")}`;
+          const recordUnitId = String(value.unitId ?? "");
+          const recordIndicatorId = String(value.indicatorId ?? "");
+          const recordGroupId =
+            indicators.find((indicator) => indicator.id === recordIndicatorId)
+              ?.groupId ?? "";
+          if (
+            yearMonth < start ||
+            yearMonth > end ||
+            (unitId && recordUnitId !== unitId) ||
+            (indicatorId && recordIndicatorId !== indicatorId) ||
+            (groupId && recordGroupId !== groupId)
+          )
+            return;
+          result.push({
+            id: document.id,
+            year,
+            month,
+            unitId: recordUnitId,
+            indicatorId: recordIndicatorId,
+            rate: typeof value.rate === "number" ? value.rate : null,
+            reviewerName: String(value.reviewerName ?? value.reviewerId ?? ""),
+            reviewedPersonName: String(value.reviewedPersonName ?? ""),
+            submittedAt: value.submittedAt,
+          });
+        });
+      });
+      result.sort(
+        (a, b) =>
+          b.year - a.year ||
+          b.month - a.month ||
+          a.unitId.localeCompare(b.unitId, "zh-Hant"),
+      );
+      setRows(result);
+      setQueried(true);
+    } catch (queryError) {
+      setRows([]);
+      setQueried(true);
+      setError(
+        `查詢失敗：${queryError instanceof Error ? queryError.message : String(queryError)}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteSelected = async () => {
+    if (busy || !user || selected.length === 0) return;
+    const ids = [...selected];
+    if (
+      !window.confirm(
+        `即將永久刪除 ${ids.length} 筆審查結果，且無法復原。確定刪除？`,
+      )
+    )
+      return;
+    setBusy(true);
+    setError("");
+    const removed: string[] = [];
+    const affectedYears: number[] = [];
+    try {
+      const db = getFirebaseDb();
+      for (let index = 0; index < ids.length; index += 400) {
+        const chunk = ids.slice(index, index + 400);
+        const batch = writeBatch(db);
+        chunk.forEach((id) =>
+          batch.delete(doc(db, "reviewRecords", id)),
+        );
+        const criteria = {
+          unitId: unitId || null,
+          groupId: groupId || null,
+          indicatorId: indicatorId || null,
+          startMonth: start,
+          endMonth: end,
+        };
+        batch.set(doc(collection(db, "auditLogs")), {
+          actor: user.staffId,
+          actorName: user.name,
+          action: "批次刪除審查結果",
+          targetType: "reviewRecords",
+          targetId: `${start}～${end}・${chunk.length} 筆`,
+          detail: `篩選條件：單位 ${criteria.unitId ?? "全部"}；組別 ${criteria.groupId ?? "全部"}；指標 ${criteria.indicatorId ?? "全部"}；文件 ID：${chunk.join(", ")}`,
+          criteria,
+          documentIds: chunk,
+          count: chunk.length,
+          createdAt: serverTimestamp(),
+        });
+        await batch.commit();
+        removed.push(...chunk);
+        affectedYears.push(
+          ...rows
+            .filter((row) => chunk.includes(row.id))
+            .map((row) => row.year),
+        );
+      }
+      const years = [...new Set(affectedYears)];
+      setRows((current) => current.filter((row) => !removed.includes(row.id)));
+      setSelected([]);
+      onDone(years);
+      onAction(`已永久刪除 ${removed.length} 筆審查結果。`);
+    } catch (deleteError) {
+      const years = [
+        ...new Set(
+          rows
+            .filter((row) => removed.includes(row.id))
+            .map((row) => row.year),
+        ),
+      ];
+      setRows((current) => current.filter((row) => !removed.includes(row.id)));
+      setSelected((current) => current.filter((id) => !removed.includes(id)));
+      if (removed.length > 0) onDone(years);
+      const message = `刪除部分失敗：已成功刪除 ${removed.length} 筆，尚有 ${ids.length - removed.length} 筆未完成。${deleteError instanceof Error ? deleteError.message : String(deleteError)}`;
+      setError(message);
+      onAction(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const allSelected = rows.length > 0 && rows.every((row) => selected.includes(row.id));
+
+  return (
+    <section className="review-results-manager">
+      <div className="results-filters">
+        <SelectField
+          label="單位"
+          value={unitId}
+          onChange={setUnitId}
+          options={[
+            { value: "", label: "全部單位" },
+            ...units.map((unit) => ({
+              value: unit.code,
+              label: `${unit.code}・${unit.name}`,
+            })),
+          ]}
+        />
+        <SelectField
+          label="組別"
+          value={groupId}
+          onChange={(value) => {
+            setGroupId(value);
+            setIndicatorId("");
+          }}
+          options={[
+            { value: "", label: "全部組別" },
+            ...Array.from(
+              new Set(indicators.map((indicator) => indicator.groupId).filter(Boolean)),
+            ).map((id) => ({
+              value: id,
+              label: groups.find((group) => group.id === id)?.name ?? id,
+            })),
+          ]}
+        />
+        <SelectField
+          label="指標名稱"
+          value={indicatorId}
+          onChange={setIndicatorId}
+          options={[
+            { value: "", label: "全部指標" },
+            ...indicators
+              .filter((indicator) => !groupId || indicator.groupId === groupId)
+              .map((indicator) => ({
+                value: indicator.id,
+                label: `${indicator.code}・${indicator.name}`,
+              })),
+          ]}
+        />
+        <ResultMonthPicker
+          label="起始西元年月"
+          value={start}
+          onChange={setStart}
+          ariaLabel="起始西元年月"
+        />
+        <ResultMonthPicker
+          label="結束西元年月"
+          value={end}
+          onChange={setEnd}
+          ariaLabel="結束西元年月"
+        />
+        <div className="results-query-actions">
+          <button
+            className="button button-primary"
+            type="button"
+            disabled={busy || start > end}
+            onClick={queryResults}
+          >
+            查詢
+          </button>
+        </div>
+      </div>
+      {error && (
+        <p className="results-range-error" role="alert">
+          {error}
+        </p>
+      )}
+      {queried && (
+        <div className="panel">
+          <div className="review-results-actions">
+            <strong>
+              查得 {rows.length} 筆{selected.length > 0 && `・已選 ${selected.length} 筆`}
+            </strong>
+            <button
+              type="button"
+              className="button button-outline"
+              disabled={busy || rows.length === 0}
+              onClick={() =>
+                setSelected(allSelected ? [] : rows.map((row) => row.id))
+              }
+            >
+              {allSelected ? "取消全選" : "全選"}
+            </button>
+            <button
+              type="button"
+              className="button button-danger"
+              disabled={busy || selected.length === 0}
+              onClick={deleteSelected}
+            >
+              {busy ? "處理中…" : `永久刪除所選（${selected.length}）`}
+            </button>
+          </div>
+          <div className="analysis-table-wrap">
+            <table className="review-results-table">
+              <thead>
+                <tr>
+                  <th>選取</th>
+                  <th>結果日期</th>
+                  <th>單位</th>
+                  <th>指標</th>
+                  <th>審查人員</th>
+                  <th>被審人員</th>
+                  <th>正確率</th>
+                  <th>提交時間</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`選取 ${row.year}/${String(row.month).padStart(2, "0")} ${indicatorName(row.indicatorId)} ${row.reviewedPersonName || "審查結果"}`}
+                        checked={selected.includes(row.id)}
+                        disabled={busy}
+                        onChange={(event) =>
+                          setSelected((current) =>
+                            event.target.checked
+                              ? [...current, row.id]
+                              : current.filter((id) => id !== row.id),
+                          )
+                        }
+                      />
+                    </td>
+                    <td>
+                      {row.year}/{String(row.month).padStart(2, "0")}
+                    </td>
+                    <td>{unitName(row.unitId)}</td>
+                    <td>{indicatorName(row.indicatorId)}</td>
+                    <td>{row.reviewerName || "—"}</td>
+                    <td>{row.reviewedPersonName || "—"}</td>
+                    <td>{row.rate == null ? "—" : `${row.rate}%`}</td>
+                    <td>{formatSubmittedAt(row.submittedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {!queried && (
+        <EmptyState
+          title="尚未查詢"
+          description="設定篩選條件後按「查詢」讀取審查結果。"
+        />
+      )}
+    </section>
+  );
+}
+
+function formatSubmittedAt(value: unknown): string {
+  if (!value || typeof value !== "object") return "—";
+  const timestamp = value as { toDate?: () => Date; seconds?: number };
+  const date =
+    typeof timestamp.toDate === "function"
+      ? timestamp.toDate()
+      : typeof timestamp.seconds === "number"
+        ? new Date(timestamp.seconds * 1000)
+        : null;
+  return date && !Number.isNaN(date.getTime())
+    ? date.toLocaleString("zh-Hant-TW", { hour12: false })
+    : "—";
 }
 
 /* ================= 達閾值率矩陣（組別／單位分析共用） ================= */

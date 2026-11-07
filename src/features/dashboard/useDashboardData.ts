@@ -40,6 +40,7 @@ import {
   countRecordsByTask,
   dashboardMonthWindow,
   mergeDashTasks,
+  taskProgressCount,
 } from "../../lib/dashboardStats";
 import type { ReviewTaskStatus } from "../../lib/scheduling";
 
@@ -108,6 +109,10 @@ function parseTask(
 ): Omit<DashTask, "doneCount"> {
   const cc = data.caseCount;
   const st = String(data.status ?? "pending");
+  const quotaCategory =
+    data.quotaCategory === "year" || data.quotaCategory === "academic"
+      ? data.quotaCategory
+      : undefined;
   return {
     id,
     indicatorId: String(data.indicatorId ?? ""),
@@ -117,6 +122,26 @@ function parseTask(
     month: Number(data.month ?? 0),
     caseCount:
       typeof cc === "number" && Number.isInteger(cc) && cc >= 1 ? cc : null,
+    quotaVersion: data.quotaVersion === 1 ? 1 : undefined,
+    quotaGroupId:
+      typeof data.quotaGroupId === "string" ? data.quotaGroupId : undefined,
+    quotaCategory,
+    quotaIntervalStartYear:
+      typeof data.quotaIntervalStartYear === "number"
+        ? data.quotaIntervalStartYear
+        : undefined,
+    quotaIntervalStartMonth:
+      typeof data.quotaIntervalStartMonth === "number"
+        ? data.quotaIntervalStartMonth
+        : undefined,
+    quotaIntervalEndYear:
+      typeof data.quotaIntervalEndYear === "number"
+        ? data.quotaIntervalEndYear
+        : undefined,
+    quotaIntervalEndMonth:
+      typeof data.quotaIntervalEndMonth === "number"
+        ? data.quotaIntervalEndMonth
+        : undefined,
     deadline: String(data.deadline ?? ""),
     status: (st === "done" ? "done" : st === "locked" ? "locked" : "pending") as ReviewTaskStatus,
   };
@@ -147,6 +172,9 @@ function parseRecord(
         ? data.reviewedPersonName
         : "",
     rate: typeof data.rate === "number" ? data.rate : null,
+    quotaGroupId:
+      typeof data.quotaGroupId === "string" ? data.quotaGroupId : undefined,
+    source: typeof data.source === "string" ? data.source : undefined,
     answers: (ans as Record<string, unknown>[]).map((a) => ({
       questionId: String(a.questionId ?? ""),
       itemText: String(a.itemText ?? ""),
@@ -363,6 +391,31 @@ export function useDashboardData(): DashboardData {
         for (const t of list) {
           t.doneCount = countMap.get(t.id) ?? 0;
         }
+        const quotaTasks = list.filter(
+          (task) => task.quotaVersion === 1 && task.quotaGroupId,
+        );
+        if (quotaTasks.length > 0) {
+          try {
+            const { loadPeriodicQuotaCounts } = await import(
+              "./periodicQuotaCounts"
+            );
+            const { counts, failedGroups } = await loadPeriodicQuotaCounts(
+              db,
+              quotaTasks,
+            );
+            if (cancelled) return;
+            quotaTasks.forEach((task) => {
+              const groupId = task.quotaGroupId!;
+              task.quotaDoneCount = counts.get(groupId) ?? 0;
+              if (failedGroups.has(groupId))
+                task.quotaDoneCountUnknown = true;
+            });
+          } catch {
+            quotaTasks.forEach((task) =>
+              (task.quotaDoneCountUnknown = true),
+            );
+          }
+        }
         // 狀態自動校正（v1.12.2 模式＋v1.15.0 鎖定）
         // v1.27.2：只收集「真的不同」的任務，單一 writeBatch 提交（失敗不影響畫面，下次再試）
         // v1.28 階段 6（B8）：再節流——同一任務一小時內已寫入過相同目標狀態
@@ -371,8 +424,10 @@ export function useDashboardData(): DashboardData {
         // 且不記入節流，下次載入再試。
         const fixes: { id: string; patch: Record<string, unknown> }[] = [];
         for (const t of list) {
+          const progressCount = taskProgressCount(t);
+          if (progressCount == null) continue;
           const right = correctTaskStatus(
-            t.doneCount,
+            progressCount,
             t.caseCount,
             t.deadline,
             t.status,

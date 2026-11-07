@@ -7,6 +7,7 @@ import { SectionTitle } from "../../components/ui";
 import {
   cycleMonthLabel,
   declineAlerts,
+  taskProgressCount,
   unitMonthAvgs,
 } from "../../lib/dashboardStats";
 import { avgRateOf, ragStatus, type StatsCycle } from "../../lib/resultAnalysis";
@@ -54,13 +55,25 @@ export function SupervisorTab({
       const tasks = data.tasks.filter(
         (t) => t.unitId === u.id && t.year === curYear && t.month === curMonth,
       );
-      const done = tasks.reduce((n, t) => n + t.doneCount, 0);
-      const req = tasks.reduce((n, t) => n + requiredCases(t.caseCount), 0);
-      const rates = data.records
-        .filter(
-          (r) => r.unitId === u.id && r.year === curYear && r.month === curMonth,
-        )
-        .map((r) => r.rate);
+      let done = 0;
+      let req = 0;
+      let progressUnknown = false;
+      const countedQuotaGroups = new Set<string>();
+      for (const task of tasks) {
+        if (task.quotaGroupId) {
+          if (countedQuotaGroups.has(task.quotaGroupId)) continue;
+          countedQuotaGroups.add(task.quotaGroupId);
+        }
+        const progressCount = taskProgressCount(task);
+        if (progressCount == null) progressUnknown = true;
+        else done += progressCount;
+        req += requiredCases(task.caseCount);
+      }
+      const monthRecords = data.records.filter(
+        (r) => r.unitId === u.id && r.year === curYear && r.month === curMonth,
+      );
+      const monthCount = monthRecords.length;
+      const rates = monthRecords.map((r) => r.rate);
       const avg = avgRateOf(rates);
       // 燈號：用該單位本月指標的最低閾值判定（簡化）
       const ths = tasks
@@ -71,9 +84,11 @@ export function SupervisorTab({
         unit: u,
         done,
         req,
+        monthCount,
+        progressUnknown,
         avg,
         rag: ragStatus(avg, th),
-        complete: req > 0 && done >= req,
+        complete: req > 0 && !progressUnknown && done >= req,
       };
     });
   }, [data, districtUnits, curYear, curMonth]);
@@ -146,7 +161,8 @@ export function SupervisorTab({
               <thead>
                 <tr>
                   <th>單位</th>
-                  <th>完成/應審件數</th>
+                  <th>審查進度（週期為區間共用）</th>
+                  <th>本月實際件數</th>
                   <th>平均正確率</th>
                   <th>品質燈號</th>
                   <th>狀態</th>
@@ -158,9 +174,12 @@ export function SupervisorTab({
                     <td>{r.unit.code}</td>
                     <td>
                       {r.req > 0
-                        ? `${r.done}/${r.req}`
+                        ? r.progressUnknown
+                          ? "—"
+                          : `${r.done}/${r.req}`
                         : "本月無任務"}
                     </td>
+                    <td>{r.monthCount}</td>
                     <td>{r.avg != null ? `${r.avg}%` : "—"}</td>
                     <td>
                       <span
@@ -217,8 +236,14 @@ export function SupervisorTab({
             </div>
             <div className="task-card-meta">
               <span>
-                完成/應審：{r.req > 0 ? `${r.done}/${r.req}` : "本月無任務"}
+                審查進度（週期為區間共用）：
+                {r.req > 0
+                  ? r.progressUnknown
+                    ? "—"
+                    : `${r.done}/${r.req}`
+                  : "本月無任務"}
               </span>
+              <span>本月實際件數：{r.monthCount}</span>
               <span>
                 平均正確率：{r.avg != null ? `${r.avg}%` : "—"}
               </span>

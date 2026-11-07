@@ -5,11 +5,8 @@ import {
   doc,
   getDoc,
   getDocs,
-  query,
   serverTimestamp,
   setDoc,
-  where,
-  writeBatch,
 } from "./db";
 import { logAudit } from "./audit";
 import { isReviewerRole } from "./roleIdentity";
@@ -377,6 +374,17 @@ export interface ReviewTask {
   reviewerId: string;
   /** 每輪審查件數（產生時自該年度單一 caseCount 快照；null＝未設定） */
   caseCount: number | null;
+  /** 僅新產生的年度／學年度任務：同指標、單位與區間共用 N 件；舊任務及 temp 不含此欄。 */
+  quotaVersion?: 1;
+  quotaGroupId?: string;
+  quotaCategory?: "year" | "academic";
+  quotaIntervalStartYear?: number;
+  quotaIntervalStartMonth?: number;
+  quotaIntervalEndYear?: number;
+  quotaIntervalEndMonth?: number;
+  /** 新任務來源快照，用於重新產生時只重建同一排程，不波及其他類別。 */
+  scheduleCategory?: "year" | "academic" | "temp";
+  schedulePeriod?: string;
   /** 截止日 YYYY-MM-DD（審查月份次月＋系統參數「補審截止（次月幾日）」） */
   deadline: string;
   status: ReviewTaskStatus;
@@ -545,7 +553,7 @@ export interface IndicatorSchedule {
   intervalMonths: ReviewInterval | null;
   /** 關聯年份（臨時排程用，v1.18；null＝未設定） */
   refYear: number | null;
-  /** 每輪審查件數（全單位共用單一值；null＝未設定） */
+  /** 週期排程每個單位每區間的審查件數 N（設定值對所有單位相同；null＝未設定） */
   caseCount: number | null;
   /** 受審單位 id 清單（各組複選／全選） */
   unitIds: string[];
@@ -656,7 +664,7 @@ export function legacyYearScheduleToIndicatorSchedule(
 }
 
 /** 排程稽核：fire-and-forget，不擋主流程 */
-function auditSchedule(
+export function auditSchedule(
   db: any,
   actor: { id: string; name: string },
   action: string,
@@ -870,17 +878,7 @@ export function scheduleReviewCalendarMonths(sched: {
   return [...out.values()].sort((a, b) => a.year - b.year || a.month - b.month);
 }
 
-/**
- * 依排程展開審查任務。
- *
- * 沿用 buildReviewTasks 的（月份 × 審查員 × 單位）展開邏輯，
- * 但月份先以 scheduleReviewCalendarMonths 展開為全部審查曆年月
- *（起始月＋區間月數，可跨年）後、按曆年分組再展開
- *（reviewTasks 欄位結構不變）。
- *
- * 產生前先刪除該排程涵蓋曆年、該指標「未執行」的舊任務（已完成的保留，
- * 沿用既有規則）；成功後 audit「產生排程」。回傳新產生任務筆數。
- */
+/** 建立任務時才動態載入 builder，避免 dashboard 首屏包含排程寫入邏輯。 */
 export async function buildTasksFromSchedule(
   db: any,
   sched: IndicatorSchedule,
@@ -888,75 +886,33 @@ export async function buildTasksFromSchedule(
   actor: { id: string; name: string },
   deadlineDay = 10,
 ): Promise<number> {
-  // v1.23：起始月＋區間月數展開為全部審查曆年月（可跨年）
-  const reviewMonths = scheduleReviewCalendarMonths(sched);
-  const items = assignments?.items ?? [];
-  // 曆年月 → 曆年分組（學年度會跨兩個曆年）
-  const byYear = new Map<number, number[]>();
-  for (const { year: cy, month: m } of reviewMonths) {
-    const arr = byYear.get(cy) ?? [];
-    arr.push(m);
-    byYear.set(cy, arr);
-  }
+  const { buildTasksFromSchedule: build } = await import("./scheduleTaskBuilder");
+  return build(db, sched, assignments, actor, deadlineDay);
+}
 
-  // 只刪除該指標、涵蓋曆年中「未執行」的舊任務（done 保留），沿用既有規則
-  const BATCH_LIMIT = 400;
-  let batch = writeBatch(db);
-  let ops = 0;
-  const commits: Promise<void>[] = [];
-  const flush = () => {
-    if (ops > 0) {
-      commits.push(batch.commit());
-      batch = writeBatch(db);
-      ops = 0;
-    }
-  };
-  for (const cy of byYear.keys()) {
-    const oldSnap = await getDocs(
-      query(
-        collection(db, "reviewTasks"),
-        where("indicatorId", "==", sched.indicatorId),
-        where("year", "==", cy),
-      ),
-    );
-    oldSnap.docs.forEach((d) => {
-      if (d.data().status === "done") return; // 已完成保留
-      batch.delete(d.ref);
-      ops += 1;
-      if (ops >= BATCH_LIMIT) flush();
-    });
-  }
+/** 穩定的週期配額組 ID：同指標／單位／排程輪次共用，刻意不含 reviewerId。 */
+export function periodicQuotaGroupId(input: {
+  indicatorId: string;
+  unitId: string;
+  category: "year" | "academic";
+  period: string;
+  start: { year: number; month: number };
+}): string {
+  return [
+    "quota-v1",
+    input.indicatorId,
+    input.category,
+    input.period,
+    `${input.start.year}-${String(input.start.month).padStart(2, "0")}`,
+    input.unitId,
+  ]
+    .map(encodeURIComponent)
+    .join("|");
+}
 
-  // 按曆年展開新任務
-  let taskCount = 0;
-  for (const [cy, ms] of byYear) {
-    const newTasks = buildReviewTasks({
-      indicatorId: sched.indicatorId,
-      year: cy,
-      months: ms,
-      items,
-      caseCount: sched.caseCount ?? null,
-      deadlineDay,
-    });
-    newTasks.forEach((t) => {
-      const ref = doc(collection(db, "reviewTasks"));
-      batch.set(ref, { ...t, createdAt: serverTimestamp() });
-      ops += 1;
-      taskCount += 1;
-      if (ops >= BATCH_LIMIT) flush();
-    });
-  }
-  flush();
-  await Promise.all(commits);
-
-  auditSchedule(
-    db,
-    actor,
-    "產生排程",
-    sched,
-    `${sched.indicatorId}・${sched.periodLabel}：產生 ${taskCount} 筆任務`,
-  );
-  return taskCount;
+/** 週期共用配額：每個 group 的每個名額固定對應一個 document。 */
+export function periodicQuotaSlotDocId(quotaGroupId: string, slot: number): string {
+  return `${quotaGroupId}__slot__${slot}`;
 }
 
 /** createTempSchedule 輸入（加審／自審） */

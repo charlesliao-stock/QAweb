@@ -6,12 +6,11 @@ import { useMemo, useState } from "react";
 import { doc, serverTimestamp, updateDoc } from "../../lib/db";
 import { getFirebaseDb } from "../../lib/firebase";
 import { SectionTitle } from "../../components/ui";
-import { lagLights } from "../../lib/dashboardStats";
+import { lagLights, taskProgressLabel } from "../../lib/dashboardStats";
 import {
   DEFAULT_DASHBOARD_SECTIONS,
   type DashboardSections,
 } from "../../lib/dashboardSections";
-import { progressLabel } from "../../lib/reviewProgress";
 import { todayStr } from "../../lib/scheduling";
 import type { DashboardData } from "./useDashboardData";
 
@@ -110,7 +109,7 @@ export function OfficerTab({
                     </td>
                     <td>{t.unitId}</td>
                     <td>{t.reviewerId}</td>
-                    <td>{progressLabel(t.doneCount, t.caseCount)}</td>
+                    <td>{taskProgressLabel(t)}</td>
                     <td>{t.deadline}</td>
                   </tr>
                 ))}
@@ -153,9 +152,7 @@ export function OfficerTab({
                     <td>{t.unitId}</td>
                     {/* v1.28 階段 2：補紀錄超過上限者進度未知，顯示「—」而非錯誤的 0 */}
                     <td>
-                      {t.doneCountUnknown
-                        ? "—"
-                        : progressLabel(t.doneCount, t.caseCount)}
+                      {taskProgressLabel(t)}
                     </td>
                     <td>{t.deadline}</td>
                   </tr>

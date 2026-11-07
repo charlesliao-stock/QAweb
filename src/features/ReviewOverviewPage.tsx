@@ -39,6 +39,12 @@ interface TaskLite {
   caseCount: number | null;
   deadline: string;
   status: string;
+  quotaVersion?: 1;
+  quotaGroupId?: string;
+  quotaIntervalStartYear?: number;
+  quotaIntervalStartMonth?: number;
+  quotaIntervalEndYear?: number;
+  quotaIntervalEndMonth?: number;
 }
 
 interface RecordLite {
@@ -78,6 +84,25 @@ function taskFromDoc(id: string, data: Record<string, unknown>): TaskLite {
       typeof cc === "number" && Number.isInteger(cc) && cc >= 1 ? cc : null,
     deadline: String(data.deadline ?? ""),
     status: data.status === "done" ? "done" : "pending",
+    quotaVersion: data.quotaVersion === 1 ? 1 : undefined,
+    quotaGroupId:
+      typeof data.quotaGroupId === "string" ? data.quotaGroupId : undefined,
+    quotaIntervalStartYear:
+      typeof data.quotaIntervalStartYear === "number"
+        ? data.quotaIntervalStartYear
+        : undefined,
+    quotaIntervalStartMonth:
+      typeof data.quotaIntervalStartMonth === "number"
+        ? data.quotaIntervalStartMonth
+        : undefined,
+    quotaIntervalEndYear:
+      typeof data.quotaIntervalEndYear === "number"
+        ? data.quotaIntervalEndYear
+        : undefined,
+    quotaIntervalEndMonth:
+      typeof data.quotaIntervalEndMonth === "number"
+        ? data.quotaIntervalEndMonth
+        : undefined,
   };
 }
 
@@ -101,6 +126,7 @@ export function ReviewOverviewPage({
   const [recordsByTask, setRecordsByTask] = useState<Map<string, RecordLite[]>>(
     new Map(),
   );
+  const [quotaCounts, setQuotaCounts] = useState<Map<string, number>>(new Map());
   const [reviewerNames, setReviewerNames] = useState<Map<string, string>>(
     new Map(),
   );
@@ -189,6 +215,78 @@ export function ReviewOverviewPage({
       taskList.sort((a, b) => a.month - b.month);
       setTasks(taskList);
 
+      const quotaTasks = [
+        ...new Map(
+          taskList
+            .filter((t) => t.quotaVersion === 1 && t.quotaGroupId)
+            .map((t) => [t.quotaGroupId!, t]),
+        ).values(),
+      ];
+      const quotaYears = new Set<number>();
+      quotaTasks.forEach((t) => {
+        const from = t.quotaIntervalStartYear ?? year;
+        const to = t.quotaIntervalEndYear ?? year;
+        for (let y = from; y <= to; y += 1) quotaYears.add(y);
+      });
+      quotaYears.delete(year);
+      let allReviewDocs = [...rsnap.docs];
+      try {
+        const extra = await Promise.all(
+          [...quotaYears].map((y) =>
+            getDocsFromServer(
+              query(
+                collection(db, "reviewRecords"),
+                where("indicatorId", "==", indicatorId),
+                where("year", "==", y),
+              ),
+            ),
+          ),
+        );
+        allReviewDocs = allReviewDocs.concat(...extra.map((snap) => snap.docs));
+      } catch {
+        onAction("跨年審查區間資料讀取不完整，請重新整理後再查詢");
+      }
+
+      const quotaTaskById = new Map(
+        quotaTasks.map((t) => [t.quotaGroupId!, t]),
+      );
+      const quotaCountMap = new Map<string, number>();
+      const addQuotaCount = (groupId: string) =>
+        quotaCountMap.set(groupId, (quotaCountMap.get(groupId) ?? 0) + 1);
+      allReviewDocs.forEach((d) => {
+        const data = d.data() as Record<string, unknown>;
+        const unitId = String(data.unitId ?? "");
+        const recordYear = Number(data.year ?? 0);
+        const recordMonth = Number(data.month ?? 0);
+        const groupId =
+          typeof data.quotaGroupId === "string" ? data.quotaGroupId : "";
+        if (groupId && quotaTaskById.has(groupId)) {
+          addQuotaCount(groupId);
+          return;
+        }
+        if (data.source !== "import" || groupId) return;
+        quotaTasks.forEach((t) => {
+          if (
+            t.unitId !== unitId ||
+            t.quotaIntervalStartYear == null ||
+            t.quotaIntervalStartMonth == null ||
+            t.quotaIntervalEndYear == null ||
+            t.quotaIntervalEndMonth == null
+          )
+            return;
+          const afterStart =
+            recordYear > t.quotaIntervalStartYear ||
+            (recordYear === t.quotaIntervalStartYear &&
+              recordMonth >= t.quotaIntervalStartMonth);
+          const beforeEnd =
+            recordYear < t.quotaIntervalEndYear ||
+            (recordYear === t.quotaIntervalEndYear &&
+              recordMonth <= t.quotaIntervalEndMonth);
+          if (afterStart && beforeEnd) addQuotaCount(t.quotaGroupId!);
+        });
+      });
+      setQuotaCounts(quotaCountMap);
+
       const rmap = new Map<string, RecordLite[]>();
       rsnap.docs.forEach((d) => {
         const data = d.data() as Record<string, unknown>;
@@ -267,14 +365,22 @@ export function ReviewOverviewPage({
     (unitId: string) => {
       let done = 0;
       let req = 0;
+      const seenQuotaGroups = new Set<string>();
       for (const t of tasks) {
         if (t.unitId !== unitId) continue;
-        done += recordsByTask.get(t.id)?.length ?? 0;
-        req += requiredCases(t.caseCount);
+        if (t.quotaVersion === 1 && t.quotaGroupId) {
+          if (seenQuotaGroups.has(t.quotaGroupId)) continue;
+          seenQuotaGroups.add(t.quotaGroupId);
+          done += quotaCounts.get(t.quotaGroupId) ?? 0;
+          req += requiredCases(t.caseCount);
+        } else {
+          done += recordsByTask.get(t.id)?.length ?? 0;
+          req += requiredCases(t.caseCount);
+        }
       }
       return { done, req };
     },
-    [tasks, recordsByTask],
+    [tasks, recordsByTask, quotaCounts],
   );
 
   if (executing) {
@@ -299,7 +405,7 @@ export function ReviewOverviewPage({
       </div>
       <SectionTitle
         title={`審查總覽：${indicatorName}`}
-        note={`各單位・各輪次審查紀錄（3 次／年＝每單位 3 輪）`}
+        note="年度／學年度每單位每區間 N 件由同單位審查員共用；臨時排程維持原件數設定。"
         action={
           <div className="select-wrap">
             <select
@@ -392,7 +498,12 @@ export function ReviewOverviewPage({
                         }
                         return list.map((t) => {
                           const recs = recordsByTask.get(t.id) ?? [];
-                          const done = isTaskComplete(recs.length, t.caseCount);
+                          const sharedQuota =
+                            t.quotaVersion === 1 && Boolean(t.quotaGroupId);
+                          const completedCases = sharedQuota
+                            ? quotaCounts.get(t.quotaGroupId!) ?? 0
+                            : recs.length;
+                          const done = isTaskComplete(completedCases, t.caseCount);
                           const roundOpen = expandedRounds.has(t.id);
                           return (
                             <Fragment key={t.id}>
@@ -403,7 +514,10 @@ export function ReviewOverviewPage({
                                     t.reviewerId}
                                 </td>
                                 <td>
-                                  {progressLabel(recs.length, t.caseCount)}
+                                  {progressLabel(completedCases, t.caseCount)}
+                                  {sharedQuota && (
+                                    <small className="muted-text">（本區間共用）</small>
+                                  )}
                                 </td>
                                 <td>
                                   <span

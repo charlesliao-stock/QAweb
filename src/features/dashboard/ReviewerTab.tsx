@@ -6,8 +6,12 @@ import { useMemo, useState } from "react";
 import { CircleAlert, Lock } from "lucide-react";
 import { SectionTitle } from "../../components/ui";
 import { isOverdue, todayStr } from "../../lib/scheduling";
-import { progressLabel, requiredCases } from "../../lib/reviewProgress";
-import { daysBetween } from "../../lib/dashboardStats";
+import { requiredCases } from "../../lib/reviewProgress";
+import {
+  daysBetween,
+  taskProgressCount,
+  taskProgressLabel,
+} from "../../lib/dashboardStats";
 import {
   DEFAULT_DASHBOARD_SECTIONS,
   type DashboardSections,
@@ -53,12 +57,14 @@ export function ReviewerTab({
     [data, staffId, curYear, curMonth],
   );
 
-  const isDone = (doneCount: number, caseCount: number | null) =>
-    doneCount >= requiredCases(caseCount);
+  const isDone = (task: (typeof myTasks)[number]) => {
+    const doneCount = taskProgressCount(task);
+    return doneCount != null && doneCount >= requiredCases(task.caseCount);
+  };
   const pendingTasks = myTasks.filter(
-    (t) => !isDone(t.doneCount, t.caseCount),
+    (t) => !isDone(t),
   );
-  const doneTasks = myTasks.filter((t) => isDone(t.doneCount, t.caseCount));
+  const doneTasks = myTasks.filter((t) => isDone(t));
   const shown = tab === "pending" ? pendingTasks : doneTasks;
 
   const lockedTasks = pendingTasks.filter((t) => t.status === "locked");
@@ -89,7 +95,7 @@ export function ReviewerTab({
           <Lock size={12} style={{ verticalAlign: "-1px" }} /> 已鎖定
         </span>
       );
-    const done = isDone(t.doneCount, t.caseCount);
+    const done = isDone(t);
     const overdue = isOverdue(t.deadline, done ? "done" : "pending");
     if (overdue)
       return <span className="status-pill danger">逾期未完成</span>;
@@ -103,7 +109,10 @@ export function ReviewerTab({
   return (
     <>
       <section className="panel my-review">
-        <SectionTitle title={ymTitle} note={`共 ${myTasks.length} 筆任務`} />
+        <SectionTitle
+          title={ymTitle}
+          note={`共 ${myTasks.length} 筆任務；週期排程件數為區間共用`}
+        />
         <div className="tabs" style={{ marginBottom: 12 }} role="tablist">
           <button
             className={`tab${tab === "pending" ? " active" : ""}`}
@@ -136,7 +145,7 @@ export function ReviewerTab({
                   <tr>
                     <th>指標名稱</th>
                     <th>審查單位</th>
-                    <th>完成/應審件數</th>
+                    <th>完成/應審</th>
                     <th>截止日期</th>
                     <th>狀態</th>
                     <th>操作</th>
@@ -144,7 +153,7 @@ export function ReviewerTab({
                 </thead>
                 <tbody>
                   {shown.map((t) => {
-                    const done = isDone(t.doneCount, t.caseCount);
+                    const done = isDone(t);
                     const overdue = isOverdue(
                       t.deadline,
                       done ? "done" : "pending",
@@ -155,7 +164,7 @@ export function ReviewerTab({
                           {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                         </td>
                         <td>{t.unitId}</td>
-                        <td>{progressLabel(t.doneCount, t.caseCount)}</td>
+                        <td>{taskProgressLabel(t)}</td>
                         <td
                           style={
                             overdue && t.status !== "locked"
@@ -200,7 +209,7 @@ export function ReviewerTab({
             </div>
             <div className="task-cards">
               {shown.map((t) => {
-                const done = isDone(t.doneCount, t.caseCount);
+                const done = isDone(t);
                 return (
                   <div key={t.id} className="task-card">
                     <div className="task-card-top">
@@ -212,7 +221,7 @@ export function ReviewerTab({
                     <div className="task-card-meta">
                       <span>審查單位：{t.unitId}</span>
                       <span>
-                        完成/應審：{progressLabel(t.doneCount, t.caseCount)}
+                        完成/應審：{taskProgressLabel(t)}
                       </span>
                       <span>截止：{t.deadline}</span>
                     </div>
@@ -252,7 +261,7 @@ export function ReviewerTab({
                     <tr>
                       <th>指標名稱</th>
                       <th>審查單位</th>
-                      <th>完成/應審件數</th>
+                      <th>完成/應審</th>
                       <th>操作</th>
                     </tr>
                   </thead>
@@ -263,7 +272,7 @@ export function ReviewerTab({
                           {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                         </td>
                         <td>{t.unitId}</td>
-                        <td>{progressLabel(t.doneCount, t.caseCount)}</td>
+                        <td>{taskProgressLabel(t)}</td>
                         <td>
                           <button
                             className="text-button"

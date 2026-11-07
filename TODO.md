@@ -5,7 +5,7 @@
 - [x] 建立非正式展示版；畫面使用虛構人員、單位、指標、排程、審查與改善案件資料。登入頁明確提示不需要真實帳號或密碼，不得輸入真實職編、密碼、Email、病人資料、床號或審查資料。角色切換只展示視角，不驗證身分、不代表正式授權。
 - [x] 初版包含品質儀表板與 RAG 燈號、指標清單、審查排程、一題一卡審查、結果趨勢、群組階層／權限矩陣、CAPA 摘要與系統管理展示頁。按鈕不會寫入真實資料；尚未完成的操作會明確提示展示限制。
 - [x] 本地展示模式預設使用虛構資料；Firebase Authentication 模式可使用既有帳號登入，讀取 `indicators`、`users/{職編}`、`units`、`reviewRecords` 與 `indicatorYearSchedules`。
-- [x] 結果分析唯讀查詢已送出的 `reviewRecords`，不提供審查結果新增、修改或刪除操作；年度排程月份設定會依登入權限寫入 `indicatorYearSchedules`。
+- [x] 結果分析分析頁籤唯讀查詢已送出的 `reviewRecords`；系統管理員另有審查結果管理頁，可依權限批次刪除並留下稽核紀錄。年度排程月份設定會依登入權限寫入 `indicatorYearSchedules`。
 - [x] 以手機優先 RWD 支援手機、平板與桌機；Vite production build 產生靜態網站檔案。README 說明展示限制、Firebase 環境變數、啟動方式及正式化前置條件。
 
 ## 展示模式登入與角色視角
@@ -51,10 +51,10 @@
 
 - [x] 本機 Auth/結果連線預設關閉；GitHub Pages workflow 明確使用已公開的 Firebase Web config 並啟用 Auth 登入，展示 `qms_demo` 讀取仍關閉。
 - [ ] 確認並驗收 Firestore Rules 對 `reviewRecords`、`indicatorYearSchedules`、`indicators`、`users`、`units`、CAPA 與稽核事件的角色範圍；不得以客戶端篩選取代 Rules。
-- [x] 審查結果 adapter 不提供 `reviewRecords` 寫入操作；排程 adapter 儲存 `unitIds`、年度月份、審核月數與更新者資訊。
+- [x] 審查執行頁維護 `reviewRecords`；結果分析的一般分析頁籤唯讀，系統管理員可依 Firestore Rules 批次刪除所選結果，並在同一批次寫入可追溯的 `auditLogs`。
 - [x] Firebase 讀取失敗時顯示錯誤，不匿名降級或用本地假結果冒充真實查詢結果。
 - [x] 不提交服務帳戶、使用者密碼、Email 服務密鑰或真實個資；公開 Firebase Web config 與已部署 nurseboard 相同。
-- [x] 資料原則上不刪除；正式保存期間、草稿 30 天清除例外、照片保存期限及稽核資料保存政策需院方確認。展示版不保存任何真實資料。
+- [x] 審查結果原則上保留；系統管理員只有在逐次確認後才可批次永久刪除所選紀錄，並留下稽核軌跡。正式保存期間、草稿 30 天清除例外、照片保存期限及稽核資料保存政策仍需院方確認。
 
 ## 工程與交付
 
@@ -63,3 +63,10 @@
 - [x] 提供 README，說明展示模式、Firebase 環境變數、啟動方式，以及切換正式系統前必須完成的安全工作。
 - [x] GitHub Actions 使用 Firebase Web config 啟用 Auth 模式；`VITE_FIREBASE_DEMO_READS` 仍固定關閉。已完成本機 production build。
 - [ ] 將 GitHub Pages 發布來源從 `main` 根目錄切換為 GitHub Actions；合併 `nursingqc-demo` 後確認 Actions 部署成功並檢視公開網站。
+
+
+## 本次新增需求（2026-11-07）
+
+- [x] 年度／學年度週期排程的審查件數 N，定義為每個排程單位、每個審查區間合計 N 件；區間內各月份合併計件，同一單位同一區間若指派多位審查員，N 件由他們共用；臨時排程不變。僅新產生／重新產生的週期任務套用新口徑，已完成的歷史任務與審查紀錄不回溯修改。
+- [x] 結果分析頁新增系統管理員專用「審查結果管理」頁籤；提供單位、組別、指標名稱及起訖西元年月篩選與查詢，使用與單位分析相同的年月選擇器；可多選審查結果後批次刪除，刪除前明確確認筆數，並留下可追溯稽核紀錄；Firestore Rules 只允許系統管理員刪除審查結果。
+- [x] 結果分析頁籤列維持「組別分析、單位分析、指標分析、結果匯入」順序，管理員另可見新增的審查結果管理；分析篩選器分成兩排，查詢按鈕統一顯示「查詢」，移除「重新整理」按鈕。

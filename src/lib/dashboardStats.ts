@@ -20,11 +20,45 @@ export interface DashTask {
   deadline: string;
   status: "pending" | "done" | "locked";
   doneCount: number;
+  quotaVersion?: 1;
+  quotaGroupId?: string;
+  quotaCategory?: "year" | "academic";
+  quotaIntervalStartYear?: number;
+  quotaIntervalStartMonth?: number;
+  quotaIntervalEndYear?: number;
+  quotaIntervalEndMonth?: number;
+  /** 年度／學年度週期整個區間、同單位跨審查員共用的完成數。 */
+  quotaDoneCount?: number;
+  quotaDoneCountUnknown?: boolean;
   /**
    * v1.28 階段 2：鎖定／逾期任務的紀錄以 taskId in 查詢分批補（每批 30 個、
    * 上限 90 個任務）；超過上限者完成進度未知，畫面顯示「—」而非錯誤的 0。
    */
   doneCountUnknown?: boolean;
+}
+
+/** 任務狀態/配額進度使用 quota count；月度實際紀錄仍使用 doneCount。 */
+export function taskProgressCount(
+  task: Pick<
+    DashTask,
+    | "doneCount"
+    | "doneCountUnknown"
+    | "quotaGroupId"
+    | "quotaDoneCount"
+    | "quotaDoneCountUnknown"
+  >,
+): number | null {
+  if (task.quotaGroupId) {
+    return task.quotaDoneCountUnknown ? null : task.quotaDoneCount ?? null;
+  }
+  return task.doneCountUnknown ? null : task.doneCount;
+}
+
+export function taskProgressLabel(
+  task: Pick<DashTask, "caseCount"> & Parameters<typeof taskProgressCount>[0],
+): string {
+  const count = taskProgressCount(task);
+  return count == null ? "—" : `${count}/${requiredCases(task.caseCount)}`;
 }
 
 /** 儀表板用的逐件紀錄列 */
@@ -40,6 +74,8 @@ export interface DashRecord {
   reviewedPersonEmpNo: string;
   reviewedPersonName: string;
   rate: number | null;
+  quotaGroupId?: string;
+  source?: string;
   answers: {
     questionId: string;
     itemText: string;
@@ -232,8 +268,10 @@ export function lagLights(
     if (t.status !== "pending") continue;
     const diff = daysBetween(today, t.deadline);
     if (diff < 0 || diff > 5) continue;
+    const doneCount = taskProgressCount(t);
+    if (doneCount == null) continue;
     const req = requiredCases(t.caseCount);
-    const pct = req > 0 ? t.doneCount / req : 1;
+    const pct = req > 0 ? doneCount / req : 1;
     if (pct >= 0.8) continue;
     out.push({ task: t, pct, level: pct < 0.5 ? "red" : "yellow" });
   }

@@ -281,12 +281,12 @@ export interface IntervalProgress {
 
 function pct(done: number, total: number): number {
   if (total <= 0) return 100;
-  return Math.round((done / total) * 1000) / 10;
+  return Math.round((Math.min(done, total) / total) * 1000) / 10;
 }
 
 /**
  * 現階段區間進度（純函式）。
- * - 總人次＝單位數×件數×審查月數；件數未設定 → totalPersons=null
+ * - 年度／學年度總人次＝單位數×件數（區間月份及審查員共用）；臨時／舊排程沿用單位數×件數×審查月數
  * - 已完成人次＝區間曆月份內已提交的審查筆數
  * - 總單位次＝單位數×審查月數
  * - 已完成單位次＝區間內有提交≥1筆的（單位,月）組合數
@@ -295,6 +295,8 @@ export function computeIntervalProgress(opts: {
   unitCount: number;
   caseCount: number | null;
   reviewMonthCount: number;
+  /** 年度／學年度套用每個單位、每個區間的共用配額；未傳或 temp 維持舊公式。 */
+  category?: "year" | "academic" | "temp";
   records: { unitId: string; year: number; month: number }[];
   intervalMonthKeys: Set<string>;
 }): IntervalProgress {
@@ -302,13 +304,19 @@ export function computeIntervalProgress(opts: {
     opts.intervalMonthKeys.has(`${r.year}-${r.month}`),
   );
   const donePersons = inIv.length;
+  const periodicQuota =
+    opts.category === "year" || opts.category === "academic";
   const totalPersons =
     opts.caseCount == null
       ? null
-      : opts.unitCount * opts.caseCount * opts.reviewMonthCount;
-  const totalUnits = opts.unitCount * opts.reviewMonthCount;
+      : opts.unitCount * opts.caseCount *
+        (periodicQuota ? 1 : opts.reviewMonthCount);
+  const totalUnits =
+    opts.unitCount * (periodicQuota ? 1 : opts.reviewMonthCount);
   const unitMonthSet = new Set(inIv.map((r) => `${r.unitId}@${r.year}-${r.month}`));
-  const doneUnits = unitMonthSet.size;
+  const doneUnits = periodicQuota
+    ? new Set(inIv.map((r) => r.unitId)).size
+    : unitMonthSet.size;
   return {
     totalPersons,
     donePersons,

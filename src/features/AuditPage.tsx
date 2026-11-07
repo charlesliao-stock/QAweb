@@ -42,6 +42,7 @@ import { maskName } from "../lib/mask";
 import {
   normalizeAssignmentItem,
   parseIndicatorSchedule,
+  periodicQuotaGroupId,
   type IndicatorSchedule,
 } from "../lib/scheduling";
 import {
@@ -89,6 +90,8 @@ interface RecordRow {
   reviewerName: string;
   reviewedPersonName: string;
   rate: number | null;
+  quotaGroupId: string;
+  source: string;
 }
 
 interface MonthOption {
@@ -397,6 +400,9 @@ export function AuditPage({
                   ? v.reviewedPersonName
                   : "",
               rate,
+              quotaGroupId:
+                typeof v.quotaGroupId === "string" ? v.quotaGroupId : "",
+              source: typeof v.source === "string" ? v.source : "",
             };
             const list = recordsByIndicator.get(iid) ?? [];
             list.push(row);
@@ -417,14 +423,38 @@ export function AuditPage({
           const iv = containingInterval(schedLike(s), today);
           if (!iv) continue;
           const keys = new Set(iv.allMonths.map(ymKey));
-          const inRecords = (recordsByIndicator.get(s.indicatorId) ?? []).filter(
-            (r) => keys.has(ymKey({ year: r.year, month: r.month })),
+          const periodicCategory =
+            s.category === "year" || s.category === "academic"
+              ? s.category
+              : null;
+          const scheduledUnitIds = new Set(s.unitIds);
+          const intervalRecords = (recordsByIndicator.get(s.indicatorId) ?? []).filter(
+            (record) =>
+              keys.has(ymKey({ year: record.year, month: record.month })) &&
+              (periodicCategory === null ||
+                scheduledUnitIds.size === 0 ||
+                scheduledUnitIds.has(record.unitId)),
           );
+          const inRecords = periodicCategory
+            ? intervalRecords.filter(
+                (record) =>
+                  record.source === "import" ||
+                  record.quotaGroupId ===
+                    periodicQuotaGroupId({
+                      indicatorId: s.indicatorId,
+                      unitId: record.unitId,
+                      category: periodicCategory,
+                      period: s.period,
+                      start: iv.start,
+                    }),
+              )
+            : intervalRecords;
           const reviewMonthCount = iv.reviewMonths.length;
           const progress = computeIntervalProgress({
             unitCount: s.unitIds.length,
             caseCount: s.caseCount,
             reviewMonthCount,
+            category: s.category,
             records: inRecords,
             intervalMonthKeys: keys,
           });
@@ -612,7 +642,8 @@ export function AuditPage({
       planned:
         viewRow.sched.caseCount == null
           ? null
-          : viewRow.sched.caseCount * viewRow.reviewMonthCount,
+          : viewRow.sched.caseCount *
+            (viewRow.sched.category === "temp" ? viewRow.reviewMonthCount : 1),
       average:
         summary.rates.length > 0
           ? Math.round(

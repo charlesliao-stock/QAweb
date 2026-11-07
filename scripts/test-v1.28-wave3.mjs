@@ -322,7 +322,12 @@ function fakeCacheApi({ demo = false, cacheDocs = null, cacheExists = true, cach
   a("B3：初始化失敗退回預設 getFirestore", fb.includes("getFirestore(app)") && fb.includes("firestoreCacheStatus"));
   const cf = src("src/lib/cacheFirst.ts");
   a("B3：demo 模式先於 SDK 判斷", cf.includes("if (api.isDemoMode()) return api.getDocs(q)"));
-  a("B3：重新整理有強制走伺服器機制", src("src/features/ResultsPage.tsx").includes("forceServerRefetch()"));
+  const resultsPage = src("src/features/ResultsPage.tsx");
+  a(
+    "B3：按查詢使所選年月 reviewRecords／reviewTasks 快取失效後重載",
+    resultsPage.includes('invalidateCachedYears("reviewRecords", queryYears, cacheScope)') &&
+      resultsPage.includes('invalidateCachedYears("reviewTasks", queryYears, cacheScope)'),
+  );
   const allSrc = ["src/app/App.tsx", "src/features/AdminPage.tsx", "src/features/DashboardPage.tsx", "src/features/GroupsPage.tsx", "src/features/IndicatorsPage.tsx", "src/features/ResultsPage.tsx", "src/features/AuditPage.tsx", "src/features/SchedulePage.tsx", "src/features/ReviewOverviewPage.tsx", "src/features/ReviewExecutePage.tsx", "src/features/dashboard/useDashboardData.ts", "src/lib/firebase.ts", "src/lib/usePermissions.ts"]
     .map((p) => src(p)).join("\n");
   a("B3：參考資料走 cache-first（13 處漏斗皆已遷移）", (allSrc.match(/getDocsCacheFirst\(/g) || []).length >= 20 && (allSrc.match(/getDocCacheFirst\(/g) || []).length >= 5);

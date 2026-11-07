@@ -603,7 +603,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     const { pending, done } = taskCountsFor(row);
     if (pending + done > 0) {
       const ok = window.confirm(
-        `${sched.periodLabel}已有 ${pending} 筆未執行、${done} 筆已完成任務。產生排程將刪除未執行的任務後重建；已完成的月份不會被修改（含當初的審查件數），確定嗎？`,
+        `${sched.periodLabel}已有 ${pending} 筆未執行、${done} 筆已完成任務。重新產生會刪除未執行任務並建立新任務；週期排程將按每單位、每區間 N 件計算，區間月份合併且同單位審查員共用 N。既有已完成任務與結果不回溯修改。確定嗎？`,
       );
       if (!ok) return;
     }
@@ -878,7 +878,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                               {sched.months.length} 個月・{sched.unitIds.length}{" "}
                               單位
                               {sched.caseCount != null &&
-                                `・${sched.caseCount} 件/輪`}
+                                `・${sched.caseCount} 件/每單位每區間`}
                             </div>
                           )}
                         </td>
@@ -1765,7 +1765,12 @@ function ScheduleEditor({
                 </div>
               </div>
               <div className="form-field" style={{ maxWidth: 200 }}>
-                <label className="field-label">審查件數 *</label>
+                <label className="field-label">
+                  每單位每審查區間件數 *
+                  <span className="muted-text">
+                    （區間內各月份合計；同單位多位審查員共用）
+                  </span>
+                </label>
                 <span className="case-count-field">
                   <input
                     type="number"
@@ -2591,7 +2596,11 @@ function ScheduleDetailModal({
             <tr>
               <td style={{ whiteSpace: "nowrap" }}><b>審查件數</b></td>
               <td data-label="審查件數">
-                {sched.caseCount != null ? `${sched.caseCount} 件/輪` : "—"}
+                {sched.caseCount != null
+                  ? sched.category === "temp"
+                    ? `${sched.caseCount} 件/輪`
+                    : `${sched.caseCount} 件/每單位每區間（跨月份、同單位審查員共用）`
+                  : "—"}
               </td>
             </tr>
             {sched.notes && (

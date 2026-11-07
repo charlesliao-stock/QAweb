@@ -11,6 +11,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from "../lib/db";
 import { EmptyState, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
@@ -24,15 +25,23 @@ import {
   type AuditQuestion,
 } from "../lib/indicators";
 import { ReviewQuestionList } from "./ReviewQuestionList";
-import { computeOptionSetScore, type ReviewAnswer } from "../lib/reviewRecords";
+import {
+  computeOptionSetScore,
+  type ReviewAnswer,
+} from "../lib/reviewRecords";
 import {
   isTaskComplete,
+  nextAvailableQuotaSlot,
   nextCaseSeq,
   progressLabel,
   requiredCases,
   reviewCaseDocId,
 } from "../lib/reviewProgress";
-import { todayStr, type ReviewTask } from "../lib/scheduling";
+import {
+  periodicQuotaSlotDocId,
+  todayStr,
+  type ReviewTask,
+} from "../lib/scheduling";
 
 /**
  * 進入審查表單的方式（v1.11.0）：
@@ -62,8 +71,16 @@ interface CaseRecordRow {
   totalScore: number;
   maxScore: number;
   rate: number | null;
+  quotaGroupId?: string;
+  quotaCaseNo?: number;
+  version?: number;
   submittedAt: unknown;
   submittedBy: string;
+}
+
+interface PeriodicQuotaState {
+  count: number;
+  occupiedSlots: number[];
 }
 
 interface PersonOption {
@@ -102,9 +119,35 @@ function fmtTs(ts: unknown): string {
   return "";
 }
 
+function isSharedPeriodicQuotaTask(
+  task: ReviewTask | null | undefined,
+): task is ReviewTask & {
+  quotaVersion: 1;
+  quotaGroupId: string;
+  quotaCategory: "year" | "academic";
+  quotaIntervalStartYear: number;
+  quotaIntervalStartMonth: number;
+  quotaIntervalEndYear: number;
+  quotaIntervalEndMonth: number;
+} {
+  return (
+    task?.quotaVersion === 1 &&
+    Boolean(task.quotaGroupId) &&
+    (task.quotaCategory === "year" || task.quotaCategory === "academic") &&
+    typeof task.quotaIntervalStartYear === "number" &&
+    typeof task.quotaIntervalStartMonth === "number" &&
+    typeof task.quotaIntervalEndYear === "number" &&
+    typeof task.quotaIntervalEndMonth === "number"
+  );
+}
+
 function taskFromDoc(id: string, data: Record<string, unknown>): TaskFull {
   const cc = data.caseCount;
   const st = String(data.status ?? "pending");
+  const quotaCategory =
+    data.quotaCategory === "year" || data.quotaCategory === "academic"
+      ? data.quotaCategory
+      : undefined;
   return {
     id,
     indicatorId: String(data.indicatorId ?? ""),
@@ -114,6 +157,26 @@ function taskFromDoc(id: string, data: Record<string, unknown>): TaskFull {
     reviewerId: String(data.reviewerId ?? ""),
     caseCount:
       typeof cc === "number" && Number.isInteger(cc) && cc >= 1 ? cc : null,
+    quotaVersion: data.quotaVersion === 1 ? 1 : undefined,
+    quotaGroupId:
+      typeof data.quotaGroupId === "string" ? data.quotaGroupId : undefined,
+    quotaCategory,
+    quotaIntervalStartYear:
+      typeof data.quotaIntervalStartYear === "number"
+        ? data.quotaIntervalStartYear
+        : undefined,
+    quotaIntervalStartMonth:
+      typeof data.quotaIntervalStartMonth === "number"
+        ? data.quotaIntervalStartMonth
+        : undefined,
+    quotaIntervalEndYear:
+      typeof data.quotaIntervalEndYear === "number"
+        ? data.quotaIntervalEndYear
+        : undefined,
+    quotaIntervalEndMonth:
+      typeof data.quotaIntervalEndMonth === "number"
+        ? data.quotaIntervalEndMonth
+        : undefined,
     deadline: String(data.deadline ?? ""),
     status: st === "done" ? "done" : st === "locked" ? "locked" : "pending",
     completedAt: data.completedAt,
@@ -145,6 +208,7 @@ export function ReviewExecutePage({
   const [selectedAuditItem, setSelectedAuditItem] = useState("");
   const [task, setTask] = useState<TaskFull | null>(null);
   const [records, setRecords] = useState<CaseRecordRow[]>([]);
+  const [quotaDoneCount, setQuotaDoneCount] = useState(0);
   const [loadError, setLoadError] = useState("");
 
   /** 逐件表單欄位（v1.11.0） */
@@ -181,7 +245,8 @@ export function ReviewExecutePage({
   const [unlockReason, setUnlockReason] = useState("");
   const [unlocking, setUnlocking] = useState(false);
 
-  const doneCount = records.length;
+  const sharedQuotaTask = isSharedPeriodicQuotaTask(task);
+  const doneCount = sharedQuotaTask ? quotaDoneCount : records.length;
   const liveScore = useMemo(() => {
     const selections = questions.flatMap((question) => {
       const selectedIndex = answers[question.id];
@@ -232,6 +297,11 @@ export function ReviewExecutePage({
           totalScore: Number(data.totalScore ?? 0),
           maxScore: Number(data.maxScore ?? 0),
           rate: typeof data.rate === "number" ? data.rate : null,
+          quotaGroupId:
+            typeof data.quotaGroupId === "string" ? data.quotaGroupId : undefined,
+          quotaCaseNo:
+            typeof data.quotaCaseNo === "number" ? data.quotaCaseNo : undefined,
+          version: typeof data.version === "number" ? data.version : undefined,
           submittedAt: data.submittedAt,
           submittedBy:
             typeof data.submittedBy === "string" ? data.submittedBy : "",
@@ -240,6 +310,103 @@ export function ReviewExecutePage({
       // 舊格式單筆（caseSeq null）排最前，其餘按件次
       rows.sort((a, b) => (a.caseSeq ?? 0) - (b.caseSeq ?? 0));
       return rows;
+    },
+    [],
+  );
+
+  const loadPeriodicQuotaCount = useCallback(
+    async (quotaTask: TaskFull): Promise<PeriodicQuotaState> => {
+      if (!isSharedPeriodicQuotaTask(quotaTask))
+        return { count: 0, occupiedSlots: [] };
+      const startYear = quotaTask.quotaIntervalStartYear!;
+      const startMonth = quotaTask.quotaIntervalStartMonth!;
+      const endYear = quotaTask.quotaIntervalEndYear!;
+      const endMonth = quotaTask.quotaIntervalEndMonth!;
+      const monthKeys = new Set<string>();
+      let cursor = startYear * 12 + startMonth - 1;
+      const end = endYear * 12 + endMonth - 1;
+      while (cursor <= end) {
+        const year = Math.floor(cursor / 12);
+        const month = (cursor % 12) + 1;
+        monthKeys.add(`${year}-${month}`);
+        cursor += 1;
+      }
+      const years = [...new Set([...monthKeys].map((key) => Number(key.split("-")[0])))];
+      const db = getFirebaseDb();
+      const snapshots = await Promise.all(
+        years.map((year) =>
+          getDocsFromServer(
+            query(
+              collection(db, "reviewRecords"),
+              where("indicatorId", "==", quotaTask.indicatorId),
+              where("year", "==", year),
+            ),
+          ),
+        ),
+      );
+      let count = 0;
+      const occupiedSlots = new Set<number>();
+      snapshots.forEach((snapshot) => {
+        snapshot.docs.forEach((record) => {
+          const data = record.data() as Record<string, unknown>;
+          if (String(data.unitId ?? "") !== quotaTask.unitId) return;
+          const month = Number(data.month ?? 0);
+          const key = `${Number(data.year ?? 0)}-${month}`;
+          if (!monthKeys.has(key)) return;
+          const groupId =
+            typeof data.quotaGroupId === "string" ? data.quotaGroupId : "";
+          const source = typeof data.source === "string" ? data.source : "";
+          // 僅計入同一週期 quota group 的任務結果與 taskless 匯入結果；temp/舊版 task 不混入。
+          if (groupId === quotaTask.quotaGroupId || (!groupId && source === "import")) {
+            count += 1;
+            if (
+              groupId === quotaTask.quotaGroupId &&
+              typeof data.quotaCaseNo === "number" &&
+              Number.isInteger(data.quotaCaseNo) &&
+              data.quotaCaseNo > 0
+            ) {
+              occupiedSlots.add(data.quotaCaseNo);
+            }
+          }
+        });
+      });
+      return { count, occupiedSlots: [...occupiedSlots] };
+    },
+    [],
+  );
+
+  const syncPeriodicQuotaTaskStatus = useCallback(
+    async (quotaTask: TaskFull, complete: boolean) => {
+      if (!isSharedPeriodicQuotaTask(quotaTask)) return;
+      const db = getFirebaseDb();
+      const snapshot = await getDocsFromServer(
+        query(
+          collection(db, "reviewTasks"),
+          where("quotaGroupId", "==", quotaTask.quotaGroupId),
+        ),
+      );
+      const updates: { ref: (typeof snapshot.docs)[number]["ref"]; data: Record<string, unknown> }[] = [];
+      snapshot.docs.forEach((taskDoc) => {
+        const status = String(taskDoc.data().status ?? "pending");
+        if (complete && status !== "done") {
+          updates.push({
+            ref: taskDoc.ref,
+            data: { status: "done", completedAt: serverTimestamp() },
+          });
+        } else if (!complete && status === "done") {
+          updates.push({
+            ref: taskDoc.ref,
+            data: { status: "pending", completedAt: null },
+          });
+        }
+      });
+      for (let index = 0; index < updates.length; index += 400) {
+        const batch = writeBatch(db);
+        updates.slice(index, index + 400).forEach(({ ref, data }) =>
+          batch.update(ref, data),
+        );
+        await batch.commit();
+      }
     },
     [],
   );
@@ -355,6 +522,11 @@ export function ReviewExecutePage({
         const recs = await loadCaseRecords(t.id);
         if (cancelled) return;
         setRecords(recs);
+        const quotaState = isSharedPeriodicQuotaTask(t)
+          ? await loadPeriodicQuotaCount(t)
+          : { count: recs.length, occupiedSlots: [] };
+        if (cancelled) return;
+        setQuotaDoneCount(quotaState.count);
         // 解鎖申請（v1.15.0）
         try {
           const usnap = await getDocs(
@@ -393,7 +565,15 @@ export function ReviewExecutePage({
             setEditingId(editId);
           }
         }
-        if (!cancelled) setAllDone(isTaskComplete(recs.length, t.caseCount));
+        const quotaComplete = isTaskComplete(quotaState.count, t.caseCount);
+        if (isSharedPeriodicQuotaTask(t)) {
+          try {
+            await syncPeriodicQuotaTaskStatus(t, quotaComplete);
+          } catch {
+            // 狀態同步失敗不阻擋表單；件數仍由最新結果查詢判定。
+          }
+        }
+        if (!cancelled) setAllDone(quotaComplete);
       } catch (error) {
         if (!cancelled) setLoadError(`載入失敗：${toErrorMessage(error)}`);
       } finally {
@@ -588,6 +768,9 @@ export function ReviewExecutePage({
         }
         await updateDoc(recordRef, {
           ...nextValues,
+          ...(typeof previous.quotaGroupId === "string"
+            ? { version: Number(previous.version ?? 1) + 1 }
+            : {}),
           ...(Object.keys(changes).length > 0
             ? {
                 editHistory,
@@ -599,6 +782,14 @@ export function ReviewExecutePage({
         });
         const recs = await loadCaseRecords(task.id);
         setRecords(recs);
+        if (sharedQuotaTask) {
+          try {
+            const quotaState = await loadPeriodicQuotaCount(task);
+            setQuotaDoneCount(quotaState.count);
+          } catch {
+            // 更新成功後仍回到查詢列表；下次載入會重新取得區間件數。
+          }
+        }
         onAction(`已更新審查結果${rate != null ? `，正確率 ${rate}%` : ""}`);
         if (target.mode === "records") {
           setEditingId(null); // 回到查詢列表
@@ -607,9 +798,41 @@ export function ReviewExecutePage({
         }
       } else {
         // 逐件新增
+        const quotaState = sharedQuotaTask
+          ? await loadPeriodicQuotaCount(task)
+          : { count: records.length, occupiedSlots: [] };
+        const beforeCount = quotaState.count;
+        if (sharedQuotaTask) {
+          setQuotaDoneCount(beforeCount);
+        }
+        if (sharedQuotaTask && isTaskComplete(beforeCount, task.caseCount)) {
+          setAllDone(true);
+          try {
+            await syncPeriodicQuotaTaskStatus(task, true);
+          } catch {
+            // 件數已達上限；狀態可由下次載入修復。
+          }
+          throw new Error(`本審查區間已達 ${requiredCases(task.caseCount)} 件，不可再新增`);
+        }
+        const quotaSlot = sharedQuotaTask
+          ? nextAvailableQuotaSlot(
+              quotaState.occupiedSlots,
+              requiredCases(task.caseCount),
+            )
+          : null;
+        if (sharedQuotaTask && quotaSlot == null) {
+          throw new Error("本審查區間名額已被其他審查員使用，請重新讀取進度後再試");
+        }
         const seq = nextCaseSeq(records.length);
         const taskId = task.id;
-        await setDoc(doc(db, "reviewRecords", reviewCaseDocId(taskId, seq)), {
+        const quotaSlotId =
+          sharedQuotaTask && quotaSlot != null
+            ? periodicQuotaSlotDocId(task.quotaGroupId, quotaSlot)
+            : "";
+        const recordId = sharedQuotaTask
+          ? quotaSlotId
+          : reviewCaseDocId(taskId, seq);
+        await setDoc(doc(db, "reviewRecords", recordId), {
           taskId,
           indicatorId: task.indicatorId,
           unitId: task.unitId,
@@ -630,15 +853,34 @@ export function ReviewExecutePage({
           rate,
           submittedAt: serverTimestamp(),
           submittedBy: staffId,
+          ...(sharedQuotaTask
+            ? {
+                quotaGroupId: task.quotaGroupId,
+                quotaCaseNo: quotaSlot,
+                quotaSlotDocId: quotaSlotId,
+                version: 1,
+              }
+            : {}),
         });
         const req = requiredCases(task.caseCount);
-        if (isTaskComplete(seq, task.caseCount)) {
+        const completedCount = sharedQuotaTask ? beforeCount + 1 : seq;
+        if (sharedQuotaTask) {
+          setQuotaDoneCount(completedCount);
+        }
+        const completed = isTaskComplete(completedCount, task.caseCount);
+        if (sharedQuotaTask) {
+          try {
+            await syncPeriodicQuotaTaskStatus(task, completed);
+          } catch {
+            // 審查紀錄已成功儲存，task 狀態會在下次載入時重新同步。
+          }
+        } else if (completed) {
           await updateDoc(doc(db, "reviewTasks", taskId), {
             status: "done",
             completedAt: serverTimestamp(),
           });
-          setAllDone(true);
         }
+        setAllDone(completed);
         setRecords(await loadCaseRecords(taskId));
         setAnswers({}); // 清空答案，保留日期／審查人員，繼續下一件
         setCommonErrorAnswers({});
@@ -648,12 +890,20 @@ export function ReviewExecutePage({
         setPersonQuery("");
         setBedNo("");
         onAction(
-          `已送出第 ${seq} 件（共需 ${req} 件）${rate != null ? `，正確率 ${rate}%` : ""}`,
+          `已送出第 ${sharedQuotaTask ? completedCount : seq} 件（${sharedQuotaTask ? "本區間合計" : "共需"} ${sharedQuotaTask ? `${completedCount}/` : ""}${req} 件）${rate != null ? `，正確率 ${rate}%` : ""}`,
         );
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
     } catch (error) {
-      onAction(`送出失敗：${toErrorMessage(error)}`);
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? String((error as { code?: unknown }).code ?? "")
+          : "";
+      if (sharedQuotaTask && code === "permission-denied") {
+        onAction("本區間名額剛被其他審查員使用，請重新讀取進度後再送出");
+      } else {
+        onAction(`送出失敗：${toErrorMessage(error)}`);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -694,7 +944,7 @@ export function ReviewExecutePage({
       </div>
       <SectionTitle
         title={`${isRecordsView ? "審查結果查詢" : "審查表單"}：${indicatorName}`}
-        note={`${ymLabel(task.year, task.month)}・${task.unitId}・已完成 ${progressLabel(doneCount, task.caseCount)} 件`}
+        note={`${ymLabel(task.year, task.month)}・${task.unitId}・${sharedQuotaTask ? "本區間合計" : "已完成"} ${progressLabel(doneCount, task.caseCount)} 件`}
       />
 
       {isRecordsView ? (
@@ -815,9 +1065,9 @@ export function ReviewExecutePage({
           {allDone && !editingId && (
             <section className="panel" style={{ borderColor: "#9fd4c8" }}>
               <p style={{ margin: 0 }}>
-                <b>✅ 本單位審查已完成</b>
+                <b>✅ {sharedQuotaTask ? "本區間審查已完成" : "本單位審查已完成"}</b>
                 <span className="muted-text">
-                  （{progressLabel(doneCount, task.caseCount)} 件）
+                  （{sharedQuotaTask ? "本區間合計 " : ""}{progressLabel(doneCount, task.caseCount)} 件）
                 </span>
               </p>
               <div className="form-actions" style={{ marginTop: 12 }}>
@@ -1045,12 +1295,12 @@ export function ReviewExecutePage({
                   disabled={submitting}
                   onClick={handleSubmit}
                 >
-                  <Check size={15} />{" "}
+                <Check size={15} />{" "}
                   {submitting
                     ? "送出中…"
                     : editingId
                       ? "更新審查結果"
-                      : `送出第 ${nextCaseSeq(doneCount)} 件`}
+                      : `送出第 ${nextCaseSeq(records.length)} 件`}
                 </button>
                 <button className="button button-ghost" onClick={onBack}>
                   取消返回

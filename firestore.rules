@@ -29,8 +29,27 @@ service cloud.firestore {
       return hasRole('系統管理員');
     }
 
+    // 新版週期排程每一個 N 名額對應一個固定 reviewRecords 文件 ID。
+    // 同一名額競態提交時，第二次寫入會變成 update；version guard 會拒絕舊版覆寫。
+    function validQuotaSlot(id) {
+      let groupId = request.resource.data.get('quotaGroupId', '');
+      let group = get(/databases/$(database)/documents/reviewQuotaGroups/$(groupId));
+      return groupId is string
+        && exists(/databases/$(database)/documents/reviewQuotaGroups/$(groupId))
+        && request.resource.data.get('quotaSlotDocId', '') == id
+        && id in group.data.get('slotIds', []);
+    }
+
     function isGanShi() {
       return hasRole('品管執行幹事') || isAdmin();
+    }
+
+    function canManageSchedule() {
+      return hasRole('召集人')
+        || hasRole('品管組召集人')
+        || hasRole('執行幹事')
+        || hasRole('品管組執行幹事')
+        || isAdmin();
     }
 
     // 人員主檔：本人可讀寫自己（不可改 roles/status）；管理員全權
@@ -118,9 +137,28 @@ service cloud.firestore {
       allow read, write: if isAuthed();
     }
 
+    // 週期排程共用配額名額清單：不含個人審查資料，排程幹事以上維護。
+    match /reviewQuotaGroups/{id} {
+      allow read: if isAuthed();
+      allow create, update: if canManageSchedule();
+      allow delete: if isAdmin();
+    }
+
     // 審查執行紀錄（v1.10.0）：業務資料，第一階段登入者可讀寫
     match /reviewRecords/{id} {
-      allow read, write: if isAuthed();
+      allow read: if isAuthed();
+      allow create: if isAuthed()
+        && (!('quotaGroupId' in request.resource.data) || validQuotaSlot(id));
+      allow update: if isAuthed() && (
+        (!('quotaGroupId' in resource.data)
+          && !('quotaGroupId' in request.resource.data))
+        || ('quotaGroupId' in resource.data
+          && request.resource.data.get('quotaGroupId', '') == resource.data.quotaGroupId
+          && request.resource.data.get('quotaSlotDocId', '') == id
+          && resource.data.get('quotaSlotDocId', '') == id
+          && request.resource.data.get('version', 0) == resource.data.get('version', 0) + 1)
+      );
+      allow delete: if isAdmin();
     }
 
     // 解鎖申請（v1.15.0）：登入者可讀；申請人（requestedBy＝本人職編）可建立；

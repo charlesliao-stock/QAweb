@@ -8,6 +8,7 @@ import { SectionTitle } from "../../components/ui";
 import {
   recentAlerts,
   staffAvgRate,
+  taskProgressCount,
   unitPassRate,
 } from "../../lib/dashboardStats";
 import {
@@ -81,14 +82,25 @@ export function HeadNurseTab({
 
   // 超額加審：完成數 ＞ 應審件數
   const overAudits = useMemo(
-    () =>
-      data.tasks.filter(
-        (t) =>
-          t.unitId === unitCode &&
-          t.year === curYear &&
-          t.month === curMonth &&
-          t.doneCount > requiredCases(t.caseCount),
-      ),
+    () => {
+      const seenQuotaGroups = new Set<string>();
+      return data.tasks.filter((task) => {
+        const doneCount = taskProgressCount(task);
+        if (
+          task.unitId !== unitCode ||
+          task.year !== curYear ||
+          task.month !== curMonth ||
+          doneCount == null ||
+          doneCount <= requiredCases(task.caseCount)
+        )
+          return false;
+        if (task.quotaGroupId) {
+          if (seenQuotaGroups.has(task.quotaGroupId)) return false;
+          seenQuotaGroups.add(task.quotaGroupId);
+        }
+        return true;
+      });
+    },
     [data, unitCode, curYear, curMonth],
   );
 
@@ -199,12 +211,15 @@ export function HeadNurseTab({
         <section className="panel">
           <SectionTitle title="超額加審提醒" note="完成數超過應審件數" />
           <ul style={{ margin: 0, paddingLeft: 20 }}>
-            {overAudits.map((t) => (
-              <li key={t.id}>
-                {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}：
-                已完成 {t.doneCount} 件（應審 {requiredCases(t.caseCount)} 件）
-              </li>
-            ))}
+            {overAudits.map((t) => {
+              const doneCount = taskProgressCount(t) ?? 0;
+              return (
+                <li key={t.id}>
+                  {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}：
+                  已完成 {doneCount} 件（應審 {requiredCases(t.caseCount)} 件）
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}

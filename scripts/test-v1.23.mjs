@@ -7,13 +7,15 @@ import { build } from "esbuild";
 import { writeFileSync } from "fs";
 import { createRequire } from "module";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+const ROOT = process.cwd();
 
 const entry = `
 import {
   autoSelectMonths, resolveIntervalMonths, clampIntervalForEditor,
   parseIntervalMonths, intervalRangeLabels, scheduleReviewCalendarMonths,
+  periodicQuotaGroupId, periodicQuotaSlotDocId,
 } from "${ROOT}/src/lib/scheduling";
+import { nextAvailableQuotaSlot } from "${ROOT}/src/lib/reviewProgress";
 import {
   scheduleIntervals, containingInterval, intervalDisplay,
   computeIntervalProgress,
@@ -22,6 +24,8 @@ import { cycleMonths } from "${ROOT}/src/lib/cycle";
 export {
   autoSelectMonths, resolveIntervalMonths, clampIntervalForEditor,
   parseIntervalMonths, intervalRangeLabels, scheduleReviewCalendarMonths,
+  periodicQuotaGroupId, periodicQuotaSlotDocId,
+  nextAvailableQuotaSlot,
   scheduleIntervals, containingInterval, intervalDisplay,
   computeIntervalProgress, cycleMonths,
 };
@@ -258,13 +262,51 @@ const sAcad23 = {
     unitCount: 3,
     caseCount: 3,
     reviewMonthCount: 2,
+    category: "year",
     records,
     intervalMonthKeys: keys,
   });
-  assert("總人次＝3×3×2＝18", p.totalPersons === 18);
+  assert("週期排程總人次＝3單位×每區間3件＝9", p.totalPersons === 9);
   assert("已完成人次＝3", p.donePersons === 3);
-  assert("總單位次＝3×2＝6", p.totalUnits === 6);
-  assert("已完成單位次＝3（u1@8、u1@9、u2@8）", p.doneUnits === 3);
+  assert("總單位次＝3（每單位一個區間）", p.totalUnits === 3);
+  assert("已完成單位＝2（u1、u2；月份合併）", p.doneUnits === 2);
+  const temp = L.computeIntervalProgress({
+    unitCount: 3,
+    caseCount: 3,
+    reviewMonthCount: 2,
+    category: "temp",
+    records,
+    intervalMonthKeys: keys,
+  });
+  assert("臨時排程沿用舊總人次＝3×3×2＝18", temp.totalPersons === 18);
+  assert("臨時排程沿用舊單位次＝3×2＝6", temp.totalUnits === 6);
+}
+
+/* ---------- 8. 週期配額組：跨審查員共享、單位／輪次隔離 ---------- */
+{
+  const base = {
+    indicatorId: "indicator-1",
+    unitId: "10A",
+    category: "year",
+    period: "2026",
+    start: { year: 2026, month: 2 },
+  };
+  const reviewerA = L.periodicQuotaGroupId({ ...base, reviewerId: "reviewer-a" });
+  const reviewerB = L.periodicQuotaGroupId({ ...base, reviewerId: "reviewer-b" });
+  const otherUnit = L.periodicQuotaGroupId({ ...base, unitId: "10B" });
+  const otherInterval = L.periodicQuotaGroupId({
+    ...base,
+    start: { year: 2026, month: 5 },
+  });
+  assert("同單位同區間的不同審查員共用同一 group", reviewerA === reviewerB);
+  assert("不同單位使用不同 group", reviewerA !== otherUnit);
+  assert("不同審查區間使用不同 group", reviewerA !== otherInterval);
+  assert(
+    "同一 group 的同一名額固定指向同一 document",
+    L.periodicQuotaSlotDocId(reviewerA, 2) === L.periodicQuotaSlotDocId(reviewerB, 2),
+  );
+  assert("已刪除的空名額可重用", L.nextAvailableQuotaSlot([1, 3], 3) === 2);
+  assert("N 個名額都被占用時不可再取 slot", L.nextAvailableQuotaSlot([1, 2, 3], 3) === null);
 }
 
 console.log(`\nv1.23: ${passed} passed, ${failed} failed`);

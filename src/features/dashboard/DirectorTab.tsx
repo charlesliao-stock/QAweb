@@ -4,7 +4,7 @@
  */
 import { useMemo } from "react";
 import { SectionTitle } from "../../components/ui";
-import { radarMatrix } from "../../lib/dashboardStats";
+import { radarMatrix, taskProgressCount } from "../../lib/dashboardStats";
 import {
   DEFAULT_DASHBOARD_SECTIONS,
   type DashboardSections,
@@ -125,14 +125,25 @@ export function DirectorTab({
     [data, curYear, curMonth],
   );
 
-  // 全院戰情
-  const totalTasks = monthTasks.length;
-  const doneTasks = monthTasks.filter(
-    (t) => t.doneCount >= requiredCases(t.caseCount),
-  ).length;
+  // 全院戰情：週期配額按 quota group 去重，temp/舊 task 則各自計算。
+  const countedMonthTasks = useMemo(() => {
+    const seenQuotaGroups = new Set<string>();
+    return monthTasks.filter((task) => {
+      if (!task.quotaGroupId) return true;
+      if (seenQuotaGroups.has(task.quotaGroupId)) return false;
+      seenQuotaGroups.add(task.quotaGroupId);
+      return true;
+    });
+  }, [monthTasks]);
+  const totalTasks = countedMonthTasks.length;
+  const doneTasks = countedMonthTasks.filter((task) => {
+    const count = taskProgressCount(task);
+    return count != null && count >= requiredCases(task.caseCount);
+  }).length;
   const totalRate =
     totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 1000) / 10 : null;
-  const totalCases = monthTasks.reduce((n, t) => n + t.doneCount, 0);
+  // 月報的人次只算本月紀錄；週期 quota progress 不重複列入各月件數。
+  const totalCases = monthRecords.length;
   // 綜合達標率：各單位月平均達標的比例
   const byUnit = new Map<string, (number | null)[]>();
   for (const r of monthRecords) {

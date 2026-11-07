@@ -5412,3 +5412,56 @@ body {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* 管理員審查結果管理 */
+.review-results-manager .results-filters {
+  align-items: flex-end;
+}
+.review-results-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.review-results-actions strong {
+  margin-right: auto;
+}
+.review-results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-small);
+}
+.review-results-table th,
+.review-results-table td {
+  padding: 10px 9px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+.review-results-table th {
+  color: var(--muted);
+  background: var(--bg);
+}
+.review-results-manager .analysis-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.button-danger {
+  background: #b42318;
+  color: #fff;
+  border-color: #b42318;
+}
+.button-danger:hover {
+  background: #912018;
+}
+
+@media (max-width: 640px) {
+  .review-results-manager .results-filters > * {
+    min-width: 0;
+    flex: 1 1 45%;
+  }
+  .review-results-actions .button {
+    flex: 1 1 auto;
+  }
+}
