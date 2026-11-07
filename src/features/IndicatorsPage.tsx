@@ -149,6 +149,7 @@ interface IndicatorForm {
   status: IndicatorStatus;
   steps: TenSteps;
   questions: AuditQuestion[];
+  auditItems: string[];
   /** 題目分組（「啟用題目分組」開關控制；不是每一份指標都有） */
   questionGroups: QuestionGroup[];
   useQuestionGroups: boolean;
@@ -171,6 +172,7 @@ function emptyForm(): IndicatorForm {
     status: "草稿",
     steps,
     questions: [],
+    auditItems: [],
     questionGroups: [],
     useQuestionGroups: false,
     requireBedNo: true,
@@ -192,6 +194,7 @@ function toErrorMessage(error: unknown): string {
 /** 審核表編輯值（單筆表單＋批次新增共用，v1.18 抽取） */
 export interface AuditFormValue {
   questions: AuditQuestion[];
+  auditItems: string[];
   questionGroups: QuestionGroup[];
   useQuestionGroups: boolean;
   requireBedNo: boolean;
@@ -201,11 +204,78 @@ export interface AuditFormValue {
 export function emptyAuditFormValue(): AuditFormValue {
   return {
     questions: [],
+    auditItems: [],
     questionGroups: [],
     useQuestionGroups: false,
     requireBedNo: true,
     requireReviewee: true,
   };
+}
+
+function OptionListEditor({
+  label,
+  values,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  values: string[];
+  onChange: (values: string[]) => void;
+  placeholder: string;
+}) {
+  const [draft, setDraft] = useState("");
+  function addValue() {
+    const value = draft.trim();
+    if (!value || values.includes(value)) return;
+    onChange([...values, value]);
+    setDraft("");
+  }
+  return (
+    <div className="audit-option-editor">
+      {values.length > 0 && (
+        <div className="audit-option-chips">
+          {values.map((value) => (
+            <span className="chip" key={value}>
+              {value}
+              <button
+                type="button"
+                aria-label={`移除${label}：${value}`}
+                onClick={() =>
+                  onChange(values.filter((item) => item !== value))
+                }
+              >
+                <X size={13} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="audit-option-add">
+        <input
+          className="text-input"
+          value={draft}
+          placeholder={placeholder}
+          aria-label={`新增${label}`}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              addValue();
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="button button-outline"
+          onClick={addValue}
+          disabled={!draft.trim() || values.includes(draft.trim())}
+        >
+          <Plus size={14} />
+          新增
+        </button>
+      </div>
+    </div>
+  );
 }
 
 /** 負責人多選（職編／姓名搜尋；單筆表單＋批次新增共用，v1.18 抽取） */
@@ -400,11 +470,7 @@ function AuditFormEditor({
       return;
     }
     onChange(
-      removeQuestionGroupFromList(
-        value.questionGroups,
-        value.questions,
-        id,
-      ),
+      removeQuestionGroupFromList(value.questionGroups, value.questions, id),
     );
   }
 
@@ -427,6 +493,7 @@ function AuditFormEditor({
               <th>題目</th>
               <th>選項</th>
               <th>審核指引</th>
+              <th>常見錯誤（可複選）</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -482,13 +549,13 @@ function AuditFormEditor({
                           })
                         }
                       >
-                        {(
-                          Object.keys(OPTION_SET_LABELS) as OptionSet[]
-                        ).map((s) => (
-                          <option key={s} value={s}>
-                            {OPTION_SET_LABELS[s]}
-                          </option>
-                        ))}
+                        {(Object.keys(OPTION_SET_LABELS) as OptionSet[]).map(
+                          (s) => (
+                            <option key={s} value={s}>
+                              {OPTION_SET_LABELS[s]}
+                            </option>
+                          ),
+                        )}
                       </select>
                       <ChevronDown size={15} />
                     </div>
@@ -501,6 +568,16 @@ function AuditFormEditor({
                       aria-label="審核指引"
                       onChange={(e) =>
                         updateQuestion(q.id, { guidance: e.target.value })
+                      }
+                    />
+                  </td>
+                  <td>
+                    <OptionListEditor
+                      label="常見錯誤"
+                      values={q.commonErrors ?? []}
+                      placeholder="輸入後按 Enter"
+                      onChange={(commonErrors) =>
+                        updateQuestion(q.id, { commonErrors })
                       }
                     />
                   </td>
@@ -582,6 +659,18 @@ function AuditFormEditor({
           </span>
         </span>
       </label>
+      <div className="audit-items-setting">
+        <label className="field-label">審核項目（單選）</label>
+        <p className="settings-note">
+          可設定多個審核項目；審查時選擇其中一項。
+        </p>
+        <OptionListEditor
+          label="審核項目"
+          values={value.auditItems}
+          placeholder="輸入後按 Enter"
+          onChange={(auditItems) => onChange({ auditItems })}
+        />
+      </div>
       {value.useQuestionGroups ? (
         <>
           <div className="group-actions">
@@ -650,20 +739,14 @@ function AuditFormEditor({
                 </span>
               </div>
               {renderQuestionTable(value.questions.filter((x) => !x.groupId))}
-              <button
-                className="text-button"
-                onClick={() => addQuestion(null)}
-              >
+              <button className="text-button" onClick={() => addQuestion(null)}>
                 <Plus size={14} /> 新增題目
               </button>
             </div>
           )}
           {value.questions.filter((x) => !x.groupId).length === 0 && (
             <div className="group-actions">
-              <button
-                className="text-button"
-                onClick={() => addQuestion(null)}
-              >
+              <button className="text-button" onClick={() => addQuestion(null)}>
                 <Plus size={14} /> 新增未分組題目
               </button>
             </div>
@@ -788,7 +871,9 @@ export function IndicatorsPage({
           owners: Array.isArray(data.owners) ? data.owners.map(String) : [],
           mainThreshold: primaryThreshold(data),
           basicThreshold:
-            typeof data.basicThreshold === "number" ? data.basicThreshold : null,
+            typeof data.basicThreshold === "number"
+              ? data.basicThreshold
+              : null,
           status: STATUSES.includes(data.status) ? data.status : "草稿",
           version: typeof data.version === "string" ? data.version : "v1.0",
         };
@@ -913,8 +998,7 @@ export function IndicatorsPage({
       const questions = nq.questions.map((q) => ({
         ...q,
         // 分組表沒有的 groupId 視為未分組（容錯，避免題目消失）
-        groupId:
-          q.groupId && groupIds.has(q.groupId) ? q.groupId : null,
+        groupId: q.groupId && groupIds.has(q.groupId) ? q.groupId : null,
         groupName:
           q.groupId && groupIds.has(q.groupId)
             ? (mergedGroups.find((g) => g.id === q.groupId)?.name ?? "")
@@ -930,6 +1014,9 @@ export function IndicatorsPage({
         status: STATUSES.includes(data.status) ? data.status : "草稿",
         steps,
         questions,
+        auditItems: Array.isArray(data.auditItems)
+          ? data.auditItems.map(String).filter(Boolean)
+          : [],
         questionGroups: mergedGroups,
         useQuestionGroups,
         requireBedNo: data.requireBedNo === true,
@@ -1040,9 +1127,7 @@ export function IndicatorsPage({
         },
         step5: {
           ...prev.steps.step5,
-          thresholds: prev.steps.step5.thresholds.filter(
-            (_, i) => i !== index,
-          ),
+          thresholds: prev.steps.step5.thresholds.filter((_, i) => i !== index),
         },
       },
     }));
@@ -1176,6 +1261,9 @@ export function IndicatorsPage({
         itemText: q.itemText.trim(),
         optionSet: q.optionSet,
         guidance: q.guidance.trim(),
+        commonErrors: (q.commonErrors ?? [])
+          .map((item) => item.trim())
+          .filter(Boolean),
         groupId: q.groupId,
         groupName: q.groupName.trim(),
         order: i,
@@ -1199,6 +1287,7 @@ export function IndicatorsPage({
         status: form.status,
         tenSteps: steps,
         questions,
+        auditItems: form.auditItems.map((item) => item.trim()).filter(Boolean),
         questionGroups,
         useQuestionGroups: form.useQuestionGroups,
         requireBedNo: form.requireBedNo,
@@ -1235,6 +1324,9 @@ export function IndicatorsPage({
           threshold: basicThreshold,
           tenSteps: steps,
           questions,
+          auditItems: form.auditItems
+            .map((item) => item.trim())
+            .filter(Boolean),
           effectiveDate: new Date().toISOString().slice(0, 10),
           note: "初版",
           createdAt: serverTimestamp(),
@@ -1273,6 +1365,9 @@ export function IndicatorsPage({
             threshold: basicThreshold,
             tenSteps: steps,
             questions,
+            auditItems: form.auditItems
+              .map((item) => item.trim())
+              .filter(Boolean),
             effectiveDate: new Date().toISOString().slice(0, 10),
             note: "審查資料鎖定後修訂",
             createdAt: serverTimestamp(),
@@ -1379,24 +1474,7 @@ export function IndicatorsPage({
       <PageHeading
         page="indicators"
         action={
-          view.kind === "list" ? (
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <button
-                className="button button-primary"
-                onClick={openCreate}
-              >
-                <Plus size={16} />
-                新增指標
-              </button>
-              <button
-                className="button button-outline"
-                onClick={() => setBatchOpen(true)}
-              >
-                <Plus size={16} />
-                批次新增
-              </button>
-            </div>
-          ) : (
+          view.kind !== "list" ? (
             <button
               className="button button-outline"
               onClick={() => setView({ kind: "list" })}
@@ -1404,7 +1482,7 @@ export function IndicatorsPage({
               <X size={15} />
               返回清單
             </button>
-          )
+          ) : undefined
         }
       />
 
@@ -1434,6 +1512,19 @@ export function IndicatorsPage({
             value={searchKw}
             onChange={(e) => setSearchKw(e.target.value)}
           />
+          <div className="indicator-filter-actions">
+            <button className="button button-primary" onClick={openCreate}>
+              <Plus size={16} />
+              新增指標
+            </button>
+            <button
+              className="button button-outline"
+              onClick={() => setBatchOpen(true)}
+            >
+              <Plus size={16} />
+              批次新增
+            </button>
+          </div>
         </div>
       )}
 
@@ -1445,7 +1536,7 @@ export function IndicatorsPage({
         ) : rows.length === 0 ? (
           <EmptyState
             title="尚無指標"
-            description="使用右上角「新增指標」建立第一支指標，分類組別、編號、名稱、負責人與閾值為必填。"
+            description="使用上方工具列的「新增指標」建立第一支指標，分類組別、編號、名稱、負責人與閾值為必填。"
           />
         ) : (
           <section className="panel data-panel">
@@ -1534,11 +1625,16 @@ export function IndicatorsPage({
                             : "—"}
                         </td>
                         <td>
-                          {displayThreshold(row.basicThreshold, row.mainThreshold)}
+                          {displayThreshold(
+                            row.basicThreshold,
+                            row.mainThreshold,
+                          )}
                           %
                         </td>
                         <td>
-                          <span className={`status-pill ${STATUS_PILL[row.status]}`}>
+                          <span
+                            className={`status-pill ${STATUS_PILL[row.status]}`}
+                          >
                             {row.status}
                           </span>
                         </td>
@@ -1548,8 +1644,7 @@ export function IndicatorsPage({
                             onClick={() => openEdit(row.id)}
                           >
                             <Pencil size={13} /> 編輯
-                          </button>
-                          {" "}
+                          </button>{" "}
                           {row.status !== "停用" && (
                             <button
                               className="text-button"
@@ -1578,7 +1673,11 @@ export function IndicatorsPage({
             }
           />
           {formError && (
-            <div className="login-error" ref={formErrorRef} aria-live="assertive">
+            <div
+              className="login-error"
+              ref={formErrorRef}
+              aria-live="assertive"
+            >
               {formError}
             </div>
           )}
@@ -1611,354 +1710,369 @@ export function IndicatorsPage({
             <>
               <SectionTitle title="基本資料" note="六欄皆為必填" />
               <div className="form-stack">
-            <div className="form-field">
-              <label className="field-label">組別 *</label>
-              <div className="select-wrap">
-                <select
-                  value={form.groupId}
-                  disabled={isEditing}
-                  onChange={(e) => setField("groupId", e.target.value)}
-                >
-                  <option value="">請選擇組別</option>
-                  {[...groupMap.entries()].map(([id, name]) => (
-                    <option key={id} value={id}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
-            <div className="form-field">
-              <label className="field-label">指標編號 *</label>
-              <input
-                className="text-input"
-                value={form.code}
-                disabled={isEditing}
-                placeholder="例如 QI-001"
-                onChange={(e) => setField("code", e.target.value)}
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">指標名稱 *</label>
-              <input
-                className="text-input"
-                value={form.name}
-                placeholder="例如 手部衛生遵從率"
-                onChange={(e) => setField("name", e.target.value)}
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">閾值（%） *</label>
-              <input
-                className="text-input"
-                type="number"
-                min={1}
-                max={100}
-                step={1}
-                placeholder="1～100 的正整數"
-                value={
-                  typeof form.basicThreshold === "number" &&
-                  Number.isFinite(form.basicThreshold)
-                    ? String(form.basicThreshold)
-                    : ""
-                }
-                onChange={(e) =>
-                  setField(
-                    "basicThreshold",
-                    e.target.value === "" ? "" : Number(e.target.value),
-                  )
-                }
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">
-                負責人 *（輸入職編或姓名搜尋，可多選）
-              </label>
-              <OwnerMultiSelect
-                staffMap={staffMap}
-                staffLoaded={staffLoaded}
-                owners={form.owners}
-                onChange={(owners) => setField("owners", owners)}
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">狀態 *</label>
-              <div className="select-wrap">
-                <select
-                  value={form.status}
-                  onChange={(e) =>
-                    setField("status", e.target.value as IndicatorStatus)
-                  }
-                >
-                  {STATUSES.map((s) => (
-                    <option
-                      key={s}
-                      value={s}
-                      disabled={s === "啟用" && !canEnable()}
+                <div className="form-field">
+                  <label className="field-label">組別 *</label>
+                  <div className="select-wrap">
+                    <select
+                      value={form.groupId}
+                      disabled={isEditing}
+                      onChange={(e) => setField("groupId", e.target.value)}
                     >
-                      {s}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={15} />
+                      <option value="">請選擇組別</option>
+                      {[...groupMap.entries()].map(([id, name]) => (
+                        <option key={id} value={id}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown size={15} />
+                  </div>
+                </div>
+                <div className="form-field">
+                  <label className="field-label">指標編號 *</label>
+                  <input
+                    className="text-input"
+                    value={form.code}
+                    disabled={isEditing}
+                    placeholder="例如 QI-001"
+                    onChange={(e) => setField("code", e.target.value)}
+                  />
+                </div>
+                <div className="form-field">
+                  <label className="field-label">指標名稱 *</label>
+                  <input
+                    className="text-input"
+                    value={form.name}
+                    placeholder="例如 手部衛生遵從率"
+                    onChange={(e) => setField("name", e.target.value)}
+                  />
+                </div>
+                <div className="form-field">
+                  <label className="field-label">閾值（%） *</label>
+                  <input
+                    className="text-input"
+                    type="number"
+                    min={1}
+                    max={100}
+                    step={1}
+                    placeholder="1～100 的正整數"
+                    value={
+                      typeof form.basicThreshold === "number" &&
+                      Number.isFinite(form.basicThreshold)
+                        ? String(form.basicThreshold)
+                        : ""
+                    }
+                    onChange={(e) =>
+                      setField(
+                        "basicThreshold",
+                        e.target.value === "" ? "" : Number(e.target.value),
+                      )
+                    }
+                  />
+                </div>
+                <div className="form-field">
+                  <label className="field-label">
+                    負責人 *（輸入職編或姓名搜尋，可多選）
+                  </label>
+                  <OwnerMultiSelect
+                    staffMap={staffMap}
+                    staffLoaded={staffLoaded}
+                    owners={form.owners}
+                    onChange={(owners) => setField("owners", owners)}
+                  />
+                </div>
+                <div className="form-field">
+                  <label className="field-label">狀態 *</label>
+                  <div className="select-wrap">
+                    <select
+                      value={form.status}
+                      onChange={(e) =>
+                        setField("status", e.target.value as IndicatorStatus)
+                      }
+                    >
+                      {STATUSES.map((s) => (
+                        <option
+                          key={s}
+                          value={s}
+                          disabled={s === "啟用" && !canEnable()}
+                        >
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown size={15} />
+                  </div>
+                  {!canEnable() && (
+                    <p className="settings-note">
+                      需完成基本資料（六欄）與審核表（至少一題）才能啟用。
+                    </p>
+                  )}
+                </div>
               </div>
-              {!canEnable() && (
-                <p className="settings-note">
-                  需完成基本資料（六欄）與審核表（至少一題）才能啟用。
-                </p>
-              )}
-            </div>
-          </div>
-          </>)}
+            </>
+          )}
 
           {formTab === "steps" && (
             <>
               <SectionTitle title="10 steps" note="全院統一標題" />
-          {(
-            [
-              ["step1", 1],
-              ["step2", 2],
-              ["step3", 3],
-            ] as const
-          ).map(([key, n]) => (
-            <div className="form-field" key={key}>
-              <label className="field-label">
-                {n}. {TEN_STEP_TITLES[n - 1]}
-              </label>
-              <textarea
-                className="text-input"
-                value={form.steps[key]}
-                onChange={(e) => setStep(key, e.target.value)}
-              />
-            </div>
-          ))}
+              {(
+                [
+                  ["step1", 1],
+                  ["step2", 2],
+                  ["step3", 3],
+                ] as const
+              ).map(([key, n]) => (
+                <div className="form-field" key={key}>
+                  <label className="field-label">
+                    {n}. {TEN_STEP_TITLES[n - 1]}
+                  </label>
+                  <textarea
+                    className="text-input"
+                    value={form.steps[key]}
+                    onChange={(e) => setStep(key, e.target.value)}
+                  />
+                </div>
+              ))}
 
-          <div className="form-field">
-            <label className="field-label">4. {TEN_STEP_TITLES[3]}</label>
-            <textarea
-              className="text-input"
-              value={form.steps.step4.basis}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  steps: {
-                    ...prev.steps,
-                    step4: { ...prev.steps.step4, basis: e.target.value },
-                  },
-                }))
-              }
-            />
-          </div>
-          <div className="sub-block">
-            <SectionTitle
-              title="指標"
-              note="可自行新增；每支指標自動編號，公式呈現為「分子／分母 ×100%」"
-              action={
-                <button className="text-button" onClick={addSubIndicator}>
-                  <Plus size={14} /> 新增指標
-                </button>
-              }
-            />
-            {form.steps.step4.subIndicators.length === 0 ? (
-              <p className="settings-note">尚未新增指標。</p>
-            ) : (
-              form.steps.step4.subIndicators.map((s, i) => (
-                <div key={i} className="indicator-card">
-                  <div className="indicator-head">
-                    <span className="indicator-num">{i + 1}</span>
-                    <input
-                      className="text-input"
-                      value={s.name}
-                      placeholder="指標名稱"
-                      onChange={(e) =>
-                        updateSubIndicator(i, { name: e.target.value })
-                      }
-                    />
-                    <button
-                      className="icon-button"
-                      aria-label="刪除指標"
-                      onClick={() => removeSubIndicator(i)}
-                    >
-                      <X size={15} />
+              <div className="form-field">
+                <label className="field-label">4. {TEN_STEP_TITLES[3]}</label>
+                <textarea
+                  className="text-input"
+                  value={form.steps.step4.basis}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      steps: {
+                        ...prev.steps,
+                        step4: { ...prev.steps.step4, basis: e.target.value },
+                      },
+                    }))
+                  }
+                />
+              </div>
+              <div className="sub-block">
+                <SectionTitle
+                  title="指標"
+                  note="可自行新增；每支指標自動編號，公式呈現為「分子／分母 ×100%」"
+                  action={
+                    <button className="text-button" onClick={addSubIndicator}>
+                      <Plus size={14} /> 新增指標
                     </button>
-                  </div>
-                  <div className="indicator-formula">
-                    <div className="fraction">
-                      <input
-                        className="text-input fraction-input"
-                        value={s.numerator}
-                        placeholder="分子（自由輸入）"
-                        onChange={(e) =>
-                          updateSubIndicator(i, {
-                            numerator: e.target.value,
-                          })
-                        }
-                      />
-                      <div className="fraction-bar" aria-hidden="true" />
-                      <input
-                        className="text-input fraction-input"
-                        value={s.denominator}
-                        placeholder="分母（自由輸入）"
-                        onChange={(e) =>
-                          updateSubIndicator(i, {
-                            denominator: e.target.value,
-                          })
-                        }
-                      />
+                  }
+                />
+                {form.steps.step4.subIndicators.length === 0 ? (
+                  <p className="settings-note">尚未新增指標。</p>
+                ) : (
+                  form.steps.step4.subIndicators.map((s, i) => (
+                    <div key={i} className="indicator-card">
+                      <div className="indicator-head">
+                        <span className="indicator-num">{i + 1}</span>
+                        <input
+                          className="text-input"
+                          value={s.name}
+                          placeholder="指標名稱"
+                          onChange={(e) =>
+                            updateSubIndicator(i, { name: e.target.value })
+                          }
+                        />
+                        <button
+                          className="icon-button"
+                          aria-label="刪除指標"
+                          onClick={() => removeSubIndicator(i)}
+                        >
+                          <X size={15} />
+                        </button>
+                      </div>
+                      <div className="indicator-formula">
+                        <div className="fraction">
+                          <input
+                            className="text-input fraction-input"
+                            value={s.numerator}
+                            placeholder="分子（自由輸入）"
+                            onChange={(e) =>
+                              updateSubIndicator(i, {
+                                numerator: e.target.value,
+                              })
+                            }
+                          />
+                          <div className="fraction-bar" aria-hidden="true" />
+                          <input
+                            className="text-input fraction-input"
+                            value={s.denominator}
+                            placeholder="分母（自由輸入）"
+                            onChange={(e) =>
+                              updateSubIndicator(i, {
+                                denominator: e.target.value,
+                              })
+                            }
+                          />
+                        </div>
+                        <span className="fraction-times">×100%</span>
+                      </div>
                     </div>
-                    <span className="fraction-times">×100%</span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+                  ))
+                )}
+              </div>
 
-          <SectionTitle
-            title={`5. ${TEN_STEP_TITLES[4]}`}
-            note="每支指標一列、自動編號（與步驟四對應）；第一筆為主閾值，用於達標判斷"
-          />
-          {form.steps.step4.subIndicators.length === 0 ? (
-            <p className="settings-note">
-              請先在步驟四新增指標，閾值會依指標自動產生對應列。
-            </p>
-          ) : (
-            form.steps.step4.subIndicators.map((s, i) => {
-              const v = form.steps.step5.thresholds[i]?.value;
-              return (
-                <div key={i}>
-                  <div className="threshold-row">
-                    <span className="threshold-num">{i + 1}</span>
-                    <span className="threshold-name">
-                      {s.name.trim() || `指標 ${i + 1}`}
-                    </span>
-                    <input
-                      className="text-input"
-                      type="number"
-                      min={0}
-                      max={100}
-                      placeholder="0～100"
-                      value={
-                        typeof v === "number" && Number.isFinite(v)
-                          ? String(v)
-                          : ""
-                      }
-                      onChange={(e) =>
-                        updateThreshold(i, {
-                          value:
-                            e.target.value === ""
-                              ? NaN
-                              : Number(e.target.value),
-                        })
-                      }
-                    />
-                  </div>
-                  {i === 0 && (
-                    <span className="main-threshold-tag">
-                      主閾值，用於達標判斷
-                    </span>
-                  )}
+              <SectionTitle
+                title={`5. ${TEN_STEP_TITLES[4]}`}
+                note="每支指標一列、自動編號（與步驟四對應）；第一筆為主閾值，用於達標判斷"
+              />
+              {form.steps.step4.subIndicators.length === 0 ? (
+                <p className="settings-note">
+                  請先在步驟四新增指標，閾值會依指標自動產生對應列。
+                </p>
+              ) : (
+                form.steps.step4.subIndicators.map((s, i) => {
+                  const v = form.steps.step5.thresholds[i]?.value;
+                  return (
+                    <div key={i}>
+                      <div className="threshold-row">
+                        <span className="threshold-num">{i + 1}</span>
+                        <span className="threshold-name">
+                          {s.name.trim() || `指標 ${i + 1}`}
+                        </span>
+                        <input
+                          className="text-input"
+                          type="number"
+                          min={0}
+                          max={100}
+                          placeholder="0～100"
+                          value={
+                            typeof v === "number" && Number.isFinite(v)
+                              ? String(v)
+                              : ""
+                          }
+                          onChange={(e) =>
+                            updateThreshold(i, {
+                              value:
+                                e.target.value === ""
+                                  ? NaN
+                                  : Number(e.target.value),
+                            })
+                          }
+                        />
+                      </div>
+                      {i === 0 && (
+                        <span className="main-threshold-tag">
+                          主閾值，用於達標判斷
+                        </span>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+
+              <div className="form-field" style={{ marginTop: 14 }}>
+                <label className="field-label">6. {TEN_STEP_TITLES[5]}</label>
+              </div>
+              <div className="form-stack">
+                <div className="form-field">
+                  <label className="field-label">1.個案數</label>
+                  <input
+                    className="text-input"
+                    value={form.steps.step6.caseCount}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        steps: {
+                          ...prev.steps,
+                          step6: {
+                            ...prev.steps.step6,
+                            caseCount: e.target.value,
+                          },
+                        },
+                      }))
+                    }
+                  />
                 </div>
-              );
-            })
+                <div className="form-field">
+                  <label className="field-label">2.審核人員</label>
+                  <input
+                    className="text-input"
+                    value={form.steps.step6.auditors}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        steps: {
+                          ...prev.steps,
+                          step6: {
+                            ...prev.steps.step6,
+                            auditors: e.target.value,
+                          },
+                        },
+                      }))
+                    }
+                  />
+                </div>
+                <div className="form-field">
+                  <label className="field-label">3.審核日期</label>
+                  <input
+                    className="text-input"
+                    value={form.steps.step6.auditDate}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        steps: {
+                          ...prev.steps,
+                          step6: {
+                            ...prev.steps.step6,
+                            auditDate: e.target.value,
+                          },
+                        },
+                      }))
+                    }
+                  />
+                </div>
+                <div className="form-field">
+                  <label className="field-label">4.審核方式</label>
+                  <input
+                    className="text-input"
+                    value={form.steps.step6.auditMethod}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        steps: {
+                          ...prev.steps,
+                          step6: {
+                            ...prev.steps.step6,
+                            auditMethod: e.target.value,
+                          },
+                        },
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+
+              {(
+                [
+                  ["step7", 7],
+                  ["step8", 8],
+                  ["step9", 9],
+                  ["step10", 10],
+                ] as const
+              ).map(([key, n]) => (
+                <div className="form-field" key={key}>
+                  <label className="field-label">
+                    {n}. {TEN_STEP_TITLES[n - 1]}
+                  </label>
+                  <textarea
+                    className="text-input"
+                    value={form.steps[key]}
+                    onChange={(e) => setStep(key, e.target.value)}
+                  />
+                </div>
+              ))}
+            </>
           )}
-
-          <div className="form-field" style={{ marginTop: 14 }}>
-            <label className="field-label">6. {TEN_STEP_TITLES[5]}</label>
-          </div>
-          <div className="form-stack">
-            <div className="form-field">
-              <label className="field-label">1.個案數</label>
-              <input
-                className="text-input"
-                value={form.steps.step6.caseCount}
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    steps: {
-                      ...prev.steps,
-                      step6: { ...prev.steps.step6, caseCount: e.target.value },
-                    },
-                  }))
-                }
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">2.審核人員</label>
-              <input
-                className="text-input"
-                value={form.steps.step6.auditors}
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    steps: {
-                      ...prev.steps,
-                      step6: { ...prev.steps.step6, auditors: e.target.value },
-                    },
-                  }))
-                }
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">3.審核日期</label>
-              <input
-                className="text-input"
-                value={form.steps.step6.auditDate}
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    steps: {
-                      ...prev.steps,
-                      step6: { ...prev.steps.step6, auditDate: e.target.value },
-                    },
-                  }))
-                }
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">4.審核方式</label>
-              <input
-                className="text-input"
-                value={form.steps.step6.auditMethod}
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    steps: {
-                      ...prev.steps,
-                      step6: { ...prev.steps.step6, auditMethod: e.target.value },
-                    },
-                  }))
-                }
-              />
-            </div>
-          </div>
-
-          {(
-            [
-              ["step7", 7],
-              ["step8", 8],
-              ["step9", 9],
-              ["step10", 10],
-            ] as const
-          ).map(([key, n]) => (
-            <div className="form-field" key={key}>
-              <label className="field-label">
-                {n}. {TEN_STEP_TITLES[n - 1]}
-              </label>
-              <textarea
-                className="text-input"
-                value={form.steps[key]}
-                onChange={(e) => setStep(key, e.target.value)}
-              />
-            </div>
-          ))}
-          </>)}
 
           {formTab === "audit" && (
             <>
               <AuditFormEditor
                 value={{
                   questions: form.questions,
+                  auditItems: form.auditItems,
                   questionGroups: form.questionGroups,
                   useQuestionGroups: form.useQuestionGroups,
                   requireBedNo: form.requireBedNo,
@@ -1967,38 +2081,37 @@ export function IndicatorsPage({
                 onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
               />
 
-          {isEditing && versions.length > 0 && (
-            <>
-              <SectionTitle title="版本紀錄" note="歷史版本快照" />
-              <div className="table-scroll">
-                <table className="permission-table">
-                  <thead>
-                    <tr>
-                      <th>版本</th>
-                      <th>狀態</th>
-                      <th>生效日</th>
-                      <th>建立者</th>
-                      <th>建立時間</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {versions.map((v) => (
-                      <tr key={v.id}>
-                        <td>
-                          <b>{v.version}</b>
-                        </td>
-                        <td>{v.status}</td>
-                        <td>{v.effectiveDate || "—"}</td>
-                        <td>{v.createdBy || "—"}</td>
-                        <td>{v.createdAtText || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-
+              {isEditing && versions.length > 0 && (
+                <>
+                  <SectionTitle title="版本紀錄" note="歷史版本快照" />
+                  <div className="table-scroll">
+                    <table className="permission-table">
+                      <thead>
+                        <tr>
+                          <th>版本</th>
+                          <th>狀態</th>
+                          <th>生效日</th>
+                          <th>建立者</th>
+                          <th>建立時間</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {versions.map((v) => (
+                          <tr key={v.id}>
+                            <td>
+                              <b>{v.version}</b>
+                            </td>
+                            <td>{v.status}</td>
+                            <td>{v.effectiveDate || "—"}</td>
+                            <td>{v.createdBy || "—"}</td>
+                            <td>{v.createdAtText || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </>
           )}
 
@@ -2338,8 +2451,7 @@ function BatchAddDialog({
         const docId = indicatorDocId(r.groupId, code);
         const ref = doc(db, "indicators", docId);
         const exists = await getDoc(ref);
-        if (exists.exists())
-          throw new Error(`指標編號 ${code} 在此組別已存在`);
+        if (exists.exists()) throw new Error(`指標編號 ${code} 在此組別已存在`);
         const basicThreshold =
           typeof r.threshold === "number" ? r.threshold : 0;
         // v1.22：分組資訊一律保存（分組開關關閉僅隱藏顯示，不刪除資料）
@@ -2348,6 +2460,9 @@ function BatchAddDialog({
           itemText: q.itemText.trim(),
           optionSet: q.optionSet,
           guidance: q.guidance.trim(),
+          commonErrors: (q.commonErrors ?? [])
+            .map((item) => item.trim())
+            .filter(Boolean),
           groupId: q.groupId,
           groupName: q.groupName.trim(),
           order: i,
@@ -2371,6 +2486,9 @@ function BatchAddDialog({
           status: "草稿",
           tenSteps: steps,
           questions,
+          auditItems: r.audit.auditItems
+            .map((item) => item.trim())
+            .filter(Boolean),
           questionGroups,
           useQuestionGroups: r.audit.useQuestionGroups,
           requireBedNo: r.audit.requireBedNo,
@@ -2388,6 +2506,9 @@ function BatchAddDialog({
           threshold: basicThreshold,
           tenSteps: steps,
           questions,
+          auditItems: r.audit.auditItems
+            .map((item) => item.trim())
+            .filter(Boolean),
           effectiveDate: new Date().toISOString().slice(0, 10),
           note: "初版",
           createdAt: serverTimestamp(),
@@ -2560,11 +2681,9 @@ function BatchAddDialog({
                           value={r.groupId}
                           aria-label={`第${ri + 1}列組別`}
                           onChange={(e) =>
-                            updateRow(
-                              r.key,
-                              { groupId: e.target.value },
-                              ["groupId"],
-                            )
+                            updateRow(r.key, { groupId: e.target.value }, [
+                              "groupId",
+                            ])
                           }
                         >
                           <option value="">請選擇</option>

@@ -13,12 +13,13 @@
  * v1.20：只顯示包含本月區間的指標（今天不在任何區間內就不列）；
  * 表頭篩選列移除，改為清單上方篩選區（組別／指標／關鍵字）。
  */
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowUpDown,
   ChevronDown,
   ClipboardCheck,
   Eye,
+  Pencil,
   ShieldCheck,
   X,
 } from "lucide-react";
@@ -79,6 +80,7 @@ interface IndicatorLite {
 
 interface RecordRow {
   id: string;
+  taskId: string;
   indicatorId: string;
   unitId: string;
   year: number;
@@ -118,19 +120,6 @@ type SortKey = "group" | "name" | "interval" | "person" | "unit";
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   return "讀寫失敗，請檢查網路連線後再試";
-}
-
-function fmtTs(ts: unknown): string {
-  if (ts && typeof (ts as { toDate?: unknown }).toDate === "function") {
-    try {
-      return (ts as { toDate: () => Date })
-        .toDate()
-        .toLocaleString("zh-TW", { hour12: false });
-    } catch {
-      return "";
-    }
-  }
-  return "";
 }
 
 function fmtPct(p: number | null): string {
@@ -179,6 +168,7 @@ export function AuditPage({
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ActiveRow[]>([]);
+  const [dataRefreshKey, setDataRefreshKey] = useState(0);
   // v1.28 階段 6（B6）：審查紀錄分頁未拉完（觸及上限／分頁異常）時顯示可見提示
   const [recordsTruncated, setRecordsTruncated] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("group");
@@ -188,6 +178,8 @@ export function AuditPage({
   const [selIndicator, setSelIndicator] = useState("");
   const [keyword, setKeyword] = useState("");
   const [viewRow, setViewRow] = useState<ActiveRow | null>(null);
+  const [selectedUnitFilter, setSelectedUnitFilter] = useState("");
+  const [detailListOpen, setDetailListOpen] = useState(false);
   /** 檢視 modal：該指標題目（逐題明細分組＋指引用；v1.24） */
   const [viewQuestions, setViewQuestions] = useState<AuditQuestion[]>([]);
   const [viewShowGroups, setViewShowGroups] = useState(false);
@@ -198,6 +190,7 @@ export function AuditPage({
   const [expandedAnswers, setExpandedAnswers] = useState<ReviewAnswer[] | null>(
     null,
   );
+  const [expandedEditHistory, setExpandedEditHistory] = useState<Record<string, unknown>[]>([]);
   const [expandedLoading, setExpandedLoading] = useState(false);
   const [execRow, setExecRow] = useState<ActiveRow | null>(null);
   const [execUnit, setExecUnit] = useState("");
@@ -390,6 +383,7 @@ export function AuditPage({
                 : null;
             const row: RecordRow = {
               id: d.id,
+              taskId: typeof v.taskId === "string" ? v.taskId : d.id,
               indicatorId: iid,
               unitId: typeof v.unitId === "string" ? v.unitId : "",
               year: ym.year,
@@ -475,12 +469,15 @@ export function AuditPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.staffId]);
+  }, [user?.staffId, dataRefreshKey]);
 
   /* ---------- 檢視 modal：載入該指標題目（逐題明細分組＋指引用；v1.24） ---------- */
   useEffect(() => {
     setExpandedRecordId(null);
     setExpandedAnswers(null);
+    setExpandedEditHistory([]);
+    setSelectedUnitFilter("");
+    setDetailListOpen(false);
     if (!viewRow) {
       setViewQuestions([]);
       setViewShowGroups(false);
@@ -507,13 +504,8 @@ export function AuditPage({
     };
   }, [viewRow]);
 
-  /** 檢視 modal：展開／收起單筆紀錄的逐題明細（選項＋備註） */
+  /** 載入第三層明細彈窗的逐題作答與修改歷程 */
   async function toggleRecordDetail(rec: RecordRow) {
-    if (expandedRecordId === rec.id) {
-      setExpandedRecordId(null);
-      setExpandedAnswers(null);
-      return;
-    }
     setExpandedRecordId(rec.id);
     setExpandedAnswers(null);
     setExpandedLoading(true);
@@ -526,11 +518,24 @@ export function AuditPage({
       setExpandedAnswers(
         Array.isArray(v.answers) ? (v.answers as ReviewAnswer[]) : [],
       );
+      setExpandedEditHistory(
+        Array.isArray(v.editHistory)
+          ? (v.editHistory as Record<string, unknown>[]).slice().reverse()
+          : [],
+      );
     } catch {
       setExpandedAnswers([]);
+      setExpandedEditHistory([]);
     } finally {
       setExpandedLoading(false);
     }
+  }
+
+  function editRecord(rec: RecordRow) {
+    setViewRow(null);
+    setDetailListOpen(false);
+    setExpandedRecordId(null);
+    setExecuting({ mode: "task", taskId: rec.taskId, editRecordId: rec.id });
   }
 
   // 篩選區選項：組別＝清單內的組別；指標＝清單內的指標（隨組別連動）
@@ -588,6 +593,43 @@ export function AuditPage({
       return c * dir;
     });
   }, [rows, selGroup, selIndicator, keyword, sortKey, sortDir]);
+
+  const viewUnitSummaries = useMemo(() => {
+    if (!viewRow) return [];
+    const summaries = new Map<string, { count: number; rates: number[] }>();
+    viewRow.sched.unitIds.forEach((unitId) =>
+      summaries.set(unitId, { count: 0, rates: [] }),
+    );
+    viewRow.records.forEach((record) => {
+      const summary = summaries.get(record.unitId) ?? { count: 0, rates: [] };
+      summary.count += 1;
+      if (record.rate != null) summary.rates.push(record.rate);
+      summaries.set(record.unitId, summary);
+    });
+    return [...summaries.entries()].map(([unitId, summary]) => ({
+      unitId,
+      count: summary.count,
+      planned:
+        viewRow.sched.caseCount == null
+          ? null
+          : viewRow.sched.caseCount * viewRow.reviewMonthCount,
+      average:
+        summary.rates.length > 0
+          ? Math.round(
+              (summary.rates.reduce((sum, rate) => sum + rate, 0) /
+                summary.rates.length) *
+                10,
+            ) / 10
+          : null,
+    }));
+  }, [viewRow]);
+  const viewRecords = useMemo(
+    () =>
+      viewRow?.records.filter(
+        (record) => !selectedUnitFilter || record.unitId === selectedUnitFilter,
+      ) ?? [],
+    [viewRow, selectedUnitFilter],
+  );
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === 1 ? -1 : 1));
@@ -683,7 +725,10 @@ export function AuditPage({
     return (
       <ReviewExecutePage
         target={executing}
-        onBack={() => setExecuting(null)}
+        onBack={() => {
+          setExecuting(null);
+          setDataRefreshKey((key) => key + 1);
+        }}
         onAction={onAction}
       />
     );
@@ -848,18 +893,16 @@ export function AuditPage({
       {viewRow && (
         <div className="reviewer-modal-backdrop" onClick={() => setViewRow(null)}>
           <div
-            className="reviewer-modal panel"
+            className="reviewer-modal wide panel"
             role="dialog"
             aria-modal="true"
-            aria-label="審查結果檢視"
+            aria-label="品管審查結果摘要"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="reviewer-modal-head">
               <div>
-                <h2>審查結果</h2>
-                <p>
-                  {viewRow.indicatorName}・{viewRow.intervalLabel}
-                </p>
+                <h2>{viewRow.indicatorName}・排程審查結果摘要</h2>
+                <p>{viewRow.intervalLabel}・摘要以目前最新審查結果計算</p>
               </div>
               <button
                 type="button"
@@ -870,74 +913,71 @@ export function AuditPage({
                 <X size={16} />
               </button>
             </div>
-            <SectionTitle title="排程設定摘要" />
-            <dl className="detail-list">
-              <div>
-                <dt>組別</dt>
-                <dd>{viewRow.groupName}</dd>
+            {viewUnitSummaries.length === 0 ? (
+              <p className="muted-text">本區間尚無單位審查結果。</p>
+            ) : (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>排程單位</th>
+                      <th>已審／應審件數</th>
+                      <th>平均正確率</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {viewUnitSummaries.map((summary) => (
+                      <tr key={summary.unitId}>
+                        <td data-label="排程單位">{viewRow.unitNameOf(summary.unitId)}</td>
+                        <td data-label="已審／應審件數">{summary.count}／{summary.planned ?? "—"} 件</td>
+                        <td data-label="平均正確率">{summary.average == null ? "—" : `${summary.average}%`}</td>
+                        <td data-label="操作">
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => {
+                              setSelectedUnitFilter(summary.unitId);
+                              setDetailListOpen(true);
+                            }}
+                          >
+                            <Eye size={14} /> 檢視個人結果
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
+            )}
+            <div className="form-actions">
+              <button type="button" className="button button-ghost" onClick={() => setViewRow(null)}>
+                關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewRow && detailListOpen && (
+        <div className="reviewer-modal-backdrop reviewer-modal-layer-2" onClick={() => setDetailListOpen(false)}>
+          <div
+            className="reviewer-modal wide panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="審查明細"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="reviewer-modal-head">
               <div>
-                <dt>年別</dt>
-                <dd>
-                  {viewRow.sched.category === "temp"
-                    ? "臨時"
-                    : viewRow.sched.periodLabel}
-                </dd>
+                <h2>審查明細</h2>
+                <p>{viewRow.unitNameOf(selectedUnitFilter)}・{viewRecords.length} 筆</p>
               </div>
-              <div>
-                <dt>審核區間</dt>
-                <dd>{viewRow.intervalLabel}</dd>
-              </div>
-              <div>
-                <dt>審查月份</dt>
-                <dd>
-                  {viewRow.monthOptions.map((o) => o.label).join("、") || "—"}
-                </dd>
-              </div>
-              <div>
-                <dt>受審單位</dt>
-                <dd>
-                  {viewRow.sched.unitIds.length} 個：
-                  {viewRow.sched.unitIds
-                    .map((c) => viewRow.unitNameOf(c))
-                    .join("、") || "—"}
-                </dd>
-              </div>
-              <div>
-                <dt>每輪件數</dt>
-                <dd>
-                  {viewRow.sched.caseCount != null
-                    ? `${viewRow.sched.caseCount} 件`
-                    : "未設定"}
-                </dd>
-              </div>
-              <div>
-                <dt>審查頻次／區間</dt>
-                <dd>
-                  {viewRow.sched.frequency != null
-                    ? `${viewRow.sched.frequency}次/年`
-                    : "—"}
-                  ／
-                  {viewRow.sched.intervalMonths != null
-                    ? `${viewRow.sched.intervalMonths}個月`
-                    : "—"}
-                </dd>
-              </div>
-              <div>
-                <dt>最後編輯</dt>
-                <dd>
-                  {viewRow.sched.updatedByName || viewRow.sched.updatedBy || "—"}
-                  {fmtTs(viewRow.sched.updatedAt)
-                    ? `・${fmtTs(viewRow.sched.updatedAt)}`
-                    : ""}
-                </dd>
-              </div>
-            </dl>
-            <SectionTitle
-              title="已提交審查紀錄（本區間）"
-              note={`${viewRow.records.length} 筆，唯讀`}
-            />
-            {viewRow.records.length === 0 ? (
+              <button type="button" className="button button-ghost" onClick={() => setDetailListOpen(false)} aria-label="關閉審查明細">
+                <X size={16} />
+              </button>
+            </div>
+            {viewRecords.length === 0 ? (
               <p className="muted-text">本區間尚無提交紀錄。</p>
             ) : (
               <div className="table-scroll">
@@ -945,70 +985,137 @@ export function AuditPage({
                   <thead>
                     <tr>
                       <th>年月</th>
-                      <th>單位</th>
                       <th>審查日期</th>
                       <th>審查人員</th>
                       <th>受審人員</th>
                       <th>正確率</th>
-                      <th>明細</th>
+                      <th>個人結果</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {viewRow.records.map((r) => (
-                      <Fragment key={r.id}>
-                        <tr>
-                          <td>
-                            {r.year}年{r.month}月
-                          </td>
-                          <td>{viewRow.unitNameOf(r.unitId)}</td>
-                          <td>{r.reviewDate || "—"}</td>
-                          <td>{maskName(r.reviewerName) || "—"}</td>
-                          <td>{maskName(r.reviewedPersonName) || "—"}</td>
-                          <td>{r.rate == null ? "—" : `${r.rate}%`}</td>
-                          <td>
-                            <button
-                              type="button"
-                              className="text-button"
-                              onClick={() => toggleRecordDetail(r)}
-                              aria-expanded={expandedRecordId === r.id}
-                            >
-                              {expandedRecordId === r.id ? "▾ 收起" : "▸ 明細"}
+                    {viewRecords.map((record) => (
+                      <tr key={record.id}>
+                        <td data-label="年月">{record.year}年{record.month}月</td>
+                        <td data-label="審查日期">{record.reviewDate || "—"}</td>
+                        <td data-label="審查人員">{maskName(record.reviewerName) || "—"}</td>
+                        <td data-label="受審人員">{maskName(record.reviewedPersonName) || "—"}</td>
+                        <td data-label="正確率">{record.rate == null ? "—" : `${record.rate}%`}</td>
+                        <td data-label="個人結果">
+                          <div className="review-record-actions">
+                            <button type="button" className="text-button" onClick={() => void toggleRecordDetail(record)}>
+                              <Eye size={14} /> 檢視
                             </button>
-                          </td>
-                        </tr>
-                        {expandedRecordId === r.id ? (
-                          <tr>
-                            <td colSpan={7}>
-                              {expandedLoading || expandedAnswers == null ? (
-                                <p className="muted-text">載入明細中…</p>
-                              ) : expandedAnswers.length === 0 ? (
-                                <p className="muted-text">
-                                  此筆紀錄沒有逐題作答資料。
-                                </p>
-                              ) : (
-                                <ReviewQuestionList
-                                  mode="view"
-                                  questions={viewQuestions}
-                                  showGroups={viewShowGroups}
-                                  answers={expandedAnswers}
-                                />
-                              )}
-                            </td>
-                          </tr>
-                        ) : null}
-                      </Fragment>
+                            <button type="button" className="text-button" onClick={() => editRecord(record)}>
+                              <Pencil size={14} /> 修改
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             )}
             <div className="form-actions">
-              <button
-                type="button"
-                className="button button-ghost"
-                onClick={() => setViewRow(null)}
-              >
-                關閉
+              <button type="button" className="button button-ghost" onClick={() => setDetailListOpen(false)}>
+                返回摘要
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewRow && detailListOpen && expandedRecordId && (
+        <div className="reviewer-modal-backdrop reviewer-modal-layer-3" onClick={() => setExpandedRecordId(null)}>
+          <div
+            className="reviewer-modal wide panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="審查項目結果"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="reviewer-modal-head">
+              <div>
+                <h2>審查項目結果</h2>
+                <p>{viewRow.indicatorName}・{viewRecords.find((record) => record.id === expandedRecordId)?.year}年{viewRecords.find((record) => record.id === expandedRecordId)?.month}月</p>
+              </div>
+              <button type="button" className="button button-ghost" onClick={() => setExpandedRecordId(null)} aria-label="關閉審查項目結果">
+                <X size={16} />
+              </button>
+            </div>
+            {expandedLoading || expandedAnswers == null ? (
+              <p className="muted-text">載入明細中…</p>
+            ) : (
+              <>
+                {expandedAnswers.length === 0 ? (
+                  <p className="muted-text">此筆紀錄沒有逐題作答資料。</p>
+                ) : (
+                  <ReviewQuestionList
+                    mode="view"
+                    questions={viewQuestions}
+                    showGroups={viewShowGroups}
+                    answers={expandedAnswers}
+                  />
+                )}
+                <div className="form-actions">
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    onClick={() => {
+                      const record = viewRecords.find((item) => item.id === expandedRecordId);
+                      if (!record) return;
+                      editRecord(record);
+                    }}
+                  >
+                    <Pencil size={15} /> 編輯審查結果
+                  </button>
+                </div>
+                <SectionTitle title="修改紀錄" note={`${expandedEditHistory.length} 次修改`} />
+                {expandedEditHistory.length === 0 ? (
+                  <p className="muted-text">尚無修改紀錄；送出後的首次修改會記錄變更前後內容。</p>
+                ) : (
+                  <div className="review-edit-history">
+                    {expandedEditHistory.map((entry, index) => {
+                      const changes = entry.changes && typeof entry.changes === "object"
+                        ? (entry.changes as Record<string, { before?: unknown; after?: unknown }>)
+                        : {};
+                      const labels: Record<string, string> = {
+                        answers: "逐題作答", totalScore: "總得分", maxScore: "計分題數", rate: "正確率",
+                        reviewDate: "審查日期", reviewerEmpNo: "審查人員職編", reviewerName: "審查人員",
+                        reviewedPersonEmpNo: "受審人員職編", reviewedPersonName: "受審人員", bedNo: "床號", auditItem: "審核項目",
+                      };
+                      const stamp = typeof entry.editedAt === "string"
+                        ? new Date(entry.editedAt).toLocaleString("zh-TW", { hour12: false })
+                        : "時間未記錄";
+                      return (
+                        <article className="review-edit-history-item" key={`${String(entry.editedAt)}-${index}`}>
+                          <b>{String(entry.actorName ?? entry.actorId ?? "未知修改者")}</b>
+                          <span>{stamp}</span>
+                          <ul>
+                            {Object.entries(changes).map(([key, change]) => (
+                              <li key={key}>
+                                <strong>{labels[key] ?? key}</strong>
+                                {key === "answers" ? (
+                                  <details>
+                                    <summary>查看逐題內容前後差異</summary>
+                                    <pre>{JSON.stringify(change, null, 2)}</pre>
+                                  </details>
+                                ) : (
+                                  <span>{JSON.stringify(change.before)} → {JSON.stringify(change.after)}</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+            <div className="form-actions">
+              <button type="button" className="button button-ghost" onClick={() => setExpandedRecordId(null)}>
+                返回審查明細
               </button>
             </div>
           </div>

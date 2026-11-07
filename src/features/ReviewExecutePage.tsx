@@ -24,10 +24,7 @@ import {
   type AuditQuestion,
 } from "../lib/indicators";
 import { ReviewQuestionList } from "./ReviewQuestionList";
-import {
-  computeOptionSetScore,
-  type ReviewAnswer,
-} from "../lib/reviewRecords";
+import { computeOptionSetScore, type ReviewAnswer } from "../lib/reviewRecords";
 import {
   isTaskComplete,
   nextCaseSeq,
@@ -60,6 +57,7 @@ interface CaseRecordRow {
   reviewedPersonEmpNo: string;
   reviewedPersonName: string;
   bedNo: string;
+  auditItem?: string;
   answers: ReviewAnswer[];
   totalScore: number;
   maxScore: number;
@@ -143,6 +141,8 @@ export function ReviewExecutePage({
   /** 需要受審人員資料（v1.17）：false 時隱藏「職編」欄位；缺值視為 true（相容舊資料） */
   const [requireReviewee, setRequireReviewee] = useState(true);
   const [questions, setQuestions] = useState<AuditQuestion[]>([]);
+  const [auditItems, setAuditItems] = useState<string[]>([]);
+  const [selectedAuditItem, setSelectedAuditItem] = useState("");
   const [task, setTask] = useState<TaskFull | null>(null);
   const [records, setRecords] = useState<CaseRecordRow[]>([]);
   const [loadError, setLoadError] = useState("");
@@ -164,6 +164,10 @@ export function ReviewExecutePage({
   const [bedNo, setBedNo] = useState("");
   /** questionId → 備註（v1.15.0：選填） */
   const [notes, setNotes] = useState<Record<string, string>>({});
+  /** questionId → 已勾選常見錯誤（不影響評分） */
+  const [commonErrorAnswers, setCommonErrorAnswers] = useState<
+    Record<string, string[]>
+  >({});
 
   /** questionId → 選中的選項 index */
   const [answers, setAnswers] = useState<Record<string, number>>({});
@@ -178,6 +182,19 @@ export function ReviewExecutePage({
   const [unlocking, setUnlocking] = useState(false);
 
   const doneCount = records.length;
+  const liveScore = useMemo(() => {
+    const selections = questions.flatMap((question) => {
+      const selectedIndex = answers[question.id];
+      if (selectedIndex == null) return [];
+      const label = optionLabelsOf(question.optionSet)[selectedIndex];
+      if (!label) return [];
+      return [{ score: label === "是" ? 1 : 0, excluded: label === "不適用" }];
+    });
+    return {
+      ...computeOptionSetScore(selections),
+      answeredCount: selections.length,
+    };
+  }, [questions, answers]);
 
   /* ---------- 載入：該 task 的逐件紀錄 ---------- */
   const loadCaseRecords = useCallback(
@@ -193,7 +210,8 @@ export function ReviewExecutePage({
         rows.push({
           id: d.id,
           caseSeq: typeof cs === "number" ? cs : null,
-          reviewDate: typeof data.reviewDate === "string" ? data.reviewDate : "",
+          reviewDate:
+            typeof data.reviewDate === "string" ? data.reviewDate : "",
           reviewerEmpNo:
             typeof data.reviewerEmpNo === "string" ? data.reviewerEmpNo : "",
           reviewerName:
@@ -207,6 +225,7 @@ export function ReviewExecutePage({
               ? data.reviewedPersonName
               : "",
           bedNo: typeof data.bedNo === "string" ? data.bedNo : "",
+          auditItem: typeof data.auditItem === "string" ? data.auditItem : "",
           answers: Array.isArray(data.answers)
             ? (data.answers as ReviewAnswer[])
             : [],
@@ -229,6 +248,7 @@ export function ReviewExecutePage({
   function prefillRecord(rec: CaseRecordRow, qs: AuditQuestion[]) {
     const next: Record<string, number> = {};
     const nextNotes: Record<string, string> = {};
+    const nextCommonErrors: Record<string, string[]> = {};
     rec.answers.forEach((a) => {
       const q = qs.find((x) => x.id === a.questionId);
       if (!q) return;
@@ -243,9 +263,13 @@ export function ReviewExecutePage({
       }
       if (idx >= 0) next[q.id] = idx;
       if (a.note) nextNotes[a.questionId] = a.note;
+      if (Array.isArray(a.commonErrors) && a.commonErrors.length > 0)
+        nextCommonErrors[a.questionId] = a.commonErrors;
     });
     setAnswers(next);
     setNotes(nextNotes);
+    setCommonErrorAnswers(nextCommonErrors);
+    setSelectedAuditItem(rec.auditItem ?? "");
     setReviewDate(rec.reviewDate || todayStr());
     setReviewerEmpNo(rec.reviewerEmpNo);
     setReviewerName(rec.reviewerName);
@@ -276,8 +300,7 @@ export function ReviewExecutePage({
               staffId: d.id,
               name: typeof data.name === "string" ? data.name : d.id,
               status: typeof data.status === "string" ? data.status : "",
-              unitCode:
-                typeof data.unitCode === "string" ? data.unitCode : "",
+              unitCode: typeof data.unitCode === "string" ? data.unitCode : "",
             });
           });
           list.sort((a, b) => {
@@ -295,7 +318,10 @@ export function ReviewExecutePage({
           if (!cancelled) setLoadError("找不到該審查任務。");
           return;
         }
-        const t = taskFromDoc(tsnap.id, tsnap.data() as Record<string, unknown>);
+        const t = taskFromDoc(
+          tsnap.id,
+          tsnap.data() as Record<string, unknown>,
+        );
         if (cancelled) return;
         // 指標＋題目
         const isnap = await getDoc(doc(db, "indicators", t.indicatorId));
@@ -313,6 +339,11 @@ export function ReviewExecutePage({
           setRequireBedNo(idata.requireBedNo === true);
           // v1.17：缺值視為 true（舊資料維持顯示職編欄）
           setRequireReviewee(idata.requireReviewee !== false);
+          setAuditItems(
+            Array.isArray(idata.auditItems)
+              ? idata.auditItems.map(String).filter(Boolean)
+              : [],
+          );
           // v1.22：分組名只在該指標開啟題目分組時顯示
           setShowQuestionGroups(idata.useQuestionGroups === true);
         }
@@ -338,8 +369,7 @@ export function ReviewExecutePage({
               const ud = d.data() as Record<string, unknown>;
               urows.push({
                 id: d.id,
-                status:
-                  typeof ud.status === "string" ? ud.status : "pending",
+                status: typeof ud.status === "string" ? ud.status : "pending",
                 reason: typeof ud.reason === "string" ? ud.reason : "",
               });
             });
@@ -489,6 +519,10 @@ export function ReviewExecutePage({
       onAction("請填寫病人床號");
       return;
     }
+    if (auditItems.length > 0 && !selectedAuditItem) {
+      onAction("請選擇審核項目");
+      return;
+    }
     setSubmitting(true);
     try {
       const db = getFirebaseDb();
@@ -503,6 +537,9 @@ export function ReviewExecutePage({
           optionLabel: label,
           score: label === "是" ? 1 : 0,
           excluded: label === "不適用",
+          ...((commonErrorAnswers[q.id] ?? []).length > 0
+            ? { commonErrors: commonErrorAnswers[q.id] }
+            : {}),
           ...(note ? { note } : {}),
         };
       });
@@ -513,7 +550,11 @@ export function ReviewExecutePage({
         target.mode === "task" ? (target.editRecordId ?? editingId) : editingId;
       if (editId) {
         // 單件更新：不增加件數
-        await updateDoc(doc(db, "reviewRecords", editId), {
+        const recordRef = doc(db, "reviewRecords", editId);
+        const previousSnap = await getDoc(recordRef);
+        if (!previousSnap.exists()) throw new Error("找不到要修改的審查紀錄");
+        const previous = previousSnap.data() as Record<string, unknown>;
+        const nextValues: Record<string, unknown> = {
           answers: answerList,
           totalScore,
           maxScore,
@@ -524,6 +565,37 @@ export function ReviewExecutePage({
           reviewedPersonEmpNo: personEmpNo.trim(),
           reviewedPersonName: personName.trim(),
           bedNo: bedNo.trim(),
+          auditItem: selectedAuditItem,
+        };
+        const changes: Record<string, { before: unknown; after: unknown }> = {};
+        for (const [key, after] of Object.entries(nextValues)) {
+          const before = previous[key] ?? (key === "answers" ? [] : "");
+          if (JSON.stringify(before) !== JSON.stringify(after)) {
+            changes[key] = { before, after };
+          }
+        }
+        const editedAt = new Date().toISOString();
+        const editHistory = Array.isArray(previous.editHistory)
+          ? [...previous.editHistory]
+          : [];
+        if (Object.keys(changes).length > 0) {
+          editHistory.push({
+            actorId: staffId,
+            actorName: user?.name ?? staffId,
+            editedAt,
+            changes,
+          });
+        }
+        await updateDoc(recordRef, {
+          ...nextValues,
+          ...(Object.keys(changes).length > 0
+            ? {
+                editHistory,
+                lastModifiedAt: serverTimestamp(),
+                lastModifiedBy: staffId,
+                lastModifiedByName: user?.name ?? staffId,
+              }
+            : {}),
         });
         const recs = await loadCaseRecords(task.id);
         setRecords(recs);
@@ -551,6 +623,7 @@ export function ReviewExecutePage({
           reviewedPersonEmpNo: personEmpNo.trim(),
           reviewedPersonName: personName.trim(),
           bedNo: bedNo.trim(),
+          auditItem: selectedAuditItem,
           answers: answerList,
           totalScore,
           maxScore,
@@ -568,6 +641,7 @@ export function ReviewExecutePage({
         }
         setRecords(await loadCaseRecords(taskId));
         setAnswers({}); // 清空答案，保留日期／審查人員，繼續下一件
+        setCommonErrorAnswers({});
         setNotes({});
         setPersonEmpNo("");
         setPersonName("");
@@ -601,7 +675,10 @@ export function ReviewExecutePage({
             <ArrowLeft size={15} /> 返回儀表板
           </button>
         </div>
-        <EmptyState title="無法開啟審查表" description={loadError || "任務資料異常。"} />
+        <EmptyState
+          title="無法開啟審查表"
+          description={loadError || "任務資料異常。"}
+        />
       </>
     );
   }
@@ -635,6 +712,7 @@ export function ReviewExecutePage({
                     <th>審查人員</th>
                     <th>受審人員</th>
                     <th>床號</th>
+                    <th>審核項目</th>
                     <th>得分／正確率</th>
                     <th>送出時間</th>
                     <th>操作</th>
@@ -658,6 +736,7 @@ export function ReviewExecutePage({
                           : "—"}
                       </td>
                       <td>{r.bedNo || "—"}</td>
+                      <td>{r.auditItem || "—"}</td>
                       <td>
                         {r.totalScore}/{r.maxScore}
                         {r.rate != null ? `（${r.rate}%）` : ""}
@@ -674,7 +753,10 @@ export function ReviewExecutePage({
                               setEditingId(r.id);
                             }}
                           >
-                            <Pencil size={13} style={{ verticalAlign: "-2px" }} />{" "}
+                            <Pencil
+                              size={13}
+                              style={{ verticalAlign: "-2px" }}
+                            />{" "}
                             編輯
                           </button>
                         )}
@@ -815,7 +897,9 @@ export function ReviewExecutePage({
                             >
                               {u.staffId}／{maskName(u.name)}
                               {u.status && u.status !== "在職" && (
-                                <span className="muted-text">（{u.status}）</span>
+                                <span className="muted-text">
+                                  （{u.status}）
+                                </span>
                               )}
                             </button>
                           </li>
@@ -826,62 +910,64 @@ export function ReviewExecutePage({
                 )}
               </div>
               {requireReviewee && (
-              <div className="form-field" style={{ position: "relative" }}>
-                <label className="field-label">
-                  職編 <span style={{ color: "#b3372f" }}>*</span>
-                </label>
-                {personEmpNo ? (
-                  <p style={{ margin: "12px 0" }}>
-                    <b>
-                      {personEmpNo}／{maskName(personName || personEmpNo)}
-                    </b>{" "}
-                    <button
-                      className="text-button"
-                      onClick={() => {
-                        setPersonEmpNo("");
-                        setPersonName("");
-                        setPersonQuery("");
-                        setShowPersonSugg(true);
-                      }}
-                    >
-                      更換
-                    </button>
-                  </p>
-                ) : (
-                  <>
-                    <input
-                      type="text"
-                      className="text-input"
-                      placeholder={`輸入職編或姓名搜尋（${task.unitId}同單位）`}
-                      value={personQuery}
-                      onChange={(e) => {
-                        setPersonQuery(e.target.value);
-                        setShowPersonSugg(true);
-                      }}
-                      onFocus={() => setShowPersonSugg(true)}
-                      aria-label="受審人員搜尋"
-                    />
-                    {showPersonSugg && personSugg.length > 0 && (
-                      <ul className="sugg-list">
-                        {personSugg.map((u) => (
-                          <li key={u.staffId}>
-                            <button
-                              type="button"
-                              className="text-button"
-                              onClick={() => selectPerson(u)}
-                            >
-                              {u.staffId}／{maskName(u.name)}
-                              {u.status && u.status !== "在職" && (
-                                <span className="muted-text">（{u.status}）</span>
-                              )}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </>
-                )}
-              </div>
+                <div className="form-field" style={{ position: "relative" }}>
+                  <label className="field-label">
+                    職編 <span style={{ color: "#b3372f" }}>*</span>
+                  </label>
+                  {personEmpNo ? (
+                    <p style={{ margin: "12px 0" }}>
+                      <b>
+                        {personEmpNo}／{maskName(personName || personEmpNo)}
+                      </b>{" "}
+                      <button
+                        className="text-button"
+                        onClick={() => {
+                          setPersonEmpNo("");
+                          setPersonName("");
+                          setPersonQuery("");
+                          setShowPersonSugg(true);
+                        }}
+                      >
+                        更換
+                      </button>
+                    </p>
+                  ) : (
+                    <>
+                      <input
+                        type="text"
+                        className="text-input"
+                        placeholder={`輸入職編或姓名搜尋（${task.unitId}同單位）`}
+                        value={personQuery}
+                        onChange={(e) => {
+                          setPersonQuery(e.target.value);
+                          setShowPersonSugg(true);
+                        }}
+                        onFocus={() => setShowPersonSugg(true)}
+                        aria-label="受審人員搜尋"
+                      />
+                      {showPersonSugg && personSugg.length > 0 && (
+                        <ul className="sugg-list">
+                          {personSugg.map((u) => (
+                            <li key={u.staffId}>
+                              <button
+                                type="button"
+                                className="text-button"
+                                onClick={() => selectPerson(u)}
+                              >
+                                {u.staffId}／{maskName(u.name)}
+                                {u.status && u.status !== "在職" && (
+                                  <span className="muted-text">
+                                    （{u.status}）
+                                  </span>
+                                )}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
+                  )}
+                </div>
               )}
               {requireBedNo && (
                 <div className="form-field">
@@ -901,6 +987,28 @@ export function ReviewExecutePage({
             </div>
           </section>
 
+          {auditItems.length > 0 && (
+            <section className="panel audit-item-selection">
+              <label className="field-label" htmlFor="review-audit-item">
+                審核項目 <span style={{ color: "#b3372f" }}>*</span>
+              </label>
+              <select
+                id="review-audit-item"
+                className="text-input"
+                value={selectedAuditItem}
+                onChange={(event) => setSelectedAuditItem(event.target.value)}
+                aria-label="選擇審核項目"
+              >
+                <option value="">請選擇一項</option>
+                {auditItems.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </section>
+          )}
+
           {questions.length === 0 ? (
             <EmptyState
               title="該指標尚未建立審查題目"
@@ -914,12 +1022,22 @@ export function ReviewExecutePage({
                 questions={questions}
                 showGroups={showQuestionGroups}
                 answers={answers}
+                commonErrorAnswers={commonErrorAnswers}
                 notes={notes}
                 onAnswer={chooseAnswer}
+                onCommonErrors={(qid, values) =>
+                  setCommonErrorAnswers((prev) => ({ ...prev, [qid]: values }))
+                }
                 onNote={(qid, text) =>
                   setNotes((prev) => ({ ...prev, [qid]: text }))
                 }
               />
+
+              <p className="settings-note" aria-live="polite">
+                {editingId ? "修改後即時正確率" : "目前已答題正確率"}：
+                {liveScore.rate == null ? "—" : `${liveScore.rate}%`}
+                {`（已答 ${liveScore.answeredCount}/${questions.length} 題；不適用不計入分母）`}
+              </p>
 
               <div className="form-actions" style={{ marginBottom: 24 }}>
                 <button

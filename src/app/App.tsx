@@ -5,6 +5,8 @@ import {
   BookOpenCheck,
   CalendarDays,
   Check,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   FileBarChart2,
   GitBranch,
@@ -359,7 +361,21 @@ function Shell() {
   const { user, loading, needsPasswordChange, logout } = useAuth();
   const [page, setPage] = useState<PageId>("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
+  const [isMobile, setIsMobile] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 760px)").matches,
+  );
   const [toast, setToast] = useState("");
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 760px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   // v1.27.2：notify 必須是穩定引用。若每次渲染都產生新函式，各頁以 onAction 為依賴的
   // 載入 effect 會在 toast 顯示／消失（2 次重渲染）時整頁重拉 Firestore。
@@ -407,7 +423,7 @@ function Shell() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${sidebarHidden ? " sidebar-hidden" : ""}`}>
       <Sidebar
         page={page}
         onPage={setPage}
@@ -415,15 +431,42 @@ function Shell() {
         mobileOpen={mobileOpen}
         onClose={() => setMobileOpen(false)}
       />
+      <button
+        className={`sidebar-handle icon-button${
+          isMobile && mobileOpen ? " mobile-open" : ""
+        }`}
+        type="button"
+        aria-label={
+          isMobile
+            ? mobileOpen
+              ? "收合側邊功能表"
+              : "開啟側邊功能表"
+            : sidebarHidden
+              ? "開啟側邊功能表"
+              : "收合側邊功能表"
+        }
+        title={
+          isMobile
+            ? mobileOpen
+              ? "收合側邊功能表"
+              : "開啟側邊功能表"
+            : sidebarHidden
+              ? "開啟側邊功能表"
+              : "收合側邊功能表"
+        }
+        onClick={() => {
+          if (isMobile) setMobileOpen((open) => !open);
+          else setSidebarHidden((hidden) => !hidden);
+        }}
+      >
+        {(isMobile ? mobileOpen : !sidebarHidden) ? (
+          <ChevronLeft size={18} />
+        ) : (
+          <ChevronRight size={18} />
+        )}
+      </button>
       <main className="main-area">
         <div className="page-content">
-          <button
-            className="mobile-menu icon-button"
-            aria-label="開啟選單"
-            onClick={() => setMobileOpen(true)}
-          >
-            <Menu size={20} />
-          </button>
           <Suspense
             fallback={<p className="settings-note">頁面載入中…</p>}
           >
