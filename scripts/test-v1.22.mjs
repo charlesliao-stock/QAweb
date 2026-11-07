@@ -12,7 +12,7 @@ import { build } from "esbuild";
 import { writeFileSync } from "fs";
 import { createRequire } from "module";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+const ROOT = process.cwd();
 
 const entry = `
 import {

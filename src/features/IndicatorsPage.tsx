@@ -29,6 +29,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from "../lib/db";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
@@ -57,6 +58,7 @@ import {
   newQid,
   normalizeQuestions,
   normalizeTenSteps,
+  optionLabelsOf,
   parseIndicatorDocId,
   primaryThreshold,
   removeQuestionGroupFromList,
@@ -80,6 +82,11 @@ import {
   validateBasicRows,
 } from "../lib/import";
 import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
+import {
+  mergeImportedAuditForm,
+  resolveAuditImportGroup,
+  type ImportedAuditForm,
+} from "../lib/auditFormImport";
 
 export type IndicatorStatus =
   | "草稿"
@@ -2139,7 +2146,19 @@ export function IndicatorsPage({
           groupMap={groupMap}
           staffMap={staffMap}
           staffLoaded={staffLoaded}
-          existingCodes={new Set(rows.map((r) => r.id))}
+          existingCodes={new Set(
+            rows
+              .filter((row) => row.groupId && row.code.trim())
+              .map((row) => indicatorDocId(row.groupId, row.code.trim())),
+          )}
+          existingIndicatorIds={new Map(
+            rows
+              .filter((row) => row.groupId && row.code.trim())
+              .map((row) => [
+                indicatorDocId(row.groupId, row.code.trim()),
+                row.id,
+              ]),
+          )}
           user={user ? { staffId: user.staffId, name: user.name } : null}
           onAction={onAction}
           onClose={() => setBatchOpen(false)}
@@ -2182,11 +2201,109 @@ function emptyBatchRow(): BatchRow {
   };
 }
 
+function batchRowHasContent(row: BatchRow): boolean {
+  return Boolean(
+    row.groupId ||
+      row.code.trim() ||
+      row.name.trim() ||
+      row.threshold !== "" ||
+      row.owners.length > 0 ||
+      row.audit.questions.length > 0,
+  );
+}
+
+interface ExistingAuditImport {
+  indicatorId: string;
+  groupId: string;
+  groupName: string;
+  code: string;
+  name: string;
+  originalAudit: AuditFormValue;
+  originalSignature: string;
+  importedAudit: AuditFormValue;
+}
+
+interface PreparedExistingAuditImport extends ExistingAuditImport {
+  currentAudit: AuditFormValue;
+  latestData: Record<string, unknown>;
+  hasReviewData: boolean;
+}
+
+interface BatchSavePlan {
+  newRows: BatchRow[];
+  existing: PreparedExistingAuditImport[];
+}
+
+function auditFormFromIndicatorData(
+  data: Record<string, unknown>,
+): AuditFormValue {
+  const normalized = normalizeQuestions(data.questions);
+  const questionGroups = mergeQuestionGroups(
+    data.questionGroups,
+    normalized.groups,
+  );
+  const groupIds = new Set(questionGroups.map((group) => group.id));
+  const questions = normalized.questions.map((question) => {
+    const validGroup = question.groupId && groupIds.has(question.groupId);
+    return {
+      ...question,
+      groupId: validGroup ? question.groupId : null,
+      groupName: validGroup
+        ? (questionGroups.find((group) => group.id === question.groupId)
+            ?.name ?? "")
+        : "",
+    };
+  });
+  return {
+    questions,
+    auditItems: Array.isArray(data.auditItems)
+      ? data.auditItems.map(String).filter(Boolean)
+      : [],
+    questionGroups,
+    useQuestionGroups:
+      typeof data.useQuestionGroups === "boolean"
+        ? data.useQuestionGroups
+        : normalized.useGroups,
+    requireBedNo: data.requireBedNo === true,
+    requireReviewee: data.requireReviewee === true,
+  };
+}
+
+function auditFormSignature(form: AuditFormValue): string {
+  return JSON.stringify({
+    questionGroups: form.questionGroups
+      .map(({ id, name, order }) => ({ id, name, order }))
+      .sort((a, b) => a.order - b.order),
+    questions: form.questions
+      .map((question) => ({
+        id: question.id,
+        itemText: question.itemText,
+        optionSet: question.optionSet,
+        guidance: question.guidance,
+        commonErrors: question.commonErrors ?? [],
+        groupId: question.groupId,
+        groupName: question.groupName,
+        order: question.order,
+      }))
+      .sort((a, b) => a.order - b.order),
+    useQuestionGroups: form.useQuestionGroups,
+  });
+}
+
+function importedAuditPart(form: AuditFormValue): ImportedAuditForm {
+  return {
+    questions: form.questions,
+    questionGroups: form.questionGroups,
+    useQuestionGroups: form.useQuestionGroups,
+  };
+}
+
 function BatchAddDialog({
   groupMap,
   staffMap,
   staffLoaded,
   existingCodes,
+  existingIndicatorIds,
   user,
   onAction,
   onClose,
@@ -2196,6 +2313,7 @@ function BatchAddDialog({
   staffMap: Map<string, StaffOption>;
   staffLoaded: boolean;
   existingCodes: Set<string>;
+  existingIndicatorIds: Map<string, string>;
   user: { staffId: string; name: string } | null;
   onAction: (m: string) => void;
   onClose: () => void;
@@ -2203,6 +2321,10 @@ function BatchAddDialog({
 }) {
   const [rows, setRows] = useState<BatchRow[]>(() => [emptyBatchRow()]);
   const [saving, setSaving] = useState(false);
+  const [existingAuditImports, setExistingAuditImports] = useState<
+    ExistingAuditImport[]
+  >([]);
+  const [saveChoice, setSaveChoice] = useState<BatchSavePlan | null>(null);
 
   // v1.20：匯入（基本資料／審核表，Excel／CSV）＋範本下載
   const [importSummary, setImportSummary] = useState<string | null>(null);
@@ -2283,6 +2405,7 @@ function BatchAddDialog({
     setImportSummary(null);
     setImportErrors([]);
     setImporting(true);
+    setSaveChoice(null);
     try {
       const sheet = await readSheetFile(file);
       const { headerErrors, data } = parseAuditSheet(sheet);
@@ -2295,19 +2418,164 @@ function BatchAddDialog({
         setImportErrors(["檔案內無資料列"]);
         return;
       }
-      // v1.22：以「組別＋編號」對應批次表格中的列
-      const batchByCode = new Map<string, string[]>();
-      for (const r of rows) {
-        const code = r.code.trim();
-        if (!code) continue;
-        const gname = groupMap.get(r.groupId) || "";
-        const list = batchByCode.get(code) ?? [];
-        if (gname && !list.includes(gname)) list.push(gname);
-        batchByCode.set(code, list);
+
+      const groupOptions = [...groupMap.entries()].map(([id, name]) => ({
+        id,
+        name,
+      }));
+      const resolutionByLine = new Map<
+        number,
+        ReturnType<typeof resolveAuditImportGroup>
+      >();
+      const normalizedData = data.map((row) => {
+        const resolution = resolveAuditImportGroup(
+          row.indicatorGroup,
+          groupOptions,
+        );
+        resolutionByLine.set(row.lineNo, resolution);
+        return {
+          ...row,
+          indicatorGroup: resolution.ok
+            ? resolution.groupName
+            : row.indicatorGroup.trim(),
+        };
+      });
+
+      const pairByKey = new Map<
+        string,
+        { groupId: string; groupName: string; code: string }
+      >();
+      for (const row of data) {
+        const resolution = resolutionByLine.get(row.lineNo);
+        const code = row.code.trim();
+        if (!resolution?.ok || !code) continue;
+        const key = indicatorDocId(resolution.groupId, code);
+        pairByKey.set(key, {
+          groupId: resolution.groupId,
+          groupName: resolution.groupName,
+          code,
+        });
       }
-      const results = validateAuditRows(data, { batchByCode });
+
+      // 以複合文件 ID 精確讀取既有指標；組別名稱／編號不會跨組誤配。
+      const db = getFirebaseDb();
+      const existingByKey = new Map<string, ExistingAuditImport>();
+      for (const [key, pair] of pairByKey) {
+        const existingId =
+          existingIndicatorIds.get(key) ?? indicatorDocId(pair.groupId, pair.code);
+        const snap = await getDoc(
+          doc(db, "indicators", existingId),
+        );
+        if (!snap.exists()) {
+          if (existingIndicatorIds.has(key))
+            throw new Error(
+              `既有指標 ${pair.groupName}／${pair.code} 已不存在，請重新整理指標清單`,
+            );
+          continue;
+        }
+        const raw = snap.data() as Record<string, unknown>;
+        const parsedId = parseIndicatorDocId(snap.id);
+        if (
+          (typeof raw.groupId === "string" && raw.groupId !== pair.groupId) ||
+          (typeof raw.code === "string" && raw.code.trim() !== pair.code) ||
+          (parsedId &&
+            (parsedId.groupId !== pair.groupId || parsedId.code !== pair.code))
+        ) {
+          throw new Error(
+            `既有指標 ${pair.groupName}／${pair.code} 的文件資料不一致，請先檢查指標主檔`,
+          );
+        }
+        const originalAudit = auditFormFromIndicatorData(raw);
+        existingByKey.set(key, {
+          indicatorId: snap.id,
+          groupId: pair.groupId,
+          groupName: pair.groupName,
+          code: pair.code,
+          name: typeof raw.name === "string" ? raw.name : pair.code,
+          originalAudit,
+          originalSignature: auditFormSignature(originalAudit),
+          importedAudit: emptyAuditFormValue(),
+        });
+      }
+
+      // 驗證範圍包含本次批次新增列和已存在的精確目標。
+      const batchByCode = new Map<string, string[]>();
+      const addBatchTarget = (code: string, groupId: string) => {
+        const trimmedCode = code.trim();
+        const groupName = groupMap.get(groupId) || "";
+        if (!trimmedCode || !groupName) return;
+        const list = batchByCode.get(trimmedCode) ?? [];
+        if (!list.includes(groupName)) list.push(groupName);
+        batchByCode.set(trimmedCode, list);
+      };
+      rows.forEach((row) => addBatchTarget(row.code, row.groupId));
+      for (const target of existingByKey.values())
+        addBatchTarget(target.code, target.groupId);
+
+      const validation = validateAuditRows(normalizedData, { batchByCode });
+      const results = validation.map((result) => {
+        const resolution = resolutionByLine.get(result.lineNo);
+        if (!resolution || resolution.ok) return result;
+        const reason =
+          resolution.reason === "missing"
+            ? "組別未填"
+            : resolution.reason === "ambiguous"
+              ? `組別「${data.find((row) => row.lineNo === result.lineNo)?.indicatorGroup.trim() || ""}」不唯一，請填組別 ID`
+              : `找不到組別「${data.find((row) => row.lineNo === result.lineNo)?.indicatorGroup.trim() || ""}」`;
+        return {
+          ...result,
+          ok: false,
+          errors: [...new Set([...result.errors, reason])],
+          values: null,
+        };
+      });
       const ok = results.filter((r) => r.ok && r.values);
       const bad = results.filter((r) => !r.ok);
+
+      const importedByKey = new Map<string, AuditFormValue>();
+      const addImportedQuestion = (
+        audit: AuditFormValue,
+        value: NonNullable<(typeof ok)[number]["values"]>,
+      ) => {
+        let groupId: string | null = null;
+        let groupName = "";
+        if (value.groupName) {
+          const existingGroup = audit.questionGroups.find(
+            (group) => group.name.trim() === value.groupName,
+          );
+          if (existingGroup) {
+            groupId = existingGroup.id;
+            groupName = existingGroup.name;
+          } else {
+            const group = {
+              id: newQid(),
+              name: value.groupName,
+              order: audit.questionGroups.length,
+            };
+            audit.questionGroups = [...audit.questionGroups, group];
+            groupId = group.id;
+            groupName = group.name;
+          }
+          audit.useQuestionGroups = true;
+        }
+        const question = emptyAuditQuestion(groupId, groupName);
+        question.itemText = value.itemText;
+        question.optionSet = value.optionSet;
+        question.guidance = value.guidance;
+        question.order = audit.questions.length;
+        audit.questions = [...audit.questions, question];
+      };
+
+      for (const result of ok) {
+        const value = result.values!;
+        const resolution = resolutionByLine.get(result.lineNo);
+        if (!resolution?.ok) continue;
+        const key = indicatorDocId(resolution.groupId, value.code);
+        const imported = importedByKey.get(key) ?? emptyAuditFormValue();
+        addImportedQuestion(imported, value);
+        importedByKey.set(key, imported);
+      }
+
       if (ok.length > 0) {
         setRows((prev) => {
           const next = prev.map((r) => ({
@@ -2318,51 +2586,67 @@ function BatchAddDialog({
               questionGroups: [...r.audit.questionGroups],
             },
           }));
-          for (const res of ok) {
-            const v = res.values!;
+          for (const [key, imported] of importedByKey) {
+            if (existingByKey.has(key)) continue;
+            const target = pairByKey.get(key);
+            if (!target) continue;
             const idx = next.findIndex(
-              (r) =>
-                r.code.trim() === v.code &&
-                groupMap.get(r.groupId) === v.indicatorGroup,
+              (row) =>
+                row.code.trim() === target.code &&
+                row.groupId === target.groupId,
             );
             if (idx < 0) continue;
             const row = next[idx];
-            let groupId: string | null = null;
-            let groupName = "";
-            if (v.groupName) {
-              const existing = row.audit.questionGroups.find(
-                (g) => g.name.trim() === v.groupName,
-              );
-              if (existing) {
-                groupId = existing.id;
-                groupName = existing.name;
-              } else {
-                const g = {
-                  id: newQid(),
-                  name: v.groupName,
-                  order: row.audit.questionGroups.length,
-                };
-                row.audit.questionGroups = [...row.audit.questionGroups, g];
-                groupId = g.id;
-                groupName = g.name;
-              }
-              row.audit.useQuestionGroups = true;
-            }
-            const q = emptyAuditQuestion(groupId, groupName);
-            q.itemText = v.itemText;
-            q.optionSet = v.optionSet;
-            q.guidance = v.guidance;
-            q.order = row.audit.questions.length;
-            row.audit.questions = [...row.audit.questions, q];
-            row.showAudit = true;
+            const merged = mergeImportedAuditForm(
+              importedAuditPart(row.audit),
+              importedAuditPart(imported),
+              "append",
+            );
+            next[idx] = {
+              ...row,
+              audit: { ...row.audit, ...merged },
+              showAudit: true,
+            };
           }
           return next;
         });
       }
+
+      const existingImports = [...importedByKey.entries()]
+        .filter(([key]) => existingByKey.has(key))
+        .map(([key, imported]) => ({
+          ...existingByKey.get(key)!,
+          importedAudit: imported,
+        }));
+      if (existingImports.length > 0) {
+        setExistingAuditImports((previous) => {
+          const byId = new Map(
+            previous.map((target) => [target.indicatorId, target]),
+          );
+          for (const target of existingImports) {
+            const old = byId.get(target.indicatorId);
+            if (!old) {
+              byId.set(target.indicatorId, target);
+              continue;
+            }
+            const merged = mergeImportedAuditForm(
+              importedAuditPart(old.importedAudit),
+              importedAuditPart(target.importedAudit),
+              "append",
+            );
+            byId.set(target.indicatorId, {
+              ...old,
+              importedAudit: { ...old.importedAudit, ...merged },
+            });
+          }
+          return [...byId.values()];
+        });
+      }
+
       setImportErrors(
         bad.map((r) => `第 ${r.lineNo} 列：${r.errors.join("；")}`),
       );
-      const msg = `審核表匯入：成功 ${ok.length} 題、失敗 ${bad.length} 題`;
+      const msg = `審核表匯入：成功 ${ok.length} 題、比對既有指標 ${existingImports.length} 支、失敗 ${bad.length} 列`;
       setImportSummary(msg);
       onAction(msg);
     } catch (error) {
@@ -2421,15 +2705,20 @@ function BatchAddDialog({
       onAction("請先登入");
       return;
     }
+    const activeRows = rows.filter(batchRowHasContent);
+    if (activeRows.length === 0 && existingAuditImports.length === 0) {
+      onAction("請先新增指標或匯入審核表");
+      return;
+    }
     const codeCounts = new Map<string, number>();
-    for (const r of rows) {
+    for (const r of activeRows) {
       const c = r.code.trim();
       if (!c) continue;
       const k = r.groupId ? indicatorDocId(r.groupId, c) : c;
       codeCounts.set(k, (codeCounts.get(k) ?? 0) + 1);
     }
     let hasError = false;
-    const checked = rows.map((r) => {
+    const checked = activeRows.map((r) => {
       const errors = validateRow(r, codeCounts);
       if (Object.keys(errors).length > 0) {
         hasError = true;
@@ -2438,98 +2727,297 @@ function BatchAddDialog({
       }
       return { ...r, errors };
     });
-    setRows(checked);
+    const checkedByKey = new Map(checked.map((row) => [row.key, row]));
+    setRows((previous) =>
+      previous.map((row) => checkedByKey.get(row.key) ?? row),
+    );
     if (hasError) {
       onAction("批次資料有誤（紅字標示），請修正後再儲存");
       return;
     }
     setSaving(true);
     try {
-      const db = getFirebaseDb();
-      let n = 0;
-      for (const r of checked) {
-        const code = r.code.trim();
-        const docId = indicatorDocId(r.groupId, code);
-        const ref = doc(db, "indicators", docId);
-        const exists = await getDoc(ref);
-        if (exists.exists()) throw new Error(`指標編號 ${code} 在此組別已存在`);
-        const basicThreshold =
-          typeof r.threshold === "number" ? r.threshold : 0;
-        // v1.22：分組資訊一律保存（分組開關關閉僅隱藏顯示，不刪除資料）
-        const questions = r.audit.questions.map((q, i) => ({
-          id: q.id,
-          itemText: q.itemText.trim(),
-          optionSet: q.optionSet,
-          guidance: q.guidance.trim(),
-          commonErrors: (q.commonErrors ?? [])
-            .map((item) => item.trim())
-            .filter(Boolean),
-          groupId: q.groupId,
-          groupName: q.groupName.trim(),
-          order: i,
-        }));
-        const questionGroups = [...r.audit.questionGroups]
-          .sort((a, b) => a.order - b.order)
-          .map((g, i) => ({
-            id: g.id,
-            name: g.name.trim() || `分組 ${i + 1}`,
-            order: i,
-          }));
-        const steps = emptyTenSteps();
-        steps.step5.thresholds = [];
-        await setDoc(ref, {
-          code,
-          name: r.name.trim(),
-          groupId: r.groupId,
-          owners: r.owners,
-          threshold: basicThreshold,
-          basicThreshold,
-          status: "草稿",
-          tenSteps: steps,
-          questions,
-          auditItems: r.audit.auditItems
-            .map((item) => item.trim())
-            .filter(Boolean),
-          questionGroups,
-          useQuestionGroups: r.audit.useQuestionGroups,
-          requireBedNo: r.audit.requireBedNo,
-          requireReviewee: r.audit.requireReviewee,
-          version: "v1.0",
-          hasReviewData: false,
-          createdAt: serverTimestamp(),
-          createdBy: user.staffId,
-          updatedAt: serverTimestamp(),
-          updatedBy: user.staffId,
-        });
-        await setDoc(doc(db, "indicators", docId, "versions", "v1.0"), {
-          version: "v1.0",
-          status: "草稿",
-          threshold: basicThreshold,
-          tenSteps: steps,
-          questions,
-          auditItems: r.audit.auditItems
-            .map((item) => item.trim())
-            .filter(Boolean),
-          effectiveDate: new Date().toISOString().slice(0, 10),
-          note: "初版",
-          createdAt: serverTimestamp(),
-          createdBy: user.staffId,
-        });
-        logAudit(db, {
-          actor: user.staffId,
-          actorName: user.name,
-          action: "建立指標",
-          targetType: "indicator",
-          targetId: docId,
-          detail: r.name.trim(),
-        });
-        n++;
+      const preparedExisting = await prepareExistingAuditImports();
+      const plan: BatchSavePlan = {
+        newRows: checked,
+        existing: preparedExisting,
+      };
+      const requiresDecision = preparedExisting.some(
+        (target) =>
+          target.currentAudit.questions.length > 0 || target.hasReviewData,
+      );
+      if (requiresDecision) {
+        setSaveChoice(plan);
+        return;
       }
-      onAction(`已建立 ${n} 支指標`);
-      onDone();
+      await commitBatchSave(plan, "replace");
     } catch (error) {
       onAction(
         `批次新增失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function prepareExistingAuditImports(): Promise<
+    PreparedExistingAuditImport[]
+  > {
+    const db = getFirebaseDb();
+    return Promise.all(
+      existingAuditImports.map(async (target) => {
+        const snapshot = await getDoc(doc(db, "indicators", target.indicatorId));
+        if (!snapshot.exists())
+          throw new Error(
+            `找不到既有指標 ${target.groupName}／${target.code}，請重新匯入審核表`,
+          );
+        const latestData = snapshot.data() as Record<string, unknown>;
+        const parsedId = parseIndicatorDocId(snapshot.id);
+        const latestGroupId =
+          typeof latestData.groupId === "string"
+            ? latestData.groupId
+            : (parsedId?.groupId ?? target.groupId);
+        const latestCode =
+          typeof latestData.code === "string"
+            ? latestData.code.trim()
+            : (parsedId?.code ?? target.code);
+        if (latestGroupId !== target.groupId || latestCode !== target.code)
+          throw new Error(
+            `既有指標 ${target.groupName}／${target.code} 的組別或編號已變更，請重新匯入`,
+          );
+
+        const currentAudit = auditFormFromIndicatorData(latestData);
+        if (auditFormSignature(currentAudit) !== target.originalSignature)
+          throw new Error(
+            `指標 ${target.groupName}／${target.code} 的審核表在預覽後已變更，請重新匯入以免覆蓋他人修改`,
+          );
+
+        // 查詢失敗時中止，不把未知狀態誤當成沒有歷史審查。
+        const reviewSnapshot = await getDocs(
+          query(
+            collection(db, "reviewRecords"),
+            where("indicatorId", "==", target.indicatorId),
+            limit(1),
+          ),
+        );
+        return {
+          ...target,
+          currentAudit,
+          latestData,
+          hasReviewData:
+            latestData.hasReviewData === true || !reviewSnapshot.empty,
+        };
+      }),
+    );
+  }
+
+  async function commitBatchSave(
+    plan: BatchSavePlan,
+    mode: "replace" | "append",
+  ) {
+    if (!user) throw new Error("請先登入");
+    const db = getFirebaseDb();
+    const totalTargets = plan.newRows.length + plan.existing.length;
+    if (totalTargets === 0) throw new Error("沒有可儲存的指標或審核表");
+    // 每個目標最多三次寫入（主檔、版本、稽核），低於 Firestore 的 500 次限制。
+    if (totalTargets > 150)
+      throw new Error("單次最多儲存 150 支指標，請分批匯入");
+
+    // 使用者選擇取代/追加後再次檢查，避免預覽期間他人修改遭覆蓋。
+    const refreshed = await prepareExistingAuditImports();
+    const refreshedById = new Map(
+      refreshed.map((target) => [target.indicatorId, target]),
+    );
+    for (const target of plan.existing) {
+      const latest = refreshedById.get(target.indicatorId);
+      if (!latest || latest.hasReviewData !== target.hasReviewData)
+        throw new Error("既有審查資料狀態已變更，請重新按儲存確認");
+    }
+
+    const batch = writeBatch(db);
+    const writeAudit = (action: string, targetId: string, detail: string) => {
+      batch.set(doc(collection(db, "auditLogs")), {
+        actor: user.staffId,
+        actorName: user.name,
+        action,
+        targetType: "indicator",
+        targetId,
+        detail,
+        createdAt: serverTimestamp(),
+      });
+    };
+
+    for (const row of plan.newRows) {
+      const code = row.code.trim();
+      const indicatorId = indicatorDocId(row.groupId, code);
+      const ref = doc(db, "indicators", indicatorId);
+      const exists = await getDoc(ref);
+      if (exists.exists()) throw new Error(`指標編號 ${code} 在此組別已存在`);
+
+      const basicThreshold = typeof row.threshold === "number" ? row.threshold : 0;
+      const questions = row.audit.questions.map((question, order) => ({
+        id: question.id,
+        itemText: question.itemText.trim(),
+        optionSet: question.optionSet,
+        guidance: question.guidance.trim(),
+        commonErrors: (question.commonErrors ?? [])
+          .map((item) => item.trim())
+          .filter(Boolean),
+        groupId: question.groupId,
+        groupName: question.groupName.trim(),
+        order,
+      }));
+      const questionGroups = [...row.audit.questionGroups]
+        .sort((a, b) => a.order - b.order)
+        .map((group, order) => ({
+          id: group.id,
+          name: group.name.trim() || `分組 ${order + 1}`,
+          order,
+        }));
+      const steps = emptyTenSteps();
+      steps.step5.thresholds = [];
+      batch.set(ref, {
+        code,
+        name: row.name.trim(),
+        groupId: row.groupId,
+        owners: row.owners,
+        threshold: basicThreshold,
+        basicThreshold,
+        status: "草稿",
+        tenSteps: steps,
+        questions,
+        auditItems: row.audit.auditItems
+          .map((item) => item.trim())
+          .filter(Boolean),
+        questionGroups,
+        useQuestionGroups: row.audit.useQuestionGroups,
+        requireBedNo: row.audit.requireBedNo,
+        requireReviewee: row.audit.requireReviewee,
+        version: "v1.0",
+        hasReviewData: false,
+        createdAt: serverTimestamp(),
+        createdBy: user.staffId,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.staffId,
+      });
+      batch.set(doc(db, "indicators", indicatorId, "versions", "v1.0"), {
+        version: "v1.0",
+        status: "草稿",
+        threshold: basicThreshold,
+        tenSteps: steps,
+        questions,
+        auditItems: row.audit.auditItems
+          .map((item) => item.trim())
+          .filter(Boolean),
+        effectiveDate: new Date().toISOString().slice(0, 10),
+        note: "初版",
+        createdAt: serverTimestamp(),
+        createdBy: user.staffId,
+      });
+      writeAudit("建立指標", indicatorId, row.name.trim());
+    }
+
+    for (const plannedTarget of plan.existing) {
+      const target = refreshedById.get(plannedTarget.indicatorId)!;
+      const mergeMode =
+        target.currentAudit.questions.length > 0 ? mode : "replace";
+      const merged = mergeImportedAuditForm(
+        importedAuditPart(target.currentAudit),
+        importedAuditPart(target.importedAudit),
+        mergeMode,
+      );
+      const questions = merged.questions.map((question, order) => ({
+        id: question.id,
+        itemText: question.itemText.trim(),
+        optionSet: question.optionSet,
+        guidance: question.guidance.trim(),
+        commonErrors: (question.commonErrors ?? [])
+          .map((item) => item.trim())
+          .filter(Boolean),
+        groupId: question.groupId,
+        groupName: question.groupName.trim(),
+        order,
+      }));
+      const questionGroups = [...merged.questionGroups]
+        .sort((a, b) => a.order - b.order)
+        .map((group, order) => ({ ...group, order }));
+      const indicatorRef = doc(db, "indicators", target.indicatorId);
+      let versionDetail = "";
+      if (target.hasReviewData) {
+        const currentVersion =
+          typeof target.latestData.version === "string"
+            ? target.latestData.version
+            : "v1.0";
+        const newVersion = nextVersion(currentVersion);
+        batch.set(
+          doc(db, "indicators", target.indicatorId, "versions", newVersion),
+          {
+            version: newVersion,
+            status:
+              typeof target.latestData.status === "string"
+                ? target.latestData.status
+                : "草稿",
+            threshold: primaryThreshold(target.latestData),
+            tenSteps: target.latestData.tenSteps ?? emptyTenSteps(),
+            questions,
+            auditItems: Array.isArray(target.latestData.auditItems)
+              ? target.latestData.auditItems.map(String).filter(Boolean)
+              : [],
+            questionGroups,
+            useQuestionGroups: merged.useQuestionGroups,
+            effectiveDate: new Date().toISOString().slice(0, 10),
+            note: `批次匯入審核表（${mergeMode === "replace" ? "取代" : "追加"}）`,
+            createdAt: serverTimestamp(),
+            createdBy: user.staffId,
+          },
+        );
+        batch.update(indicatorRef, {
+          questions,
+          questionGroups,
+          useQuestionGroups: merged.useQuestionGroups,
+          version: newVersion,
+          hasReviewData: true,
+          updatedAt: serverTimestamp(),
+          updatedBy: user.staffId,
+        });
+        versionDetail = `，新版本 ${newVersion}`;
+      } else {
+        batch.update(indicatorRef, {
+          questions,
+          questionGroups,
+          useQuestionGroups: merged.useQuestionGroups,
+          updatedAt: serverTimestamp(),
+          updatedBy: user.staffId,
+        });
+      }
+      writeAudit(
+        "匯入審核表",
+        target.indicatorId,
+        `${mergeMode === "replace" ? "取代" : "追加"}：${target.currentAudit.questions.length} 題 → ${questions.length} 題${versionDetail}`,
+      );
+    }
+
+    await batch.commit();
+    const summary = [
+      plan.newRows.length ? `建立 ${plan.newRows.length} 支新指標` : "",
+      plan.existing.length ? `更新 ${plan.existing.length} 支既有指標審核表` : "",
+    ]
+      .filter(Boolean)
+      .join("；");
+    onAction(`批次儲存完成：${summary}`);
+    onDone();
+  }
+
+  async function handleSaveChoice(mode: "replace" | "append") {
+    if (!saveChoice) return;
+    setSaving(true);
+    try {
+      await commitBatchSave(saveChoice, mode);
+      setSaveChoice(null);
+    } catch (error) {
+      setSaveChoice(null);
+      onAction(
+        `批次儲存失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
       );
     } finally {
       setSaving(false);
@@ -2549,8 +3037,7 @@ function BatchAddDialog({
           <div>
             <h2>批次新增指標</h2>
             <p>
-              每列一支指標（基本資料必填）；可展開「審核表」逐列編輯題目。存檔前會整批驗證，有誤整批退回。亦可由下方按鈕匯入
-              Excel／CSV（基本資料與審核表分開匯入，皆提供範本）。
+              新增指標須填基本資料；匯入既有指標的審核表時，依組別及指標編號匹配並先預覽。若原審核表已有題目，按儲存後可選擇取代或追加。
             </p>
           </div>
           <button
@@ -2613,7 +3100,9 @@ function BatchAddDialog({
           >
             <Download size={14} /> 下載審核表範本
           </button>
-          <span className="muted-text">共 {rows.length} 列</span>
+          <span className="muted-text">
+            新指標 {rows.filter(batchRowHasContent).length} 列
+          </span>
           {importing && (
             <span className="muted-text" role="status">
               讀取檔案中…
@@ -2657,6 +3146,51 @@ function BatchAddDialog({
               </div>
             ))}
           </div>
+        )}
+        {existingAuditImports.length > 0 && (
+          <section className="batch-existing-audit-preview">
+            <h3>既有指標審核表匯入預覽</h3>
+            <p className="muted-text">
+              已找到 {existingAuditImports.length} 支指標；以下變更尚未儲存。按儲存後，原審核表已有題目時會再詢問取代或追加。
+            </p>
+            <div className="batch-existing-audit-list">
+              {existingAuditImports.map((target) => (
+                <article
+                  className="batch-existing-audit-card"
+                  key={target.indicatorId}
+                >
+                  <div className="batch-existing-audit-heading">
+                    <strong>{target.name}</strong>
+                    <span>
+                      {target.groupName}／{target.code}
+                    </span>
+                  </div>
+                  <p>
+                    原審核表 {target.originalAudit.questions.length} 題；本次匯入 {target.importedAudit.questions.length} 題
+                  </p>
+                  <details>
+                    <summary>預覽本次匯入題目</summary>
+                    <ol>
+                      {target.importedAudit.questions.map((question) => (
+                        <li key={question.id}>
+                          <strong>{question.itemText}</strong>
+                          <div className="muted-text">
+                            分組：{question.groupName || "未分組"}；選項：
+                            {optionLabelsOf(question.optionSet).join("、")}
+                          </div>
+                          {question.guidance && (
+                            <div className="muted-text">
+                              指引：{question.guidance}
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ol>
+                  </details>
+                </article>
+              ))}
+            </div>
+          </section>
         )}
         <div className="table-scroll">
           <table className="permission-table">
@@ -2828,16 +3362,88 @@ function BatchAddDialog({
         <div className="form-actions">
           <button
             className="button button-primary"
-            disabled={saving}
+            disabled={saving || !!saveChoice}
             onClick={handleSave}
           >
-            {saving ? "儲存中…" : `建立 ${rows.length} 支指標`}
+            {saving
+              ? "儲存中…"
+              : `儲存批次（新指標 ${rows.filter(batchRowHasContent).length} 支、既有審核表 ${existingAuditImports.length} 支）`}
           </button>
           <button className="button button-ghost" onClick={onClose}>
             取消
           </button>
         </div>
       </div>
+      {saveChoice && (
+        <div
+          className="reviewer-modal-backdrop batch-save-choice-backdrop"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (!saving) setSaveChoice(null);
+          }}
+        >
+          <div
+            className="reviewer-modal panel batch-save-choice"
+            role="dialog"
+            aria-modal="true"
+            aria-label="選擇既有審核表處理方式"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2>選擇審核表儲存方式</h2>
+            {saveChoice.existing.some(
+              (target) => target.currentAudit.questions.length > 0,
+            ) ? (
+              <p>
+                本次有既有審核表含有題目。請選擇此批所有既有指標的處理方式：取代原有整份審核表，或將匯入題目追加在後。
+              </p>
+            ) : (
+              <p>原審核表目前沒有題目，確認後將儲存匯入的審核題目。</p>
+            )}
+            {saveChoice.existing.some((target) => target.hasReviewData) && (
+              <p className="settings-note">
+                部分指標已有審查歷史；系統將依版本控管建立新版本，保留既有歷史審查資料。
+              </p>
+            )}
+            <div className="batch-save-choice-actions">
+              {saveChoice.existing.some(
+                (target) => target.currentAudit.questions.length > 0,
+              ) ? (
+                <>
+                  <button
+                    className="button button-outline"
+                    disabled={saving}
+                    onClick={() => void handleSaveChoice("replace")}
+                  >
+                    取代原有整份審核表
+                  </button>
+                  <button
+                    className="button button-primary"
+                    disabled={saving}
+                    onClick={() => void handleSaveChoice("append")}
+                  >
+                    追加到原有審核表後
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="button button-primary"
+                  disabled={saving}
+                  onClick={() => void handleSaveChoice("replace")}
+                >
+                  確認儲存審核表
+                </button>
+              )}
+              <button
+                className="button button-ghost"
+                disabled={saving}
+                onClick={() => setSaveChoice(null)}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

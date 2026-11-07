@@ -5115,6 +5115,88 @@ button:disabled {
 .reviewer-modal.batch-modal {
   width: min(1180px, 100%);
 }
+.batch-existing-audit-preview {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+}
+.batch-existing-audit-preview h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--ink, #1f2e36);
+}
+.batch-existing-audit-preview > p {
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+.batch-existing-audit-list {
+  display: grid;
+  gap: 8px;
+}
+.batch-existing-audit-card {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+.batch-existing-audit-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.batch-existing-audit-heading span,
+.batch-existing-audit-card p {
+  color: var(--muted, #6b7a7d);
+  font-size: 12px;
+}
+.batch-existing-audit-card p {
+  margin: 6px 0;
+}
+.batch-existing-audit-card details summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.batch-existing-audit-card ol {
+  margin: 6px 0 0;
+  padding-inline-start: 22px;
+  overflow-wrap: anywhere;
+}
+.batch-existing-audit-card li + li {
+  margin-top: 8px;
+}
+.batch-existing-audit-card li .muted-text {
+  display: block;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.batch-save-choice-backdrop {
+  z-index: 90;
+  background: rgba(15, 30, 35, 0.62);
+}
+.reviewer-modal.batch-save-choice {
+  width: min(620px, 100%);
+}
+.batch-save-choice h2 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  color: var(--ink, #1f2e36);
+}
+.batch-save-choice > p {
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+.batch-save-choice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
 /* v1.20：查閱視窗 2 倍寬（原 560px → 1120px） */
 .reviewer-modal.wide {
   width: min(1600px, calc(100vw - 32px));
@@ -5368,6 +5450,13 @@ body {
   .reviewer-modal.batch-modal {
     width: calc(100vw - 16px);
     max-height: calc(100dvh - 16px);
+  }
+  .batch-save-choice-actions > .button {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+  .batch-existing-audit-heading {
+    align-items: flex-start;
   }
   /* P2-10：popover 縮減；月份 popover 改靠右對齊，避免溢出欄位右緣。 */
   .results-month-popover {
