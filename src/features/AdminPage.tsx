@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
   Check,
   ChevronDown,
   ChevronRight,
   Database,
+  Eye,
   Pencil,
   Plus,
+  RotateCcw,
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
@@ -23,6 +25,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from "../lib/db";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
@@ -42,11 +45,18 @@ import {
   SEED_ROLES,
   SYSTEM_PARAM_LABELS,
   SYSTEM_PARAM_SELECT_OPTIONS,
-  UI_THEMES,
   runSystemSeed,
   themeName,
   type SystemParams,
+  type UiThemeDef,
 } from "../lib/seed";
+import {
+  clearThemeRegistry,
+  ensureBuiltIns,
+  loadThemes,
+  themeToCssVars,
+} from "../lib/themeRegistry";
+import { isHexColor, validateThemeContrast } from "../lib/colorContrast";
 import {
   PERM_KEYS,
   PERM_LABELS,
@@ -80,9 +90,12 @@ function paramKindOf(key: keyof SystemParams): ParamKind {
 function SystemInitSection({
   onAction,
   canManageRoles,
+  themeTick,
 }: {
   onAction: (message: string) => void;
   canManageRoles: boolean;
+  /** 主題在模板管理區變更後遞增，觸發參數重讀（顯示目前主題名稱）。 */
+  themeTick: number;
 }) {
   const { user } = useAuth();
   const [params, setParams] = useState<SystemParams | null | undefined>(undefined);
@@ -105,7 +118,7 @@ function SystemInitSection({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [themeTick]);
 
   async function handleSeed() {
     if (!user || seeding) return;
@@ -121,22 +134,6 @@ function SystemInitSection({
       onAction("初始化失敗：權限不足或網路異常，請稍後再試");
     } finally {
       setSeeding(false);
-    }
-  }
-
-  async function handleThemeChange(themeId: string) {
-    if (!user) return;
-    try {
-      await updateDoc(doc(getFirebaseDb(), "systemParams", "config"), {
-        uiTheme: themeId,
-        updatedAt: serverTimestamp(),
-        updatedBy: user.staffId,
-      });
-      setParams((prev) => (prev ? { ...prev, uiTheme: themeId } : prev));
-      applyTheme(themeId);
-      onAction(`主題配色已切換為「${themeName(themeId)}」（全院統一）`);
-    } catch {
-      onAction("主題切換失敗：權限不足或網路異常");
     }
   }
 
@@ -317,24 +314,10 @@ function SystemInitSection({
                 <div key={key} className="param-row">
                   <dt>{SYSTEM_PARAM_LABELS[key]}</dt>
                   <dd>
-                    {canManageRoles ? (
-                      <div className="select-wrap">
-                        <select
-                          value={params.uiTheme || "green-2"}
-                          onChange={(e) => void handleThemeChange(e.target.value)}
-                          aria-label="主題配色"
-                        >
-                          {UI_THEMES.map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.name}
-                            </option>
-                          ))}
-                        </select>
-                        <ChevronDown size={15} />
-                      </div>
-                    ) : (
-                      themeName(params.uiTheme || "green-2")
-                    )}
+                    {themeName(params.uiTheme || "green-2")}
+                    <span className="muted-text">
+                      （請至下方「模板管理」切換）
+                    </span>
                   </dd>
                 </div>
               ) : (
@@ -345,6 +328,782 @@ function SystemInitSection({
               ),
           )}
         </dl>
+      )}
+    </section>
+  );
+}
+
+/* ================= 模板管理（v1.32.0，資料驅動） =================
+   主題定義在 Firestore uiThemes 集合（見 src/lib/themeRegistry.ts），
+   新增一套模板不需發版。刪除自訂模板＝真刪；內建模板只能隱藏／還原。
+   防呆：green-2 不可隱藏／刪／改；內建線上不改色；自訂 id 不可撞內建；
+   至少留 1 套可見；刪使用中主題自動切回 green-2。 */
+
+const THEME_ID_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+type ThemeDraft = UiThemeDef;
+
+const THEME_HEX_KEYS = [
+  "teal",
+  "tealDeep",
+  "tealSoft",
+  "accent",
+  "accentDeep",
+  "accentSoft",
+  "accent2",
+  "accent2Deep",
+  "accent2Soft",
+  "bg",
+  "btnHoverBg",
+  "btnHoverColor",
+  "rowHover",
+  "navHover",
+] as const;
+type ThemeHexKey = (typeof THEME_HEX_KEYS)[number];
+
+const THEME_HEX_LABELS: Record<ThemeHexKey, string> = {
+  teal: "主色",
+  tealDeep: "主色深版",
+  tealSoft: "主色淡底",
+  accent: "輔色",
+  accentDeep: "輔色深版",
+  accentSoft: "輔色淡底",
+  accent2: "點綴色",
+  accent2Deep: "點綴色深版",
+  accent2Soft: "點綴色淡底",
+  bg: "頁面底色",
+  btnHoverBg: "主按鈕 hover 底",
+  btnHoverColor: "主按鈕 hover 文字",
+  rowHover: "表格列 hover 底",
+  navHover: "導覽 hover 底",
+};
+
+function TemplateManagementSection({
+  onAction,
+  onThemeChanged,
+}: {
+  onAction: (message: string) => void;
+  onThemeChanged: () => void;
+}) {
+  const { user } = useAuth();
+  const [themes, setThemes] = useState<UiThemeDef[] | null>(null);
+  const [currentId, setCurrentId] = useState("green-2");
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<ThemeDraft | null>(null);
+  const [copyFromId, setCopyFromId] = useState("printmax-green");
+  const [formError, setFormError] = useState("");
+  const [formWarnings, setFormWarnings] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const visible = useMemo(
+    () => (themes ?? []).filter((t) => !t.hidden),
+    [themes],
+  );
+  const hidden = useMemo(
+    () => (themes ?? []).filter((t) => t.hidden),
+    [themes],
+  );
+
+  async function loadAll() {
+    try {
+      const db = getFirebaseDb();
+      if (user) await ensureBuiltIns(user.staffId);
+      clearThemeRegistry();
+      const defs = await loadThemes();
+      setThemes(defs);
+      const snap = await getCachedRef(SYSTEM_CONFIG_KEY, () =>
+        getDocCacheFirst(doc(db, "systemParams", "config")),
+      );
+      if (snap.exists()) {
+        const t = (snap.data() as { uiTheme?: unknown }).uiTheme;
+        if (typeof t === "string" && t) setCurrentId(t);
+      }
+    } catch {
+      onAction("讀取模板清單失敗");
+      setThemes([]);
+    }
+  }
+
+  useEffect(() => {
+    void loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function reloadThemes() {
+    clearThemeRegistry();
+    setThemes(await loadThemes());
+  }
+
+  async function handleSetActive(def: UiThemeDef) {
+    if (!user || busyId) return;
+    setBusyId(def.id);
+    try {
+      await updateDoc(doc(getFirebaseDb(), "systemParams", "config"), {
+        uiTheme: def.id,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.staffId,
+      });
+      setCurrentId(def.id);
+      applyTheme(def.id);
+      setPreviewId(null);
+      onThemeChanged();
+      onAction(`主題配色已切換為「${def.name}」（全院統一）`);
+    } catch {
+      onAction("主題切換失敗：權限不足或網路異常");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function handlePreview(def: UiThemeDef) {
+    applyTheme(def.id);
+    setPreviewId(def.id);
+  }
+
+  function cancelPreview() {
+    applyTheme(currentId);
+    setPreviewId(null);
+  }
+
+  async function handleHide(def: UiThemeDef) {
+    if (!user || busyId) return;
+    if (def.id === "green-2") {
+      onAction("「雅致綠」為預設主題，不可隱藏");
+      return;
+    }
+    if (visible.length <= 1) {
+      onAction("至少保留一套可見主題");
+      return;
+    }
+    const active = def.id === currentId;
+    if (
+      active &&
+      !window.confirm(
+        `「${def.name}」目前使用中，隱藏後全院主題將切回「雅致綠」。確定隱藏？`,
+      )
+    )
+      return;
+    if (!active && !window.confirm(`確定隱藏模板「${def.name}」？`)) return;
+    setBusyId(def.id);
+    try {
+      const db = getFirebaseDb();
+      if (active) {
+        const batch = writeBatch(db);
+        batch.update(doc(db, "uiThemes", def.id), {
+          hidden: true,
+          updatedAt: serverTimestamp(),
+          updatedBy: user.staffId,
+        });
+        batch.update(doc(db, "systemParams", "config"), {
+          uiTheme: "green-2",
+          updatedAt: serverTimestamp(),
+          updatedBy: user.staffId,
+        });
+        await batch.commit();
+        setCurrentId("green-2");
+        applyTheme("green-2");
+        onThemeChanged();
+        onAction(`已隱藏「${def.name}」，全院主題已切回「雅致綠」`);
+      } else {
+        await updateDoc(doc(db, "uiThemes", def.id), {
+          hidden: true,
+          updatedAt: serverTimestamp(),
+          updatedBy: user.staffId,
+        });
+        onAction(`已隱藏模板「${def.name}」`);
+      }
+      await reloadThemes();
+    } catch {
+      onAction("隱藏失敗：權限不足或網路異常");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleRestore(def: UiThemeDef) {
+    if (!user || busyId) return;
+    setBusyId(def.id);
+    try {
+      await updateDoc(doc(getFirebaseDb(), "uiThemes", def.id), {
+        hidden: false,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.staffId,
+      });
+      await reloadThemes();
+      onAction(`已還原模板「${def.name}」`);
+    } catch {
+      onAction("還原失敗：權限不足或網路異常");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDelete(def: UiThemeDef) {
+    if (!user || busyId) return;
+    if (def.builtIn) {
+      onAction("內建模板不可刪除，只能隱藏");
+      return;
+    }
+    const active = def.id === currentId;
+    if (
+      !window.confirm(
+        active
+          ? `「${def.name}」目前使用中，刪除後全院主題將切回「雅致綠」。確定刪除？此動作無法復原。`
+          : `確定刪除自訂模板「${def.name}」？此動作無法復原。`,
+      )
+    )
+      return;
+    setBusyId(def.id);
+    try {
+      const db = getFirebaseDb();
+      if (active) {
+        const batch = writeBatch(db);
+        batch.delete(doc(db, "uiThemes", def.id));
+        batch.update(doc(db, "systemParams", "config"), {
+          uiTheme: "green-2",
+          updatedAt: serverTimestamp(),
+          updatedBy: user.staffId,
+        });
+        await batch.commit();
+        setCurrentId("green-2");
+        applyTheme("green-2");
+        onThemeChanged();
+        onAction(`已刪除「${def.name}」，全院主題已切回「雅致綠」`);
+      } else {
+        await deleteDoc(doc(db, "uiThemes", def.id));
+        onAction(`已刪除自訂模板「${def.name}」`);
+      }
+      await reloadThemes();
+    } catch {
+      onAction("刪除失敗：權限不足或網路異常");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleEnsure() {
+    if (!user || busyId) return;
+    setBusyId("__ensure");
+    try {
+      await ensureBuiltIns(user.staffId);
+      await reloadThemes();
+      onAction("已補齊內建模板");
+    } catch {
+      onAction("補齊失敗：權限不足或網路異常");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function openCreate() {
+    const src =
+      (themes ?? []).find((t) => t.id === copyFromId) ??
+      (themes ?? [])[0];
+    if (!src) return;
+    const order = Math.max(0, ...(themes ?? []).map((t) => t.order)) + 1;
+    setDraft({
+      ...src,
+      id: "",
+      name: "",
+      source: "管理員自訂",
+      builtIn: false,
+      hidden: false,
+      order,
+    });
+    setEditingId(null);
+    setFormError("");
+    setFormWarnings([]);
+    setFormOpen(true);
+  }
+
+  function openEdit(def: UiThemeDef) {
+    setDraft({ ...def });
+    setEditingId(def.id);
+    setFormError("");
+    setFormWarnings([]);
+    setFormOpen(true);
+  }
+
+  function handleCopyFromChange(nextId: string) {
+    setCopyFromId(nextId);
+    if (editingId != null) return;
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const src = (themes ?? []).find((t) => t.id === nextId);
+      if (!src) return prev;
+      return {
+        ...src,
+        id: prev.id,
+        name: prev.name,
+        source: "管理員自訂",
+        builtIn: false,
+        hidden: false,
+        order: prev.order,
+      };
+    });
+  }
+
+  async function handleSaveTheme() {
+    if (!draft || !user) return;
+    const name = draft.name.trim();
+    if (!name) {
+      setFormError("請填寫模板名稱");
+      return;
+    }
+    if (editingId == null) {
+      if (!THEME_ID_PATTERN.test(draft.id)) {
+        setFormError(
+          "模板 id 須為小寫英文／數字／連字號（kebab-case），例如 edu-blue",
+        );
+        return;
+      }
+      if ((themes ?? []).some((t) => t.id === draft.id)) {
+        setFormError(`模板 id「${draft.id}」已存在`);
+        return;
+      }
+    }
+    for (const key of THEME_HEX_KEYS) {
+      if (!isHexColor(draft[key])) {
+        setFormError(`欄位「${THEME_HEX_LABELS[key]}」須為 #rrggbb 格式`);
+        return;
+      }
+    }
+    if (
+      !Number.isInteger(draft.radiusBtn) ||
+      draft.radiusBtn < 0 ||
+      draft.radiusBtn > 999 ||
+      !Number.isInteger(draft.radiusCard) ||
+      draft.radiusCard < 0 ||
+      draft.radiusCard > 999 ||
+      !Number.isInteger(draft.lift) ||
+      draft.lift < 0 ||
+      draft.lift > 10
+    ) {
+      setFormError("圓角須為 0–999 整數，上浮須為 0–10 整數");
+      return;
+    }
+    if (draft.grad !== "none" && draft.grad.trim() === "") {
+      setFormError("卡片頂條漸層請填 CSS 字串或 none");
+      return;
+    }
+    const { errors, warnings } = validateThemeContrast(draft);
+    if (errors.length > 0) {
+      setFormError(errors.join("；"));
+      return;
+    }
+    setFormWarnings(warnings);
+    setSaving(true);
+    try {
+      const db = getFirebaseDb();
+      const payload = {
+        ...draft,
+        name,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.staffId,
+      };
+      if (editingId == null) {
+        await setDoc(doc(db, "uiThemes", draft.id), payload);
+        onAction(`已新增模板「${name}」，不需發版，各裝置下次載入即出現`);
+      } else {
+        await updateDoc(doc(db, "uiThemes", editingId), payload);
+        onAction(`模板「${name}」已更新`);
+      }
+      setFormOpen(false);
+      setDraft(null);
+      await reloadThemes();
+    } catch {
+      setFormError("儲存失敗：權限不足或網路異常");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const setDraftField = <K extends keyof ThemeDraft>(
+    key: K,
+    value: ThemeDraft[K],
+  ) => setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
+
+  function colorField(key: ThemeHexKey) {
+    if (!draft) return null;
+    return (
+      <div className="form-field" key={key}>
+        <label className="field-label">{THEME_HEX_LABELS[key]}</label>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            type="color"
+            value={draft[key]}
+            onChange={(e) => setDraftField(key, e.target.value)}
+            aria-label={THEME_HEX_LABELS[key]}
+          />
+          <input
+            className="text-input"
+            value={draft[key]}
+            onChange={(e) => setDraftField(key, e.target.value)}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  function numField(
+    label: string,
+    key: "radiusBtn" | "radiusCard" | "lift" | "order",
+  ) {
+    if (!draft) return null;
+    return (
+      <div className="form-field" key={key}>
+        <label className="field-label">{label}</label>
+        <input
+          className="text-input"
+          type="number"
+          value={draft[key]}
+          onChange={(e) =>
+            setDraftField(key, Number(e.target.value) || 0)
+          }
+        />
+      </div>
+    );
+  }
+
+  function themeCard(def: UiThemeDef) {
+    const previewVars = themeToCssVars(def) as CSSProperties;
+    const isActive = def.id === currentId;
+    const isDefault = def.id === "green-2";
+    return (
+      <div
+        key={def.id}
+        className="panel"
+        style={{ ...previewVars, padding: 16 }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 8,
+          }}
+        >
+          <b>{def.name}</b>
+          <span style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {isActive && (
+              <span className="status-pill success">使用中</span>
+            )}
+            {def.hidden && (
+              <span className="status-pill warning">已隱藏</span>
+            )}
+            {def.builtIn ? (
+              <span className="muted-text">內建</span>
+            ) : (
+              <span className="muted-text">自訂</span>
+            )}
+          </span>
+        </div>
+        <div className="muted-text" style={{ fontSize: 12, marginTop: 2 }}>
+          <code>{def.id}</code> · {def.source}
+        </div>
+        <div style={{ display: "flex", gap: 6, margin: "10px 0" }}>
+          {[def.teal, def.accent, def.accent2].map((c) => (
+            <span
+              key={c}
+              title={c}
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: "50%",
+                background: c,
+                border: "1px solid #e8edef",
+              }}
+            />
+          ))}
+        </div>
+        <div
+          style={{
+            background: "var(--teal-soft)",
+            borderRadius: "var(--radius-card)",
+            padding: 10,
+            marginBottom: 10,
+          }}
+        >
+          <span
+            className="button button-primary"
+            style={{ pointerEvents: "none" }}
+          >
+            主按鈕
+          </span>{" "}
+          <span style={{ color: "var(--teal-deep)", fontWeight: 700 }}>
+            預覽文字
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            className="text-button"
+            disabled={busyId === def.id}
+            onClick={() => handlePreview(def)}
+          >
+            <Eye size={13} /> 預覽
+          </button>
+          {!def.hidden && !isActive && (
+            <button
+              className="text-button"
+              disabled={busyId === def.id}
+              onClick={() => void handleSetActive(def)}
+            >
+              <Check size={13} /> 設為使用中
+            </button>
+          )}
+          {def.builtIn ? (
+            def.hidden ? (
+              <button
+                className="text-button"
+                disabled={busyId === def.id}
+                onClick={() => void handleRestore(def)}
+              >
+                <RotateCcw size={13} /> 還原
+              </button>
+            ) : (
+              !isDefault && (
+                <button
+                  className="text-button"
+                  disabled={busyId === def.id || visible.length <= 1}
+                  onClick={() => void handleHide(def)}
+                >
+                  <X size={13} /> 隱藏
+                </button>
+              )
+            )
+          ) : (
+            <>
+              <button
+                className="text-button"
+                onClick={() => openEdit(def)}
+              >
+                <Pencil size={13} /> 編輯
+              </button>
+              <button
+                className="text-button"
+                disabled={busyId === def.id}
+                onClick={() => void handleDelete(def)}
+              >
+                <Trash2 size={13} /> 刪除
+              </button>
+            </>
+          )}
+          {isDefault && <span className="muted-text">預設主題</span>}
+        </div>
+      </div>
+    );
+  }
+
+  const gridStyle: CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+    gap: 12,
+  };
+
+  return (
+    <section className="panel" id="template-management">
+      <SectionTitle
+        title="模板管理"
+        note="新增模板不需發版；內建模板只能隱藏，改色請複製成自訂模板再改"
+        action={
+          <button
+            className="button button-outline"
+            disabled={busyId === "__ensure"}
+            onClick={() => void handleEnsure()}
+          >
+            補齊內建模板
+          </button>
+        }
+      />
+      {previewId && (
+        <div
+          className="admin-alert"
+          style={{ marginBottom: 12 }}
+          role="status"
+        >
+          <Eye size={17} />
+          <span>
+            預覽中：
+            <b>{(themes ?? []).find((t) => t.id === previewId)?.name ?? previewId}</b>
+            （尚未套用全院）
+          </span>
+          <button
+            className="button button-primary"
+            style={{ marginLeft: "auto" }}
+            onClick={() => {
+              const def = (themes ?? []).find((t) => t.id === previewId);
+              if (def) void handleSetActive(def);
+            }}
+          >
+            套用為全院主題
+          </button>
+          <button className="button button-outline" onClick={cancelPreview}>
+            取消預覽
+          </button>
+        </div>
+      )}
+      {themes === null ? (
+        <p className="settings-note">讀取中…</p>
+      ) : (
+        <>
+          <div style={gridStyle}>{visible.map((t) => themeCard(t))}</div>
+          {hidden.length > 0 && (
+            <>
+              <div style={{ marginTop: 16 }}>
+                <SectionTitle
+                  title="已隱藏"
+                  note="還原後可再設為使用中"
+                />
+              </div>
+              <div style={gridStyle}>{hidden.map((t) => themeCard(t))}</div>
+            </>
+          )}
+          <div className="form-actions" style={{ marginTop: 12 }}>
+            <button
+              className="button button-outline"
+              onClick={openCreate}
+            >
+              <Plus size={14} /> 新增模板
+            </button>
+          </div>
+          {formOpen && draft && (
+            <div className="panel" style={{ marginTop: 12 }}>
+              <SectionTitle
+                title={editingId ? `編輯模板「${draft.name || editingId}」` : "新增模板"}
+                note={
+                  editingId
+                    ? "僅自訂模板可編輯；id 建立後不可改"
+                    : "先選複製來源，再改名稱與顏色；儲存後不需發版"
+                }
+              />
+              <div className="form-grid">
+                {editingId == null && (
+                  <>
+                    <div className="form-field">
+                      <label className="field-label">複製來源</label>
+                      <div className="select-wrap">
+                        <select
+                          value={copyFromId}
+                          onChange={(e) =>
+                            handleCopyFromChange(e.target.value)
+                          }
+                          aria-label="複製來源"
+                        >
+                          {(themes ?? []).map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}（{t.id}）
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={15} />
+                      </div>
+                    </div>
+                    <div className="form-field">
+                      <label className="field-label">模板 id *</label>
+                      <input
+                        className="text-input"
+                        value={draft.id}
+                        onChange={(e) =>
+                          setDraftField("id", e.target.value.trim())
+                        }
+                        placeholder="例如 edu-blue"
+                      />
+                    </div>
+                  </>
+                )}
+                <div className="form-field">
+                  <label className="field-label">模板名稱 *</label>
+                  <input
+                    className="text-input"
+                    value={draft.name}
+                    onChange={(e) => setDraftField("name", e.target.value)}
+                    placeholder="例如 教育寶藍"
+                  />
+                </div>
+                {colorField("teal")}
+                {colorField("accent")}
+                {colorField("accent2")}
+                {colorField("bg")}
+              </div>
+              <details style={{ marginTop: 4 }}>
+                <summary style={{ cursor: "pointer", fontWeight: 700 }}>
+                  進階：淡底、hover 與殼層
+                </summary>
+                <div className="form-grid" style={{ marginTop: 12 }}>
+                  {colorField("tealDeep")}
+                  {colorField("tealSoft")}
+                  {colorField("accentDeep")}
+                  {colorField("accentSoft")}
+                  {colorField("accent2Deep")}
+                  {colorField("accent2Soft")}
+                  {colorField("btnHoverBg")}
+                  {colorField("btnHoverColor")}
+                  {colorField("rowHover")}
+                  {colorField("navHover")}
+                  <div className="form-field">
+                    <label className="field-label">卡片頂條漸層（或 none）</label>
+                    <input
+                      className="text-input"
+                      value={draft.grad}
+                      onChange={(e) => setDraftField("grad", e.target.value)}
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label className="field-label">主按鈕 hover 陰影（或 none）</label>
+                    <input
+                      className="text-input"
+                      value={draft.shadowHover}
+                      onChange={(e) =>
+                        setDraftField("shadowHover", e.target.value)
+                      }
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label className="field-label">卡片 hover 陰影（或 none）</label>
+                    <input
+                      className="text-input"
+                      value={draft.shadowCardHover}
+                      onChange={(e) =>
+                        setDraftField("shadowCardHover", e.target.value)
+                      }
+                    />
+                  </div>
+                  {numField("按鈕圓角 px（999＝膠囊）", "radiusBtn")}
+                  {numField("卡片圓角 px", "radiusCard")}
+                  {numField("卡片 hover 上浮 px", "lift")}
+                  {numField("排序", "order")}
+                </div>
+              </details>
+              {formError && <div className="login-error">{formError}</div>}
+              {formWarnings.length > 0 && (
+                <p className="settings-note">
+                  提醒：{formWarnings.join("；")}
+                </p>
+              )}
+              <div className="form-actions">
+                <button
+                  className="button button-primary"
+                  disabled={saving}
+                  onClick={() => void handleSaveTheme()}
+                >
+                  {saving ? "儲存中…" : editingId ? "儲存修改" : "新增模板"}
+                </button>
+                <button
+                  className="button button-outline"
+                  onClick={() => {
+                    setFormOpen(false);
+                    setDraft(null);
+                  }}
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </section>
   );
@@ -960,6 +1719,8 @@ export function AdminPage({
 }) {
   const { can } = usePermissions();
   const canManageRoles = can("manageRoles");
+  // 主題在模板管理區變更後遞增，觸發 SystemInitSection 重讀參數（顯示目前主題）
+  const [themeTick, setThemeTick] = useState(0);
   return (
     <>
       <PageHeading
@@ -985,7 +1746,17 @@ export function AdminPage({
           角色可由系統管理員動態建立，不需修改程式；正式授權以系統管理員設定為準。
         </span>
       </div>
-      <SystemInitSection onAction={onAction} canManageRoles={canManageRoles} />
+      <SystemInitSection
+        onAction={onAction}
+        canManageRoles={canManageRoles}
+        themeTick={themeTick}
+      />
+      {canManageRoles && (
+        <TemplateManagementSection
+          onAction={onAction}
+          onThemeChanged={() => setThemeTick((t) => t + 1)}
+        />
+      )}
       {canManageRoles && <RolePermissionSection onAction={onAction} />}
       <AuditLogSection canManageRoles={canManageRoles} />
       <div className="admin-settings-grid">

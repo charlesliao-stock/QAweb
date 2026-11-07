@@ -34,7 +34,8 @@ export type RefCollectionName =
   | "units"
   | "users"
   | "roles"
-  | "titles";
+  | "titles"
+  | "uiThemes";
 
 export const REF_COLLECTIONS: readonly RefCollectionName[] = [
   "indicators",
@@ -43,6 +44,7 @@ export const REF_COLLECTIONS: readonly RefCollectionName[] = [
   "users",
   "roles",
   "titles",
+  "uiThemes",
 ] as const;
 
 /** systemParams/config 單一文件的快取鍵 */

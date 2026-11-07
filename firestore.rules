@@ -51,6 +51,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // UI 主題定義（v1.32.0，資料驅動）：登入可讀，管理員可寫（與 systemParams 同級，無擴權）
+    match /uiThemes/{id} {
+      allow read: if isAuthed();
+      allow create, update, delete: if isAdmin();
+    }
+
     // 稽核軌跡：僅允許新增（append-only），查詢限管理員
     match /auditLogs/{id} {
       allow get, list: if isAdmin();
