@@ -1,1 +1,249 @@
-{"fieldOverrides":[],"indexes":[{"collectionGroup":"reviews","fields":[{"fieldPath":"unitCode","order":"ASCENDING"},{"fieldPath":"scheduleMonth","order":"ASCENDING"},{"fieldPath":"indicatorId","order":"ASCENDING"}],"queryScope":"COLLECTION"},{"collectionGroup":"reviews","fields":[{"fieldPath":"reviewerId","order":"ASCENDING"},{"fieldPath":"scheduleMonth","order":"DESCENDING"}],"queryScope":"COLLECTION"},{"collectionGroup":"schedules","fields":[{"fieldPath":"scheduleMonth","order":"ASCENDING"},{"fieldPath":"unitCode","order":"ASCENDING"}],"queryScope":"COLLECTION"},{"collectionGroup":"auditLogs","fields":[{"fieldPath":"userId","order":"ASCENDING"},{"fieldPath":"createdAt","order":"DESCENDING"}],"queryScope":"COLLECTION"},{"collectionGroup":"indicators","fields":[{"fieldPath":"group","order":"ASCENDING"},{"fieldPath":"status","order":"ASCENDING"}],"queryScope":"COLLECTION"},{"collectionGroup":"reviewTasks","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"deadline","order":"ASCENDING"}],"queryScope":"COLLECTION"},{"collectionGroup":"reviewRecords","fields":[{"fieldPath":"indicatorId","order":"ASCENDING"},{"fieldPath":"year","order":"ASCENDING"}],"queryScope":"COLLECTION"},{"collectionGroup":"reviewTasks","fields":[{"fieldPath":"indicatorId","order":"ASCENDING"},{"fieldPath":"year","order":"ASCENDING"}],"queryScope":"COLLECTION"}]}
+{
+  "fieldOverrides": [],
+  "indexes": [
+    {
+      "collectionGroup": "reviews",
+      "fields": [
+        {
+          "fieldPath": "unitCode",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "scheduleMonth",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "indicatorId",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "reviews",
+      "fields": [
+        {
+          "fieldPath": "reviewerId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "scheduleMonth",
+          "order": "DESCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "schedules",
+      "fields": [
+        {
+          "fieldPath": "scheduleMonth",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "unitCode",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "auditLogs",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "indicators",
+      "fields": [
+        {
+          "fieldPath": "group",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "reviewTasks",
+      "fields": [
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "deadline",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "reviewRecords",
+      "fields": [
+        {
+          "fieldPath": "indicatorId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "year",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "reviewTasks",
+      "fields": [
+        {
+          "fieldPath": "indicatorId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "year",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "reviewTasks",
+      "fields": [
+        {
+          "fieldPath": "scheduleEndYear",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "scheduleEndMonth",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "reviewSummaryRetries",
+      "fields": [
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "nextAttemptAt",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "notifications",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "reviewSummaries",
+      "fields": [
+        {
+          "fieldPath": "indicatorId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "scheduleStartKey",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "reviewRecords",
+      "fields": [
+        {
+          "fieldPath": "indicatorId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "scheduleStartYear",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "scheduleStartMonth",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "indicatorVersionAtSchedule",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "reviewRecords",
+      "fields": [
+        {
+          "fieldPath": "scheduleEndYear",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "scheduleEndMonth",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "reviewSummaries",
+      "fields": [
+        {
+          "fieldPath": "indicatorId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "scheduleStartYear",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "scheduleStartMonth",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "indicatorVersion",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
+      "collectionGroup": "reviewSummaries",
+      "fields": [
+        {
+          "fieldPath": "scheduleEndYear",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "scheduleEndMonth",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    }
+  ]
+}

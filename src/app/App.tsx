@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowRight,
   BookOpenCheck,
+  Bell,
   CalendarDays,
   Check,
   ChevronLeft,
@@ -18,7 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { AuthProvider, useAuth } from "../lib/auth";
-import { doc } from "../lib/db";
+import { collection, doc, getDocs, limit, orderBy, query, serverTimestamp, updateDoc, where } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
 import { getDocCacheFirst } from "../lib/cacheFirst";
@@ -282,6 +283,53 @@ function Sidebar({
   const displayName = user?.name ?? "";
   const staffId = user?.staffId ?? "";
   const unitName = user?.unitName || user?.unitCode || "";
+  const [notifications, setNotifications] = useState<{
+    id: string; title: string; message: string; read: boolean; createdAt: unknown;
+  }[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  async function toggleNotifications() {
+    const opening = !notificationsOpen;
+    setNotificationsOpen(opening);
+    if (!opening || !staffId) return;
+    setNotificationsLoading(true);
+    try {
+      const snapshot = await getDocs(
+        query(
+          collection(getFirebaseDb(), "notifications"),
+          where("userId", "==", staffId),
+          orderBy("createdAt", "desc"),
+          limit(20),
+        ),
+      );
+      setNotifications(snapshot.docs.map((item) => {
+        const data = item.data() as Record<string, unknown>;
+        return {
+          id: item.id,
+          title: typeof data.title === "string" ? data.title : "系統通知",
+          message: typeof data.message === "string" ? data.message : "",
+          read: data.read === true,
+          createdAt: data.createdAt,
+        };
+      }));
+    } catch {
+      setNotifications([]);
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }
+  async function markNotificationRead(id: string) {
+    try {
+      await updateDoc(doc(getFirebaseDb(), "notifications", id), {
+        read: true,
+        readAt: serverTimestamp(),
+      });
+      setNotifications((items) => items.map((item) => item.id === id ? { ...item, read: true } : item));
+    } catch {
+      // 若規則或網路拒絕更新，保留未讀狀態供稍後重試。
+    }
+  }
+  const unreadNotifications = notifications.filter((item) => !item.read).length;
   return (
     <>
       {mobileOpen && (
@@ -305,6 +353,39 @@ function Sidebar({
           >
             <X size={18} />
           </button>
+        </div>
+        <div className="sidebar-notifications">
+          <button
+            className="notification-trigger"
+            type="button"
+            aria-label={`系統通知，${unreadNotifications} 則未讀`}
+            aria-expanded={notificationsOpen}
+            onClick={() => void toggleNotifications()}
+          >
+            <Bell size={17} />
+            <span>系統通知</span>
+            {unreadNotifications > 0 && <b className="notification-count">{unreadNotifications}</b>}
+          </button>
+          {notificationsOpen && (
+            <div className="notification-popover" role="region" aria-label="系統通知清單">
+              <div className="notification-popover-title">最近通知</div>
+              {notificationsLoading ? (
+                <p className="settings-note">載入中…</p>
+              ) : notifications.length === 0 ? (
+                <p className="settings-note">目前沒有通知。</p>
+              ) : notifications.map((item) => (
+                <article className={`notification-item${item.read ? " read" : " unread"}`} key={item.id}>
+                  <b>{item.title}</b>
+                  <p>{item.message}</p>
+                  {!item.read && (
+                    <button type="button" className="notification-mark-read" onClick={() => void markNotificationRead(item.id)}>
+                      標記已讀
+                    </button>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
         </div>
         <nav className="main-nav" aria-label="主要導覽">
           {NAV_GROUPS.map((group) => (

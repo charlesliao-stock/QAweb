@@ -40,6 +40,36 @@ service cloud.firestore {
         && id in group.data.get('slotIds', []);
     }
 
+    // 任務建立後，指標版本／閾值／審查區間為摘要依據，不得隨一般任務狀態更新而改寫。
+    function preservesTaskSnapshot() {
+      return request.resource.data.get('indicatorId', null) == resource.data.get('indicatorId', null)
+        && request.resource.data.get('year', null) == resource.data.get('year', null)
+        && request.resource.data.get('month', null) == resource.data.get('month', null)
+        && request.resource.data.get('unitId', null) == resource.data.get('unitId', null)
+        && request.resource.data.get('indicatorVersionAtSchedule', null) == resource.data.get('indicatorVersionAtSchedule', null)
+        && request.resource.data.get('thresholdAtSchedule', null) == resource.data.get('thresholdAtSchedule', null)
+        && request.resource.data.get('thresholdRuleAtSchedule', null) == resource.data.get('thresholdRuleAtSchedule', null)
+        && request.resource.data.get('scheduleStartYear', null) == resource.data.get('scheduleStartYear', null)
+        && request.resource.data.get('scheduleStartMonth', null) == resource.data.get('scheduleStartMonth', null)
+        && request.resource.data.get('scheduleEndYear', null) == resource.data.get('scheduleEndYear', null)
+        && request.resource.data.get('scheduleEndMonth', null) == resource.data.get('scheduleEndMonth', null);
+    }
+
+    // 原始審查內容可依核准流程修正，但指標／任務／閾值／區間快照不可變。
+    function preservesReviewSnapshot() {
+      return request.resource.data.get('indicatorId', null) == resource.data.get('indicatorId', null)
+        && request.resource.data.get('year', null) == resource.data.get('year', null)
+        && request.resource.data.get('month', null) == resource.data.get('month', null)
+        && request.resource.data.get('unitId', null) == resource.data.get('unitId', null)
+        && request.resource.data.get('indicatorVersionAtSchedule', null) == resource.data.get('indicatorVersionAtSchedule', null)
+        && request.resource.data.get('thresholdAtSchedule', null) == resource.data.get('thresholdAtSchedule', null)
+        && request.resource.data.get('thresholdRuleAtSchedule', null) == resource.data.get('thresholdRuleAtSchedule', null)
+        && request.resource.data.get('scheduleStartYear', null) == resource.data.get('scheduleStartYear', null)
+        && request.resource.data.get('scheduleStartMonth', null) == resource.data.get('scheduleStartMonth', null)
+        && request.resource.data.get('scheduleEndYear', null) == resource.data.get('scheduleEndYear', null)
+        && request.resource.data.get('scheduleEndMonth', null) == resource.data.get('scheduleEndMonth', null);
+    }
+
     function isGanShi() {
       return hasRole('品管執行幹事') || isAdmin();
     }
@@ -62,6 +92,22 @@ service cloud.firestore {
         && request.resource.data.get('roles', []) == resource.data.get('roles', [])
         && request.resource.data.get('status', '') == resource.data.get('status', '')));
       allow delete: if isAdmin();
+    }
+
+    // 預計算品質摘要：登入者唯讀，僅 Admin SDK 後端可寫。
+    match /reviewSummaries/{id} {
+      allow read: if isAuthed();
+      allow write: if false;
+    }
+
+    // 持久化通知：僅文件所屬使用者可讀取／標記已讀；不得由用戶端建立或刪除。
+    match /notifications/{id} {
+      allow get, list: if isAuthed() && resource.data.get('userId', '') == staffId();
+      allow update: if isAuthed()
+        && resource.data.get('userId', '') == staffId()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt'])
+        && request.resource.data.get('read', false) is bool;
+      allow create, delete: if false;
     }
 
     // 系統參數：登入可讀，管理員可寫
@@ -134,7 +180,8 @@ service cloud.firestore {
 
     // 指標排程（v1.8.0）：審查任務為業務資料，第一階段登入者可讀寫
     match /reviewTasks/{id} {
-      allow read, write: if isAuthed();
+      allow read, create, delete: if isAuthed();
+      allow update: if isAuthed() && preservesTaskSnapshot();
     }
 
     // 週期排程共用配額名額清單：不含個人審查資料，排程幹事以上維護。
@@ -149,7 +196,7 @@ service cloud.firestore {
       allow read: if isAuthed();
       allow create: if isAuthed()
         && (!('quotaGroupId' in request.resource.data) || validQuotaSlot(id));
-      allow update: if isAuthed() && (
+      allow update: if isAuthed() && preservesReviewSnapshot() && (
         (!('quotaGroupId' in resource.data)
           && !('quotaGroupId' in request.resource.data))
         || ('quotaGroupId' in resource.data

@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   query,
   serverTimestamp,
@@ -17,6 +18,7 @@ import {
   type IndicatorAssignment,
   type IndicatorSchedule,
 } from "./scheduling";
+import { effectiveThreshold } from "./indicators";
 
 /**
  * 依排程展開審查任務。
@@ -30,6 +32,13 @@ export async function buildTasksFromSchedule(
   actor: { id: string; name: string },
   deadlineDay = 10,
 ): Promise<number> {
+  const indicatorSnap = await getDoc(doc(db, "indicators", sched.indicatorId));
+  const indicatorData = indicatorSnap.exists()
+    ? (indicatorSnap.data() as Record<string, unknown>)
+    : {};
+  const indicatorVersionAtSchedule =
+    typeof indicatorData.version === "string" ? indicatorData.version : "v1.0";
+  const thresholdAtSchedule = effectiveThreshold(indicatorData);
   const reviewMonths = scheduleReviewCalendarMonths(sched);
   const items = assignments?.items ?? [];
   const quotaByMonth = new Map<
@@ -201,6 +210,13 @@ export async function buildTasksFromSchedule(
         ...quota,
         scheduleCategory: sched.category,
         schedulePeriod: sched.period,
+        indicatorVersionAtSchedule,
+        thresholdAtSchedule,
+        thresholdRuleAtSchedule: ">=",
+        scheduleStartYear: quotaInterval?.start.year ?? task.year,
+        scheduleStartMonth: quotaInterval?.start.month ?? task.month,
+        scheduleEndYear: quotaInterval?.end.year ?? task.year,
+        scheduleEndMonth: quotaInterval?.end.month ?? task.month,
       });
       if (
         quotaGroupId &&

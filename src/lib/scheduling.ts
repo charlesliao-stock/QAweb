@@ -385,6 +385,14 @@ export interface ReviewTask {
   /** 新任務來源快照，用於重新產生時只重建同一排程，不波及其他類別。 */
   scheduleCategory?: "year" | "academic" | "temp";
   schedulePeriod?: string;
+  /** 指標排程建立時的不可變摘要依據；舊任務缺值時由讀取端相容處理。 */
+  indicatorVersionAtSchedule?: string;
+  thresholdAtSchedule?: number;
+  thresholdRuleAtSchedule?: ">=";
+  scheduleStartYear?: number;
+  scheduleStartMonth?: number;
+  scheduleEndYear?: number;
+  scheduleEndMonth?: number;
   /** 截止日 YYYY-MM-DD（審查月份次月＋系統參數「補審截止（次月幾日）」） */
   deadline: string;
   status: ReviewTaskStatus;

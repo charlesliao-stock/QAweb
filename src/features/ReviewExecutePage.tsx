@@ -177,6 +177,23 @@ function taskFromDoc(id: string, data: Record<string, unknown>): TaskFull {
       typeof data.quotaIntervalEndMonth === "number"
         ? data.quotaIntervalEndMonth
         : undefined,
+    indicatorVersionAtSchedule:
+      typeof data.indicatorVersionAtSchedule === "string"
+        ? data.indicatorVersionAtSchedule
+        : undefined,
+    thresholdAtSchedule:
+      typeof data.thresholdAtSchedule === "number"
+        ? data.thresholdAtSchedule
+        : undefined,
+    thresholdRuleAtSchedule: data.thresholdRuleAtSchedule === ">=" ? ">=" : undefined,
+    scheduleStartYear:
+      typeof data.scheduleStartYear === "number" ? data.scheduleStartYear : undefined,
+    scheduleStartMonth:
+      typeof data.scheduleStartMonth === "number" ? data.scheduleStartMonth : undefined,
+    scheduleEndYear:
+      typeof data.scheduleEndYear === "number" ? data.scheduleEndYear : undefined,
+    scheduleEndMonth:
+      typeof data.scheduleEndMonth === "number" ? data.scheduleEndMonth : undefined,
     deadline: String(data.deadline ?? ""),
     status: st === "done" ? "done" : st === "locked" ? "locked" : "pending",
     completedAt: data.completedAt,
@@ -746,6 +763,24 @@ export function ReviewExecutePage({
           reviewedPersonName: personName.trim(),
           bedNo: bedNo.trim(),
           auditItem: selectedAuditItem,
+          ...(task.indicatorVersionAtSchedule
+            ? { indicatorVersionAtSchedule: task.indicatorVersionAtSchedule }
+            : {}),
+          ...(typeof task.thresholdAtSchedule === "number"
+            ? { thresholdAtSchedule: task.thresholdAtSchedule }
+            : {}),
+          ...(typeof task.scheduleStartYear === "number"
+            ? { scheduleStartYear: task.scheduleStartYear }
+            : {}),
+          ...(typeof task.scheduleStartMonth === "number"
+            ? { scheduleStartMonth: task.scheduleStartMonth }
+            : {}),
+          ...(typeof task.scheduleEndYear === "number"
+            ? { scheduleEndYear: task.scheduleEndYear }
+            : {}),
+          ...(typeof task.scheduleEndMonth === "number"
+            ? { scheduleEndMonth: task.scheduleEndMonth }
+            : {}),
         };
         const changes: Record<string, { before: unknown; after: unknown }> = {};
         for (const [key, after] of Object.entries(nextValues)) {
@@ -839,6 +874,17 @@ export function ReviewExecutePage({
           reviewerId: task.reviewerId,
           year: task.year,
           month: task.month,
+          ...(task.indicatorVersionAtSchedule
+            ? { indicatorVersionAtSchedule: task.indicatorVersionAtSchedule }
+            : {}),
+          ...(typeof task.thresholdAtSchedule === "number"
+            ? { thresholdAtSchedule: task.thresholdAtSchedule }
+            : {}),
+          thresholdRuleAtSchedule: task.thresholdRuleAtSchedule ?? ">=",
+          scheduleStartYear: task.scheduleStartYear ?? task.year,
+          scheduleStartMonth: task.scheduleStartMonth ?? task.month,
+          scheduleEndYear: task.scheduleEndYear ?? task.year,
+          scheduleEndMonth: task.scheduleEndMonth ?? task.month,
           caseSeq: seq,
           reviewDate,
           reviewerEmpNo: reviewerEmpNo.trim(),

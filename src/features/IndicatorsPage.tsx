@@ -161,6 +161,7 @@ interface IndicatorForm {
   /** 題目分組（「啟用題目分組」開關控制；不是每一份指標都有） */
   questionGroups: QuestionGroup[];
   useQuestionGroups: boolean;
+  groupScoring: boolean;
   /** 需要病人床號（v1.15.0）：審查表單顯示床號欄位且列為必填 */
   requireBedNo: boolean;
   /** 需要受審人員資料（v1.17）：審查表單顯示「職編」欄位且列為必填 */
@@ -183,6 +184,7 @@ function emptyForm(): IndicatorForm {
     auditItems: [],
     questionGroups: [],
     useQuestionGroups: false,
+    groupScoring: false,
     requireBedNo: true,
     requireReviewee: true,
   };
@@ -205,6 +207,7 @@ export interface AuditFormValue {
   auditItems: string[];
   questionGroups: QuestionGroup[];
   useQuestionGroups: boolean;
+  groupScoring: boolean;
   requireBedNo: boolean;
   requireReviewee: boolean;
 }
@@ -215,6 +218,7 @@ export function emptyAuditFormValue(): AuditFormValue {
     auditItems: [],
     questionGroups: [],
     useQuestionGroups: false,
+    groupScoring: false,
     requireBedNo: true,
     requireReviewee: true,
   };
@@ -641,6 +645,20 @@ function AuditFormEditor({
       <p className="settings-note">
         開啟後可建立多個分組、一個分組下可建多個題目；關閉僅隱藏分組顯示，分組與題目歸屬保留，重新開啟後恢復。
       </p>
+      <button
+        type="button"
+        className={`mode-toggle${value.groupScoring ? " on" : ""}`}
+        onClick={() => onChange({ groupScoring: !value.groupScoring })}
+        aria-pressed={value.groupScoring}
+        disabled={!value.useQuestionGroups}
+        title={!value.useQuestionGroups ? "請先啟用題目分組" : undefined}
+      >
+        <span>啟用分組計分</span>
+        <span className="toggle-track" />
+      </button>
+      <p className="settings-note">
+        開啟後審查結果將依各分組獨立計分；需先啟用題目分組。關閉時維持指標整體計分。
+      </p>
       <label className="check-row" style={{ marginTop: 8 }}>
         <input
           type="checkbox"
@@ -1027,6 +1045,7 @@ export function IndicatorsPage({
           : [],
         questionGroups: mergedGroups,
         useQuestionGroups,
+        groupScoring: data.groupScoring === true,
         requireBedNo: data.requireBedNo === true,
         // v1.17：舊資料缺值視為 false（不主動回寫，下次存檔才寫入）
         requireReviewee: data.requireReviewee === true,
@@ -1298,6 +1317,7 @@ export function IndicatorsPage({
         auditItems: form.auditItems.map((item) => item.trim()).filter(Boolean),
         questionGroups,
         useQuestionGroups: form.useQuestionGroups,
+        groupScoring: form.groupScoring,
         requireBedNo: form.requireBedNo,
         requireReviewee: form.requireReviewee,
         updatedAt: serverTimestamp(),
@@ -1335,6 +1355,9 @@ export function IndicatorsPage({
           auditItems: form.auditItems
             .map((item) => item.trim())
             .filter(Boolean),
+          questionGroups,
+          useQuestionGroups: form.useQuestionGroups,
+          groupScoring: form.groupScoring,
           effectiveDate: new Date().toISOString().slice(0, 10),
           note: "初版",
           createdAt: serverTimestamp(),
@@ -2083,6 +2106,7 @@ export function IndicatorsPage({
                   auditItems: form.auditItems,
                   questionGroups: form.questionGroups,
                   useQuestionGroups: form.useQuestionGroups,
+                  groupScoring: form.groupScoring,
                   requireBedNo: form.requireBedNo,
                   requireReviewee: form.requireReviewee,
                 }}
@@ -2264,6 +2288,7 @@ function auditFormFromIndicatorData(
       typeof data.useQuestionGroups === "boolean"
         ? data.useQuestionGroups
         : normalized.useGroups,
+    groupScoring: data.groupScoring === true,
     requireBedNo: data.requireBedNo === true,
     requireReviewee: data.requireReviewee === true,
   };
@@ -2295,6 +2320,7 @@ function importedAuditPart(form: AuditFormValue): ImportedAuditForm {
     questions: form.questions,
     questionGroups: form.questionGroups,
     useQuestionGroups: form.useQuestionGroups,
+    groupScoring: form.groupScoring,
   };
 }
 
@@ -2891,6 +2917,7 @@ function BatchAddDialog({
           .filter(Boolean),
         questionGroups,
         useQuestionGroups: row.audit.useQuestionGroups,
+        groupScoring: row.audit.groupScoring,
         requireBedNo: row.audit.requireBedNo,
         requireReviewee: row.audit.requireReviewee,
         version: "v1.0",
@@ -2909,6 +2936,9 @@ function BatchAddDialog({
         auditItems: row.audit.auditItems
           .map((item) => item.trim())
           .filter(Boolean),
+        questionGroups,
+        useQuestionGroups: row.audit.useQuestionGroups,
+        groupScoring: row.audit.groupScoring,
         effectiveDate: new Date().toISOString().slice(0, 10),
         note: "初版",
         createdAt: serverTimestamp(),
@@ -2965,6 +2995,7 @@ function BatchAddDialog({
               : [],
             questionGroups,
             useQuestionGroups: merged.useQuestionGroups,
+            groupScoring: merged.groupScoring,
             effectiveDate: new Date().toISOString().slice(0, 10),
             note: `批次匯入審核表（${mergeMode === "replace" ? "取代" : "追加"}）`,
             createdAt: serverTimestamp(),
@@ -2975,6 +3006,7 @@ function BatchAddDialog({
           questions,
           questionGroups,
           useQuestionGroups: merged.useQuestionGroups,
+          groupScoring: merged.groupScoring,
           version: newVersion,
           hasReviewData: true,
           updatedAt: serverTimestamp(),
@@ -2986,6 +3018,7 @@ function BatchAddDialog({
           questions,
           questionGroups,
           useQuestionGroups: merged.useQuestionGroups,
+          groupScoring: merged.groupScoring,
           updatedAt: serverTimestamp(),
           updatedBy: user.staffId,
         });

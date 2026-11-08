@@ -13,6 +13,7 @@ export interface ImportedAuditForm {
   questions: AuditQuestion[];
   questionGroups: QuestionGroup[];
   useQuestionGroups: boolean;
+  groupScoring: boolean;
 }
 
 export type AuditGroupResolution =
@@ -72,6 +73,7 @@ export function mergeImportedAuditForm(
       questions: importedQuestions,
       questionGroups: importedGroups,
       useQuestionGroups: imported.useQuestionGroups || importedGroups.length > 0,
+      groupScoring: imported.groupScoring,
     };
   }
 
@@ -139,5 +141,6 @@ export function mergeImportedAuditForm(
       existing.useQuestionGroups ||
       imported.useQuestionGroups ||
       groups.length > 0,
+    groupScoring: existing.groupScoring || imported.groupScoring,
   };
 }

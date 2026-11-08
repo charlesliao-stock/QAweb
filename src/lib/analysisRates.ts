@@ -31,6 +31,10 @@ export interface AnalysisRecord {
   month: number;
   /** 正確率％（一位小數）；滿分 0 時為 null */
   rate: number | null;
+  /** 排程建立時固定的閾值；舊／外部匯入紀錄可能缺值。 */
+  thresholdAtSchedule?: number;
+  /** 審查任務建立時的指標版本；舊紀錄可能缺值。 */
+  indicatorVersion?: string;
   answers: AnalysisAnswer[];
   /** 被審人員職編（v1.27.0 下探 L2 用） */
   personEmpNo: string;
@@ -68,7 +72,9 @@ export function passRateOf(
   threshold: number,
 ): PassRate {
   const total = records.length;
-  const pass = records.filter((r) => isPassing(r.rate, threshold)).length;
+  const pass = records.filter((r) =>
+    isPassing(r.rate, typeof r.thresholdAtSchedule === "number" ? r.thresholdAtSchedule : threshold),
+  ).length;
   return {
     pass,
     total,
@@ -235,6 +241,7 @@ export function recordsInMonths(
 /* ================= 各選項得分狀況（文件圖示／指標選項明細共用） ================= */
 
 export interface OptionDetailRow {
+  indicatorVersion?: string;
   questionId: string;
   itemText: string;
   order: number;
@@ -292,4 +299,133 @@ export function optionDetailRows(
             : null,
       };
     });
+}
+
+
+export interface QuestionErrorRow {
+  indicatorVersion: string;
+  sourceVersions?: string[];
+  questionId: string;
+  itemText: string;
+  yes: number;
+  no: number;
+  notApplicable: number;
+  validCount: number;
+  errorRate: number | null;
+}
+
+/**
+ * 錯題排行：以「否」為錯誤，「不適用」不納入錯誤率分母；
+ * 跨版本按完全相同的題目文字合併排行並列出來源版本；僅供錯誤量排行，不代表版本等價／趨勢可合併。
+ * 每筆紀錄同一題只計一次，重複 questionId 以最後一個答案為準。
+ */
+export function questionErrorRows(records: AnalysisRecord[]): QuestionErrorRow[] {
+  const counts = new Map<string, QuestionErrorRow>();
+  const versionsByText = new Map<string, Set<string>>();
+  for (const record of records) {
+    const version = record.indicatorVersion || "版本未記錄";
+    const latest = new Map<string, AnalysisAnswer>();
+    for (const answer of record.answers) {
+      if (answer.questionId) latest.set(answer.questionId, answer);
+    }
+    for (const answer of latest.values()) {
+      const itemText = (answer.itemText || "（題目文字未保存）").trim().replace(/\s+/g, " ");
+      const key = itemText;
+      const versions = versionsByText.get(key) ?? new Set<string>();
+      versions.add(version);
+      versionsByText.set(key, versions);
+      const row = counts.get(key) ?? {
+        indicatorVersion: version,
+        questionId: answer.questionId,
+        itemText,
+        yes: 0,
+        no: 0,
+        notApplicable: 0,
+        validCount: 0,
+        errorRate: null,
+      };
+      if (answer.optionLabel === "是") row.yes += 1;
+      else if (answer.optionLabel === "否") row.no += 1;
+      else if (answer.optionLabel === "不適用") row.notApplicable += 1;
+      counts.set(key, row);
+    }
+  }
+  return [...counts.entries()]
+    .map(([key, row]) => {
+      const validCount = row.yes + row.no;
+      const sourceVersions = [...(versionsByText.get(key) ?? [])].sort((a, b) => a.localeCompare(b, "zh-Hant"));
+      return {
+        ...row,
+        sourceVersions,
+        indicatorVersion: sourceVersions.length > 1 ? `跨版本（${sourceVersions.join("、")}）` : sourceVersions[0] ?? "版本未記錄",
+        validCount,
+        errorRate: validCount > 0 ? round1((row.no / validCount) * 100) : null,
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.no - a.no ||
+        (b.errorRate ?? -1) - (a.errorRate ?? -1) ||
+        a.indicatorVersion.localeCompare(b.indicatorVersion, "zh-Hant") ||
+        a.itemText.localeCompare(b.itemText, "zh-Hant"),
+    );
+}
+
+/** 由預存摘要的分組題目選項計數產生錯題排行，不讀逐筆審查資料。 */
+export function questionErrorRowsFromSummaries(
+  summaries: {
+    indicatorVersion: string;
+    questionOptions: {
+      questionId: string;
+      itemText: string;
+      yes: number;
+      no: number;
+      notApplicable: number;
+    }[];
+  }[],
+): QuestionErrorRow[] {
+  const totals = new Map<string, QuestionErrorRow>();
+  const versionsByText = new Map<string, Set<string>>();
+  for (const summary of summaries) {
+    for (const question of summary.questionOptions) {
+      const itemText = (question.itemText || "（題目文字未保存）").trim().replace(/\s+/g, " ");
+      const key = itemText;
+      const versions = versionsByText.get(key) ?? new Set<string>();
+      versions.add(summary.indicatorVersion || "版本未記錄");
+      versionsByText.set(key, versions);
+      const row = totals.get(key) ?? {
+        indicatorVersion: summary.indicatorVersion || "版本未記錄",
+        questionId: question.questionId,
+        itemText,
+        yes: 0,
+        no: 0,
+        notApplicable: 0,
+        validCount: 0,
+        errorRate: null,
+      };
+      row.yes += question.yes;
+      row.no += question.no;
+      row.notApplicable += question.notApplicable;
+      totals.set(key, row);
+    }
+  }
+  return [...totals.entries()]
+    .map(([key, row]) => {
+      const validCount = row.yes + row.no;
+      const sourceVersions = [...(versionsByText.get(key) ?? [])].sort((a, b) => a.localeCompare(b, "zh-Hant"));
+      return {
+        ...row,
+        sourceVersions,
+        indicatorVersion: sourceVersions.length > 1 ? `跨版本（${sourceVersions.join("、")}）` : sourceVersions[0] ?? "版本未記錄",
+        validCount,
+        errorRate: validCount > 0 ? round1((row.no / validCount) * 100) : null,
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.no - a.no ||
+        (b.errorRate ?? -1) - (a.errorRate ?? -1) ||
+        a.indicatorVersion.localeCompare(b.indicatorVersion, "zh-Hant") ||
+        a.itemText.localeCompare(b.itemText, "zh-Hant"),
+    );
 }
