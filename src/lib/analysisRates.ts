@@ -203,18 +203,20 @@ export interface TransposedPersonMatrix {
 }
 
 /**
- * 下探 L2 轉置（v1.27.1）：直向＝選項（題目，每列一題），橫向＝人員姓名
+ * 下探 L2 轉置（v1.27.1）：直向＝選項（題目，每列一題），橫向＝人員
  * （每欄一人，順序維持 personOptionRows 的順序），中間＝審查結果。
- * 欄位標頭為遮罩後姓名，無姓名則顯示職編。
+ * 職編完整顯示；姓名只顯示遮罩後版本，無職編時以遮罩姓名作標頭。
  */
 export function transposePersonOptionRows(
   rows: PersonOptionRow[],
   questions: AuditQuestion[],
 ): TransposedPersonMatrix {
   return {
-    headers: rows.map(
-      (r) => maskName(r.personName) || r.personEmpNo || "—",
-    ),
+    headers: rows.map((r) => {
+      const maskedName = maskName(r.personName);
+      if (r.personEmpNo && maskedName) return `${r.personEmpNo}／${maskedName}`;
+      return r.personEmpNo || maskedName || "—";
+    }),
     rows: questions.map((q) => ({
       questionId: q.id,
       itemText: q.itemText,

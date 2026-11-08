@@ -15,7 +15,7 @@ const { build } = await import(
 );
 writeFileSync(
   "/tmp/review-summaries-test.ts",
-  `export { buildReviewSummaries } from "${root}/src/lib/reviewSummaries";\nexport { questionErrorRows, questionErrorRowsFromSummaries } from "${root}/src/lib/analysisRates";`,
+  `export { buildReviewSummaries } from "${root}/src/lib/reviewSummaries";\nexport { questionErrorRows, questionErrorRowsFromSummaries, transposePersonOptionRows } from "${root}/src/lib/analysisRates";`,
 );
 await build({
   entryPoints: ["/tmp/review-summaries-test.ts"],
@@ -121,6 +121,14 @@ const summaryErrors = lib.questionErrorRowsFromSummaries([
   { indicatorVersion: "v1.1", questionOptions: [{ questionId: "q2", itemText: "共同題", yes: 1, no: 4, notApplicable: 0 }] },
 ]);
 assert("摘要錯題跨版本合併且不納入不適用", summaryErrors[0]?.no === 7 && summaryErrors[0]?.validCount === 10 && summaryErrors[0]?.sourceVersions?.length === 2);
+const idHeader = lib.transposePersonOptionRows([
+  { personEmpNo: "A00123", personName: "王小明", answers: new Map(), rate: 90, passing: true },
+], []);
+const nameHeader = lib.transposePersonOptionRows([
+  { personEmpNo: "", personName: "王小明", answers: new Map(), rate: 90, passing: true },
+], []);
+assert("下探職編完整顯示且姓名中間字遮罩", idHeader.headers[0] === "A00123／王O明");
+assert("缺職編時以下探遮罩姓名顯示", nameHeader.headers[0] === "王O明");
 
 if (failures) {
   console.error(`${failures} test(s) failed`);

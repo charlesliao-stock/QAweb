@@ -172,7 +172,7 @@ for (const file of tsxFiles) {
 a(`全部 data-table 皆包橫捲容器（未包：${unwrapped.join(",") || "無"}）`, unwrapped.length === 0);
 
 // 目前系統版號
-a('版號 1.33.0', version.includes('VERSION = "1.33.0"'));
+a('版號 1.33.1', version.includes('VERSION = "1.33.1"'));
 
 console.log(f === 0 ? "v1.32.1 RWD：全部通過" : `v1.32.1 RWD：${f} 項失敗`);
 process.exit(f === 0 ? 0 : 1);
