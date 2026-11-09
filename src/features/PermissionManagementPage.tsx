@@ -4,8 +4,7 @@ import { EmptyState, PageHeading, SectionTitle} from "../components/ui";
 import { collection, doc, getDocsFromServer, serverTimestamp, writeBatch} from "../lib/db";
 import { getFirebaseDb} from "../lib/firebase";
 import { isDemoMode} from "../lib/demoMode";
-import { getCachedRefCollection} from "../lib/refCache";
-import { getDocsCacheFirst} from "../lib/cacheFirst";
+import { invalidateRefCollection} from "../lib/refCache";
 import { useAuth} from "../lib/auth";
 import { usePermissions} from "../lib/usePermissions";
 import {
@@ -291,28 +290,31 @@ setResetBusy(false);
 }
 
 /**
-* 範本列只取系統實際建立的職稱／角色（v1.39.2，不寫死名單）：
+* 範本列只取系統實際建立的職稱／角色（v1.39.2，不寫死名單；
+* v1.39.3 進頁改走伺服器讀取）：
 * 群組目標取 kind='group' 的角色文件名稱、單位目標取 titles 文件名稱、
-* 單位角色目標取 kind='unit' 的角色文件名稱（去重；舊文件無 kind 時
-* 以名稱清單分類）；系統管理員、一般人員永不列入。
+* 單位角色目標取 kind='unit' 的角色文件名稱（去重；無 kind 時以名稱
+* 分類：含「單位」→單位角色，其餘→群組）；系統管理員、一般人員
+* 永不列入。
 * 範本不存在時以全不勾、預設不跨顯示，改了即建立範本文件。
-* 角色／職稱文件已由上方 Promise.all 重新載入（refCache 內含 roles／titles）。
+* 進頁一律讀伺服器（v1.39.3）：cache-first 在此頁會吃到陳舊快照——
+* 記憶體快取無 TTL、持久快取非空即回、forceServerRefetch 從未被接上，
+* 他處建立的角色／職稱進不了本頁，「重新載入」也刷不掉。管理員專用頁、
+* 每進頁 3 次小集合讀取，正確性優先。讀前先失效 refCache，讓其他頁
+* 下次也重讀。
 */
 const loadData = useCallback(async () => {
 setLoading(true);
 setLoadError("");
 try {
 const db = getFirebaseDb();
+invalidateRefCollection("permissionTemplates");
+invalidateRefCollection("roles");
+invalidateRefCollection("titles");
 const [templateSnapshot, roleSnapshot, titleSnapshot] = await Promise.all([
-getCachedRefCollection("permissionTemplates", () =>
-getDocsCacheFirst(collection(db, "permissionTemplates")),
-),
-getCachedRefCollection("roles", () =>
-getDocsCacheFirst(collection(db, "roles")),
-),
-getCachedRefCollection("titles", () =>
-getDocsCacheFirst(collection(db, "titles")),
-),
+getDocsFromServer(collection(db, "permissionTemplates")),
+getDocsFromServer(collection(db, "roles")),
+getDocsFromServer(collection(db, "titles")),
 ]);
 const templates = new Map<
 string,

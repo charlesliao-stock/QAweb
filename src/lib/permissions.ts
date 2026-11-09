@@ -1,9 +1,5 @@
 import type { PageId } from "../types";
-import {
-  isGroupScopedRole,
-  isUnitLevelRole,
-  type Membership,
-} from "./roleIdentity";
+import type { Membership } from "./roleIdentity";
 
 /** 導覽頁面與功能權限使用同一矩陣；尚未實作的 reviewers 不列入。 */
 export const PAGE_PERMISSION_KEYS = {
@@ -121,12 +117,16 @@ export function parseTemplateCategory(raw: unknown): TemplateCategory | undefine
 }
 
 /**
- * 權限頁列來源（v1.39.2）：只取系統實際建立的職稱／角色，不寫死名單。
+ * 權限頁列來源（v1.39.2 只取系統實際建立的職稱／角色，不寫死名單；
+ * v1.39.3 分類改穩健名稱判斷）：
  * 選單位時載入單位內已設定的職稱，選群組時載入群組內的角色；
  * 還沒建立任何職稱／角色時，三個目標皆為空列。
- * 角色分類：kind 有值時以 kind 為準（group／unit）；舊文件無 kind 時
- * 以名稱清單分類（不讀 groupId）；其餘名稱歸單位角色（v1.39.1 做法）。
- * 系統管理員、一般人員永不列入。
+ * 角色分類：kind 有值時以 kind 為準（group／unit）；v1.39 起新文件
+ * 不寫 kind，無 kind 時看名稱——含「單位」→單位角色，其餘一律→群組
+ *（舊版只認 10 個固定名稱，「品管召集人」「組長」「組員」等會被誤歸
+ * 單位角色、群組目標看不到，這就是 v1.39.3 要修的 bug）。
+ * 分類永遠不靜默丟名：任何角色名至少出現在一個目標下。
+ * 職稱一律歸單位，不看 level 欄位。系統管理員、一般人員永不列入。
  */
 export function deriveTemplateRowNames(
   roles: Array<{ name: string; kind?: unknown }>,
@@ -148,16 +148,16 @@ export function deriveTemplateRowNames(
     }
     const kind =
       role.kind === "group" || role.kind === "unit" ? role.kind : undefined;
+    // 無 kind 時看名稱：含「單位」→單位角色，其餘一律→群組
+    //（不只認固定清單，任何新名稱都不會被靜默丟到別的目標）。
     const category: TemplateCategory =
       kind === "group"
         ? "group"
         : kind === "unit"
           ? "unitRole"
-          : isUnitLevelRole(name)
+          : name.includes("單位")
             ? "unitRole"
-            : isGroupScopedRole(name)
-              ? "group"
-              : "unitRole";
+            : "group";
     push(category, name);
   }
   for (const title of titles) {
