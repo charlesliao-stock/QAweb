@@ -34,7 +34,6 @@ import { maskName } from "../lib/mask";
 import { SEED_GROUP_NAMES } from "../lib/seed";
 import { reviewerDocId, UNCATEGORIZED_GROUP_ID, shouldAutoLinkReviewer } from "../lib/scheduling";
 import {
-  emptyPermissions,
   parseGroupScopeMode,
   parsePermissions,
   parseRoleKind,
@@ -1433,7 +1432,6 @@ export function GroupsPage({
           level: titleForm.level,
           scopeMode,
           unitCodes,
-          permissions: emptyPermissions(),
           ...auditFields(user.staffId, true),
         });
         batch.set(doc(collection(db, "auditLogs")), {
@@ -2116,7 +2114,6 @@ export function GroupsPage({
         unitCode,
         groupScopeMode,
         description: "",
-        permissions: emptyPermissions(),
         ...auditFields(user?.staffId ?? "", true),
       });
       batch.set(doc(collection(db, "auditLogs")), {
@@ -2129,7 +2126,7 @@ export function GroupsPage({
           ? `於群組 ${groupId} 建立角色「${name}」（${groupScopeMode === "all" ? "跨群組" : "不跨群組"}）`
           : `於單位 ${unitCode} 建立角色「${name}」`,
         before: null,
-        after: { name, kind, groupId, unitCode, groupScopeMode, permissions: emptyPermissions() },
+        after: { name, kind, groupId, unitCode, groupScopeMode },
         createdAt: serverTimestamp(),
       });
       await batch.commit();
@@ -2501,7 +2498,6 @@ export function GroupsPage({
             unitCode: "",
             groupScopeMode: "group",
             description: "",
-            permissions: emptyPermissions(),
             ...auditFields(me, true),
           });
           batch.set(doc(collection(getFirebaseDb(), "auditLogs")), {
@@ -2512,7 +2508,7 @@ export function GroupsPage({
             targetId: roleRef.id,
             detail: `批次於群組 ${groupId} 建立角色「${name}」（群組角色，不跨群組）`,
             before: null,
-            after: { name, kind: "group", groupId, groupScopeMode: "group", permissions: emptyPermissions() },
+            after: { name, kind: "group", groupId, groupScopeMode: "group" },
             createdAt: serverTimestamp(),
           });
         };
@@ -2637,7 +2633,6 @@ export function GroupsPage({
             level,
             scopeMode,
             unitCodes,
-            permissions: emptyPermissions(),
             ...auditFields(me, true),
           });
           b.set(doc(collection(getFirebaseDb(), "auditLogs")), {

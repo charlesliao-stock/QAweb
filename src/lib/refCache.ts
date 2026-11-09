@@ -1,8 +1,8 @@
 /**
  * 參考資料記憶體快取（v1.28 階段 4，提案 B2）。
  *
- * 範圍：六個參考集合 indicators／groups／units／users／roles／titles
- * ＋ systemParams/config 單一文件。不要快取 reviewTasks／reviewRecords
+ * 範圍：參考集合 indicators／groups／units／users／roles／titles／
+ * permissionTemplates ＋ systemParams/config 單一文件。不要快取 reviewTasks／reviewRecords
  *（那是階段 3 按年份快取的範圍）。
  *
  * 存放位置：模組級 Map（記憶體），與階段 3 的 resultsCache.ts 同一層、
@@ -35,7 +35,8 @@ export type RefCollectionName =
   | "users"
   | "roles"
   | "titles"
-  | "uiThemes";
+  | "uiThemes"
+  | "permissionTemplates";
 
 export const REF_COLLECTIONS: readonly RefCollectionName[] = [
   "indicators",
@@ -45,6 +46,7 @@ export const REF_COLLECTIONS: readonly RefCollectionName[] = [
   "roles",
   "titles",
   "uiThemes",
+  "permissionTemplates",
 ] as const;
 
 /** systemParams/config 單一文件的快取鍵 */

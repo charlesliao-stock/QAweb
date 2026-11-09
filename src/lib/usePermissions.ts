@@ -5,44 +5,25 @@ import { getCachedRefCollection } from "./refCache";
 import { getDocsCacheFirst } from "./cacheFirst";
 import { useAuth } from "./auth";
 import {
-  PERM_KEYS,
   can as evaluatePermission,
-  parseGroupScopeMode,
   parsePermissions,
   parseRoleKind,
-  parseScopeMode,
-  scopedRoleKey,
-  type PermKey,
+  parseTemplateCategory,
+  templateKey,
   type PermissionCatalog,
-  type PermissionTitleDefinition,
-  type RolePermissions,
+  type PermKey,
 } from "./permissions";
 
 /**
- * 空 catalog（v1.37.0：無預設權限）。
- * 無 catalog 紀錄的角色／職稱權限一律為空，不再按角色名給預設值；
+ * 空 catalog（v1.38.0 範本制：無範本＝無權限）。
+ * 無範本的角色／職稱權限一律為空，不再按角色名給預設值；
  * 系統管理員另有 bypass，不受此影響。
  */
 const emptyCatalog = (): PermissionCatalog => ({
-  globalRolePerms: {},
-  groupRolePerms: {},
-  groupRoleScopes: {},
-  groupRolesByName: {},
-  titles: [],
+  templates: {},
+  roleDocs: {},
+  titleDocs: [],
 });
-
-/** 群組覆寫值與全域基準取交集（v1.36.0 沿用）：任一群組未勾選即不授權。 */
-function intersectPermissions(
-  baseline: Record<PermKey, boolean>,
-  raw: unknown,
-): Record<PermKey, boolean> {
-  const overrides = parsePermissions(raw);
-  const out = { ...baseline };
-  for (const key of PERM_KEYS) {
-    out[key] = baseline[key] === true && overrides[key] === true;
-  }
-  return out;
-}
 
 export function usePermissions() {
   const { user } = useAuth();
@@ -60,6 +41,9 @@ export function usePermissions() {
     }
     setReady(false);
     Promise.all([
+      getCachedRefCollection("permissionTemplates", () =>
+        getDocsCacheFirst(collection(getFirebaseDb(), "permissionTemplates")),
+      ),
       getCachedRefCollection("roles", () =>
         getDocsCacheFirst(collection(getFirebaseDb(), "roles")),
       ),
@@ -67,51 +51,32 @@ export function usePermissions() {
         getDocsCacheFirst(collection(getFirebaseDb(), "titles")),
       ),
     ])
-      .then(([roleSnapshot, titleSnapshot]) => {
+      .then(([templateSnapshot, roleSnapshot, titleSnapshot]) => {
         if (cancelled) return;
         const next = emptyCatalog();
+        templateSnapshot.docs.forEach((document) => {
+          const data = document.data() as Record<string, unknown>;
+          const category = parseTemplateCategory(data.category);
+          const name = typeof data.name === "string" ? data.name : "";
+          if (!category || !name) return;
+          next.templates[templateKey(category, name)] = {
+            category,
+            name,
+            permissions: parsePermissions(data.permissions),
+            cross: data.cross === true,
+          };
+        });
         roleSnapshot.docs.forEach((document) => {
           const data = document.data() as Record<string, unknown>;
           const name = typeof data.name === "string" ? data.name : document.id;
-          // 無 permissions 欄位＝尚未設定，零權限（不再套用角色名預設值）。
-          const rolePermissions = parsePermissions(data.permissions);
           const groupId = typeof data.groupId === "string" ? data.groupId : "";
-          const kind = parseRoleKind(data.kind, groupId);
-          if (kind === "group" && groupId) {
-            const scopedKey = scopedRoleKey(groupId, name);
-            next.groupRolePerms[scopedKey] = rolePermissions;
-            next.groupRoleScopes[scopedKey] = {
-              groupScopeMode: parseGroupScopeMode(data.groupScopeMode),
-              groupId,
-            };
-            const definitions = next.groupRolesByName[name] ?? [];
-            definitions.push({
-              groupId,
-              groupScopeMode: parseGroupScopeMode(data.groupScopeMode),
-              permissions: rolePermissions,
-            });
-            next.groupRolesByName[name] = definitions;
-            if (data.groupPermissionsByGroup && typeof data.groupPermissionsByGroup === "object") {
-              Object.entries(data.groupPermissionsByGroup as Record<string, unknown>).forEach(
-                ([scopedGroupId, rawPermissions]) => {
-                  next.groupRolePerms[scopedRoleKey(scopedGroupId, name)] =
-                    intersectPermissions(rolePermissions, rawPermissions);
-                },
-              );
-            }
-          } else {
-            next.globalRolePerms[name] = rolePermissions;
-            if (data.groupPermissionsByGroup && typeof data.groupPermissionsByGroup === "object") {
-              Object.entries(data.groupPermissionsByGroup as Record<string, unknown>).forEach(
-                ([scopedGroupId, rawPermissions]) => {
-                  next.groupRolePerms[scopedRoleKey(scopedGroupId, name)] =
-                    intersectPermissions(rolePermissions, rawPermissions);
-                },
-              );
-            }
-          }
+          const unitCode = typeof data.unitCode === "string" ? data.unitCode : "";
+          const meta = { kind: parseRoleKind(data.kind, groupId), groupId, unitCode };
+          const list = next.roleDocs[name] ?? [];
+          list.push(meta);
+          next.roleDocs[name] = list;
         });
-        next.titles = titleSnapshot.docs.map((document) => {
+        next.titleDocs = titleSnapshot.docs.map((document) => {
           const data = document.data() as Record<string, unknown>;
           const unitCodes = Array.isArray(data.unitCodes)
             ? data.unitCodes.map(String).filter(Boolean)
@@ -119,11 +84,8 @@ export function usePermissions() {
           return {
             id: document.id,
             name: typeof data.name === "string" ? data.name : document.id,
-            scopeMode: parseScopeMode(data.scopeMode, unitCodes),
             unitCodes,
-            permissions: parsePermissions(data.permissions),
-            configured: data.permissions !== undefined && data.permissions !== null,
-          } satisfies PermissionTitleDefinition;
+          };
         });
         setCatalog(next);
       })
@@ -160,23 +122,10 @@ export function usePermissions() {
     [isAdmin, permUser, catalog],
   );
 
-  const rolePerms = catalog.globalRolePerms;
-  const titlePerms = useMemo(
-    () => Object.fromEntries(catalog.titles.map((title) => [title.id, title.permissions])) as Record<string, RolePermissions>,
-    [catalog.titles],
-  );
-  const titleConfigured = useMemo(
-    () => Object.fromEntries(catalog.titles.map((title) => [title.id, title.configured])) as Record<string, boolean>,
-    [catalog.titles],
-  );
-
   return {
     can,
     ready,
     isAdmin,
     catalog,
-    rolePerms,
-    titlePerms,
-    titleConfigured,
   };
 }
