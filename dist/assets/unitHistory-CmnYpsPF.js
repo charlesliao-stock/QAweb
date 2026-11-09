@@ -1,0 +1,1 @@
+function d(n,t){var r;const s=new Map(n.map(e=>[e.code,e])),o=new Set,i=[t];for(;i.length>0;){const e=i.pop();if(!(!e||o.has(e))){o.add(e);for(const c of((r=s.get(e))==null?void 0:r.mergedFromUnitCodes)??[])c&&!o.has(c)&&i.push(c)}}return o}function a(n,t,s){return s.some(o=>d(n,o).has(t))}export{d as u,a as w};

@@ -137,9 +137,37 @@ export function scopedRoleKey(groupId: string, roleName: string): string {
   return `${encodeURIComponent(groupId)}::${encodeURIComponent(roleName)}`;
 }
 
+/**
+ * 權限範圍模式（v1.36.0）：
+ * - "all"＝不分單位，適用全部單位；
+ * - "units"＝分單位，只適用 unitCodes 清單內的單位。
+ * 既有資料無 scopeMode 時由 unitCodes 推斷：有單位清單→分單位，無→不分單位。
+ */
+export type ScopeMode = "all" | "units";
+
+export function parseScopeMode(raw: unknown, unitCodes: string[]): ScopeMode {
+  if (raw === "all" || raw === "units") return raw;
+  return unitCodes.length > 0 ? "units" : "all";
+}
+
+export function scopeAppliesToUnit(
+  scopeMode: ScopeMode,
+  unitCodes: string[],
+  unitCode: string,
+): boolean {
+  if (scopeMode === "all") return true;
+  return unitCode !== "" && unitCodes.includes(unitCode);
+}
+
+export interface RoleScopeDefinition {
+  scopeMode: ScopeMode;
+  unitCodes: string[];
+}
+
 export interface PermissionTitleDefinition {
   id: string;
   name: string;
+  scopeMode: ScopeMode;
   unitCodes: string[];
   permissions: Record<PermKey, boolean>;
   configured: boolean;
@@ -148,6 +176,8 @@ export interface PermissionTitleDefinition {
 export interface PermissionCatalog {
   globalRolePerms: Record<string, Record<PermKey, boolean>>;
   groupRolePerms: Record<string, Record<PermKey, boolean>>;
+  /** 角色範圍：全域角色以角色名為鍵；群組角色以 scopedRoleKey 為鍵；群組覆寫沿用全域角色的範圍。 */
+  roleScopes: Record<string, RoleScopeDefinition>;
   titles: PermissionTitleDefinition[];
 }
 
@@ -171,6 +201,21 @@ function rolePermissionsForGroup(
   );
 }
 
+/** 角色範圍是否涵蓋使用者單位；catalog 無範圍紀錄時視為不分單位（既有資料預設）。 */
+function roleScopeAllows(
+  catalog: PermissionCatalog,
+  groupId: string | undefined,
+  roleName: string,
+  unitCode: string,
+): boolean {
+  const scope =
+    (groupId
+      ? catalog.roleScopes[scopedRoleKey(groupId, roleName)]
+      : undefined) ?? catalog.roleScopes[roleName];
+  if (!scope) return true;
+  return scopeAppliesToUnit(scope.scopeMode, scope.unitCodes, unitCode);
+}
+
 function titleForUser(user: PermUser, catalog: PermissionCatalog) {
   if (user.titleId) {
     return catalog.titles.find((title) => title.id === user.titleId);
@@ -178,8 +223,7 @@ function titleForUser(user: PermUser, catalog: PermissionCatalog) {
   const matches = catalog.titles.filter(
     (title) =>
       title.name === user.title &&
-      user.unitCode !== "" &&
-      title.unitCodes.includes(user.unitCode),
+      scopeAppliesToUnit(title.scopeMode, title.unitCodes, user.unitCode),
   );
   return matches.length === 1 ? matches[0] : undefined;
 }
@@ -203,19 +247,27 @@ export function can(
     (role) => !membershipRoles.has(role) && !isGroupScopedRole(role),
   );
   const globalAllowed = globalRoleNames.some(
-    (role) => catalog.globalRolePerms[role]?.[key] === true,
+    (role) =>
+      catalog.globalRolePerms[role]?.[key] === true &&
+      roleScopeAllows(catalog, undefined, role, user.unitCode),
   );
   const groupAllowed = user.memberships.some(
     (membership) =>
       (!groupId || membership.groupId === groupId) &&
       membership.roles.some(
-        (role) => rolePermissionsForGroup(catalog, membership.groupId, role)?.[key] === true,
+        (role) =>
+          rolePermissionsForGroup(catalog, membership.groupId, role)?.[key] === true &&
+          roleScopeAllows(catalog, membership.groupId, role, user.unitCode),
       ),
   );
   if (!globalAllowed && !groupAllowed) return false;
 
   const title = titleForUser(user, catalog);
-  if (!title || !title.configured || !title.unitCodes.includes(user.unitCode)) {
+  if (
+    !title ||
+    !title.configured ||
+    !scopeAppliesToUnit(title.scopeMode, title.unitCodes, user.unitCode)
+  ) {
     return false;
   }
   return title.permissions[key] === true;

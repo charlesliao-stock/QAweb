@@ -1171,6 +1171,12 @@ export function ResultsPage({
         rate: unitPeriodRows.length ? round1((unitPassed / unitPeriodRows.length) * 100) : null,
       };
       const personPr = summaryPassRate(metrics);
+      // v1.36.0（D12）：護理長同時看「本單位」與「全院彙總」比較——本單位來自 unit-scope 摘要，
+      // 全院來自 scope==="all" 預存彙總；兩者皆為彙總數，不含其他單位個別結果與個人細項。
+      const ownPersonPr = summaryPassRate(unitRows);
+      const ownTotal = unitRows.reduce((sum, row) => sum + row.totalCount, 0);
+      const hospitalPersonPr =
+        scope.kind === "admin" || isNurseLeader ? personPr : null;
       const perColumn = appliedColumns.map((column) => {
         const keys = new Set(column.months.map((month) => month.year * 100 + month.month));
         if (indUnit === "unit") {
@@ -1188,6 +1194,7 @@ export function ResultsPage({
       return {
         unitCount: new Set(unitRows.map((row) => row.unitId).filter((id): id is string => Boolean(id))).size,
         total: personPr.total, unitPr, personPr,
+        ownPersonPr, ownTotal, hospitalPersonPr,
         chartValues: pts.map((point) => point.pr.rate),
         chartLabels: pts.map((point) => point.column.label),
         chartTips: pts.map((point) => `${point.column.label}：${formatPassRate(point.pr, true)}`),
@@ -1208,6 +1215,8 @@ export function ResultsPage({
     );
     return {
       unitCount: unitIds.size, total: indRecs.length, unitPr, personPr: merged,
+      // 無預存摘要時無法算全院彙總（明細只含本人單位），全院比較留空並由畫面註明。
+      ownPersonPr: merged, ownTotal: indRecs.length, hospitalPersonPr: null,
       chartValues: pts.map((point) => point.pr.rate as number),
       chartLabels: pts.map((point) => point.column.label),
       chartTips: pts.map((point) => `${point.column.label}：${formatPassRate(point.pr, true)}`),
@@ -1615,21 +1624,50 @@ export function ResultsPage({
                   value={String(indSummary.unitCount)}
                   note={isNurseLeader ? "僅顯示本人所屬單位；不列其他單位" : "所選期間內有紀錄的單位"}
                 />
-                <SummaryCell
-                  label="受審總人次"
-                  value={String(indSummary.total)}
-                  note="所選期間內總人次數"
-                />
-                <SummaryCell
-                  label="單位正確率"
-                  value={formatPassRate(indSummary.unitPr, true)}
-                  note="達閾值單位數／審查單位數（unit-period 計）"
-                />
-                <SummaryCell
-                  label="人員正確率"
-                  value={formatPassRate(indSummary.personPr, true)}
-                  note="達閾值人次／總人次"
-                />
+                {isNurseLeader ? (
+                  <>
+                    <SummaryCell
+                      label="本單位受審人次"
+                      value={String(indSummary.ownTotal)}
+                      note="所選期間內本單位總人次數"
+                    />
+                    <SummaryCell
+                      label="單位正確率"
+                      value={formatPassRate(indSummary.unitPr, true)}
+                      note="達閾值單位數／審查單位數（unit-period 計）"
+                    />
+                    <SummaryCell
+                      label="本單位人員正確率"
+                      value={formatPassRate(indSummary.ownPersonPr, true)}
+                      note="本單位達閾值人次／本單位總人次"
+                    />
+                    <SummaryCell
+                      label="全院人員正確率"
+                      value={indSummary.hospitalPersonPr ? formatPassRate(indSummary.hospitalPersonPr, true) : "—"}
+                      note={indSummary.hospitalPersonPr
+                        ? `同一指標、同一區間全院彙總比較（全院共 ${indSummary.hospitalPersonPr.total} 人次）；不含其他單位個別結果與個人細項`
+                        : "此期間尚無全院預存摘要，無法提供全院彙總"}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <SummaryCell
+                      label="受審總人次"
+                      value={String(indSummary.total)}
+                      note="所選期間內總人次數"
+                    />
+                    <SummaryCell
+                      label="單位正確率"
+                      value={formatPassRate(indSummary.unitPr, true)}
+                      note="達閾值單位數／審查單位數（unit-period 計）"
+                    />
+                    <SummaryCell
+                      label="人員正確率"
+                      value={formatPassRate(indSummary.personPr, true)}
+                      note="達閾值人次／總人次"
+                    />
+                  </>
+                )}
               </div>
               {summaryRecords.length > 0 && (
                 <p className="settings-note" role="status">
@@ -1644,7 +1682,7 @@ export function ResultsPage({
               <section className="panel">
                 <SectionTitle
                   title="通過率"
-                  note={`${indSel.code}・${indSel.name}・${periodDesc}・單元：${indUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}`}
+                  note={`${indSel.code}・${indSel.name}・${periodDesc}・單元：${indUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}${isNurseLeader && indUnit !== "unit" && summaryRecords.length > 0 ? "・人次曲線為全院彙總比較（不含其他單位個別結果）" : ""}`}
                 />
                 {indSummary.chartValues.length === 0 ? (
                   <div className="chart-empty">尚無資料</div>

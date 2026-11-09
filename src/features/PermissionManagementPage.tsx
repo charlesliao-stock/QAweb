@@ -14,7 +14,10 @@ import {
   PERM_KEYS,
   PERM_LABELS,
   parsePermissions,
+  parseScopeMode,
+  scopeAppliesToUnit,
   type PermKey,
+  type ScopeMode,
 } from "../lib/permissions";
 import { isGroupScopedRole } from "../lib/roleIdentity";
 
@@ -35,6 +38,8 @@ interface RoleRow {
   name: string;
   description: string;
   groupId: string;
+  scopeMode: ScopeMode;
+  unitCodes: string[];
   permissions: Record<PermKey, boolean>;
   groupPermissionsByGroup: Record<string, Record<PermKey, boolean>>;
   isSeed: boolean;
@@ -44,6 +49,7 @@ interface TitleRow {
   id: string;
   name: string;
   level: string;
+  scopeMode: ScopeMode;
   unitCodes: string[];
   permissions: Record<PermKey, boolean>;
   configured: boolean;
@@ -125,11 +131,16 @@ export function PermissionManagementPage({
         .map((item) => {
           const data = item.data() as Record<string, unknown>;
           const name = typeof data.name === "string" ? data.name : item.id;
+          const unitCodes = Array.isArray(data.unitCodes)
+            ? data.unitCodes.map(String).filter(Boolean)
+            : [];
           return {
             id: item.id,
             name,
             description: typeof data.description === "string" ? data.description : "",
             groupId: typeof data.groupId === "string" ? data.groupId : "",
+            scopeMode: parseScopeMode(data.scopeMode, unitCodes),
+            unitCodes,
             permissions: mergePermissionValues(emptyPermissions(), data.permissions),
             groupPermissionsByGroup: emptyGroupOverrides(data.groupPermissionsByGroup),
             isSeed: data.isSeed === true,
@@ -139,11 +150,15 @@ export function PermissionManagementPage({
       const titleRows = titleSnapshot.docs
         .map((item) => {
           const data = item.data() as Record<string, unknown>;
+          const unitCodes = Array.isArray(data.unitCodes)
+            ? data.unitCodes.map(String).filter(Boolean)
+            : [];
           return {
             id: item.id,
             name: typeof data.name === "string" ? data.name : item.id,
             level: typeof data.level === "string" ? data.level : "",
-            unitCodes: Array.isArray(data.unitCodes) ? data.unitCodes.map(String).filter(Boolean) : [],
+            scopeMode: parseScopeMode(data.scopeMode, unitCodes),
+            unitCodes,
             permissions: mergePermissionValues(emptyPermissions(), data.permissions),
             configured: data.permissions !== undefined && data.permissions !== null,
           };
@@ -177,10 +192,13 @@ export function PermissionManagementPage({
     [roles],
   );
   const scopedTitles = useMemo(
-    () => (unitCode ? titles.filter((row) => row.unitCodes.includes(unitCode)) : []),
+    () => (unitCode ? titles.filter((row) => scopeAppliesToUnit(row.scopeMode, row.unitCodes, unitCode)) : []),
     [titles, unitCode],
   );
-  const legacyTitles = useMemo(() => titles.filter((row) => row.unitCodes.length === 0), [titles]);
+  const legacyTitles = useMemo(
+    () => titles.filter((row) => row.scopeMode === "units" && row.unitCodes.length === 0),
+    [titles],
+  );
 
   async function savePermissions(
     kind: "role-global" | "role-group" | "title",
@@ -269,6 +287,126 @@ export function PermissionManagementPage({
     } finally {
       setSavingCell("");
     }
+  }
+
+  /** 角色／職稱範圍設定（v1.36.0）：不分單位＝適用全部單位；分單位＝只適用勾選單位，分單位且未選單位時擋儲存。 */
+  const [savingScope, setSavingScope] = useState("");
+  async function saveScope(
+    kind: "role" | "title",
+    row: RoleRow | TitleRow,
+    scopeMode: ScopeMode,
+    unitCodes: string[],
+  ) {
+    if (!user || !isAdmin) {
+      onAction("權限範圍僅系統管理員可修改");
+      return;
+    }
+    if (scopeMode === "units" && unitCodes.length === 0) {
+      onAction("分單位時請至少選擇一個單位");
+      return;
+    }
+    const cellId = `scope:${kind}:${row.id}`;
+    setSavingScope(cellId);
+    const nextUnitCodes = scopeMode === "all" ? [] : [...new Set(unitCodes)].filter(Boolean);
+    try {
+      const db = getFirebaseDb();
+      const batch = writeBatch(db);
+      const collectionName = kind === "role" ? "roles" : "titles";
+      batch.update(doc(db, collectionName, row.id), {
+        scopeMode,
+        unitCodes: nextUnitCodes,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.staffId,
+      });
+      batch.set(doc(collection(db, "auditLogs")), {
+        actor: user.staffId,
+        actorName: user.name,
+        action: kind === "role" ? "角色適用範圍異動" : "職稱適用範圍異動",
+        targetId: row.id,
+        detail: `${row.name}：範圍改為${scopeMode === "all" ? "不分單位（適用全部單位）" : `分單位（${nextUnitCodes.join("、")}）`}`,
+        before: { scopeMode: row.scopeMode, unitCodes: row.unitCodes },
+        after: { scopeMode, unitCodes: nextUnitCodes },
+        createdAt: serverTimestamp(),
+      });
+      await batch.commit();
+      if (kind === "role") {
+        setRoles((current) => current.map((item) => item.id === row.id ? { ...item, scopeMode, unitCodes: nextUnitCodes } : item));
+      } else {
+        setTitles((current) => current.map((item) => item.id === row.id ? { ...item, scopeMode, unitCodes: nextUnitCodes } : item));
+      }
+      onAction(`已更新「${row.name}」的適用範圍`);
+    } catch (error) {
+      onAction(error instanceof Error ? `範圍儲存失敗：${error.message}` : "範圍儲存失敗：權限不足或網路異常");
+      await loadData();
+    } finally {
+      setSavingScope("");
+    }
+  }
+
+  function scopeTable<T extends RoleRow | TitleRow>(rows: T[], kind: "role" | "title") {
+    if (!rows.length) {
+      return <p className="settings-note">目前沒有角色或職稱。</p>;
+    }
+    return (
+      <div className="table-scroll permission-matrix-scroll">
+        <table className="permission-table">
+          <thead>
+            <tr>
+              <th>角色／職稱</th>
+              <th>範圍</th>
+              <th>適用單位（分單位時勾選）</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={`scope:${kind}:${row.id}`}>
+                <td><b>{row.name}</b></td>
+                <td>
+                  <div className="select-wrap">
+                    <select
+                      value={row.scopeMode}
+                      disabled={!isAdmin || savingScope !== ""}
+                      onChange={(event) => void saveScope(kind, row, event.target.value === "units" ? "units" : "all", row.unitCodes)}
+                      aria-label={`${row.name}範圍`}
+                    >
+                      <option value="all">不分單位（全部單位）</option>
+                      <option value="units">分單位</option>
+                    </select><ChevronDown size={15} />
+                  </div>
+                </td>
+                <td>
+                  {row.scopeMode === "all" ? (
+                    <span className="muted-text">適用全部單位</span>
+                  ) : units.length === 0 ? (
+                    <span className="muted-text">尚未建立單位</span>
+                  ) : (
+                    <div className="form-grid">
+                      {units.map((unit) => (
+                        <label className="check-row" key={unit.code}>
+                          <input
+                            type="checkbox"
+                            checked={row.unitCodes.includes(unit.code)}
+                            disabled={!isAdmin || savingScope !== ""}
+                            onChange={(event) => {
+                              const next = event.target.checked
+                                ? [...new Set([...row.unitCodes, unit.code])]
+                                : row.unitCodes.filter((code) => code !== unit.code);
+                              void saveScope(kind, row, "units", next);
+                            }}
+                            aria-label={`${row.name}：${unit.name}`}
+                          />
+                          <span>{unit.name}（{unit.code}）</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
   }
 
   function permissionMatrix<T extends RoleRow | TitleRow>(
@@ -383,11 +521,11 @@ export function PermissionManagementPage({
                 </div>
               )}
             </div>
-            <p className="settings-note">授權採交集：人員所屬角色與其適用單位職稱，必須同時勾選該功能。群組角色權限僅在所選群組內生效。</p>
+            <p className="settings-note">授權採交集：人員所屬角色與其適用單位職稱，必須同時勾選該功能；角色另受上方「範圍設定」的單位範圍限制。群組角色權限僅在所選群組內生效。</p>
             {permissionMatrix(scope === "global" ? globalRoles : scopedGroupRoles, scope === "global" ? "role-global" : "role-group")}
           </section>
           <section className="panel data-panel">
-            <SectionTitle title="職稱權限矩陣" note="職稱只對已設定的適用單位生效；與群組角色採交集。" />
+            <SectionTitle title="職稱權限矩陣" note="職稱只對其範圍內的單位生效（不分單位＝全部單位；分單位＝勾選單位）；與群組角色採交集。" />
             <div className="form-field permission-scope-controls" style={{ maxWidth: 420 }}>
               <label className="field-label">適用單位</label>
               <div className="select-wrap">
@@ -399,14 +537,21 @@ export function PermissionManagementPage({
             </div>
             {legacyTitles.length > 0 && (
               <div className="settings-note permission-legacy-warning">
-                有 {legacyTitles.length} 個職稱尚未設定適用單位，保留舊資料但不會出現在人員職稱選單。請至「群組與人員 → 職稱」為職稱設定單位。
+                有 {legacyTitles.length} 個職稱設為分單位但尚未設定適用單位，目前不適用任何單位、不會出現在人員職稱選單。請至「群組與人員 → 職稱」或下方「範圍設定」補上單位，或改為不分單位。
               </div>
             )}
             {permissionMatrix(scopedTitles, "title")}
           </section>
           <section className="panel data-panel">
+            <SectionTitle title="角色／職稱範圍設定" note="每個角色、職稱可選不分單位（適用全部單位）或分單位（只適用勾選單位）；分單位且未選單位時無法儲存。範圍與權限矩陣採交集判斷。" />
+            <h3 className="settings-note" style={{ fontWeight: 700 }}>角色範圍</h3>
+            {scopeTable(roles, "role")}
+            <h3 className="settings-note" style={{ fontWeight: 700, marginTop: 16 }}>職稱範圍</h3>
+            {scopeTable(titles, "title")}
+          </section>
+          <section className="panel data-panel">
             <SectionTitle title="權限矩陣欄位說明" note="勾選代表授予該功能；未勾選即不授權。" />
-            <p className="settings-note">頁面存取控制導覽與頁面入口；操作功能控制頁面內的查詢、照片、排程、已提交審查更正及權限管理。職稱需指定適用單位，舊人員資料中的 titleId 空值會依「職稱名稱＋所屬單位」唯一比對。</p>
+            <p className="settings-note">頁面存取控制導覽與頁面入口；操作功能控制頁面內的查詢、照片、排程、已提交審查更正及權限管理。職稱範圍為不分單位時適用全部單位，分單位時只適用勾選單位；舊人員資料中的 titleId 空值會依「職稱名稱＋所屬單位」唯一比對（不分單位職稱不受單位限制）。</p>
           </section>
         </>
       )}

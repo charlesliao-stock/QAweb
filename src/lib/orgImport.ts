@@ -127,6 +127,9 @@ export function validateUserRows(
     const title = r.title.trim();
     if (title && !ctx.titleNames.has(title))
       errors.push(`職稱「${title}」不存在`);
+    const isCreate = !ctx.existingStaffIds.has(staffId);
+    // v1.36.0：人員新增須填職稱；更新時未填則沿用既有職稱。
+    if (isCreate && !title) errors.push("請填寫職稱（人員新增須填職稱）");
     const memberships: Membership[] = [];
     for (const [gRaw, rolesRaw] of [
       [r.group1, r.roles1],
