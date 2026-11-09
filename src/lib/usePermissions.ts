@@ -5,11 +5,11 @@ import { getCachedRefCollection } from "./refCache";
 import { getDocsCacheFirst } from "./cacheFirst";
 import { useAuth } from "./auth";
 import {
-  DEFAULT_ROLE_PERMS,
   PERM_KEYS,
   can as evaluatePermission,
-  defaultRolePermissions,
+  parseGroupScopeMode,
   parsePermissions,
+  parseRoleKind,
   parseScopeMode,
   scopedRoleKey,
   type PermKey,
@@ -18,31 +18,30 @@ import {
   type RolePermissions,
 } from "./permissions";
 
+/**
+ * 空 catalog（v1.37.0：無預設權限）。
+ * 無 catalog 紀錄的角色／職稱權限一律為空，不再按角色名給預設值；
+ * 系統管理員另有 bypass，不受此影響。
+ */
 const emptyCatalog = (): PermissionCatalog => ({
-  globalRolePerms: Object.fromEntries(
-    Object.keys(DEFAULT_ROLE_PERMS).map((name) => [
-      name,
-      defaultRolePermissions(name),
-    ]),
-  ),
+  globalRolePerms: {},
   groupRolePerms: {},
-  roleScopes: {},
+  groupRoleScopes: {},
+  groupRolesByName: {},
   titles: [],
 });
 
-function mergeStoredPermissions(
-  defaults: Record<PermKey, boolean>,
+/** 群組覆寫值與全域基準取交集（v1.36.0 沿用）：任一群組未勾選即不授權。 */
+function intersectPermissions(
+  baseline: Record<PermKey, boolean>,
   raw: unknown,
 ): Record<PermKey, boolean> {
-  const merged = { ...defaults };
-  if (!raw || typeof raw !== "object") return merged;
-  const values = raw as Record<string, unknown>;
+  const overrides = parsePermissions(raw);
+  const out = { ...baseline };
   for (const key of PERM_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(values, key)) {
-      merged[key] = values[key] === true;
-    }
+    out[key] = baseline[key] === true && overrides[key] === true;
   }
-  return merged;
+  return out;
 }
 
 export function usePermissions() {
@@ -74,34 +73,39 @@ export function usePermissions() {
         roleSnapshot.docs.forEach((document) => {
           const data = document.data() as Record<string, unknown>;
           const name = typeof data.name === "string" ? data.name : document.id;
-          const rolePermissions = mergeStoredPermissions(
-            defaultRolePermissions(name),
-            data.permissions,
-          );
+          // 無 permissions 欄位＝尚未設定，零權限（不再套用角色名預設值）。
+          const rolePermissions = parsePermissions(data.permissions);
           const groupId = typeof data.groupId === "string" ? data.groupId : "";
-          const roleUnitCodes = Array.isArray(data.unitCodes)
-            ? data.unitCodes.map(String).filter(Boolean)
-            : [];
-          const roleScope = {
-            scopeMode: parseScopeMode(data.scopeMode, roleUnitCodes),
-            unitCodes: roleUnitCodes,
-          };
-          if (groupId) {
-            next.groupRolePerms[scopedRoleKey(groupId, name)] = rolePermissions;
-            next.roleScopes[scopedRoleKey(groupId, name)] = roleScope;
-          } else {
-            next.globalRolePerms[name] = rolePermissions;
-            next.roleScopes[name] = roleScope;
+          const kind = parseRoleKind(data.kind, groupId);
+          if (kind === "group" && groupId) {
+            const scopedKey = scopedRoleKey(groupId, name);
+            next.groupRolePerms[scopedKey] = rolePermissions;
+            next.groupRoleScopes[scopedKey] = {
+              groupScopeMode: parseGroupScopeMode(data.groupScopeMode),
+              groupId,
+            };
+            const definitions = next.groupRolesByName[name] ?? [];
+            definitions.push({
+              groupId,
+              groupScopeMode: parseGroupScopeMode(data.groupScopeMode),
+              permissions: rolePermissions,
+            });
+            next.groupRolesByName[name] = definitions;
             if (data.groupPermissionsByGroup && typeof data.groupPermissionsByGroup === "object") {
               Object.entries(data.groupPermissionsByGroup as Record<string, unknown>).forEach(
                 ([scopedGroupId, rawPermissions]) => {
-                  const groupOverrides = mergeStoredPermissions(rolePermissions, rawPermissions);
-                  // v1.36.0：各群組覆寫值合併取交集——任一群組未勾選即不授權，不悄悄擴權。
-                  const intersected = { ...rolePermissions };
-                  for (const key of PERM_KEYS) {
-                    intersected[key] = rolePermissions[key] === true && groupOverrides[key] === true;
-                  }
-                  next.groupRolePerms[scopedRoleKey(scopedGroupId, name)] = intersected;
+                  next.groupRolePerms[scopedRoleKey(scopedGroupId, name)] =
+                    intersectPermissions(rolePermissions, rawPermissions);
+                },
+              );
+            }
+          } else {
+            next.globalRolePerms[name] = rolePermissions;
+            if (data.groupPermissionsByGroup && typeof data.groupPermissionsByGroup === "object") {
+              Object.entries(data.groupPermissionsByGroup as Record<string, unknown>).forEach(
+                ([scopedGroupId, rawPermissions]) => {
+                  next.groupRolePerms[scopedRoleKey(scopedGroupId, name)] =
+                    intersectPermissions(rolePermissions, rawPermissions);
                 },
               );
             }

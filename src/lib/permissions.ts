@@ -1,5 +1,4 @@
 import type { PageId } from "../types";
-import { ROLE_PAGES } from "./access";
 import { isGroupScopedRole, type Membership } from "./roleIdentity";
 
 /** 導覽頁面與功能權限使用同一矩陣；尚未實作的 reviewers 不列入。 */
@@ -52,6 +51,39 @@ export const PERM_LABELS: Record<PermKey, string> = Object.fromEntries(
   ]),
 ) as Record<PermKey, string>;
 
+/**
+ * 權限鍵分組（v1.37.0 權限管理重建）：
+ * - 共用 7 鍵：單位職稱、單位角色、群組角色三類都列；
+ * - 群組專屬 4 鍵：只有群組角色列；
+ * - 管理員專屬 4 鍵：永不列出（系統管理員另有 bypass）。
+ */
+export const SHARED_PERM_KEYS = [
+  "page.dashboard",
+  "page.schedule",
+  "page.audit",
+  "page.results",
+  "page.capa",
+  "resultQuery",
+  "viewPhotos",
+] as const satisfies readonly PermKey[];
+
+export const GROUP_ONLY_PERM_KEYS = [
+  "page.indicators",
+  "page.handoff",
+  "manageSchedule",
+  "editSubmitted",
+] as const satisfies readonly PermKey[];
+
+export const ADMIN_ONLY_PERM_KEYS = [
+  "page.admin",
+  "page.permissions",
+  "manageRoles",
+  "page.groups",
+] as const satisfies readonly PermKey[];
+
+/** 不列出的角色名：系統管理員（bypass）、一般人員（不用設定權限）。 */
+export const EXCLUDED_ROLE_NAMES = ["系統管理員", "一般人員"] as const;
+
 const PAGE_KEY_BY_ID = PAGE_PERMISSION_KEYS as Partial<Record<PageId, PermKey>>;
 
 export function pagePermissionKey(page: PageId): PermKey | undefined {
@@ -64,62 +96,6 @@ export function emptyPermissions(): Record<PermKey, boolean> {
     PermKey,
     boolean
   >;
-}
-
-const BASE_ROLE_ACTIONS: Record<string, RolePermissions> = {
-  一般人員: { resultQuery: true },
-  審查員: { resultQuery: true, viewPhotos: true, editSubmitted: true },
-  護理長: { resultQuery: true, viewPhotos: true },
-  督導: { resultQuery: true, viewPhotos: true },
-  品管執行幹事: {
-    resultQuery: true,
-    viewPhotos: true,
-    manageSchedule: true,
-    editSubmitted: true,
-  },
-  系統管理員: {
-    resultQuery: true,
-    viewPhotos: true,
-    manageSchedule: true,
-    editSubmitted: true,
-    manageRoles: true,
-  },
-  指標負責人: { resultQuery: true },
-  召集人: { resultQuery: true, manageSchedule: true },
-  品管組審查員: { resultQuery: true, viewPhotos: true, editSubmitted: true },
-  單位審查員: { resultQuery: true, viewPhotos: true, editSubmitted: true },
-  品管組召集人: { resultQuery: true, manageSchedule: true },
-  品管組執行幹事: {
-    resultQuery: true,
-    viewPhotos: true,
-    manageSchedule: true,
-    editSubmitted: true,
-  },
-  單位召集人: { resultQuery: true },
-  單位執行幹事: { resultQuery: true, viewPhotos: true, editSubmitted: true },
-};
-
-/**
- * 相容既有角色頁面預設；新功能權限仍需由管理者在矩陣逐項勾選。
- * 系統管理員在 evaluator 中另有明確 super-admin bypass。
- */
-export const DEFAULT_ROLE_PERMS: Record<string, RolePermissions> = Object.fromEntries(
-  Object.keys(ROLE_PAGES).map((roleName) => {
-    const permissions = emptyPermissions();
-    for (const page of ROLE_PAGES[roleName as keyof typeof ROLE_PAGES]) {
-      const key = pagePermissionKey(page);
-      if (key) permissions[key] = true;
-    }
-    Object.assign(permissions, BASE_ROLE_ACTIONS[roleName] ?? {});
-    return [roleName, permissions];
-  }),
-);
-
-export function defaultRolePermissions(roleName: string): Record<PermKey, boolean> {
-  return {
-    ...emptyPermissions(),
-    ...(DEFAULT_ROLE_PERMS[roleName] ?? {}),
-  };
 }
 
 /** 防禦性解析 roles/titles 文件的 permissions 欄位；缺鍵明確視為 false。 */
@@ -159,9 +135,41 @@ export function scopeAppliesToUnit(
   return unitCode !== "" && unitCodes.includes(unitCode);
 }
 
-export interface RoleScopeDefinition {
-  scopeMode: ScopeMode;
-  unitCodes: string[];
+/**
+ * 角色種類（v1.37.0）：
+ * - "unit"＝單位角色（有所屬單位 unitCode，單位限制由職稱側把關）；
+ * - "group"＝群組角色（有所屬群組 groupId，另有跨群組模式）。
+ * 舊文件無 kind 時由 groupId 推斷：有群組→群組角色，無→單位角色。
+ */
+export type RoleKind = "unit" | "group";
+
+export function parseRoleKind(raw: unknown, groupId: string): RoleKind {
+  if (raw === "unit" || raw === "group") return raw;
+  return groupId ? "group" : "unit";
+}
+
+/**
+ * 群組角色跨群組模式（v1.37.0，預設不跨）：
+ * - "all"＝跨群組，任一 membership 持有該角色即生效；
+ * - "group"＝不跨群組，只在角色所屬群組生效。
+ */
+export type GroupScopeMode = "all" | "group";
+
+export function parseGroupScopeMode(raw: unknown): GroupScopeMode {
+  return raw === "all" ? "all" : "group";
+}
+
+/** 群組角色範圍紀錄：以 scopedRoleKey(groupId, roleName) 為鍵。 */
+export interface GroupRoleScope {
+  groupScopeMode: GroupScopeMode;
+  groupId: string;
+}
+
+/** 群組角色定義（同名角色分屬不同群組時各有一份，供跨群組判斷）。 */
+export interface GroupRoleDefinition {
+  groupId: string;
+  groupScopeMode: GroupScopeMode;
+  permissions: Record<PermKey, boolean>;
 }
 
 export interface PermissionTitleDefinition {
@@ -174,10 +182,14 @@ export interface PermissionTitleDefinition {
 }
 
 export interface PermissionCatalog {
+  /** 單位角色權限（全域基準）：以角色名為鍵；無 catalog 紀錄時為空，不再給預設值。 */
   globalRolePerms: Record<string, Record<PermKey, boolean>>;
+  /** 群組角色權限：以 scopedRoleKey(groupId, roleName) 為鍵。 */
   groupRolePerms: Record<string, Record<PermKey, boolean>>;
-  /** 角色範圍：全域角色以角色名為鍵；群組角色以 scopedRoleKey 為鍵；群組覆寫沿用全域角色的範圍。 */
-  roleScopes: Record<string, RoleScopeDefinition>;
+  /** 群組角色跨群組模式：以 scopedRoleKey(groupId, roleName) 為鍵。 */
+  groupRoleScopes: Record<string, GroupRoleScope>;
+  /** 群組角色定義（按角色名彙整，供跨群組 'all' 判斷）。 */
+  groupRolesByName: Record<string, GroupRoleDefinition[]>;
   titles: PermissionTitleDefinition[];
 }
 
@@ -190,30 +202,39 @@ export interface PermUser {
   unitCode: string;
 }
 
-function rolePermissionsForGroup(
+/**
+ * 某 membership 持有角色是否授權指定功能（v1.37.0）：
+ * 角色只看權限勾選＋群組歸屬，不再看角色側的單位範圍（單位限制由職稱側把關）。
+ * - 群組角色：先找所屬群組文件（scoped key）；'group' 只在所屬群組生效，
+ *   'all' 則任一 membership 持有即生效（同名角色任一所屬群組設為 'all' 即跨群組）。
+ * - 單位角色／舊文件：持有 membership 即生效，權限取全域基準。
+ * 傳 targetGroupId 時（資料操作端），membership 群組必須等於目標群組。
+ */
+function membershipRoleAllows(
   catalog: PermissionCatalog,
-  groupId: string,
+  membershipGroupId: string,
   roleName: string,
-): Record<PermKey, boolean> | undefined {
-  return (
-    catalog.groupRolePerms[scopedRoleKey(groupId, roleName)] ??
-    (isGroupScopedRole(roleName) ? catalog.globalRolePerms[roleName] : undefined)
-  );
-}
-
-/** 角色範圍是否涵蓋使用者單位；catalog 無範圍紀錄時視為不分單位（既有資料預設）。 */
-function roleScopeAllows(
-  catalog: PermissionCatalog,
-  groupId: string | undefined,
-  roleName: string,
-  unitCode: string,
+  key: PermKey,
+  targetGroupId?: string,
 ): boolean {
-  const scope =
-    (groupId
-      ? catalog.roleScopes[scopedRoleKey(groupId, roleName)]
-      : undefined) ?? catalog.roleScopes[roleName];
-  if (!scope) return true;
-  return scopeAppliesToUnit(scope.scopeMode, scope.unitCodes, unitCode);
+  if (targetGroupId && membershipGroupId !== targetGroupId) return false;
+  const scopedPerms =
+    catalog.groupRolePerms[scopedRoleKey(membershipGroupId, roleName)];
+  if (scopedPerms) {
+    if (scopedPerms[key] !== true) return false;
+    const scope = catalog.groupRoleScopes[scopedRoleKey(membershipGroupId, roleName)];
+    if (!scope || scope.groupScopeMode === "group") {
+      return membershipGroupId === (scope?.groupId ?? membershipGroupId);
+    }
+    return true;
+  }
+  const crossGroup = (catalog.groupRolesByName[roleName] ?? []).some(
+    (definition) =>
+      definition.groupScopeMode === "all" &&
+      definition.permissions[key] === true,
+  );
+  if (crossGroup) return true;
+  return catalog.globalRolePerms[roleName]?.[key] === true;
 }
 
 function titleForUser(user: PermUser, catalog: PermissionCatalog) {
@@ -247,18 +268,12 @@ export function can(
     (role) => !membershipRoles.has(role) && !isGroupScopedRole(role),
   );
   const globalAllowed = globalRoleNames.some(
-    (role) =>
-      catalog.globalRolePerms[role]?.[key] === true &&
-      roleScopeAllows(catalog, undefined, role, user.unitCode),
+    (role) => catalog.globalRolePerms[role]?.[key] === true,
   );
-  const groupAllowed = user.memberships.some(
-    (membership) =>
-      (!groupId || membership.groupId === groupId) &&
-      membership.roles.some(
-        (role) =>
-          rolePermissionsForGroup(catalog, membership.groupId, role)?.[key] === true &&
-          roleScopeAllows(catalog, membership.groupId, role, user.unitCode),
-      ),
+  const groupAllowed = user.memberships.some((membership) =>
+    membership.roles.some((role) =>
+      membershipRoleAllows(catalog, membership.groupId, role, key, groupId),
+    ),
   );
   if (!globalAllowed && !groupAllowed) return false;
 

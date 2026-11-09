@@ -510,8 +510,9 @@ export const SYSTEM_PARAM_LABELS: Record<keyof SystemParams, string> = {
 };
 
 /**
- * 系統初始化：一鍵寫入 systemParams/config 與 7 個預設角色。
- * systemParams 僅在不存在時寫入；roles 以 merge 寫入，不覆蓋已自訂的角色。
+ * 系統初始化（v1.37.0）：只寫入 systemParams/config 與內建主題。
+ * 職稱／角色不再有預設、也不自動補種，由系統管理員自行建立後再到權限管理設定權限。
+ * SEED_ROLES／SEED_TITLES 常數保留（demoData 展示資料仍在引用），不是運行時預設。
  */
 export async function runSystemSeed(
   db: Firestore,
@@ -527,33 +528,6 @@ export async function runSystemSeed(
       updatedAt: now,
       createdBy: staffId,
     });
-  }
-  for (const role of SEED_ROLES) {
-    await setDoc(
-      doc(db, "roles", role.id),
-      {
-        name: role.name,
-        description: role.description,
-        createdAt: now,
-        updatedAt: now,
-        createdBy: staffId,
-      },
-      { merge: true },
-    );
-  }
-  // 預設職稱：文件 ID 以「層級-名稱」固定，避免重複寫入；merge 不覆蓋自訂
-  for (const title of SEED_TITLES) {
-    await setDoc(
-      doc(db, "titles", `${title.level}-${title.name}`),
-      {
-        name: title.name,
-        level: title.level,
-        createdAt: now,
-        updatedAt: now,
-        createdBy: staffId,
-      },
-      { merge: true },
-    );
   }
   // v1.32.0：內建主題種子（uiThemes 集合，僅缺失時寫入，不覆蓋已自訂／已隱藏狀態）
   for (const theme of BUILT_IN_THEMES) {

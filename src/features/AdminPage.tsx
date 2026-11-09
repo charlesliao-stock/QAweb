@@ -119,7 +119,7 @@ function SystemInitSection({
         getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
       );
       setParams(snap.exists() ? (snap.data() as SystemParams) : null);
-      onAction("系統初始化完成：已寫入預設參數與 7 個角色");
+      onAction("系統初始化完成：已寫入預設參數與內建主題（職稱／角色請自行建立）");
     } catch {
       onAction("初始化失敗：權限不足或網路異常，請稍後再試");
     } finally {
@@ -194,7 +194,7 @@ function SystemInitSection({
         note={
           isDemoMode()
             ? "展示模式：系統參數、角色、職稱與展示資料已預載"
-            : "首次啟用時寫入預設參數與角色"
+            : "首次啟用時寫入預設參數與內建主題"
         }
         action={
           params && canManageRoles && !editing ? (
@@ -211,7 +211,7 @@ function SystemInitSection({
           <div>
             <p className="settings-note">
               尚未初始化。將寫入 systemParams/config 預設參數（RAG
-              黃燈區間、補審期限、草稿保留天數等）與 7 個預設角色定義。
+              黃燈區間、補審期限、草稿保留天數等）與內建主題。職稱／角色不再預設，請至「群組與人員」自行建立。
             </p>
             <button
               className="button button-primary"
@@ -219,7 +219,7 @@ function SystemInitSection({
               onClick={handleSeed}
             >
               <Database size={15} />
-              {seeding ? "寫入中…" : "一鍵初始化系統參數與角色"}
+              {seeding ? "寫入中…" : "一鍵初始化系統參數"}
             </button>
           </div>
         ) : (
