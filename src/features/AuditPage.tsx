@@ -38,6 +38,7 @@ import { getDocsCacheFirst } from "../lib/cacheFirst";
 import { fetchAllPaged } from "../lib/pagedQuery";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { useAuth } from "../lib/auth";
+import { usePermissions } from "../lib/usePermissions";
 import { maskName } from "../lib/mask";
 import {
   normalizeAssignmentItem,
@@ -170,6 +171,7 @@ export function AuditPage({
   onAction: (message: string) => void;
 }) {
   const { user } = useAuth();
+  const { can } = usePermissions();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ActiveRow[]>([]);
   const [dataRefreshKey, setDataRefreshKey] = useState(0);
@@ -567,6 +569,8 @@ export function AuditPage({
   }
 
   function canEditRecord(rec: RecordRow): boolean {
+    const groupId = viewRow?.groupId ?? "";
+    if (!groupId || !can("editSubmitted", groupId)) return false;
     return (
       (user?.roles ?? []).includes("系統管理員") ||
       rec.reviewerEmpNo === user?.staffId ||

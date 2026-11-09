@@ -1338,6 +1338,15 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
     }
   }
 
+  return (
+    <section className="panel data-panel">
+      <SectionTitle title="角色與權限設定已移至權限管理" />
+      <p className="settings-note">
+        請至「組織與設定 → 權限管理」使用依群組角色與單位職稱分開設定的完整權限矩陣。
+      </p>
+    </section>
+  );
+
   function permMatrix<
     T extends {
       id: string;
@@ -1394,7 +1403,7 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
       <section className="panel data-panel permission-panel">
         <SectionTitle
           title="角色與權限"
-          note="先新增角色，再於下方矩陣勾選其功能權限；一人多重角色時取聯集"
+          note="已移至組織與設定 → 權限管理；多重角色先取聯集，再與適用職稱採交集"
           action={
             <button className="button button-outline" onClick={openCreate}>
               <Plus size={14} /> 新增角色
@@ -1488,7 +1497,7 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
             <div style={{ marginTop: 16 }}>
               <SectionTitle
                 title="角色功能權限矩陣"
-                note="勾選即生效；多重角色取聯集"
+                note="勾選即生效；角色權限須再與適用職稱權限交集"
               />
               {permMatrix(roles, toggleRolePerm)}
             </div>
@@ -1499,7 +1508,7 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
       <section className="panel data-panel">
         <SectionTitle
           title="職稱功能權限"
-          note="尚未設定的職稱只看角色權限；儲存後改為角色＋職稱都要有才生效（無職稱者視為無權限）"
+          note="需指定適用單位；必須至少一個群組角色與該單位職稱都勾選才授權"
         />
         {loading ? (
           <p className="settings-note">讀取中…</p>
@@ -1511,7 +1520,7 @@ function RolePermissionSection({ onAction }: { onAction: (message: string) => vo
           <>
             {titles.some((t) => !t.permConfigured) && (
               <p className="settings-note" style={{ marginBottom: 8 }}>
-                未設定前只看角色權限；儲存後改為角色＋職稱都要有。
+                職稱未指定適用單位時不參與授權；角色與職稱權限採交集。
               </p>
             )}
             {permMatrix(titles, toggleTitlePerm)}

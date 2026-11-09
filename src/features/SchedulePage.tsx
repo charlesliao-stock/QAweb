@@ -40,7 +40,6 @@ import {
 import { getDocCacheFirst, getDocsCacheFirst } from "../lib/cacheFirst";
 import { indicatorCodeOf } from "../lib/indicators";
 import { buildTaskIndex } from "../lib/taskIndex";
-import { hasSchedulePermission } from "../lib/roleIdentity";
 import { usePermissions } from "../lib/usePermissions";
 import { useAuth } from "../lib/auth";
 import { isReviewerAccessActive } from "../lib/reviewerValidity";
@@ -272,9 +271,8 @@ export function defaultAddAuditReviewers(
 export function SchedulePage({ onAction }: { onAction: (message: string) => void }) {
   const { can } = usePermissions();
   const { user } = useAuth();
-  // v1.21：排程權限＝權限矩陣 manageSchedule 或組級召集人／執行幹事（新舊並認）
-  const canEdit =
-    can("manageSchedule") || hasSchedulePermission(user?.roles ?? []);
+  // 排程編輯權限依角色＋職稱矩陣交集判斷；不再以舊角色名稱繞過設定。
+  const canEdit = can("manageSchedule");
   const actor = useMemo(
     () => ({ id: user?.staffId ?? "", name: user?.name ?? "" }),
     [user],

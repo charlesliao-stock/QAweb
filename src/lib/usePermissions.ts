@@ -1,12 +1,4 @@
-/**
- * 權限 hook（v1.12.1：移轉語義；v1.12.2：系統管理員 bypass）。
- * 載入 roles＋titles 集合，提供 can(permKey)：
- * - 系統管理員（roles 含「系統管理員」）→ 全部放行（bypass）
- * - 無角色／無職稱（人員沒填）→ 無權限
- * - 職稱從未設定過權限（titles 文件無 permissions 欄位）→ 只看角色聯集
- * - 職稱曾儲存過權限矩陣 → 嚴格交集（角色聯集 AND 職稱）
- */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { collection } from "./db";
 import { getFirebaseDb } from "./firebase";
 import { getCachedRefCollection } from "./refCache";
@@ -14,31 +6,58 @@ import { getDocsCacheFirst } from "./cacheFirst";
 import { useAuth } from "./auth";
 import {
   DEFAULT_ROLE_PERMS,
-  can,
+  PERM_KEYS,
+  can as evaluatePermission,
+  defaultRolePermissions,
   parsePermissions,
+  scopedRoleKey,
   type PermKey,
-  type PermUser,
+  type PermissionCatalog,
+  type PermissionTitleDefinition,
   type RolePermissions,
 } from "./permissions";
 
+const emptyCatalog = (): PermissionCatalog => ({
+  globalRolePerms: Object.fromEntries(
+    Object.keys(DEFAULT_ROLE_PERMS).map((name) => [
+      name,
+      defaultRolePermissions(name),
+    ]),
+  ),
+  groupRolePerms: {},
+  titles: [],
+});
+
+function mergeStoredPermissions(
+  defaults: Record<PermKey, boolean>,
+  raw: unknown,
+): Record<PermKey, boolean> {
+  const merged = { ...defaults };
+  if (!raw || typeof raw !== "object") return merged;
+  const values = raw as Record<string, unknown>;
+  for (const key of PERM_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(values, key)) {
+      merged[key] = values[key] === true;
+    }
+  }
+  return merged;
+}
+
 export function usePermissions() {
   const { user } = useAuth();
-  // 先以預設基線提供判斷，Firestore 讀回後再疊加自訂值（避免載入中閃爍）
-  const [rolePerms, setRolePerms] =
-    useState<Record<string, RolePermissions>>(DEFAULT_ROLE_PERMS);
-  // 職稱權限：無程式預設值；另追蹤各職稱是否「曾儲存過」權限矩陣
-  //（permissions 欄位存在才算設定過，有別於明確存成全 false）
-  const [titlePerms, setTitlePerms] = useState<Record<string, RolePermissions>>(
-    {},
-  );
-  const [titleConfigured, setTitleConfigured] = useState<
-    Record<string, boolean>
-  >({});
+  const [catalog, setCatalog] = useState<PermissionCatalog>(emptyCatalog);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    // v1.28 階段 4：roles／titles 走參考資料共用快取（跨頁只讀一次，
-    // 自己寫入後由 db.ts 統一出口自動失效；demo 模式不快取）
+    if (!user?.staffId) {
+      setCatalog(emptyCatalog());
+      setReady(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setReady(false);
     Promise.all([
       getCachedRefCollection("roles", () =>
         getDocsCacheFirst(collection(getFirebaseDb(), "roles")),
@@ -47,57 +66,97 @@ export function usePermissions() {
         getDocsCacheFirst(collection(getFirebaseDb(), "titles")),
       ),
     ])
-      .then(([rsnap, tsnap]) => {
+      .then(([roleSnapshot, titleSnapshot]) => {
         if (cancelled) return;
-        const rp: Record<string, RolePermissions> = {
-          ...DEFAULT_ROLE_PERMS,
-        };
-        rsnap.docs.forEach((d) => {
-          const data = d.data() as Record<string, unknown>;
-          const name = typeof data.name === "string" ? data.name : d.id;
-          rp[name] = {
-            ...(DEFAULT_ROLE_PERMS[name] ?? {}),
-            ...parsePermissions(data.permissions),
-          };
-        });
-        setRolePerms(rp);
-        const tp: Record<string, RolePermissions> = {};
-        const tc: Record<string, boolean> = {};
-        tsnap.docs.forEach((d) => {
-          const data = d.data() as Record<string, unknown>;
-          const name = typeof data.name === "string" ? data.name : d.id;
-          const parsed = parsePermissions(data.permissions);
-          // 同名職稱（例：群組/單位層級的「執行幹事」）取聯集
-          tp[name] = { ...(tp[name] ?? {}), ...parsed };
-          // 任一同名文件曾存過 permissions 欄位即視為已設定
-          if (data.permissions !== undefined && data.permissions !== null) {
-            tc[name] = true;
+        const next = emptyCatalog();
+        roleSnapshot.docs.forEach((document) => {
+          const data = document.data() as Record<string, unknown>;
+          const name = typeof data.name === "string" ? data.name : document.id;
+          const rolePermissions = mergeStoredPermissions(
+            defaultRolePermissions(name),
+            data.permissions,
+          );
+          const groupId = typeof data.groupId === "string" ? data.groupId : "";
+          if (groupId) {
+            next.groupRolePerms[scopedRoleKey(groupId, name)] = rolePermissions;
+          } else {
+            next.globalRolePerms[name] = rolePermissions;
+            if (data.groupPermissionsByGroup && typeof data.groupPermissionsByGroup === "object") {
+              Object.entries(data.groupPermissionsByGroup as Record<string, unknown>).forEach(
+                ([scopedGroupId, rawPermissions]) => {
+                  next.groupRolePerms[scopedRoleKey(scopedGroupId, name)] = {
+                    ...rolePermissions,
+                    ...mergeStoredPermissions(rolePermissions, rawPermissions),
+                  };
+                },
+              );
+            }
           }
         });
-        setTitlePerms(tp);
-        setTitleConfigured(tc);
+        next.titles = titleSnapshot.docs.map((document) => {
+          const data = document.data() as Record<string, unknown>;
+          return {
+            id: document.id,
+            name: typeof data.name === "string" ? data.name : document.id,
+            unitCodes: Array.isArray(data.unitCodes)
+              ? data.unitCodes.map(String).filter(Boolean)
+              : [],
+            permissions: parsePermissions(data.permissions),
+            configured: data.permissions !== undefined && data.permissions !== null,
+          } satisfies PermissionTitleDefinition;
+        });
+        setCatalog(next);
       })
       .catch(() => {
-        /* 讀不到就沿用預設基線 */
+        // Fail closed for non-admins. System administrator retains the emergency bypass.
+        setCatalog(emptyCatalog());
+      })
+      .finally(() => {
+        if (!cancelled) setReady(true);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user?.staffId]);
 
-  const permUser: PermUser | undefined = user
-    ? { roles: user.roles ?? [], title: user.title ?? "" }
-    : undefined;
-  // 系統管理員權限最大：直接放行所有功能（v1.12.2）
-  //（既有管理員判定邏輯：roles 含「系統管理員」；沿用 GroupsPage/AdminPage 的寫法）
+  const permUser = useMemo(
+    () =>
+      user
+        ? {
+            roles: user.roles ?? [],
+            memberships: user.memberships ?? [],
+            title: user.title ?? "",
+            titleId: user.titleId ?? "",
+            unitCode: user.unitCode ?? "",
+          }
+        : undefined,
+    [user],
+  );
   const isAdmin = (user?.roles ?? []).includes("系統管理員");
 
-  const canDo = useCallback(
-    (key: PermKey) =>
-      isAdmin || can(permUser, key, rolePerms, titlePerms, titleConfigured),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [isAdmin, user?.roles, user?.title, rolePerms, titlePerms, titleConfigured],
+  const can = useCallback(
+    (key: PermKey, groupId?: string) =>
+      isAdmin || evaluatePermission(permUser, key, catalog, groupId),
+    [isAdmin, permUser, catalog],
   );
 
-  return { can: canDo, rolePerms, titlePerms, titleConfigured };
+  const rolePerms = catalog.globalRolePerms;
+  const titlePerms = useMemo(
+    () => Object.fromEntries(catalog.titles.map((title) => [title.id, title.permissions])) as Record<string, RolePermissions>,
+    [catalog.titles],
+  );
+  const titleConfigured = useMemo(
+    () => Object.fromEntries(catalog.titles.map((title) => [title.id, title.configured])) as Record<string, boolean>,
+    [catalog.titles],
+  );
+
+  return {
+    can,
+    ready,
+    isAdmin,
+    catalog,
+    rolePerms,
+    titlePerms,
+    titleConfigured,
+  };
 }

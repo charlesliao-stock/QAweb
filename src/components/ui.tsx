@@ -37,6 +37,10 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
       description: "追蹤改善措施、成效驗證與結案",
     },
     admin: { title: "系統管理", description: "角色權限與系統參數展示設定" },
+    permissions: {
+      title: "權限管理",
+      description: "依群組角色與單位職稱設定頁面及功能權限",
+    },
     reviewers: {
       title: "審查員管理",
       description: "檢視審查員名單、依組別篩選並授予審查員角色",

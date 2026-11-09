@@ -28,6 +28,7 @@ export type PageId =
   | "handoff"
   | "capa"
   | "admin"
+  | "permissions"
   | "reviewers";
 
 export type Rag = "green" | "amber" | "red";

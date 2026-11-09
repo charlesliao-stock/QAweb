@@ -17,6 +17,7 @@ import {
   LogOut,
   Menu,
   Settings2,
+  ShieldCheck,
   X,
 } from "lucide-react";
 import { AuthProvider, useAuth } from "../lib/auth";
@@ -31,6 +32,8 @@ import {
 } from "../lib/uiPrefs";
 import { BrandMark } from "../components/ui";
 import { VERSION_LABEL } from "../version";
+import { pagePermissionKey } from "../lib/permissions";
+import { usePermissions } from "../lib/usePermissions";
 import { DashboardPage } from "../features/DashboardPage";
 // v1.28 階段 6（A1）：儀表板是登入後首頁，留在首屏 chunk；其餘 7 頁懶載入，
 // 切頁時才載入對應 chunk（首次切頁多一次請求，以 Suspense 顯示載入中、不空白卡住）。
@@ -46,6 +49,11 @@ const CapaPage = lazy(() =>
 );
 const GroupsPage = lazy(() =>
   import("../features/GroupsPage").then((m) => ({ default: m.GroupsPage })),
+);
+const PermissionManagementPage = lazy(() =>
+  import("../features/PermissionManagementPage").then((m) => ({
+    default: m.PermissionManagementPage,
+  })),
 );
 const TaskHandoffPage = lazy(() =>
   import("../features/TaskHandoffPage").then((m) => ({ default: m.TaskHandoffPage })),
@@ -88,6 +96,7 @@ const NAV_GROUPS = [
       { id: "groups", label: "群組與人員", icon: GitBranch },
       { id: "handoff", label: "任務交接", icon: ArrowRightLeft },
       { id: "admin", label: "系統管理", icon: Settings2 },
+      { id: "permissions", label: "權限管理", icon: ShieldCheck },
     ],
   },
 ] as const;
@@ -273,12 +282,14 @@ function LoginScreen() {
 
 function Sidebar({
   page,
+  canViewPage,
   onPage,
   onExit,
   mobileOpen,
   onClose,
 }: {
   page: PageId;
+  canViewPage: (page: PageId) => boolean;
   onPage: (page: PageId) => void;
   onExit: () => void;
   mobileOpen: boolean;
@@ -393,27 +404,33 @@ function Sidebar({
           )}
         </div>
         <nav className="main-nav" aria-label="主要導覽">
-          {NAV_GROUPS.map((group) => (
-            <div className="nav-group" key={group.label}>
-              <span className="nav-group-label">{group.label}</span>
-              {group.items.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={item.id}
-                    className={`nav-item${page === item.id ? " active" : ""}`}
-                    onClick={() => {
-                      onPage(item.id as PageId);
-                      onClose();
-                    }}
-                  >
-                    <Icon size={18} strokeWidth={1.8} />
-                    <span>{item.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+          {NAV_GROUPS.map((group) => {
+            const visibleItems = group.items.filter((item) =>
+              canViewPage(item.id as PageId),
+            );
+            if (visibleItems.length === 0) return null;
+            return (
+              <div className="nav-group" key={group.label}>
+                <span className="nav-group-label">{group.label}</span>
+                {visibleItems.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      className={`nav-item${page === item.id ? " active" : ""}`}
+                      onClick={() => {
+                        onPage(item.id as PageId);
+                        onClose();
+                      }}
+                    >
+                      <Icon size={18} strokeWidth={1.8} />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
         </nav>
         <div className="sidebar-bottom">
           <div className="profile-row">
@@ -446,6 +463,7 @@ function Sidebar({
 
 function Shell() {
   const { user, loading, needsPasswordChange, logout } = useAuth();
+  const { can, ready: permissionsReady } = usePermissions();
   const [page, setPage] = useState<PageId>("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
@@ -455,6 +473,21 @@ function Shell() {
       window.matchMedia("(max-width: 760px)").matches,
   );
   const [toast, setToast] = useState("");
+  const canViewPage = useCallback(
+    (target: PageId) => {
+      const key = pagePermissionKey(target);
+      return Boolean(key && can(key));
+    },
+    [can],
+  );
+
+  useEffect(() => {
+    if (!permissionsReady || canViewPage(page)) return;
+    const pageIds: PageId[] = [];
+    NAV_GROUPS.forEach((group) => group.items.forEach((item) => pageIds.push(item.id as PageId)));
+    const firstAccessible = pageIds.find((target) => canViewPage(target));
+    if (firstAccessible) setPage(firstAccessible);
+  }, [canViewPage, page, permissionsReady]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 760px)");
@@ -518,6 +551,7 @@ function Shell() {
     <div className={`app-shell${sidebarHidden ? " sidebar-hidden" : ""}`}>
       <Sidebar
         page={page}
+        canViewPage={canViewPage}
         onPage={setPage}
         onExit={() => void logout()}
         mobileOpen={mobileOpen}
@@ -562,15 +596,22 @@ function Shell() {
           <Suspense
             fallback={<p className="settings-note">頁面載入中…</p>}
           >
-            {page === "dashboard" && <DashboardPage onAction={notify} />}
-            {page === "indicators" && <IndicatorsPage onAction={notify} />}
-            {page === "schedule" && <SchedulePage onAction={notify} />}
-            {page === "audit" && <AuditPage onAction={notify} />}
-            {page === "results" && <ResultsPage onAction={notify} />}
-            {page === "groups" && <GroupsPage onAction={notify} />}
-            {page === "handoff" && <TaskHandoffPage onAction={notify} />}
-            {page === "capa" && <CapaPage onAction={notify} />}
-            {page === "admin" && <AdminPage onAction={notify} />}
+            {!canViewPage(page) ? (
+              <section className="panel"><p className="settings-note">此帳號尚未取得此頁面權限，請聯絡系統管理員。</p></section>
+            ) : (
+              <>
+                {page === "dashboard" && <DashboardPage onAction={notify} />}
+                {page === "indicators" && <IndicatorsPage onAction={notify} />}
+                {page === "schedule" && <SchedulePage onAction={notify} />}
+                {page === "audit" && <AuditPage onAction={notify} />}
+                {page === "results" && <ResultsPage onAction={notify} />}
+                {page === "groups" && <GroupsPage onAction={notify} />}
+                {page === "handoff" && <TaskHandoffPage onAction={notify} />}
+                {page === "capa" && <CapaPage onAction={notify} />}
+                {page === "admin" && <AdminPage onAction={notify} />}
+                {page === "permissions" && <PermissionManagementPage onAction={notify} />}
+              </>
+            )}
           </Suspense>
         </div>
       </main>
@@ -592,7 +633,7 @@ function Shell() {
           { id: "audit", label: "品管", icon: ClipboardCheck },
           { id: "results", label: "結果", icon: FileBarChart2 },
           { id: "groups", label: "更多", icon: Menu },
-        ].map((item) => {
+        ].filter((item) => canViewPage(item.id as PageId)).map((item) => {
           const Icon = item.icon;
           return (
             <button

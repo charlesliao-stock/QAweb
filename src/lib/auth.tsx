@@ -19,6 +19,7 @@ import { getFirebaseAuth, getFirebaseDb } from "./firebase";
 import { isDemoMode, setDemoMode } from "./demoMode";
 import { clearRefCache } from "./refCache";
 import { activeRolesForReviewerExpiry, isReviewerAccessActive } from "./reviewerValidity";
+import { parseMemberships, type Membership } from "./roleIdentity";
 
 /** 登入用 email 合成規則：職編即帳號，phase 1 不寄信故用內部網域 */
 export function staffEmail(staffId: string): string {
@@ -32,7 +33,11 @@ export interface StaffProfile {
   unitName: string;
   /** 職稱名稱（v1.12.0：權限交集判斷用；""＝未設定） */
   title: string;
+  /** 新版職稱主檔 ID；舊人員資料可能為空，授權時再以職稱＋單位唯一比對。 */
+  titleId: string;
   roles: string[];
+  /** 僅保留明確儲存的群組成員角色，不把舊角色聯集擴散至多個群組。 */
+  memberships: Membership[];
   reviewerAccessExpiresAt: string;
   /** 督導負責的群組 id（v1.15.0：督導儀表板轄區用） */
   districtGroupIds: string[];
@@ -58,7 +63,9 @@ const DEMO_USER: StaffProfile = {
   unitCode: "",
   unitName: "",
   title: "督導",
+  titleId: "",
   roles: ["系統管理員"],
+  memberships: [],
   reviewerAccessExpiresAt: "",
   districtGroupIds: [],
   mustChangePassword: false,
@@ -106,6 +113,7 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
     throw new Error("此帳號已停用，請聯絡系統管理員");
   }
   const storedRoles = Array.isArray(raw.roles) ? raw.roles.map(String) : [];
+  const memberships = parseMemberships(raw.memberships);
   const reviewerAccessExpiresAt = typeof raw.reviewerAccessExpiresAt === "string"
     ? raw.reviewerAccessExpiresAt
     : "";
@@ -119,7 +127,9 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
     unitCode: typeof raw.unitCode === "string" ? raw.unitCode : "",
     unitName: typeof raw.unitName === "string" ? raw.unitName : "",
     title: typeof raw.title === "string" ? raw.title : "",
+    titleId: typeof raw.titleId === "string" ? raw.titleId : "",
     roles,
+    memberships,
     reviewerAccessExpiresAt,
     districtGroupIds,
     mustChangePassword: raw.mustChangePassword === true,

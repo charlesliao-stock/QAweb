@@ -8,7 +8,7 @@
  * xlsx 檔案讀取由呼叫端（lib/sheetFile）完成後傳入 string[][]。
  */
 import { splitOwners } from "./import";
-import type { Membership } from "./roleIdentity";
+import { isGroupScopedRole, type Membership } from "./roleIdentity";
 
 /* ================= 共用：標題列對照 ================= */
 
@@ -111,6 +111,7 @@ export function validateUserRows(
     existingStaffIds: Set<string>;
     groupByName: Map<string, string>;
     roleNames: Set<string>;
+    roleGroupIdsByName?: Map<string, string[]>;
     titleNames: Set<string>;
     unitCodes: Set<string>;
   },
@@ -143,7 +144,13 @@ export function validateUserRows(
         errors.push(`群組「${gName}」不存在`);
         continue;
       }
-      const unknown = roleNames.filter((n) => !ctx.roleNames.has(n));
+      const unknown = roleNames.filter((n) => {
+        if (!ctx.roleNames.has(n)) return true;
+        const scopedGroups = ctx.roleGroupIdsByName?.get(n);
+        if (!ctx.roleGroupIdsByName) return false;
+        if (!scopedGroups) return !isGroupScopedRole(n);
+        return !scopedGroups.includes("*") && !scopedGroups.includes(groupId);
+      });
       if (unknown.length > 0) {
         errors.push(`角色不存在：${unknown.join("、")}`);
         continue;
