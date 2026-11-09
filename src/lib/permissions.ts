@@ -85,11 +85,13 @@ export const ADMIN_ONLY_PERM_KEYS = [
 export const EXCLUDED_ROLE_NAMES = ["系統管理員", "一般人員"] as const;
 
 /**
- * 權限範本（v1.38.0 名稱範本制）：
+ * 權限範本（v1.38.0 名稱範本制，v1.39.0 判斷改吃人員指派情境）：
  * 權限按名稱存一份，不再按各群組／單位的文件各存一份。
  * 例如「召集人」只有一份範本，加護組、病房組、腫瘤組的召集人都共用
  * 同一組權限與跨設定；改一處，全部同名角色／職稱一起改。
  * 文件存於 `permissionTemplates` 集合，文件 id＝`${category}__${name}`。
+ * v1.39.0 起角色／職稱文件上的群組／範圍欄位不再作為判斷依據；
+ * 範圍改看人員自己的指派情境（memberships、title、unitCode）＋範本跨設定。
  */
 export type TemplateCategory = "group" | "unit" | "unitRole";
 
@@ -137,20 +139,6 @@ export const UNIT_ROLE_TEMPLATE_BASE_NAMES = [
   "單位審查員",
 ] as const;
 
-/** 角色文件範圍詮釋資料（供跨群組／跨單位判斷；權限本身看範本）。 */
-export interface RoleDocMeta {
-  kind: RoleKind;
-  groupId: string;
-  unitCode: string;
-}
-
-/** 職稱文件範圍詮釋資料（供不跨單位時比對適用單位；權限本身看範本）。 */
-export interface TitleDocMeta {
-  id: string;
-  name: string;
-  unitCodes: string[];
-}
-
 const PAGE_KEY_BY_ID = PAGE_PERMISSION_KEYS as Partial<Record<PageId, PermKey>>;
 
 export function pagePermissionKey(page: PageId): PermKey | undefined {
@@ -176,34 +164,8 @@ export function parsePermissions(raw: unknown): Record<PermKey, boolean> {
   return out;
 }
 
-export function scopedRoleKey(groupId: string, roleName: string): string {
-  return `${encodeURIComponent(groupId)}::${encodeURIComponent(roleName)}`;
-}
-
 /**
- * 權限範圍模式（v1.36.0）：
- * - "all"＝不分單位，適用全部單位；
- * - "units"＝分單位，只適用 unitCodes 清單內的單位。
- * 既有資料無 scopeMode 時由 unitCodes 推斷：有單位清單→分單位，無→不分單位。
- */
-export type ScopeMode = "all" | "units";
-
-export function parseScopeMode(raw: unknown, unitCodes: string[]): ScopeMode {
-  if (raw === "all" || raw === "units") return raw;
-  return unitCodes.length > 0 ? "units" : "all";
-}
-
-export function scopeAppliesToUnit(
-  scopeMode: ScopeMode,
-  unitCodes: string[],
-  unitCode: string,
-): boolean {
-  if (scopeMode === "all") return true;
-  return unitCode !== "" && unitCodes.includes(unitCode);
-}
-
-/**
- * 角色種類（v1.37.0）：
+ * 角色種類（v1.37.0，僅權限頁動態列名分類用；v1.39.0 起判斷不再讀角色文件）：
  * - "unit"＝單位角色（有所屬單位 unitCode，單位限制由職稱側把關）；
  * - "group"＝群組角色（有所屬群組 groupId，另有跨群組模式）。
  * 舊文件無 kind 時由 groupId 推斷：有群組→群組角色，無→單位角色。
@@ -215,24 +177,11 @@ export function parseRoleKind(raw: unknown, groupId: string): RoleKind {
   return groupId ? "group" : "unit";
 }
 
-/**
- * 群組角色跨群組模式（v1.37.0，預設不跨）：
- * - "all"＝跨群組，任一 membership 持有該角色即生效；
- * - "group"＝不跨群組，只在角色所屬群組生效。
- */
-export type GroupScopeMode = "all" | "group";
-
-export function parseGroupScopeMode(raw: unknown): GroupScopeMode {
-  return raw === "all" ? "all" : "group";
-}
-
 export interface PermissionCatalog {
   /** 範本：以 `${category}:${name}` 為鍵；無範本＝無權限，不再給預設值。 */
   templates: Record<string, PermissionTemplate>;
-  /** 角色文件：以角色名為鍵（同名多筆各列一份，供 kind／群組／單位判斷）。 */
-  roleDocs: Record<string, RoleDocMeta[]>;
-  /** 職稱文件（供不跨單位時比對適用單位）。 */
-  titleDocs: TitleDocMeta[];
+  /** 單位→所屬群組對照（unitCode → groupId；供單位角色不跨單位時比對）。 */
+  unitGroups: Record<string, string>;
 }
 
 /** 權限判斷所需的登入者身分；roles 是舊相容聯集，判斷時會扣除 membership 角色。 */
@@ -264,7 +213,7 @@ function groupsHoldingRole(user: PermUser, roleName: string): string[] {
 }
 
 /**
- * 群組角色範本是否授權（v1.38.0 範本制）：
+ * 群組角色範本是否授權（v1.39.0：只看 membership 指派情境，不讀角色文件）：
  * - 範本不存在或該鍵未勾選 → 不授權；
  * - 跨群組：任一 membership 持有即生效；
  * - 不跨群組：傳入目標群組時必須持有於該群組，未傳目標群組時持有任一群組即生效（導覽用）。
@@ -287,12 +236,12 @@ function groupRoleTemplateAllows(
 }
 
 /**
- * 單位角色範本是否授權（v1.38.0 範本制）：
+ * 單位角色範本是否授權（v1.39.0：只看人員指派情境，不讀角色文件 unitCode）：
  * - 範本不存在或該鍵未勾選 → 不授權；
- * - 跨單位：持有即生效；
- * - 不跨單位：角色文件 unitCode 須等於使用者單位；舊文件無 unitCode 時
- *   視為持有於本人單位（相容重置前資料，重置後新文件皆有 unitCode）；
- *   無任何角色文件時無法驗證單位範圍，範本為準。
+ * - 跨單位：持有（roles 含該角色名）即生效；
+ * - 不跨單位：只在使用者本人的 unitCode 內生效——以其單位所屬群組為準，
+ *   須在該群組的 membership 中持有此角色（單位級角色的指派即以單位群組計）。
+ *   舊文件欄位（groupId／unitCode）一律忽略。
  */
 function unitRoleTemplateAllows(
   user: PermUser,
@@ -304,17 +253,15 @@ function unitRoleTemplateAllows(
   if (!template || template.permissions[key] !== true) return false;
   if (!user.roles.includes(roleName)) return false;
   if (template.cross) return true;
-  const docs = (catalog.roleDocs[roleName] ?? []).filter(
-    (item) => item.kind === "unit",
-  );
-  if (docs.length === 0) return true;
-  return docs.some((item) => !item.unitCode || item.unitCode === user.unitCode);
+  const ownGroup = catalog.unitGroups[user.unitCode];
+  if (!ownGroup) return false;
+  return groupsHoldingRole(user, roleName).includes(ownGroup);
 }
 
 /**
  * 角色側是否授權：使用者的每個角色名找對應範本（群組角色範本／單位角色
- * 範本，依角色文件的 kind 區分；kind 不明時兩類範本都找），取聯集。
- * 角色跨單位不再另設，跟範本走（單位限制由職稱側把關）。
+ * 範本都找），取聯集。角色文件不再作為判斷依據（v1.39.0 一名一檔，
+ * 文件只剩名稱；種類由範本所屬目標決定）。
  */
 function roleSideAllows(
   user: PermUser,
@@ -323,18 +270,10 @@ function roleSideAllows(
   targetGroupId?: string,
 ): boolean {
   for (const roleName of new Set(user.roles)) {
-    const kinds = new Set(
-      (catalog.roleDocs[roleName] ?? []).map((item) => item.kind),
-    );
-    const tryGroup = kinds.size === 0 || kinds.has("group");
-    const tryUnitRole = kinds.size === 0 || kinds.has("unit");
-    if (
-      tryGroup &&
-      groupRoleTemplateAllows(user, roleName, key, catalog, targetGroupId)
-    ) {
+    if (groupRoleTemplateAllows(user, roleName, key, catalog, targetGroupId)) {
       return true;
     }
-    if (tryUnitRole && unitRoleTemplateAllows(user, roleName, key, catalog)) {
+    if (unitRoleTemplateAllows(user, roleName, key, catalog)) {
       return true;
     }
   }
@@ -342,11 +281,12 @@ function roleSideAllows(
 }
 
 /**
- * 職稱側是否授權（v1.38.0 範本制）：
+ * 職稱側是否授權（v1.39.0：只看範本，不讀職稱文件 unitCodes）：
  * - 範本不存在或該鍵未勾選 → 不授權；
  * - 跨單位：全單位生效；
- * - 不跨單位：使用者單位必須在職稱文件的 unitCodes 內（以 titleId 或
- *   職稱名找文件；無文件或無 unitCodes＝不生效）。
+ * - 不跨單位：只在使用者本人的 unitCode 內生效；使用者本就在自己的單位，
+ *   故範本勾選即生效（跨設定影響的是「能看／能管哪些單位的資料」，
+ *   由各頁的資料範圍過濾處理，不影響 can() 本身）。
  */
 function titleSideAllows(
   user: PermUser,
@@ -355,16 +295,11 @@ function titleSideAllows(
 ): boolean {
   const template = templateFor(catalog, "unit", user.title);
   if (!template || template.permissions[key] !== true) return false;
-  if (template.cross) return true;
-  const docs = catalog.titleDocs.filter(
-    (item) => item.id === user.titleId || item.name === user.title,
-  );
-  if (docs.length === 0) return false;
-  return docs.some((item) => item.unitCodes.includes(user.unitCode));
+  return true;
 }
 
 /**
- * 權限採交集（v1.38.0 範本制）：至少一個有效角色範本
+ * 權限採交集（v1.39.0 範本制＋指派情境）：至少一個有效角色範本
  * 與使用者職稱範本，都必須勾選同一功能。
  * 無職稱／無範本＝無權限。
  * 傳 groupId 時，群組角色只對該群組生效（不跨群組時）；省略時用於導覽顯示，

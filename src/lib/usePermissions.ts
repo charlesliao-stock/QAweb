@@ -7,7 +7,6 @@ import { useAuth } from "./auth";
 import {
   can as evaluatePermission,
   parsePermissions,
-  parseRoleKind,
   parseTemplateCategory,
   templateKey,
   type PermissionCatalog,
@@ -18,11 +17,12 @@ import {
  * 空 catalog（v1.38.0 範本制：無範本＝無權限）。
  * 無範本的角色／職稱權限一律為空，不再按角色名給預設值；
  * 系統管理員另有 bypass，不受此影響。
+ * v1.39.0：catalog 不再含角色／職稱文件（判斷不讀它們），改含
+ * 單位→群組對照（單位角色不跨單位時比對用）。
  */
 const emptyCatalog = (): PermissionCatalog => ({
   templates: {},
-  roleDocs: {},
-  titleDocs: [],
+  unitGroups: {},
 });
 
 export function usePermissions() {
@@ -44,14 +44,11 @@ export function usePermissions() {
       getCachedRefCollection("permissionTemplates", () =>
         getDocsCacheFirst(collection(getFirebaseDb(), "permissionTemplates")),
       ),
-      getCachedRefCollection("roles", () =>
-        getDocsCacheFirst(collection(getFirebaseDb(), "roles")),
-      ),
-      getCachedRefCollection("titles", () =>
-        getDocsCacheFirst(collection(getFirebaseDb(), "titles")),
+      getCachedRefCollection("units", () =>
+        getDocsCacheFirst(collection(getFirebaseDb(), "units")),
       ),
     ])
-      .then(([templateSnapshot, roleSnapshot, titleSnapshot]) => {
+      .then(([templateSnapshot, unitSnapshot]) => {
         if (cancelled) return;
         const next = emptyCatalog();
         templateSnapshot.docs.forEach((document) => {
@@ -66,26 +63,10 @@ export function usePermissions() {
             cross: data.cross === true,
           };
         });
-        roleSnapshot.docs.forEach((document) => {
+        unitSnapshot.docs.forEach((document) => {
           const data = document.data() as Record<string, unknown>;
-          const name = typeof data.name === "string" ? data.name : document.id;
           const groupId = typeof data.groupId === "string" ? data.groupId : "";
-          const unitCode = typeof data.unitCode === "string" ? data.unitCode : "";
-          const meta = { kind: parseRoleKind(data.kind, groupId), groupId, unitCode };
-          const list = next.roleDocs[name] ?? [];
-          list.push(meta);
-          next.roleDocs[name] = list;
-        });
-        next.titleDocs = titleSnapshot.docs.map((document) => {
-          const data = document.data() as Record<string, unknown>;
-          const unitCodes = Array.isArray(data.unitCodes)
-            ? data.unitCodes.map(String).filter(Boolean)
-            : [];
-          return {
-            id: document.id,
-            name: typeof data.name === "string" ? data.name : document.id,
-            unitCodes,
-          };
+          if (groupId) next.unitGroups[document.id] = groupId;
         });
         setCatalog(next);
       })

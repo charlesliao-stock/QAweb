@@ -33,16 +33,7 @@ import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import { SEED_GROUP_NAMES } from "../lib/seed";
 import { reviewerDocId, UNCATEGORIZED_GROUP_ID, shouldAutoLinkReviewer } from "../lib/scheduling";
-import {
-  parseGroupScopeMode,
-  parsePermissions,
-  parseRoleKind,
-  parseScopeMode,
-  scopeAppliesToUnit,
-  type GroupScopeMode,
-  type RoleKind,
-  type ScopeMode,
-} from "../lib/permissions";
+import { templateDocId } from "../lib/permissions";
 import {
   deriveGroupIds,
   deriveRoles,
@@ -86,12 +77,7 @@ interface UnitRow {
 interface TitleRow {
   id: string;
   name: string;
-  level: string;
   userCount: number | null;
-  scopeMode: ScopeMode;
-  unitCodes: string[];
-  /** 功能權限（v1.12.0：與角色分開設定，目前僅儲存） */
-  permissions: Record<string, boolean>;
 }
 
 interface UserRow {
@@ -110,20 +96,12 @@ interface UserRow {
 interface RoleRow {
   id: string;
   name: string;
-  kind: RoleKind;
-  groupId: string;
-  unitCode: string;
-  groupScopeMode: GroupScopeMode;
   memberCount: number | null;
 }
 
 interface OptionItem {
   id: string;
   name: string;
-  kind: RoleKind;
-  groupId?: string;
-  unitCode?: string;
-  groupScopeMode: GroupScopeMode;
 }
 
 function SortHeader({
@@ -163,10 +141,6 @@ interface UnitForm {
 
 interface TitleForm {
   name: string;
-  /** v1.37.0：職稱層級只留單位（群組層級已取消）。 */
-  level: "單位";
-  scopeMode: ScopeMode;
-  unitCodes: string[];
 }
 
 interface UserForm {
@@ -204,7 +178,7 @@ function emptyUnitForm(): UnitForm {
 }
 
 function emptyTitleForm(): TitleForm {
-  return { name: "", level: "單位", scopeMode: "all", unitCodes: [] };
+  return { name: "" };
 }
 
 function emptyUserForm(): UserForm {
@@ -265,16 +239,16 @@ const UNIT_SAMPLE: string[][] = unitTemplateRows();
 const UNIT_HEADER = UNIT_TEMPLATE_HEADERS;
 
 const TITLE_SAMPLE: string[][] = [
-  ["職稱名稱", "層級", "適用單位代碼（逗號分隔）"],
-  ["護理長", "單位", "請填實際單位代碼"],
-  ["副護理長", "單位", "請填實際單位代碼"],
-  ["督導", "單位", ""],
-  ["護理師", "單位", ""],
+  ["職稱名稱"],
+  ["護理長"],
+  ["副護理長"],
+  ["督導"],
+  ["護理師"],
 ];
-const TITLE_HEADER = ["職稱名稱", "層級", "適用單位代碼（逗號分隔）"];
+const TITLE_HEADER = ["職稱名稱"];
 
-const ROLE_SAMPLE: string[][] = [["角色名稱", "所屬群組"], ["自訂角色", "請填實際群組"]];
-const ROLE_HEADER = ["角色名稱", "所屬群組"];
+const ROLE_SAMPLE: string[][] = [["角色名稱"], ["召集人"], ["執行幹事"]];
+const ROLE_HEADER = ["角色名稱"];
 
 const USER_SAMPLE: string[][] = userTemplateRows();
 const USER_HEADER = USER_TEMPLATE_HEADERS;
@@ -657,14 +631,9 @@ export function GroupsPage({
   const [userSaving, setUserSaving] = useState(false);
   const [roleOptions, setRoleOptions] = useState<OptionItem[]>([]);
 
-  // ---- 角色（v1.37.0：kind 單位／群組；建立後請至權限管理設定權限） ----
+  // ---- 角色（v1.39.0：一名一檔，只寫名稱；建立後請至權限管理設定權限） ----
   const [roleCreateOpen, setRoleCreateOpen] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
-  const [newRoleKind, setNewRoleKind] = useState<RoleKind>("group");
-  const [newRoleGroupId, setNewRoleGroupId] = useState("");
-  const [newRoleUnitCode, setNewRoleUnitCode] = useState("");
-  const [newRoleGroupScopeMode, setNewRoleGroupScopeMode] =
-    useState<GroupScopeMode>("group");
   const [roleCreateError, setRoleCreateError] = useState("");
   const [roleCreateSaving, setRoleCreateSaving] = useState(false);
   /** 正在管理成員的角色 id（""＝未開啟） */
@@ -738,23 +707,19 @@ export function GroupsPage({
                 : row.staffId,
   );
 
-  /** 角色清單＋成員數（由 roleOptions 與人員清單衍生） */
+  /** 角色清單＋成員數（由 roleOptions 與人員清單衍生；一名一檔，成員＝roles 含該名或任一 membership 含該名） */
   const roleRows: RoleRow[] = useMemo(
     () =>
       roleOptions.map((r) => ({
         id: r.id,
         name: r.name,
-        kind: r.kind,
-        groupId: r.groupId ?? "",
-        unitCode: r.unitCode ?? "",
-        groupScopeMode: r.groupScopeMode,
         memberCount:
           users.length > 0
-            ? users.filter((u) => r.groupId
-                ? u.memberships.some((m) => m.groupId === r.groupId && m.roles.includes(r.name))
-                : isGroupScopedRole(r.name)
-                  ? u.memberships.some((m) => m.roles.includes(r.name))
-                  : u.roles.includes(r.name)).length
+            ? users.filter(
+                (u) =>
+                  u.roles.includes(r.name) ||
+                  u.memberships.some((m) => m.roles.includes(r.name)),
+              ).length
             : null,
       })),
     [roleOptions, users],
@@ -766,11 +731,11 @@ export function GroupsPage({
   const roleMembers = useMemo(
     () =>
       managingRole
-        ? users.filter((u) => managingRole.groupId
-            ? u.memberships.some((m) => m.groupId === managingRole.groupId && m.roles.includes(managingRole.name))
-            : isGroupScopedRole(managingRole.name)
-              ? u.memberships.some((m) => m.roles.includes(managingRole.name))
-              : u.roles.includes(managingRole.name))
+        ? users.filter(
+            (u) =>
+              u.roles.includes(managingRole.name) ||
+              u.memberships.some((m) => m.roles.includes(managingRole.name)),
+          )
         : [],
     [users, managingRole],
   );
@@ -778,13 +743,10 @@ export function GroupsPage({
     if (!managingRole) return [];
     const kw = roleAddSearch.trim().toLowerCase();
     return users.filter(
-        (u) =>
-          u.status === "在職" &&
-        !(managingRole.groupId
-          ? u.memberships.some((m) => m.groupId === managingRole.groupId && m.roles.includes(managingRole.name))
-          : isGroupScopedRole(managingRole.name)
-            ? u.memberships.some((m) => m.roles.includes(managingRole.name))
-            : u.roles.includes(managingRole.name)) &&
+      (u) =>
+        u.status === "在職" &&
+        !u.roles.includes(managingRole.name) &&
+        !u.memberships.some((m) => m.roles.includes(managingRole.name)) &&
         (kw === "" ||
           u.staffId.toLowerCase().includes(kw) ||
           u.name.toLowerCase().includes(kw)),
@@ -818,7 +780,7 @@ export function GroupsPage({
       const title = titles.find((item) => item.id === managingTitleId);
       if (!title) return [];
       return users.filter((u) => u.titleId === title.id || (
-        !u.titleId && u.title === title.name && scopeAppliesToUnit(title.scopeMode, title.unitCodes, u.unitCode)
+        !u.titleId && u.title === title.name
       ));
     },
     [users, titles, managingTitleId],
@@ -831,9 +793,8 @@ export function GroupsPage({
       .filter(
         (u) =>
           u.status === "在職" &&
-          scopeAppliesToUnit(title.scopeMode, title.unitCodes, u.unitCode) &&
           u.titleId !== title.id &&
-          (u.titleId || u.title !== title.name || !scopeAppliesToUnit(title.scopeMode, title.unitCodes, u.unitCode)) &&
+          !(u.titleId === "" && u.title === title.name) &&
           (kw === "" ||
             u.staffId.toLowerCase().includes(kw) ||
             u.name.toLowerCase().includes(kw)),
@@ -859,14 +820,9 @@ export function GroupsPage({
       setRoleOptions(
         snap.docs.map((d) => {
           const data = d.data();
-          const groupId = typeof data.groupId === "string" ? data.groupId : "";
           return {
             id: d.id,
             name: typeof data.name === "string" ? data.name : d.id,
-            kind: parseRoleKind(data.kind, groupId),
-            groupId,
-            unitCode: typeof data.unitCode === "string" ? data.unitCode : "",
-            groupScopeMode: parseGroupScopeMode(data.groupScopeMode),
           };
         }),
       );
@@ -961,36 +917,29 @@ export function GroupsPage({
       const list = snap.docs
         .map((d) => {
           const data = d.data();
-          const unitCodes = Array.isArray(data.unitCodes)
-            ? data.unitCodes.map(String).filter(Boolean)
-            : [];
           return {
             id: d.id,
             name: typeof data.name === "string" ? data.name : "",
-            level: typeof data.level === "string" ? data.level : "",
-            scopeMode: parseScopeMode(data.scopeMode, unitCodes),
-            unitCodes,
-            permissions: { ...parsePermissions(data.permissions) },
           };
         })
         .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
-      // 各職稱使用人數（僅管理員可查 users）
+      // 各職稱使用人數（僅管理員可查 users；舊人員無 titleId 者以職稱名稱比對）
       const titleCounts = new Map<string, number>();
       const legacyTitleCounts = new Map<string, number>();
+      let usersReadable = false;
       try {
         const usnap = await getCachedRefCollection("users", () =>
           getDocsFromServer(collection(getFirebaseDb(), "users")),
         );
+        usersReadable = true;
         usnap.docs.forEach((d) => {
           const data = d.data();
           const titleId = typeof data.titleId === "string" ? data.titleId : "";
           const titleName = typeof data.title === "string" ? data.title : "";
-          const unitCode = typeof data.unitCode === "string" ? data.unitCode : "";
           if (titleId) {
             titleCounts.set(titleId, (titleCounts.get(titleId) ?? 0) + 1);
-          } else if (titleName && unitCode) {
-            const key = `${encodeURIComponent(unitCode)}::${encodeURIComponent(titleName)}`;
-            legacyTitleCounts.set(key, (legacyTitleCounts.get(key) ?? 0) + 1);
+          } else if (titleName) {
+            legacyTitleCounts.set(titleName, (legacyTitleCounts.get(titleName) ?? 0) + 1);
           }
         });
       } catch {
@@ -998,26 +947,12 @@ export function GroupsPage({
         legacyTitleCounts.clear();
       }
       setTitles(
-        list.map((t) => {
-          // 不分單位職稱：舊人員以職稱名稱比對（不限單位）；分單位職稱：只計勾選單位內的舊人員。
-          const legacyCount =
-            t.scopeMode === "all"
-              ? [...legacyTitleCounts.entries()]
-                  .filter(([key]) => key.endsWith(`::${encodeURIComponent(t.name)}`))
-                  .reduce((sum, [, count]) => sum + count, 0)
-              : t.unitCodes.reduce(
-                  (count, code) => count + (legacyTitleCounts.get(
-                    `${encodeURIComponent(code)}::${encodeURIComponent(t.name)}`,
-                  ) ?? 0),
-                  0,
-                );
-          return {
-            ...t,
-            userCount: titleCounts.has(t.id) || t.scopeMode === "all" || t.unitCodes.length > 0
-              ? (titleCounts.get(t.id) ?? 0) + legacyCount
-              : null,
-          };
-        }),
+        list.map((t) => ({
+          ...t,
+          userCount: usersReadable
+            ? (titleCounts.get(t.id) ?? 0) + (legacyTitleCounts.get(t.name) ?? 0)
+            : null,
+        })),
       );
     } catch (error) {
       onAction(`讀取職稱清單失敗：${toErrorMessage(error)}`);
@@ -1375,12 +1310,7 @@ export function GroupsPage({
   function openTitleEdit(id: string) {
     const row = titles.find((t) => t.id === id);
     if (!row) return;
-    setTitleForm({
-      name: row.name,
-      level: "單位",
-      scopeMode: row.scopeMode,
-      unitCodes: [...row.unitCodes],
-    });
+    setTitleForm({ name: row.name });
     setTitleError("");
     setTitleView({ kind: "edit", id });
   }
@@ -1388,10 +1318,6 @@ export function GroupsPage({
   async function handleTitleSave() {
     const view = titleView;
     const name = titleForm.name.trim();
-    const scopeMode = titleForm.scopeMode;
-    const unitCodes = scopeMode === "all"
-      ? []
-      : [...new Set(titleForm.unitCodes)].filter(Boolean);
     if (!name) {
       setTitleError("請填寫職稱名稱");
       return;
@@ -1400,28 +1326,17 @@ export function GroupsPage({
       setTitleError("請先登入");
       return;
     }
-    if (scopeMode === "units" && unitCodes.length === 0) {
-      setTitleError("分單位時請至少設定一個適用單位；或改為不分單位");
-      return;
-    }
+    // v1.39.0：一名一檔，同名已有文件時擋下
     if (
       titles.some(
-        (t) =>
-          t.name === name &&
-          (scopeMode === "all" ||
-            t.scopeMode === "all" ||
-            t.unitCodes.some((code) => unitCodes.includes(code))) &&
-          (view.kind !== "edit" || t.id !== view.id),
+        (t) => t.name === name && (view.kind !== "edit" || t.id !== view.id),
       )
     ) {
-      setTitleError(`職稱「${name}」在所選適用範圍中已存在；同名職稱可設定在不同單位`);
+      setTitleError(`職稱「${name}」已存在`);
       return;
     }
     setTitleError("");
     setTitleSaving(true);
-    const scopeLabel = scopeMode === "all"
-      ? "不分單位（適用全部單位）"
-      : `分單位（${unitCodes.join("、")}）`;
     try {
       const db = getFirebaseDb();
       if (view.kind === "create") {
@@ -1429,47 +1344,87 @@ export function GroupsPage({
         const batch = writeBatch(db);
         batch.set(titleRef, {
           name,
-          level: titleForm.level,
-          scopeMode,
-          unitCodes,
           ...auditFields(user.staffId, true),
         });
         batch.set(doc(collection(db, "auditLogs")), {
           actor: user.staffId,
           actorName: user.name,
-          action: "職稱適用單位異動",
+          action: "職稱建立",
           targetType: "title",
           targetId: titleRef.id,
-          detail: `新增職稱「${name}」並設定適用範圍：${scopeLabel}`,
+          detail: `新增職稱「${name}」`,
           before: null,
-          after: { name, level: titleForm.level, scopeMode, unitCodes },
+          after: { name },
           createdAt: serverTimestamp(),
         });
         await batch.commit();
-        onAction(`已新增職稱 ${name}（${titleForm.level}）；請至權限管理設定權限`);
+        onAction(`已新增職稱 ${name}；請至權限管理設定權限`);
       } else if (view.kind === "edit") {
         const old = titles.find((title) => title.id === view.id);
+        const oldName = old?.name ?? "";
+        if (oldName === name) {
+          setTitleView({ kind: "list" });
+          return;
+        }
+        // 更名同步：持有此職稱的人員 title 字串＋權限範本一併改名
+        const templateRef = doc(db, "permissionTemplates", templateDocId("unit", oldName));
+        const [templateSnap, newTemplateSnap] = await Promise.all([
+          getDoc(templateRef),
+          getDoc(doc(db, "permissionTemplates", templateDocId("unit", name))),
+        ]);
+        if (newTemplateSnap.exists()) {
+          setTitleError(`新名稱「${name}」已有權限範本，請先處理該範本再更名`);
+          return;
+        }
+        const ops: Array<(b: WriteBatch) => void> = [];
+        users.forEach((u) => {
+          if (u.titleId === view.id || (!u.titleId && u.title === oldName)) {
+            ops.push((b) => {
+              b.update(doc(db, "users", u.staffId), {
+                title: name,
+                ...auditFields(user.staffId, false),
+              });
+              b.set(doc(collection(db, "auditLogs")), {
+                actor: user.staffId,
+                actorName: user.name,
+                action: "人員職稱異動",
+                targetType: "user",
+                targetId: u.staffId,
+                detail: `職稱更名：職編 ${u.staffId} 職稱「${oldName}」→「${name}」`,
+                before: { titleId: u.titleId, title: u.title },
+                after: { titleId: u.titleId, title: name },
+                createdAt: serverTimestamp(),
+              });
+            });
+          }
+        });
+        await commitInBatches(ops);
         const batch = writeBatch(db);
         batch.update(doc(db, "titles", view.id), {
           name,
-          level: titleForm.level,
-          scopeMode,
-          unitCodes,
           ...auditFields(user.staffId, false),
         });
+        if (templateSnap.exists()) {
+          batch.set(doc(db, "permissionTemplates", templateDocId("unit", name)), {
+            ...templateSnap.data(),
+            name,
+          });
+          batch.delete(templateRef);
+        }
         batch.set(doc(collection(db, "auditLogs")), {
           actor: user.staffId,
           actorName: user.name,
-          action: "職稱適用單位異動",
+          action: "職稱更名",
           targetType: "title",
           targetId: view.id,
-          detail: `更新職稱「${name}」適用範圍：${old?.scopeMode === "all" ? "不分單位" : (old?.unitCodes ?? []).join("、")} → ${scopeLabel}`,
-          before: old ? { name: old.name, level: old.level, scopeMode: old.scopeMode, unitCodes: old.unitCodes } : null,
-          after: { name, level: titleForm.level, scopeMode, unitCodes },
+          detail: `職稱「${oldName}」更名為「${name}」`,
+          before: old ? { name: old.name } : null,
+          after: { name },
           createdAt: serverTimestamp(),
         });
         await batch.commit();
-        onAction(`職稱已更新為 ${name}（${titleForm.level}）`);
+        onAction(`職稱已更名為 ${name}`);
+        await loadUsers();
       }
       setTitleView({ kind: "list" });
       await loadTitles();
@@ -1489,10 +1444,7 @@ export function GroupsPage({
         const data = document.data();
         if (data.titleId === row.id) return true;
         const titleName = typeof data.title === "string" ? data.title : "";
-        const userUnit = typeof data.unitCode === "string" ? data.unitCode : "";
-        return !data.titleId && titleName === row.name && (
-          scopeAppliesToUnit(row.scopeMode, row.unitCodes, userUnit)
-        );
+        return !data.titleId && titleName === row.name;
       });
       if (hasUsers) {
         onAction(`職稱「${row.name}」尚有人員使用，無法刪除`);
@@ -1503,7 +1455,7 @@ export function GroupsPage({
       return;
     }
     const ok = window.confirm(
-      `確定刪除職稱「${row.name}（${row.level}）」？此動作無法復原。`,
+      `確定刪除職稱「${row.name}」？此動作無法復原。`,
     );
     if (!ok) return;
     try {
@@ -1513,11 +1465,11 @@ export function GroupsPage({
       batch.set(doc(collection(db, "auditLogs")), {
         actor: user.staffId,
         actorName: user.name,
-        action: "職稱適用範圍刪除",
+        action: "職稱刪除",
         targetType: "title",
         targetId: row.id,
-        detail: `刪除職稱「${row.name}」及其適用單位設定`,
-        before: { name: row.name, level: row.level, unitCodes: row.unitCodes, permissions: row.permissions },
+        detail: `刪除職稱「${row.name}」`,
+        before: { name: row.name },
         after: null,
         createdAt: serverTimestamp(),
       });
@@ -1546,7 +1498,7 @@ export function GroupsPage({
       unitCode: row.unitCode,
       title: row.title,
       titleId: row.titleId || (() => {
-        const matches = titles.filter((title) => title.name === row.title && scopeAppliesToUnit(title.scopeMode, title.unitCodes, row.unitCode));
+        const matches = titles.filter((title) => title.name === row.title);
         return matches.length === 1 ? matches[0].id : "";
       })(),
       hireDate: "",
@@ -1658,10 +1610,6 @@ export function GroupsPage({
       : undefined;
     if (!userForm.titleId || !selectedTitle) {
       setUserError("請選擇職稱");
-      return;
-    }
-    if (!scopeAppliesToUnit(selectedTitle.scopeMode, selectedTitle.unitCodes, userForm.unitCode)) {
-      setUserError("所選職稱不適用目前單位，請重新選擇職稱");
       return;
     }
     const roles = [
@@ -1873,17 +1821,16 @@ export function GroupsPage({
 
   // ================= 角色成員（v1.21） =================
 
-  /** 從人員的 roles／memberships 移除指定角色（角色刪除／成員移除共用） */
-  function removeRoleFromUser(row: UserRow, roleName: string, groupId = "") {
+  /** 從人員的 roles／memberships 移除指定角色（角色刪除／成員移除共用；一名一檔，全群組一起移除） */
+  function removeRoleFromUser(row: UserRow, roleName: string) {
     return (b: WriteBatch) => {
       const memberships = row.memberships
         .map((m) => ({
           ...m,
-          roles: m.roles.filter((r) => r !== roleName || (groupId && m.groupId !== groupId)),
+          roles: m.roles.filter((r) => r !== roleName),
         }))
         .filter((m) => m.roles.length > 0);
-      const remainsInMembership = memberships.some((m) => m.roles.includes(roleName));
-      const roles = row.roles.filter((r) => r !== roleName || remainsInMembership);
+      const roles = row.roles.filter((r) => r !== roleName);
       b.update(doc(getFirebaseDb(), "users", row.staffId), {
         roles,
         memberships,
@@ -1896,7 +1843,7 @@ export function GroupsPage({
         action: "移除人員角色",
         targetType: "user",
         targetId: row.staffId,
-        detail: `移除職編 ${row.staffId} 的角色「${roleName}」${groupId ? `（群組 ${groupId}）` : ""}`,
+        detail: `移除職編 ${row.staffId} 的角色「${roleName}」`,
         before: { roles: row.roles, memberships: row.memberships },
         after: { roles, memberships },
         createdAt: serverTimestamp(),
@@ -1946,12 +1893,9 @@ export function GroupsPage({
     setManagingRoleId(roleId);
     setRoleMemberChecked([]);
     setRoleAddSearch("");
-    setRoleAddGroupId(role?.groupId ?? "");
+    setRoleAddGroupId("");
     setRoleAddChecked([]);
-    setRoleEditKind(role?.kind ?? "group");
-    setRoleEditGroupId(role?.groupId ?? "");
-    setRoleEditUnitCode(role?.unitCode ?? "");
-    setRoleEditGroupScopeMode(role?.groupScopeMode ?? "group");
+    setRoleEditName(role?.name ?? "");
     setRoleEditError("");
   }
 
@@ -1968,7 +1912,7 @@ export function GroupsPage({
         roleMemberChecked.includes(u.staffId),
       );
       await commitInBatches(
-        targets.map((u) => removeRoleFromUser(u, role.name, role.groupId)),
+        targets.map((u) => removeRoleFromUser(u, role.name)),
       );
       onAction(`已將 ${targets.length} 位人員移出角色「${role.name}」`);
       setRoleMemberChecked([]);
@@ -1983,7 +1927,7 @@ export function GroupsPage({
   async function handleRoleMembersAdd() {
     const role = roleRows.find((r) => r.id === managingRoleId);
     if (!role || roleAddChecked.length === 0) return;
-    const groupScoped = Boolean(role.groupId) || isGroupScopedRole(role.name);
+    const groupScoped = isGroupScopedRole(role.name);
     const unitLevel = isUnitLevelRole(role.name);
     const unitGroupOf = (unitCode: string) =>
       units.find((u) => u.code === unitCode)?.groupId ?? "";
@@ -1999,7 +1943,7 @@ export function GroupsPage({
           continue;
         }
       } else if (groupScoped) {
-        gid = role.groupId || roleAddGroupId;
+        gid = roleAddGroupId;
         if (!gid) {
           onAction("請先選擇此角色適用的群組");
           return;
@@ -2035,13 +1979,13 @@ export function GroupsPage({
     if (!ok) return;
     setRoleBusy(true);
     try {
-      const targets = users.filter((u) => row.groupId
-        ? u.memberships.some((m) => m.groupId === row.groupId && m.roles.includes(row.name))
-        : isGroupScopedRole(row.name)
-          ? u.memberships.some((m) => m.roles.includes(row.name))
-          : u.roles.includes(row.name));
+      const targets = users.filter(
+        (u) =>
+          u.roles.includes(row.name) ||
+          u.memberships.some((m) => m.roles.includes(row.name)),
+      );
       await commitInBatches(
-        targets.map((u) => removeRoleFromUser(u, row.name, row.groupId)),
+        targets.map((u) => removeRoleFromUser(u, row.name)),
       );
       const db = getFirebaseDb();
       const batch = writeBatch(db);
@@ -2049,11 +1993,11 @@ export function GroupsPage({
       batch.set(doc(collection(db, "auditLogs")), {
         actor: user.staffId,
         actorName: user.name,
-        action: "群組角色刪除",
+        action: "角色刪除",
         targetType: "role",
         targetId: row.id,
-        detail: `刪除群組 ${row.groupId || "全域／預設"} 的角色「${row.name}」`,
-        before: { name: row.name, groupId: row.groupId, memberCount: targets.length },
+        detail: `刪除角色「${row.name}」`,
+        before: { name: row.name, memberCount: targets.length },
         after: null,
         createdAt: serverTimestamp(),
       });
@@ -2073,32 +2017,13 @@ export function GroupsPage({
 
   async function handleRoleCreate() {
     const name = newRoleName.trim();
-    const kind = newRoleKind;
     if (!name) {
       setRoleCreateError("請輸入角色名稱");
       return;
     }
-    if (kind === "group" && !newRoleGroupId) {
-      setRoleCreateError("群組角色請先選擇所屬群組");
-      return;
-    }
-    if (kind === "unit" && !newRoleUnitCode) {
-      setRoleCreateError("單位角色請先選擇所屬單位");
-      return;
-    }
-    const groupId = kind === "group" ? newRoleGroupId : "";
-    const unitCode = kind === "unit" ? newRoleUnitCode : "";
-    const groupScopeMode: GroupScopeMode =
-      kind === "group" ? newRoleGroupScopeMode : "group";
-    if (roleRows.some((role) =>
-      role.name === name && role.kind === kind &&
-      (kind === "group" ? role.groupId === groupId : role.unitCode === unitCode),
-    )) {
-      setRoleCreateError(
-        kind === "group"
-          ? `此群組已存在角色「${name}」；其他群組可建立同名角色`
-          : `此單位已存在角色「${name}」；其他單位可建立同名角色`,
-      );
+    // v1.39.0：一名一檔，同名已有文件時擋下
+    if (roleRows.some((role) => role.name === name)) {
+      setRoleCreateError(`角色「${name}」已存在`);
       return;
     }
     setRoleCreateSaving(true);
@@ -2109,32 +2034,22 @@ export function GroupsPage({
       const batch = writeBatch(db);
       batch.set(roleRef, {
         name,
-        kind,
-        groupId,
-        unitCode,
-        groupScopeMode,
         description: "",
         ...auditFields(user?.staffId ?? "", true),
       });
       batch.set(doc(collection(db, "auditLogs")), {
         actor: user?.staffId ?? "",
         actorName: user?.name ?? "",
-        action: kind === "group" ? "群組角色建立" : "單位角色建立",
+        action: "角色建立",
         targetType: "role",
         targetId: roleRef.id,
-        detail: kind === "group"
-          ? `於群組 ${groupId} 建立角色「${name}」（${groupScopeMode === "all" ? "跨群組" : "不跨群組"}）`
-          : `於單位 ${unitCode} 建立角色「${name}」`,
+        detail: `建立角色「${name}」`,
         before: null,
-        after: { name, kind, groupId, unitCode, groupScopeMode },
+        after: { name },
         createdAt: serverTimestamp(),
       });
       await batch.commit();
       setNewRoleName("");
-      setNewRoleKind("group");
-      setNewRoleGroupId("");
-      setNewRoleUnitCode("");
-      setNewRoleGroupScopeMode("group");
       setRoleCreateOpen(false);
       await loadRoles();
       onAction(`已新增角色「${name}」；請至權限管理設定權限`);
@@ -2145,55 +2060,101 @@ export function GroupsPage({
     }
   }
 
-  /** 既有角色設定異動（v1.37.0）：在成員管理面板編輯 kind／所屬群組／單位／跨群組範圍。 */
-  const [roleEditKind, setRoleEditKind] = useState<RoleKind>("group");
-  const [roleEditGroupId, setRoleEditGroupId] = useState("");
-  const [roleEditUnitCode, setRoleEditUnitCode] = useState("");
-  const [roleEditGroupScopeMode, setRoleEditGroupScopeMode] =
-    useState<GroupScopeMode>("group");
+  /** 既有角色更名（v1.39.0）：只改名稱；同步更新持有此角色的人員與權限範本。 */
+  const [roleEditName, setRoleEditName] = useState("");
   const [roleEditError, setRoleEditError] = useState("");
   const [roleEditSaving, setRoleEditSaving] = useState(false);
-  async function handleRoleSettingsSave() {
+  async function handleRoleRename() {
     const role = roleRows.find((r) => r.id === managingRoleId);
     if (!role || !user) return;
-    if (roleEditKind === "group" && !roleEditGroupId) {
-      setRoleEditError("群組角色請先選擇所屬群組");
+    const name = roleEditName.trim();
+    if (!name) {
+      setRoleEditError("請輸入角色名稱");
       return;
     }
-    if (roleEditKind === "unit" && !roleEditUnitCode) {
-      setRoleEditError("單位角色請先選擇所屬單位");
+    if (name === role.name) {
+      setRoleEditError("");
       return;
     }
-    const groupId = roleEditKind === "group" ? roleEditGroupId : "";
-    const unitCode = roleEditKind === "unit" ? roleEditUnitCode : "";
-    const groupScopeMode: GroupScopeMode =
-      roleEditKind === "group" ? roleEditGroupScopeMode : "group";
+    if (roleRows.some((r) => r.id !== role.id && r.name === name)) {
+      setRoleEditError(`角色「${name}」已存在`);
+      return;
+    }
     setRoleEditError("");
     setRoleEditSaving(true);
     try {
       const db = getFirebaseDb();
+      const oldName = role.name;
+      // 新名稱已有權限範本時擋下，避免覆蓋別的範本
+      const [groupTpl, unitRoleTpl] = await Promise.all([
+        getDoc(doc(db, "permissionTemplates", templateDocId("group", name))),
+        getDoc(doc(db, "permissionTemplates", templateDocId("unitRole", name))),
+      ]);
+      if (groupTpl.exists() || unitRoleTpl.exists()) {
+        setRoleEditError(`新名稱「${name}」已有權限範本，請先處理該範本再更名`);
+        return;
+      }
+      const targets = users.filter(
+        (u) =>
+          u.roles.includes(oldName) ||
+          u.memberships.some((m) => m.roles.includes(oldName)),
+      );
+      await commitInBatches(
+        targets.map((u) => (b: WriteBatch) => {
+          const roles = u.roles.map((r) => (r === oldName ? name : r));
+          const memberships = u.memberships.map((m) => ({
+            ...m,
+            roles: m.roles.map((r) => (r === oldName ? name : r)),
+          }));
+          b.update(doc(db, "users", u.staffId), {
+            roles,
+            memberships,
+            ...auditFields(user.staffId, false),
+          });
+          b.set(doc(collection(db, "auditLogs")), {
+            actor: user.staffId,
+            actorName: user.name,
+            action: "人員角色異動",
+            targetType: "user",
+            targetId: u.staffId,
+            detail: `角色更名：職編 ${u.staffId} 角色「${oldName}」→「${name}」`,
+            before: { roles: u.roles, memberships: u.memberships },
+            after: { roles, memberships },
+            createdAt: serverTimestamp(),
+          });
+        }),
+      );
       const batch = writeBatch(db);
       batch.update(doc(db, "roles", role.id), {
-        kind: roleEditKind,
-        groupId,
-        unitCode,
-        groupScopeMode,
+        name,
         ...auditFields(user.staffId, false),
       });
+      for (const category of ["group", "unitRole"] as const) {
+        const oldRef = doc(db, "permissionTemplates", templateDocId(category, oldName));
+        const snap = await getDoc(oldRef);
+        if (snap.exists()) {
+          batch.set(doc(db, "permissionTemplates", templateDocId(category, name)), {
+            ...snap.data(),
+            name,
+          });
+          batch.delete(oldRef);
+        }
+      }
       batch.set(doc(collection(db, "auditLogs")), {
         actor: user.staffId,
         actorName: user.name,
-        action: "角色設定異動",
+        action: "角色更名",
         targetType: "role",
         targetId: role.id,
-        detail: `角色「${role.name}」改為${roleEditKind === "group" ? `群組角色（群組 ${groupId}，${groupScopeMode === "all" ? "跨群組" : "不跨群組"}）` : `單位角色（單位 ${unitCode}）`}`,
-        before: { kind: role.kind, groupId: role.groupId, unitCode: role.unitCode, groupScopeMode: role.groupScopeMode },
-        after: { kind: roleEditKind, groupId, unitCode, groupScopeMode },
+        detail: `角色「${oldName}」更名為「${name}」`,
+        before: { name: oldName },
+        after: { name },
         createdAt: serverTimestamp(),
       });
       await batch.commit();
       await loadRoles();
-      onAction(`角色「${role.name}」設定已更新`);
+      await loadUsers();
+      onAction(`角色已更名為「${name}」`);
     } catch (error) {
       setRoleEditError(`儲存失敗：${toErrorMessage(error)}`);
     } finally {
@@ -2225,7 +2186,7 @@ export function GroupsPage({
             b.set(doc(collection(getFirebaseDb(), "auditLogs")), {
               actor: me,
               actorName: user?.name ?? "",
-              action: "人員單位職稱範圍異動",
+              action: "人員單位異動",
               targetType: "user",
               targetId: target.staffId,
               detail: `職編 ${target.staffId} 移出單位 ${managingUnitCode}`,
@@ -2253,13 +2214,10 @@ export function GroupsPage({
     if (!managingUnitCode) return;
     const target = users.find((item) => item.staffId === staffId);
     if (!target) return;
-    const legacyMatches = titles.filter((title) =>
-      !target.titleId && title.name === target.title && scopeAppliesToUnit(title.scopeMode, title.unitCodes, target.unitCode),
-    );
-    const currentTitle = target.titleId
+    // v1.39.0：職稱只剩名稱，調單位時職稱一律保留
+    const retainedTitle = target.titleId
       ? titles.find((title) => title.id === target.titleId)
-      : legacyMatches.length === 1 ? legacyMatches[0] : undefined;
-    const retainedTitle = currentTitle && scopeAppliesToUnit(currentTitle.scopeMode, currentTitle.unitCodes, managingUnitCode) ? currentTitle : undefined;
+      : titles.find((title) => title.name === target.title);
     setUnitBusy(true);
     try {
       const db = getFirebaseDb();
@@ -2273,7 +2231,7 @@ export function GroupsPage({
       batch.set(doc(collection(db, "auditLogs")), {
         actor: user?.staffId ?? "",
         actorName: user?.name ?? "",
-        action: "人員單位職稱範圍異動",
+        action: "人員單位異動",
         targetType: "user",
         targetId: staffId,
         detail: `職編 ${staffId} 單位 ${target.unitCode} → ${managingUnitCode}`,
@@ -2344,7 +2302,7 @@ export function GroupsPage({
   async function handleTitleMemberAdd(staffId: string) {
     const title = titles.find((item) => item.id === managingTitleId);
     const target = users.find((item) => item.staffId === staffId);
-    if (!title || !target || !scopeAppliesToUnit(title.scopeMode, title.unitCodes, target.unitCode)) return;
+    if (!title || !target) return;
     setTitleBusy(true);
     try {
       const db = getFirebaseDb();
@@ -2462,20 +2420,15 @@ export function GroupsPage({
   }
 
   function validateRoleRows(rows: string[][]): Promise<PreviewRow[]> {
-    const groupByName = new Map(groups.map((group) => [group.name, group.id]));
     const seen = new Set<string>();
     return Promise.resolve(
       rows.map((row, i) => {
         const name = (row[0] ?? "").trim();
-        const groupName = (row[1] ?? "").trim();
-        const groupId = groupByName.get(groupName) ?? "";
-        const key = `${groupId}::${name}`;
         let error = "";
         if (!name) error = "角色名稱不可空白";
-        else if (!groupId) error = `群組「${groupName}」不存在或未填`;
-        else if (roleRows.some((role) => role.name === name && (!role.groupId || role.groupId === groupId))
-          || seen.has(key)) error = `群組「${groupName}」已有同名角色「${name}」`;
-        seen.add(key);
+        else if (roleRows.some((role) => role.name === name) || seen.has(name))
+          error = `角色「${name}」已存在`;
+        seen.add(name);
         return { index: i + 1, values: row, ok: !error, error };
       }),
     );
@@ -2483,32 +2436,25 @@ export function GroupsPage({
 
   async function importRoleRows(rows: PreviewRow[]): Promise<void> {
     const me = user?.staffId ?? "";
-    const groupByName = new Map(groups.map((group) => [group.name, group.id]));
     await commitInBatches(
       rows.map((row) => {
         const name = row.values[0].trim();
-        const groupName = row.values[1].trim();
-        const groupId = groupByName.get(groupName) ?? "";
         const roleRef = doc(collection(getFirebaseDb(), "roles"));
         return (batch: WriteBatch) => {
           batch.set(roleRef, {
             name,
-            kind: "group",
-            groupId,
-            unitCode: "",
-            groupScopeMode: "group",
             description: "",
             ...auditFields(me, true),
           });
           batch.set(doc(collection(getFirebaseDb(), "auditLogs")), {
             actor: me,
             actorName: user?.name ?? "",
-            action: "群組角色建立",
+            action: "角色建立",
             targetType: "role",
             targetId: roleRef.id,
-            detail: `批次於群組 ${groupId} 建立角色「${name}」（群組角色，不跨群組）`,
+            detail: `批次建立角色「${name}」`,
             before: null,
-            after: { name, kind: "group", groupId, groupScopeMode: "group" },
+            after: { name },
             createdAt: serverTimestamp(),
           });
         };
@@ -2584,35 +2530,16 @@ export function GroupsPage({
   }
 
   function validateTitleRows(rows: string[][]): Promise<PreviewRow[]> {
-    const keyFor = (name: string, unitCode: string) => `${name}::${unitCode}`;
-    const existing = new Set(titles.flatMap((title) => title.unitCodes.map((code) => keyFor(title.name, code))));
-    const existingAllScope = new Set(
-      titles.filter((title) => title.scopeMode === "all").map((title) => title.name),
-    );
+    const existing = new Set(titles.map((title) => title.name));
     const seen = new Set<string>();
     return Promise.resolve(
       rows.map((r, i) => {
         const index = i + 1;
         const name = (r[0] ?? "").trim();
-        const level = (r[1] ?? "").trim();
-        const unitCodes = [...new Set((r[2] ?? "").split(/[,，、]/).map((code) => code.trim()).filter(Boolean))];
         if (!name) return { index, values: r, ok: false, error: "職稱名稱不可空白" };
-        if (level !== "單位")
-          return { index, values: r, ok: false, error: "層級限填「單位」（v1.37.0 起職稱只分單位層級）" };
-        // 適用單位代碼可空白＝不分單位（v1.37.0：拿掉強制至少填一個單位代碼的驗證）
-        const unknownCodes = unitCodes.filter((code) => !units.some((unit) => unit.code === code));
-        if (unknownCodes.length > 0) return { index, values: r, ok: false, error: `找不到單位代碼：${unknownCodes.join("、")}` };
-        if (unitCodes.length === 0) {
-          if (existingAllScope.has(name) || seen.has(`all::${name}`))
-            return { index, values: r, ok: false, error: `不分單位職稱「${name}」已存在` };
-          seen.add(`all::${name}`);
-          return { index, values: r, ok: true, error: "" };
-        }
-        const keys = unitCodes.map((code) => keyFor(name, code));
-        const existingKey = keys.find((key) => existing.has(key));
-        if (existingKey) return { index, values: r, ok: false, error: `職稱「${name}」已在部分適用單位中存在` };
-        if (keys.some((key) => seen.has(key))) return { index, values: r, ok: false, error: `檔案內有同名職稱重疊適用單位：${name}` };
-        keys.forEach((key) => seen.add(key));
+        if (existing.has(name) || seen.has(name))
+          return { index, values: r, ok: false, error: `職稱「${name}」已存在` };
+        seen.add(name);
         return { index, values: r, ok: true, error: "" };
       }),
     );
@@ -2623,29 +2550,21 @@ export function GroupsPage({
     await commitInBatches(
       rows.map((r) => {
         const name = r.values[0].trim();
-        const level = "單位";
-        const unitCodes = [...new Set((r.values[2] ?? "").split(/[,，、]/).map((code) => code.trim()).filter(Boolean))];
-        const scopeMode: ScopeMode = unitCodes.length === 0 ? "all" : "units";
         const titleRef = doc(collection(getFirebaseDb(), "titles"));
         return (b: WriteBatch) => {
           b.set(titleRef, {
             name,
-            level,
-            scopeMode,
-            unitCodes,
             ...auditFields(me, true),
           });
           b.set(doc(collection(getFirebaseDb(), "auditLogs")), {
             actor: me,
             actorName: user?.name ?? "",
-            action: "職稱適用單位異動",
+            action: "職稱建立",
             targetType: "title",
             targetId: titleRef.id,
-            detail: scopeMode === "all"
-              ? `批次建立職稱「${name}」（不分單位）`
-              : `批次建立職稱「${name}」並設定適用單位：${unitCodes.join("、")}`,
+            detail: `批次建立職稱「${name}」`,
             before: null,
-            after: { name, level, scopeMode, unitCodes },
+            after: { name },
             createdAt: serverTimestamp(),
           });
         };
@@ -2653,30 +2572,17 @@ export function GroupsPage({
     );
   }
 
-  function roleGroupScopes() {
-    const scopes = new Map<string, string[]>();
-    roleOptions.forEach((role) => {
-      const current = scopes.get(role.name) ?? [];
-      if (role.groupId) current.push(role.groupId);
-      else if (isGroupScopedRole(role.name)) current.push("*");
-      scopes.set(role.name, current);
-    });
-    return scopes;
-  }
-
   function validateUserImportData(data: ReturnType<typeof parseUserSheet>["data"]) {
     const base = validateUserRowsLib(data, {
       existingStaffIds: new Set(users.map((u) => u.staffId)),
       groupByName: new Map(groups.map((g) => [g.name, g.id])),
       roleNames: new Set(roleOptions.map((r) => r.name)),
-      roleGroupIdsByName: roleGroupScopes(),
       titleNames: new Set(titles.map((t) => t.name)),
       unitCodes: new Set(units.map((u) => u.code)),
     });
     return base.map((result) => {
       if (!result.ok || !result.values) return result;
       const existing = users.find((item) => item.staffId === result.values?.staffId);
-      const unitCode = result.values.unitCode ?? existing?.unitCode ?? "";
       const titleName = result.values.title ?? existing?.title ?? "";
       if (!titleName) {
         // v1.36.0：人員新增須填職稱；更新時未填則沿用既有職稱。
@@ -2690,16 +2596,12 @@ export function GroupsPage({
         }
         return result;
       }
-      const matchingTitles = titles.filter((title) =>
-        title.name === titleName && scopeAppliesToUnit(title.scopeMode, title.unitCodes, unitCode),
-      );
-      if (matchingTitles.length === 1) return result;
+      // v1.39.0：職稱一名一檔，只認名稱存在與否，不再比對適用單位
+      if (titles.some((title) => title.name === titleName)) return result;
       return {
         ...result,
         ok: false,
-        errors: [...result.errors, unitCode
-          ? `職稱「${titleName}」未設定適用單位 ${unitCode}（或存在同名歧義）`
-          : `職稱「${titleName}」需搭配已設定單位的職稱`],
+        errors: [...result.errors, `職稱「${titleName}」不存在，請先建立職稱`],
         values: null,
       };
     });
@@ -2745,7 +2647,7 @@ export function GroupsPage({
         const nextUnitCode = v.unitCode ?? existing?.unitCode ?? "";
         const nextTitleName = v.title ?? existing?.title ?? "";
         const matchedTitle = nextTitleName
-          ? titles.filter((title) => title.name === nextTitleName && scopeAppliesToUnit(title.scopeMode, title.unitCodes, nextUnitCode))
+          ? titles.filter((title) => title.name === nextTitleName)
           : [];
         const assignedTitle = matchedTitle.length === 1 ? matchedTitle[0] : undefined;
         if (r.action === "update") updated += 1;
@@ -2902,10 +2804,6 @@ export function GroupsPage({
           className="button button-primary"
           onClick={() => {
             setNewRoleName("");
-            setNewRoleKind("group");
-            setNewRoleGroupId("");
-            setNewRoleUnitCode("");
-            setNewRoleGroupScopeMode("group");
             setRoleCreateError("");
             setRoleCreateOpen(true);
           }}
@@ -3524,30 +3422,16 @@ export function GroupsPage({
                   <thead>
                     <tr>
                       <SortHeader label="職稱名稱" sortKey="title-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      <SortHeader label="層級" sortKey="title-level" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      <th>適用單位</th>
                       <SortHeader label="使用人數" sortKey="title-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
                       {canManageMaster && <th>操作</th>}
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedRows(titles, sortState.key, (row, key) => key === "title-level" ? row.level : key === "title-count" ? (row.userCount ?? -1) : row.name).map((row) => (
+                    {sortedRows(titles, sortState.key, (row, key) => key === "title-count" ? (row.userCount ?? -1) : row.name).map((row) => (
                       <tr key={row.id}>
                         <td>
                           <b>{row.name}</b>
                         </td>
-                        <td>
-                          <span
-                            className={`status-pill ${row.level === "群組" ? "info" : "muted"}`}
-                          >
-                            {row.level || "—"}
-                          </span>
-                        </td>
-                        <td>{row.scopeMode === "all"
-                          ? <span className="status-pill muted">不分單位</span>
-                          : row.unitCodes.length > 0
-                            ? row.unitCodes.map((code) => units.find((unit) => unit.code === code)?.name ?? code).join("、")
-                            : <span className="status-pill warning">待補單位</span>}</td>
                         <td>
                           {row.userCount === null ? "—" : `${row.userCount} 人`}
                         </td>
@@ -3680,7 +3564,7 @@ export function GroupsPage({
           <section className="panel data-panel indicator-form">
             <SectionTitle
               title={isTitleEditing ? "編輯職稱" : "新增職稱"}
-              note="不分單位＝適用全部單位；分單位＝只套用至勾選的單位，同一名稱可分別設定在不同單位"
+              note="職稱以名稱唯一；跨單位設定請到權限管理。"
             />
             {titleError && <div className="login-error">{titleError}</div>}
             <div className="form-grid">
@@ -3695,55 +3579,7 @@ export function GroupsPage({
                   }
                 />
               </div>
-              <div className="form-field">
-                <label className="field-label">層級</label>
-                <p className="settings-note" style={{ margin: 0 }}>單位（職稱層級固定為單位）</p>
-              </div>
             </div>
-            <div className="form-field" style={{ marginTop: 12 }}>
-              <label className="field-label">適用範圍 *</label>
-              <div className="select-wrap">
-                <select
-                  value={titleForm.scopeMode}
-                  onChange={(e) =>
-                    setTitleForm((prev) => ({
-                      ...prev,
-                      scopeMode: e.target.value === "units" ? "units" : "all",
-                    }))
-                  }
-                >
-                  <option value="all">不分單位（適用全部單位）</option>
-                  <option value="units">分單位（只適用勾選單位）</option>
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
-            {titleForm.scopeMode === "units" && (
-              <div className="form-field" style={{ marginTop: 12 }}>
-                <label className="field-label">適用單位 *</label>
-                {units.length === 0 ? (
-                  <p className="settings-note">尚未建立單位；請先建立單位後再設定職稱。</p>
-                ) : (
-                  <div className="form-grid">
-                    {units.map((unit) => (
-                      <label className="check-row" key={unit.code}>
-                        <input
-                          type="checkbox"
-                          checked={titleForm.unitCodes.includes(unit.code)}
-                          onChange={(event) => setTitleForm((prev) => ({
-                            ...prev,
-                            unitCodes: event.target.checked
-                              ? [...new Set([...prev.unitCodes, unit.code])]
-                              : prev.unitCodes.filter((code) => code !== unit.code),
-                          }))}
-                        />
-                        <span>{unit.name}（{unit.code}）</span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
             <div className="form-actions">
               <button
                 className="button button-primary"
@@ -3887,16 +3723,7 @@ export function GroupsPage({
                   value={userForm.unitCode}
                   onChange={(e) => {
                     const nextUnitCode = e.target.value;
-                    setUserForm((prev) => {
-                      const selectedTitle = titles.find((title) => title.id === prev.titleId);
-                      if (prev.titleId && selectedTitle && !scopeAppliesToUnit(selectedTitle.scopeMode, selectedTitle.unitCodes, nextUnitCode)) {
-                        return { ...prev, unitCode: nextUnitCode, title: "", titleId: "" };
-                      }
-                      if (!prev.titleId && prev.title && prev.unitCode !== nextUnitCode) {
-                        return { ...prev, unitCode: nextUnitCode, title: "" };
-                      }
-                      return { ...prev, unitCode: nextUnitCode };
-                    });
+                    setUserForm((prev) => ({ ...prev, unitCode: nextUnitCode }));
                   }}
                 >
                   <option value="">— 未指定 —</option>
@@ -3924,17 +3751,14 @@ export function GroupsPage({
                   }}
                 >
                   <option value="">— 請選擇職稱 —</option>
-                  {titles.filter((t) => scopeAppliesToUnit(t.scopeMode, t.unitCodes, userForm.unitCode)).map((t) => (
+                  {titles.map((t) => (
                     <option key={t.id} value={t.id}>
-                      {t.name}（{t.level}）
+                      {t.name}
                     </option>
                   ))}
                 </select>
                 <ChevronDown size={15} />
               </div>
-              {userForm.title && !userForm.titleId && (
-                <p className="settings-note">現有職稱「{userForm.title}」尚未設定適用範圍；可至職稱管理補上範圍，補完前此職稱不會授予權限。</p>
-              )}
             </div>
             <div className="form-field">
               <label className="field-label">到職日</label>
@@ -4035,9 +3859,7 @@ export function GroupsPage({
               </div>
               <div className="form-grid">
                 {roleOptions
-                  .filter((r) => r.groupId
-                    ? r.groupId === m.groupId
-                    : isGroupScopedRole(r.name))
+                  .filter((r) => isGroupScopedRole(r.name))
                   .map((r) => (
                     <label className="check-row" key={r.id}>
                       <input
@@ -4072,7 +3894,7 @@ export function GroupsPage({
           ) : (
             <div className="form-grid">
               {roleOptions
-                .filter((r) => !r.groupId && !isGroupScopedRole(r.name))
+                .filter((r) => !isGroupScopedRole(r.name))
                 .map((r) => (
                   <label className="check-row" key={r.id}>
                     <input
@@ -4141,41 +3963,8 @@ export function GroupsPage({
           </section>
         ) : roleCreateOpen ? (
           <section className="panel data-panel indicator-form">
-            <SectionTitle title="新增角色" note="新角色預設無權限，建立後請至權限管理設定權限。群組角色預設不跨群組；單位角色的單位限制由職稱把關。" />
+            <SectionTitle title="新增角色" note="新角色預設無權限，建立後請至權限管理設定權限。角色以名稱唯一；跨群組／跨單位設定請到權限管理。" />
             {roleCreateError && <div className="login-error">{roleCreateError}</div>}
-            <div className="form-field" style={{ maxWidth: 420 }}>
-              <label className="field-label">角色類型 *</label>
-              <div className="select-wrap">
-                <select value={newRoleKind} onChange={(event) => setNewRoleKind(event.target.value === "unit" ? "unit" : "group")}>
-                  <option value="group">群組角色</option>
-                  <option value="unit">單位角色</option>
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
-            {newRoleKind === "group" ? (
-              <div className="form-field" style={{ maxWidth: 420 }}>
-                <label className="field-label">所屬群組 *</label>
-                <div className="select-wrap">
-                  <select value={newRoleGroupId} onChange={(event) => setNewRoleGroupId(event.target.value)}>
-                    <option value="">請先選擇群組</option>
-                    {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
-              </div>
-            ) : (
-              <div className="form-field" style={{ maxWidth: 420 }}>
-                <label className="field-label">所屬單位 *</label>
-                <div className="select-wrap">
-                  <select value={newRoleUnitCode} onChange={(event) => setNewRoleUnitCode(event.target.value)}>
-                    <option value="">請先選擇單位</option>
-                    {units.map((unit) => <option key={unit.code} value={unit.code}>{unit.name}（{unit.code}）</option>)}
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
-              </div>
-            )}
             <div className="form-field" style={{ maxWidth: 420 }}>
               <label className="field-label">角色名稱 *</label>
               <input
@@ -4185,18 +3974,6 @@ export function GroupsPage({
                 onChange={(event) => setNewRoleName(event.target.value)}
               />
             </div>
-            {newRoleKind === "group" && (
-              <div className="form-field" style={{ maxWidth: 420 }}>
-                <label className="field-label">跨群組 *</label>
-                <div className="select-wrap">
-                  <select value={newRoleGroupScopeMode} onChange={(event) => setNewRoleGroupScopeMode(event.target.value === "all" ? "all" : "group")}>
-                    <option value="group">不跨群組（只在所屬群組生效）</option>
-                    <option value="all">跨群組（任一群組持有即生效）</option>
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
-              </div>
-            )}
             <div className="form-actions">
               <button className="button button-primary" disabled={roleCreateSaving} onClick={handleRoleCreate}>
                 {roleCreateSaving ? "建立中…" : "建立角色"}
@@ -4232,64 +4009,24 @@ export function GroupsPage({
               busy={roleBusy}
             />
             <div style={{ marginTop: 16 }}>
-              <SectionTitle title="角色設定" note="可改角色類型、所屬群組／單位與跨群組範圍。單位角色不設跨單位，單位限制由職稱把關。" />
+              <SectionTitle title="角色名稱" note="角色以名稱唯一；改名會同步更新所有持有此角色的人員與權限範本。跨設定請到權限管理。" />
               {roleEditError && <div className="login-error">{roleEditError}</div>}
               <div className="form-field" style={{ maxWidth: 320 }}>
-                <label className="field-label">角色類型 *</label>
-                <div className="select-wrap">
-                  <select value={roleEditKind} onChange={(event) => setRoleEditKind(event.target.value === "unit" ? "unit" : "group")}>
-                    <option value="group">群組角色</option>
-                    <option value="unit">單位角色</option>
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
+                <label className="field-label">角色名稱 *</label>
+                <input
+                  className="text-input"
+                  value={roleEditName}
+                  placeholder="輸入角色名稱"
+                  onChange={(event) => setRoleEditName(event.target.value)}
+                />
               </div>
-              {roleEditKind === "group" ? (
-                <>
-                  <div className="form-field" style={{ maxWidth: 320 }}>
-                    <label className="field-label">所屬群組 *</label>
-                    <div className="select-wrap">
-                      <select value={roleEditGroupId} onChange={(event) => setRoleEditGroupId(event.target.value)}>
-                        <option value="">請選擇群組</option>
-                        {groups.map((g) => (
-                          <option key={g.id} value={g.id}>{g.name}</option>
-                        ))}
-                      </select>
-                      <ChevronDown size={15} />
-                    </div>
-                  </div>
-                  <div className="form-field" style={{ maxWidth: 320 }}>
-                    <label className="field-label">跨群組 *</label>
-                    <div className="select-wrap">
-                      <select value={roleEditGroupScopeMode} onChange={(event) => setRoleEditGroupScopeMode(event.target.value === "all" ? "all" : "group")}>
-                        <option value="group">不跨群組（只在所屬群組生效）</option>
-                        <option value="all">跨群組（任一群組持有即生效）</option>
-                      </select>
-                      <ChevronDown size={15} />
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="form-field" style={{ maxWidth: 320 }}>
-                  <label className="field-label">所屬單位 *</label>
-                  <div className="select-wrap">
-                    <select value={roleEditUnitCode} onChange={(event) => setRoleEditUnitCode(event.target.value)}>
-                      <option value="">請選擇單位</option>
-                      {units.map((unit) => (
-                        <option key={unit.code} value={unit.code}>{unit.name}（{unit.code}）</option>
-                      ))}
-                    </select>
-                    <ChevronDown size={15} />
-                  </div>
-                </div>
-              )}
               <div className="form-actions">
                 <button
                   className="button button-primary"
                   disabled={roleEditSaving}
-                  onClick={handleRoleSettingsSave}
+                  onClick={handleRoleRename}
                 >
-                  {roleEditSaving ? "儲存中…" : "儲存設定"}
+                  {roleEditSaving ? "儲存中…" : "儲存名稱"}
                 </button>
               </div>
             </div>
@@ -4302,7 +4039,7 @@ export function GroupsPage({
                 onChange={(e) => setRoleAddSearch(e.target.value)}
               />
             </div>
-            {!managingRole.groupId && isGroupScopedRole(managingRole.name) &&
+            {isGroupScopedRole(managingRole.name) &&
               !isUnitLevelRole(managingRole.name) && (
                 <div className="form-field" style={{ maxWidth: 320 }}>
                   <label className="field-label">適用群組 *</label>
@@ -4416,9 +4153,6 @@ export function GroupsPage({
                 <thead>
                   <tr>
                       <SortHeader label="角色名稱" sortKey="role-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      <th>類型</th>
-                      <th>所屬群組／單位</th>
-                      <th>跨群組</th>
                       <SortHeader label="成員數" sortKey="role-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
                     <th>操作</th>
                   </tr>
@@ -4429,13 +4163,6 @@ export function GroupsPage({
                       <td>
                         <b>{row.name}</b>
                       </td>
-                      <td>{row.kind === "unit" ? "單位角色" : "群組角色"}</td>
-                      <td>{row.kind === "unit"
-                        ? (row.unitCode ? units.find((unit) => unit.code === row.unitCode)?.name ?? row.unitCode : "未設定")
-                        : (row.groupId ? groups.find((group) => group.id === row.groupId)?.name ?? row.groupId : "未設定")}</td>
-                      <td>{row.kind === "group"
-                        ? (row.groupScopeMode === "all" ? "跨群組" : "不跨群組")
-                        : "—"}</td>
                       <td>
                         {row.memberCount === null
                           ? "—"
@@ -4467,7 +4194,7 @@ export function GroupsPage({
               </table>
             </div>
             <p className="settings-note">
-              群組角色依所屬群組分開授權，單位角色依所屬單位管理；可在此新增角色、管理成員或刪除角色。成員管理與刪除限系統管理員。角色權限請到「組織與設定 → 權限管理」設定。
+              角色以名稱唯一；可在此新增角色、管理成員或刪除角色。成員管理與刪除限系統管理員。角色權限請到「組織與設定 → 權限管理」設定（按名稱共用）。
             </p>
           </section>
         )
