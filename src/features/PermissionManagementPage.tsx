@@ -311,16 +311,22 @@ const db = getFirebaseDb();
 invalidateRefCollection("permissionTemplates");
 invalidateRefCollection("roles");
 invalidateRefCollection("titles");
-const [templateSnapshot, roleSnapshot, titleSnapshot] = await Promise.all([
+// 單一集合讀取失敗不拖垮整頁（v1.39.4）：permissionTemplates 在 rules
+// 缺放行時，Promise.all 會讓 roles／titles 已讀到的資料也全數作廢、
+// 整頁只剩一條籠統紅字。改用 allSettled，讀到的集合照常列出，失敗
+// 的集合名稱逐一顯示在橫幅。
+const [templateResult, roleResult, titleResult] = await Promise.allSettled([
 getDocsFromServer(collection(db, "permissionTemplates")),
 getDocsFromServer(collection(db, "roles")),
 getDocsFromServer(collection(db, "titles")),
 ]);
+const failures: string[] = [];
 const templates = new Map<
 string,
 { permissions: Record<PermKey, boolean>; cross: boolean}
 >();
-templateSnapshot.docs.forEach((item) => {
+if (templateResult.status === "fulfilled") {
+templateResult.value.docs.forEach((item) => {
 const data = item.data() as Record<string, unknown>;
 const category = parseTemplateCategory(data.category);
 const name = typeof data.name === "string"? data.name: "";
@@ -330,15 +336,32 @@ permissions: parsePermissions(data.permissions),
 cross: data.cross === true,
 });
 });
+} else {
+failures.push("權限範本（permissionTemplates）");
+}
+const roleDocs =
+roleResult.status === "fulfilled"
+? roleResult.value.docs
+: (() => {
+failures.push("角色（roles）");
+return [];
+})();
+const titleDocs =
+titleResult.status === "fulfilled"
+? titleResult.value.docs
+: (() => {
+failures.push("職稱（titles）");
+return [];
+})();
 const namesByCategory = deriveTemplateRowNames(
-roleSnapshot.docs.map((item) => {
+roleDocs.map((item) => {
 const data = item.data() as Record<string, unknown>;
 return {
 name: typeof data.name === "string"? data.name: item.id,
 kind: data.kind,
 };
 }),
-titleSnapshot.docs.map((item) => {
+titleDocs.map((item) => {
 const data = item.data() as Record<string, unknown>;
 return { name: typeof data.name === "string"? data.name: item.id };
 }),
@@ -358,6 +381,11 @@ cross: tpl? tpl.cross: false,
 }
 });
 setRows(nextRows);
+setLoadError(
+failures.length > 0
+? `部分資料讀取失敗：${failures.join("、")}，其餘資料照常顯示`
+: "",
+);
 } catch (error) {
 setLoadError(error instanceof Error? error.message: "讀取權限範本失敗");
 } finally {
