@@ -4361,6 +4361,30 @@ button:disabled {
   .review-group-box {
     padding: 4px 12px;
   }
+  .review-execute-page .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .review-execute-page .review-answer-options .check-row,
+  .review-execute-page .common-error-options label {
+    min-height: 44px;
+  }
+  .review-execute-page .common-error-options label {
+    width: 100%;
+    max-width: none;
+    align-items: center;
+  }
+  .review-execute-page .form-actions {
+    align-items: stretch;
+    gap: 8px;
+  }
+  .review-execute-page .form-actions .button {
+    width: 100%;
+    min-height: 44px;
+    justify-content: center;
+  }
+  .review-execute-page .table-scroll {
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 /* ---------- 審查人員搜尋下拉（v1.11.0） ---------- */

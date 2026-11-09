@@ -40,6 +40,37 @@ service cloud.firestore {
         && id in group.data.get('slotIds', []);
     }
 
+    function reservationTargetMatches(id, data) {
+      let targetId = data.get('targetId', '');
+      let targetCollection = data.get('targetCollection', '');
+      let draftPath = /databases/$(database)/documents/reviewDrafts/$(targetId);
+      let recordPath = /databases/$(database)/documents/reviewRecords/$(targetId);
+      return (targetCollection == 'reviewDrafts'
+          && existsAfter(draftPath)
+          && getAfter(draftPath).data.get('uniqueKey', '') == id)
+        || (targetCollection == 'reviewRecords'
+          && existsAfter(recordPath)
+          && getAfter(recordPath).data.get('uniqueKey', '') == id);
+    }
+
+    function recordHasReservation(id, data) {
+      let uniqueKey = data.get('uniqueKey', '');
+      let lockPath = /databases/$(database)/documents/reviewReservations/$(uniqueKey);
+      return uniqueKey == '' || (uniqueKey is string
+        && existsAfter(lockPath)
+        && getAfter(lockPath).data.get('targetCollection', '') == 'reviewRecords'
+        && getAfter(lockPath).data.get('targetId', '') == id);
+    }
+
+    function draftHasReservation(id, data) {
+      let uniqueKey = data.get('uniqueKey', '');
+      let lockPath = /databases/$(database)/documents/reviewReservations/$(uniqueKey);
+      return uniqueKey == '' || (uniqueKey is string
+        && existsAfter(lockPath)
+        && getAfter(lockPath).data.get('targetCollection', '') == 'reviewDrafts'
+        && getAfter(lockPath).data.get('targetId', '') == id);
+    }
+
     // 任務建立後，指標版本／閾值／審查區間為摘要依據，不得隨一般任務狀態更新而改寫。
     function preservesTaskSnapshot() {
       return request.resource.data.get('indicatorId', null) == resource.data.get('indicatorId', null)
@@ -195,7 +226,8 @@ service cloud.firestore {
     match /reviewRecords/{id} {
       allow read: if isAuthed();
       allow create: if isAuthed()
-        && (!('quotaGroupId' in request.resource.data) || validQuotaSlot(id));
+        && (!('quotaGroupId' in request.resource.data) || validQuotaSlot(id))
+        && (!('uniqueKey' in request.resource.data) || recordHasReservation(id, request.resource.data));
       allow update: if isAuthed() && preservesReviewSnapshot() && (
         (!('quotaGroupId' in resource.data)
           && !('quotaGroupId' in request.resource.data))
@@ -204,8 +236,38 @@ service cloud.firestore {
           && request.resource.data.get('quotaSlotDocId', '') == id
           && resource.data.get('quotaSlotDocId', '') == id
           && request.resource.data.get('version', 0) == resource.data.get('version', 0) + 1)
-      );
+      ) && (!('uniqueKey' in request.resource.data) || recordHasReservation(id, request.resource.data));
       allow delete: if isAdmin();
+    }
+
+    // 尚未送出的逐件暫存：不進正式紀錄／分析；本人或管理員可編輯及刪除。
+    match /reviewDrafts/{id} {
+      allow read: if isAuthed();
+      allow create: if isAuthed() && request.resource.data.get('createdBy', '') == staffId()
+        && draftHasReservation(id, request.resource.data);
+      allow update: if isAuthed()
+        && (resource.data.get('createdBy', '') == staffId()
+          || isAdmin()
+          || get(/databases/$(database)/documents/reviewTasks/$(resource.data.get('taskId', ''))).data.get('reviewerId', '') == staffId())
+        && request.resource.data.get('createdBy', '') == resource.data.get('createdBy', '')
+        && draftHasReservation(id, request.resource.data);
+      allow delete: if isAuthed() && (resource.data.get('createdBy', '') == staffId()
+        || isAdmin()
+        || get(/databases/$(database)/documents/reviewTasks/$(resource.data.get('taskId', ''))).data.get('reviewerId', '') == staffId());
+    }
+
+    // 同指標／區間／受審人員的唯一名額；create-only 可拒絕同一唯一鍵的競態建立。
+    match /reviewReservations/{id} {
+      allow get, list: if isAuthed();
+      allow create: if isAuthed()
+        && request.resource.data.get('uniqueKey', '') == id
+        && request.resource.data.get('ownerId', '') == staffId()
+        && reservationTargetMatches(id, request.resource.data);
+      allow update: if isAuthed()
+        && request.resource.data.get('uniqueKey', '') == id
+        && request.resource.data.get('ownerId', '') == resource.data.get('ownerId', '')
+        && reservationTargetMatches(id, request.resource.data);
+      allow delete: if isAuthed();
     }
 
     // 解鎖申請（v1.15.0）：登入者可讀；申請人（requestedBy＝本人職編）可建立；

@@ -17,6 +17,7 @@ import { EmptyState, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
 import { useAuth } from "../lib/auth";
+import { isReviewerAccessActive } from "../lib/reviewerValidity";
 import { maskName } from "../lib/mask";
 import {
   indicatorCodeOf,
@@ -36,6 +37,8 @@ import {
   progressLabel,
   requiredCases,
   reviewCaseDocId,
+  reviewIntervalIdentity,
+  reviewUniqueDocId,
 } from "../lib/reviewProgress";
 import {
   periodicQuotaSlotDocId,
@@ -49,7 +52,7 @@ import {
  * - records：查詢＝列出該單位該指標的逐件審查結果，每筆可編輯
  */
 export type ExecuteTarget =
-  | { mode: "task"; taskId: string; editRecordId?: string }
+  | { mode: "task"; taskId: string; editRecordId?: string; editDraftId?: string }
   | { mode: "records"; taskId: string };
 
 interface TaskFull extends ReviewTask {
@@ -80,6 +83,7 @@ interface CaseRecordRow {
 
 interface PeriodicQuotaState {
   count: number;
+  draftCount: number;
   occupiedSlots: number[];
 }
 
@@ -212,6 +216,9 @@ export function ReviewExecutePage({
 }) {
   const { user } = useAuth();
   const staffId = user?.staffId ?? "";
+  const reviewerExpired = !!user?.reviewerAccessExpiresAt &&
+    !isReviewerAccessActive(user.reviewerAccessExpiresAt) &&
+    !(user.roles ?? []).includes("系統管理員");
 
   const [loading, setLoading] = useState(true);
   const [indicatorName, setIndicatorName] = useState("");
@@ -225,7 +232,9 @@ export function ReviewExecutePage({
   const [selectedAuditItem, setSelectedAuditItem] = useState("");
   const [task, setTask] = useState<TaskFull | null>(null);
   const [records, setRecords] = useState<CaseRecordRow[]>([]);
+  const [drafts, setDrafts] = useState<CaseRecordRow[]>([]);
   const [quotaDoneCount, setQuotaDoneCount] = useState(0);
+  const [quotaDraftCount, setQuotaDraftCount] = useState(0);
   const [loadError, setLoadError] = useState("");
 
   /** 逐件表單欄位（v1.11.0） */
@@ -257,6 +266,7 @@ export function ReviewExecutePage({
   const [allDone, setAllDone] = useState(false);
   /** records 模式下正在編輯的單件（null＝列表） */
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
   /** 解鎖申請（v1.15.0） */
   const [unlockRows, setUnlockRows] = useState<UnlockRow[]>([]);
   const [unlockReason, setUnlockReason] = useState("");
@@ -264,6 +274,8 @@ export function ReviewExecutePage({
 
   const sharedQuotaTask = isSharedPeriodicQuotaTask(task);
   const doneCount = sharedQuotaTask ? quotaDoneCount : records.length;
+  const draftCount = sharedQuotaTask ? quotaDraftCount : drafts.length;
+  const usedCount = doneCount + draftCount;
   const liveScore = useMemo(() => {
     const selections = questions.flatMap((question) => {
       const selectedIndex = answers[question.id];
@@ -277,6 +289,47 @@ export function ReviewExecutePage({
       answeredCount: selections.length,
     };
   }, [questions, answers]);
+
+  async function assertUniqueReviewee(
+    empNo: string,
+    except: { recordId?: string; draftId?: string } = {},
+  ) {
+    if (!task || !empNo.trim()) return;
+    const db = getFirebaseDb();
+    const intervalId = reviewIntervalIdentity(task);
+    const [recordSnap, draftSnap] = await Promise.all([
+      getDocs(query(collection(db, "reviewRecords"), where("indicatorId", "==", task.indicatorId))),
+      getDocs(query(collection(db, "reviewDrafts"), where("indicatorId", "==", task.indicatorId))),
+    ]);
+    const intervalOf = (data: Record<string, unknown>) => reviewIntervalIdentity({
+      year: Number(data.year ?? 0),
+      month: Number(data.month ?? 0),
+      scheduleStartYear: typeof data.scheduleStartYear === "number" ? data.scheduleStartYear : undefined,
+      scheduleStartMonth: typeof data.scheduleStartMonth === "number" ? data.scheduleStartMonth : undefined,
+      scheduleEndYear: typeof data.scheduleEndYear === "number" ? data.scheduleEndYear : undefined,
+      scheduleEndMonth: typeof data.scheduleEndMonth === "number" ? data.scheduleEndMonth : undefined,
+    });
+    for (const record of recordSnap.docs) {
+      if (record.id === except.recordId) continue;
+      const data = record.data() as Record<string, unknown>;
+      if (String(data.reviewedPersonEmpNo ?? "") === empNo.trim() && intervalOf(data) === intervalId)
+        throw new Error("此受審人員在同一指標、同一審查區間已有正式紀錄，不可重複審查");
+    }
+    for (const draft of draftSnap.docs) {
+      if (draft.id === except.draftId) continue;
+      const data = draft.data() as Record<string, unknown>;
+      if (String(data.reviewedPersonEmpNo ?? "") === empNo.trim() && intervalOf(data) === intervalId)
+        throw new Error("此受審人員在同一指標、同一審查區間已有暫存紀錄；請先開啟該暫存後提交或刪除");
+    }
+    const uniqueKey = reviewUniqueDocId(task.indicatorId, intervalId, empNo);
+    const lockSnap = await getDoc(doc(db, "reviewReservations", uniqueKey));
+    if (lockSnap.exists()) {
+      const data = lockSnap.data() as Record<string, unknown>;
+      const targetId = String(data.targetId ?? "");
+      if (targetId !== except.recordId && targetId !== except.draftId)
+        throw new Error("此受審人員的唯一名額已被其他審查紀錄或暫存占用");
+    }
+  }
 
   /* ---------- 載入：該 task 的逐件紀錄 ---------- */
   const loadCaseRecords = useCallback(
@@ -331,10 +384,43 @@ export function ReviewExecutePage({
     [],
   );
 
+  const loadDraftRecords = useCallback(
+    async (taskId: string): Promise<CaseRecordRow[]> => {
+      const db = getFirebaseDb();
+      const snapshot = await getDocs(
+        query(collection(db, "reviewDrafts"), where("taskId", "==", taskId)),
+      );
+      return snapshot.docs.map((draft) => {
+        const data = draft.data() as Record<string, unknown>;
+        return {
+          id: draft.id,
+          caseSeq: typeof data.caseSeq === "number" ? data.caseSeq : null,
+          reviewDate: typeof data.reviewDate === "string" ? data.reviewDate : "",
+          reviewerEmpNo: typeof data.reviewerEmpNo === "string" ? data.reviewerEmpNo : "",
+          reviewerName: typeof data.reviewerName === "string" ? data.reviewerName : "",
+          reviewedPersonEmpNo: typeof data.reviewedPersonEmpNo === "string" ? data.reviewedPersonEmpNo : "",
+          reviewedPersonName: typeof data.reviewedPersonName === "string" ? data.reviewedPersonName : "",
+          bedNo: typeof data.bedNo === "string" ? data.bedNo : "",
+          auditItem: typeof data.auditItem === "string" ? data.auditItem : "",
+          answers: Array.isArray(data.answers) ? data.answers as ReviewAnswer[] : [],
+          totalScore: Number(data.totalScore ?? 0),
+          maxScore: Number(data.maxScore ?? 0),
+          rate: typeof data.rate === "number" ? data.rate : null,
+          quotaGroupId: typeof data.quotaGroupId === "string" ? data.quotaGroupId : undefined,
+          quotaCaseNo: typeof data.quotaCaseNo === "number" ? data.quotaCaseNo : undefined,
+          version: typeof data.version === "number" ? data.version : undefined,
+          submittedAt: data.updatedAt,
+          submittedBy: typeof data.createdBy === "string" ? data.createdBy : "",
+        };
+      }).sort((a, b) => (a.caseSeq ?? 0) - (b.caseSeq ?? 0));
+    },
+    [],
+  );
+
   const loadPeriodicQuotaCount = useCallback(
     async (quotaTask: TaskFull): Promise<PeriodicQuotaState> => {
       if (!isSharedPeriodicQuotaTask(quotaTask))
-        return { count: 0, occupiedSlots: [] };
+        return { count: 0, draftCount: 0, occupiedSlots: [] };
       const startYear = quotaTask.quotaIntervalStartYear!;
       const startMonth = quotaTask.quotaIntervalStartMonth!;
       const endYear = quotaTask.quotaIntervalEndYear!;
@@ -361,7 +447,19 @@ export function ReviewExecutePage({
           ),
         ),
       );
+      const draftSnapshots = await Promise.all(
+        years.map((year) =>
+          getDocsFromServer(
+            query(
+              collection(db, "reviewDrafts"),
+              where("indicatorId", "==", quotaTask.indicatorId),
+              where("year", "==", year),
+            ),
+          ),
+        ),
+      );
       let count = 0;
+      let draftCount = 0;
       const occupiedSlots = new Set<number>();
       snapshots.forEach((snapshot) => {
         snapshot.docs.forEach((record) => {
@@ -387,7 +485,23 @@ export function ReviewExecutePage({
           }
         });
       });
-      return { count, occupiedSlots: [...occupiedSlots] };
+      draftSnapshots.forEach((snapshot) => {
+        snapshot.docs.forEach((draft) => {
+          const data = draft.data() as Record<string, unknown>;
+          if (
+            String(data.unitId ?? "") !== quotaTask.unitId ||
+            String(data.quotaGroupId ?? "") !== quotaTask.quotaGroupId
+          ) return;
+          const month = Number(data.month ?? 0);
+          const key = `${Number(data.year ?? 0)}-${month}`;
+          if (!monthKeys.has(key)) return;
+          draftCount += 1;
+          const slot = data.quotaCaseNo;
+          if (typeof slot === "number" && Number.isInteger(slot) && slot > 0)
+            occupiedSlots.add(slot);
+        });
+      });
+      return { count, draftCount, occupiedSlots: [...occupiedSlots] };
     },
     [],
   );
@@ -539,11 +653,15 @@ export function ReviewExecutePage({
         const recs = await loadCaseRecords(t.id);
         if (cancelled) return;
         setRecords(recs);
+        const draftRows = await loadDraftRecords(t.id);
+        if (cancelled) return;
+        setDrafts(draftRows);
         const quotaState = isSharedPeriodicQuotaTask(t)
           ? await loadPeriodicQuotaCount(t)
-          : { count: recs.length, occupiedSlots: [] };
+          : { count: recs.length, draftCount: draftRows.length, occupiedSlots: [] };
         if (cancelled) return;
         setQuotaDoneCount(quotaState.count);
+        setQuotaDraftCount(quotaState.draftCount);
         // 解鎖申請（v1.15.0）
         try {
           const usnap = await getDocs(
@@ -575,11 +693,20 @@ export function ReviewExecutePage({
         // 編輯指定單件 → 預填
         const editId =
           target.mode === "task" ? (target.editRecordId ?? null) : null;
+        const editDraftId =
+          target.mode === "task" ? (target.editDraftId ?? null) : null;
         if (editId && !cancelled) {
           const rec = recs.find((r) => r.id === editId);
           if (rec) {
             prefillRecord(rec, nq.questions);
             setEditingId(editId);
+          }
+        }
+        if (editDraftId && !cancelled) {
+          const draft = draftRows.find((r) => r.id === editDraftId);
+          if (draft) {
+            prefillRecord(draft, nq.questions);
+            setEditingDraftId(editDraftId);
           }
         }
         const quotaComplete = isTaskComplete(quotaState.count, t.caseCount);
@@ -690,6 +817,173 @@ export function ReviewExecutePage({
   }
 
   /* ---------- 送出（逐件新增 or 單件更新） ---------- */
+  async function handleSaveDraft() {
+    if (!task) return;
+    setSubmitting(true);
+    try {
+      const db = getFirebaseDb();
+      const currentDraft = editingDraftId
+        ? drafts.find((draft) => draft.id === editingDraftId)
+        : undefined;
+      const answerList: ReviewAnswer[] = questions.flatMap((q) => {
+        const index = answers[q.id];
+        if (index == null) return [];
+        const label = optionLabelsOf(q.optionSet)[index];
+        if (!label) return [];
+        const note = (notes[q.id] ?? "").trim();
+        return [{
+          questionId: q.id,
+          itemText: q.itemText,
+          optionLabel: label,
+          score: label === "是" ? 1 : 0,
+          excluded: label === "不適用",
+          ...((commonErrorAnswers[q.id] ?? []).length ? { commonErrors: commonErrorAnswers[q.id] } : {}),
+          ...(note ? { note } : {}),
+        }];
+      });
+      const score = computeOptionSetScore(answerList.map((a) => ({ score: a.score, excluded: !!a.excluded })));
+      const personId = personEmpNo.trim();
+      const intervalId = reviewIntervalIdentity(task);
+      const uniqueKey = personId ? reviewUniqueDocId(task.indicatorId, intervalId, personId) : "";
+      if (personId) await assertUniqueReviewee(personId, { draftId: currentDraft?.id });
+
+      const quotaState = sharedQuotaTask
+        ? await loadPeriodicQuotaCount(task)
+        : { count: records.length, draftCount: drafts.length, occupiedSlots: [] as number[] };
+      if (!currentDraft && quotaState.count + quotaState.draftCount >= requiredCases(task.caseCount))
+        throw new Error(`本審查區間已有 ${quotaState.draftCount} 筆暫存未送出且名額已滿；請先送出或刪除暫存`);
+      const quotaCaseNo = currentDraft?.quotaCaseNo ?? (sharedQuotaTask
+        ? nextAvailableQuotaSlot(quotaState.occupiedSlots, requiredCases(task.caseCount))
+        : undefined);
+      if (sharedQuotaTask && quotaCaseNo == null)
+        throw new Error("本審查區間名額已滿，請先送出或刪除暫存");
+      const caseSeq = currentDraft?.caseSeq ?? nextCaseSeq(records.length + drafts.length);
+      const draftRef = currentDraft
+        ? doc(db, "reviewDrafts", currentDraft.id)
+        : doc(collection(db, "reviewDrafts"));
+      const oldDraftSnap = currentDraft ? await getDoc(draftRef) : null;
+      const oldDraftData = oldDraftSnap?.exists()
+        ? oldDraftSnap.data() as Record<string, unknown>
+        : {};
+      const oldUniqueKey = typeof oldDraftData.uniqueKey === "string" ? oldDraftData.uniqueKey : "";
+      const payload: Record<string, unknown> = {
+        taskId: task.id,
+        indicatorId: task.indicatorId,
+        unitId: task.unitId,
+        reviewerId: task.reviewerId,
+        year: task.year,
+        month: task.month,
+        ...(task.indicatorVersionAtSchedule ? { indicatorVersionAtSchedule: task.indicatorVersionAtSchedule } : {}),
+        ...(typeof task.thresholdAtSchedule === "number" ? { thresholdAtSchedule: task.thresholdAtSchedule } : {}),
+        thresholdRuleAtSchedule: task.thresholdRuleAtSchedule ?? ">=",
+        scheduleStartYear: task.scheduleStartYear ?? task.year,
+        scheduleStartMonth: task.scheduleStartMonth ?? task.month,
+        scheduleEndYear: task.scheduleEndYear ?? task.year,
+        scheduleEndMonth: task.scheduleEndMonth ?? task.month,
+        caseSeq,
+        reviewDate,
+        reviewerEmpNo: reviewerEmpNo.trim(),
+        reviewerName: reviewerName.trim(),
+        reviewedPersonEmpNo: personId,
+        reviewedPersonName: personName.trim(),
+        bedNo: bedNo.trim(),
+        auditItem: selectedAuditItem,
+        answers: answerList,
+        totalScore: score.totalScore,
+        maxScore: score.maxScore,
+        rate: score.rate,
+        status: "draft",
+        createdBy: typeof oldDraftData.createdBy === "string" ? oldDraftData.createdBy : staffId,
+        createdAt: oldDraftData.createdAt ?? serverTimestamp(),
+        updatedBy: staffId,
+        updatedAt: serverTimestamp(),
+        ...(uniqueKey ? { uniqueKey } : { uniqueKey: "" }),
+        ...(sharedQuotaTask ? {
+          quotaGroupId: task.quotaGroupId,
+          quotaCaseNo,
+          quotaSlotDocId: periodicQuotaSlotDocId(task.quotaGroupId, quotaCaseNo!),
+        } : {}),
+      };
+      const batch = writeBatch(db);
+      if (oldUniqueKey && oldUniqueKey !== uniqueKey)
+        batch.delete(doc(db, "reviewReservations", oldUniqueKey));
+      if (uniqueKey) {
+        const reservationRef = doc(db, "reviewReservations", uniqueKey);
+        const reservationSnap = await getDoc(reservationRef);
+        if (!reservationSnap.exists()) {
+          batch.set(reservationRef, {
+            uniqueKey,
+            ownerId: staffId,
+            targetCollection: "reviewDrafts",
+            targetId: draftRef.id,
+            taskId: task.id,
+            indicatorId: task.indicatorId,
+            intervalId,
+            personEmpNo: personId,
+            status: "draft",
+            createdAt: serverTimestamp(),
+          });
+        } else {
+          const existing = reservationSnap.data() as Record<string, unknown>;
+          if (String(existing.targetId ?? "") !== draftRef.id)
+            throw new Error("此受審人員的唯一名額已被其他審查紀錄或暫存占用");
+        }
+      }
+      batch.set(draftRef, payload, { merge: true });
+      await batch.commit();
+      const nextDrafts = await loadDraftRecords(task.id);
+      setDrafts(nextDrafts);
+      if (sharedQuotaTask) {
+        const updatedQuota = await loadPeriodicQuotaCount(task);
+        setQuotaDoneCount(updatedQuota.count);
+        setQuotaDraftCount(updatedQuota.draftCount);
+      }
+      setEditingDraftId(null);
+      setAnswers({});
+      setNotes({});
+      setCommonErrorAnswers({});
+      setPersonEmpNo("");
+      setPersonName("");
+      setBedNo("");
+      onAction("審查內容已暫存，尚未列入正式紀錄或分析");
+    } catch (error) {
+      onAction(`暫存失敗：${toErrorMessage(error)}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDeleteDraft(draft: CaseRecordRow) {
+    if (!task) return;
+    if (!window.confirm(`確定刪除第 ${draft.caseSeq ?? "—"} 件暫存？此操作無法復原。`)) return;
+    try {
+      const db = getFirebaseDb();
+      const batch = writeBatch(db);
+      const draftRef = doc(db, "reviewDrafts", draft.id);
+      const snap = await getDoc(draftRef);
+      const data = snap.exists() ? snap.data() as Record<string, unknown> : {};
+      const uniqueKey = typeof data.uniqueKey === "string" ? data.uniqueKey : "";
+      if (uniqueKey) {
+        const lockRef = doc(db, "reviewReservations", uniqueKey);
+        const lockSnap = await getDoc(lockRef);
+        if (lockSnap.exists() && String(lockSnap.data().targetId ?? "") === draft.id)
+          batch.delete(lockRef);
+      }
+      batch.delete(draftRef);
+      await batch.commit();
+      setDrafts(await loadDraftRecords(task.id));
+      if (editingDraftId === draft.id) setEditingDraftId(null);
+      if (sharedQuotaTask) {
+        const updatedQuota = await loadPeriodicQuotaCount(task);
+        setQuotaDoneCount(updatedQuota.count);
+        setQuotaDraftCount(updatedQuota.draftCount);
+      }
+      onAction("暫存已刪除");
+    } catch (error) {
+      onAction(`刪除暫存失敗：${toErrorMessage(error)}`);
+    }
+  }
+
   async function handleSubmit() {
     if (!task) return;
     if (task.status === "locked") {
@@ -751,6 +1045,10 @@ export function ReviewExecutePage({
         const previousSnap = await getDoc(recordRef);
         if (!previousSnap.exists()) throw new Error("找不到要修改的審查紀錄");
         const previous = previousSnap.data() as Record<string, unknown>;
+        const intervalId = reviewIntervalIdentity(task);
+        const personId = personEmpNo.trim();
+        const uniqueKey = personId ? reviewUniqueDocId(task.indicatorId, intervalId, personId) : "";
+        if (personId) await assertUniqueReviewee(personId, { recordId: editId });
         const nextValues: Record<string, unknown> = {
           answers: answerList,
           totalScore,
@@ -759,8 +1057,9 @@ export function ReviewExecutePage({
           reviewDate,
           reviewerEmpNo: reviewerEmpNo.trim(),
           reviewerName: reviewerName.trim(),
-          reviewedPersonEmpNo: personEmpNo.trim(),
+          reviewedPersonEmpNo: personId,
           reviewedPersonName: personName.trim(),
+          uniqueKey,
           bedNo: bedNo.trim(),
           auditItem: selectedAuditItem,
           ...(task.indicatorVersionAtSchedule
@@ -801,7 +1100,7 @@ export function ReviewExecutePage({
             changes,
           });
         }
-        await updateDoc(recordRef, {
+        const updatePayload = {
           ...nextValues,
           ...(typeof previous.quotaGroupId === "string"
             ? { version: Number(previous.version ?? 1) + 1 }
@@ -814,7 +1113,48 @@ export function ReviewExecutePage({
                 lastModifiedByName: user?.name ?? staffId,
               }
             : {}),
-        });
+        };
+        const batch = writeBatch(db);
+        const oldUniqueKey = typeof previous.uniqueKey === "string" ? previous.uniqueKey : "";
+        if (oldUniqueKey && oldUniqueKey !== uniqueKey)
+          batch.delete(doc(db, "reviewReservations", oldUniqueKey));
+        if (uniqueKey) {
+          const reservationRef = doc(db, "reviewReservations", uniqueKey);
+          const reservationSnap = await getDoc(reservationRef);
+          if (!reservationSnap.exists()) {
+            batch.set(reservationRef, {
+              uniqueKey,
+              ownerId: staffId,
+              targetCollection: "reviewRecords",
+              targetId: editId,
+              taskId: task.id,
+              indicatorId: task.indicatorId,
+              intervalId,
+              personEmpNo: personId,
+              status: "submitted",
+              createdAt: serverTimestamp(),
+            });
+          } else {
+            const existing = reservationSnap.data() as Record<string, unknown>;
+            if (String(existing.targetId ?? "") !== editId)
+              throw new Error("此受審人員的唯一名額已被其他審查紀錄或暫存占用");
+          }
+        }
+        batch.update(recordRef, updatePayload);
+        if (Object.keys(changes).length > 0) {
+          batch.set(doc(collection(db, "auditLogs")), {
+            actor: staffId,
+            actorName: user?.name ?? staffId,
+            action: "修改正式審查結果",
+            targetType: "reviewRecord",
+            targetId: editId,
+            detail: `指標「${task.indicatorId}」／單位「${task.unitId}」；異動欄位：${Object.keys(changes).join("、")}`,
+            before: Object.fromEntries(Object.entries(changes).map(([key, value]) => [key, value.before])),
+            after: Object.fromEntries(Object.entries(changes).map(([key, value]) => [key, value.after])),
+            createdAt: serverTimestamp(),
+          });
+        }
+        await batch.commit();
         const recs = await loadCaseRecords(task.id);
         setRecords(recs);
         if (sharedQuotaTask) {
@@ -832,33 +1172,40 @@ export function ReviewExecutePage({
           onBack();
         }
       } else {
-        // 逐件新增
+        // 正式提交：新建紀錄或把暫存轉為正式紀錄
+        const editingDraft = editingDraftId
+          ? drafts.find((draft) => draft.id === editingDraftId)
+          : undefined;
+        const intervalId = reviewIntervalIdentity(task);
+        const personId = personEmpNo.trim();
+        const uniqueKey = personId
+          ? reviewUniqueDocId(task.indicatorId, intervalId, personId)
+          : "";
+        if (personId)
+          await assertUniqueReviewee(personId, { draftId: editingDraft?.id });
         const quotaState = sharedQuotaTask
           ? await loadPeriodicQuotaCount(task)
-          : { count: records.length, occupiedSlots: [] };
+          : { count: records.length, draftCount: drafts.length, occupiedSlots: [] };
         const beforeCount = quotaState.count;
         if (sharedQuotaTask) {
           setQuotaDoneCount(beforeCount);
+          setQuotaDraftCount(quotaState.draftCount);
         }
-        if (sharedQuotaTask && isTaskComplete(beforeCount, task.caseCount)) {
+        const usedBefore = beforeCount + quotaState.draftCount;
+        if (!editingDraft && isTaskComplete(usedBefore, task.caseCount)) {
           setAllDone(true);
-          try {
-            await syncPeriodicQuotaTaskStatus(task, true);
-          } catch {
-            // 件數已達上限；狀態可由下次載入修復。
-          }
-          throw new Error(`本審查區間已達 ${requiredCases(task.caseCount)} 件，不可再新增`);
+          throw new Error(`本審查區間已達 ${requiredCases(task.caseCount)} 件；其中 ${quotaState.draftCount} 筆暫存未送出，請先送出或刪除暫存`);
         }
-        const quotaSlot = sharedQuotaTask
+        const quotaSlot = editingDraft?.quotaCaseNo ?? (sharedQuotaTask
           ? nextAvailableQuotaSlot(
               quotaState.occupiedSlots,
               requiredCases(task.caseCount),
             )
-          : null;
+          : null);
         if (sharedQuotaTask && quotaSlot == null) {
           throw new Error("本審查區間名額已被其他審查員使用，請重新讀取進度後再試");
         }
-        const seq = nextCaseSeq(records.length);
+        const seq = editingDraft?.caseSeq ?? nextCaseSeq(records.length + drafts.length);
         const taskId = task.id;
         const quotaSlotId =
           sharedQuotaTask && quotaSlot != null
@@ -867,7 +1214,8 @@ export function ReviewExecutePage({
         const recordId = sharedQuotaTask
           ? quotaSlotId
           : reviewCaseDocId(taskId, seq);
-        await setDoc(doc(db, "reviewRecords", recordId), {
+        const recordRef = doc(db, "reviewRecords", recordId);
+        const recordData: Record<string, unknown> = {
           taskId,
           indicatorId: task.indicatorId,
           unitId: task.unitId,
@@ -889,8 +1237,9 @@ export function ReviewExecutePage({
           reviewDate,
           reviewerEmpNo: reviewerEmpNo.trim(),
           reviewerName: reviewerName.trim(),
-          reviewedPersonEmpNo: personEmpNo.trim(),
+          reviewedPersonEmpNo: personId,
           reviewedPersonName: personName.trim(),
+          uniqueKey,
           bedNo: bedNo.trim(),
           auditItem: selectedAuditItem,
           answers: answerList,
@@ -907,9 +1256,53 @@ export function ReviewExecutePage({
                 version: 1,
               }
             : {}),
-        });
+        };
+        const batch = writeBatch(db);
+        if (editingDraft) {
+          batch.delete(doc(db, "reviewDrafts", editingDraft.id));
+          const draftSnap = await getDoc(doc(db, "reviewDrafts", editingDraft.id));
+          const draftData = draftSnap.exists() ? draftSnap.data() as Record<string, unknown> : {};
+          const oldUniqueKey = typeof draftData.uniqueKey === "string" ? draftData.uniqueKey : "";
+          if (oldUniqueKey && oldUniqueKey !== uniqueKey)
+            batch.delete(doc(db, "reviewReservations", oldUniqueKey));
+        }
+        if (uniqueKey) {
+          const reservationRef = doc(db, "reviewReservations", uniqueKey);
+          const reservationSnap = await getDoc(reservationRef);
+          if (reservationSnap.exists()) {
+            const existing = reservationSnap.data() as Record<string, unknown>;
+            if (String(existing.targetId ?? "") !== editingDraft?.id && String(existing.targetId ?? "") !== recordId)
+              throw new Error("此受審人員的唯一名額已被其他審查紀錄或暫存占用");
+            batch.set(reservationRef, {
+              ...existing,
+              uniqueKey,
+              targetCollection: "reviewRecords",
+              targetId: recordId,
+              taskId,
+              indicatorId: task.indicatorId,
+              intervalId,
+              personEmpNo: personId,
+              status: "submitted",
+            });
+          } else {
+            batch.set(reservationRef, {
+              uniqueKey,
+              ownerId: staffId,
+              targetCollection: "reviewRecords",
+              targetId: recordId,
+              taskId,
+              indicatorId: task.indicatorId,
+              intervalId,
+              personEmpNo: personId,
+              status: "submitted",
+              createdAt: serverTimestamp(),
+            });
+          }
+        }
+        batch.set(recordRef, recordData);
+        await batch.commit();
         const req = requiredCases(task.caseCount);
-        const completedCount = sharedQuotaTask ? beforeCount + 1 : seq;
+        const completedCount = beforeCount + 1;
         if (sharedQuotaTask) {
           setQuotaDoneCount(completedCount);
         }
@@ -928,6 +1321,14 @@ export function ReviewExecutePage({
         }
         setAllDone(completed);
         setRecords(await loadCaseRecords(taskId));
+        const freshDrafts = await loadDraftRecords(taskId);
+        setDrafts(freshDrafts);
+        setEditingDraftId(null);
+        if (sharedQuotaTask) {
+          const updatedQuota = await loadPeriodicQuotaCount(task);
+          setQuotaDoneCount(updatedQuota.count);
+          setQuotaDraftCount(updatedQuota.draftCount);
+        }
         setAnswers({}); // 清空答案，保留日期／審查人員，繼續下一件
         setCommonErrorAnswers({});
         setNotes({});
@@ -956,6 +1357,15 @@ export function ReviewExecutePage({
   }
 
   /* ---------- 畫面 ---------- */
+  if (reviewerExpired) {
+    return (
+      <EmptyState
+        title="審查員授權已到期"
+        description="目前帳號的審查員效期已結束，無法繼續填寫審查表；請聯絡系統管理員或所屬群組管理者。"
+      />
+    );
+  }
+
   if (loading) {
     return (
       <section className="panel">
@@ -979,10 +1389,11 @@ export function ReviewExecutePage({
     );
   }
 
-  const isRecordsView = target.mode === "records" && !editingId;
+  const isRecordsView = target.mode === "records" && !editingId && !editingDraftId;
+  const quotaFull = isTaskComplete(usedCount, task.caseCount);
 
   return (
-    <>
+    <div className="review-execute-page">
       <div style={{ marginBottom: 12 }}>
         <button className="button button-outline" onClick={onBack}>
           <ArrowLeft size={15} /> 返回儀表板
@@ -990,8 +1401,15 @@ export function ReviewExecutePage({
       </div>
       <SectionTitle
         title={`${isRecordsView ? "審查結果查詢" : "審查表單"}：${indicatorName}`}
-        note={`${ymLabel(task.year, task.month)}・${task.unitId}・${sharedQuotaTask ? "本區間合計" : "已完成"} ${progressLabel(doneCount, task.caseCount)} 件`}
+        note={`${ymLabel(task.year, task.month)}・${task.unitId}・${sharedQuotaTask ? "正式紀錄／本區間" : "正式紀錄"} ${progressLabel(doneCount, task.caseCount)} 件${draftCount > 0 ? `・暫存未送出 ${draftCount} 件` : ""}`}
       />
+
+      {!editingDraftId && drafts.length > 0 && (
+        <section className="panel">
+          <SectionTitle title={`暫存紀錄（${drafts.length}）`} note="暫存不列入正式結果與分析；可繼續編輯、送出或刪除。" />
+          <div className="table-scroll"><table className="data-table"><thead><tr><th>件次</th><th>審查日期</th><th>受審人員</th><th>已作答</th><th>狀態</th><th>操作</th></tr></thead><tbody>{drafts.map((draft) => <tr key={draft.id}><td>第 {draft.caseSeq ?? "—"} 件</td><td>{draft.reviewDate || "—"}</td><td>{draft.reviewedPersonEmpNo ? `${draft.reviewedPersonEmpNo}／${maskName(draft.reviewedPersonName || draft.reviewedPersonEmpNo)}` : "尚未選人"}</td><td>{draft.answers.length}/{questions.length}</td><td><span className="status-pill warning">暫存未送出</span></td><td><button type="button" className="text-button" onClick={() => { prefillRecord(draft, questions); setEditingId(null); setEditingDraftId(draft.id); }}>繼續編輯</button>{" "}<button type="button" className="text-button" onClick={() => void handleDeleteDraft(draft)}>刪除</button></td></tr>)}</tbody></table></div>
+        </section>
+      )}
 
       {isRecordsView ? (
         /* ============ 查詢：逐件審查結果列表 ============ */
@@ -1064,7 +1482,12 @@ export function ReviewExecutePage({
             </div>
           )}
         </section>
-      ) : task.status === "locked" && !editingId ? (
+      ) : quotaFull && !editingId && !editingDraftId ? (
+        <section className="panel" style={{ borderColor: "#e0a3a3" }}>
+          <p style={{ marginTop: 0 }}><b>本審查區間件數已達設定上限，不能新增審查。</b></p>
+          {draftCount > 0 ? <p className="settings-note">目前有 {draftCount} 筆暫存尚未送出，暫存會占用件數但不列正式紀錄；請先送出或刪除暫存。若清單中看不到，可回到該暫存所屬任務處理。</p> : <p className="settings-note">如需修正已送出的結果，請在查詢頁選擇該筆紀錄編輯。</p>}
+        </section>
+      ) : task.status === "locked" && !editingId && !editingDraftId ? (
         /* ============ 逾期鎖定：不可填寫，可申請解鎖 ============ */
         <section className="panel" style={{ borderColor: "#e0a3a3" }}>
           <p style={{ marginTop: 0 }}>
@@ -1103,6 +1526,9 @@ export function ReviewExecutePage({
       ) : (
         /* ============ 審查表單（逐件） ============ */
         <>
+          {editingDraftId && (
+            <p className="dup-note">正在編輯暫存紀錄；按「提交審查結果」後才會列為正式紀錄。</p>
+          )}
           {editingId && (
             <p className="dup-note">
               正在編輯單件審查結果，送出後僅更新該筆，不增加件數。
@@ -1336,6 +1762,15 @@ export function ReviewExecutePage({
               </p>
 
               <div className="form-actions" style={{ marginBottom: 24 }}>
+                {!editingId && (
+                  <button
+                    className="button button-outline"
+                    disabled={submitting}
+                    onClick={() => void handleSaveDraft()}
+                  >
+                    {submitting ? "暫存中…" : editingDraftId ? "更新暫存" : "暫存不送出"}
+                  </button>
+                )}
                 <button
                   className="button button-primary"
                   disabled={submitting}
@@ -1346,7 +1781,9 @@ export function ReviewExecutePage({
                     ? "送出中…"
                     : editingId
                       ? "更新審查結果"
-                      : `送出第 ${nextCaseSeq(records.length)} 件`}
+                      : editingDraftId
+                        ? "提交審查結果"
+                        : `送出第 ${nextCaseSeq(records.length + drafts.length)} 件`}
                 </button>
                 <button className="button button-ghost" onClick={onBack}>
                   取消返回
@@ -1356,6 +1793,6 @@ export function ReviewExecutePage({
           )}
         </>
       )}
-    </>
+    </div>
   );
 }

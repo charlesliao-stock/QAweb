@@ -22,6 +22,8 @@ export interface AnalysisAnswer {
   optionLabel: string;
   score: number;
   excluded?: boolean;
+  /** 該題從指標原因詞庫勾選的原因；分析僅計入已列詞庫項目。 */
+  commonErrors?: string[];
 }
 
 export interface AnalysisRecord {

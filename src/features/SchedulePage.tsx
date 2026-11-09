@@ -43,6 +43,7 @@ import { buildTaskIndex } from "../lib/taskIndex";
 import { hasSchedulePermission } from "../lib/roleIdentity";
 import { usePermissions } from "../lib/usePermissions";
 import { useAuth } from "../lib/auth";
+import { isReviewerAccessActive } from "../lib/reviewerValidity";
 import { maskName } from "../lib/mask";
 import {
   academicYearOf,
@@ -137,6 +138,7 @@ interface UserLite {
   name: string;
   unitCode: string;
   status: string;
+  reviewerAccessActive: boolean;
 }
 
 interface ReviewerLite {
@@ -425,6 +427,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             name: typeof data.name === "string" ? data.name : d.id,
             unitCode: typeof data.unitCode === "string" ? data.unitCode : "",
             status: typeof data.status === "string" ? data.status : "在職",
+            reviewerAccessActive: isReviewerAccessActive(data.reviewerAccessExpiresAt),
           };
         }),
       );
@@ -435,11 +438,16 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
         um.set(d.id, typeof name === "string" ? name : d.id);
       });
       const rbm = new Map<string, ReviewerLite[]>();
+      const activeReviewerIds = new Set(
+        unsnap.docs
+          .filter((person) => isReviewerAccessActive(person.data().reviewerAccessExpiresAt))
+          .map((person) => person.id),
+      );
       rsnap.docs.forEach((d) => {
         const data = d.data();
         const groupId = typeof data.groupId === "string" ? data.groupId : "";
         const personId = typeof data.personId === "string" ? data.personId : "";
-        if (!groupId || !personId) return;
+        if (!groupId || !personId || !activeReviewerIds.has(personId)) return;
         const arr = rbm.get(groupId) ?? [];
         arr.push({ personId, name: um.get(personId) ?? personId });
         rbm.set(groupId, arr);
@@ -1929,6 +1937,7 @@ function AddAuditDialog({
     for (const it of assignment?.items ?? []) {
       if (map.has(it.reviewerId)) continue;
       const u = users.find((x) => x.id === it.reviewerId);
+      if (!u?.reviewerAccessActive) continue;
       const g = units.find((x) => x.code === u?.unitCode)?.groupId ?? "";
       map.set(it.reviewerId, { name: u?.name ?? it.reviewerId, groupId: g });
     }

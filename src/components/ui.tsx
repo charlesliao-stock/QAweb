@@ -28,6 +28,10 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
       title: "人員管理",
       description: "群組、單位、職稱與人員主檔維護（含批次上傳）",
     },
+    handoff: {
+      title: "任務交接",
+      description: "將原審查員尚未完成的品管審查任務交接給新審查員",
+    },
     capa: {
       title: "CAPA 改善追蹤",
       description: "追蹤改善措施、成效驗證與結案",

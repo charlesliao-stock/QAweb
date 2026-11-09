@@ -14,6 +14,33 @@ export function reviewCaseDocId(taskId: string, seq: number): string {
   return `${taskId}_c${String(seq).padStart(3, "0")}`;
 }
 
+/** 跨月份排程以任務快照的起訖月代表同一審查區間；舊任務回退到年月。 */
+export function reviewIntervalIdentity(task: {
+  year: number;
+  month: number;
+  scheduleStartYear?: number;
+  scheduleStartMonth?: number;
+  scheduleEndYear?: number;
+  scheduleEndMonth?: number;
+}): string {
+  const sy = task.scheduleStartYear ?? task.year;
+  const sm = task.scheduleStartMonth ?? task.month;
+  const ey = task.scheduleEndYear ?? task.year;
+  const em = task.scheduleEndMonth ?? task.month;
+  return `${sy}-${String(sm).padStart(2, "0")}_${ey}-${String(em).padStart(2, "0")}`;
+}
+
+/** 受審人員唯一鍵：同一指標、審查區間與職編只能占一個唯一名額。 */
+export function reviewUniqueDocId(
+  indicatorId: string,
+  intervalId: string,
+  personEmpNo: string,
+): string {
+  return [indicatorId, intervalId, personEmpNo.trim()]
+    .map((part) => encodeURIComponent(part))
+    .join("|");
+}
+
 /** 完成判斷：該單位完成數 ≧ 應審件數 */
 export function isTaskComplete(
   doneCount: number,

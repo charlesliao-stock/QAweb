@@ -38,10 +38,12 @@ import {
   deriveGroupIds,
   deriveRoles,
   isGroupScopedRole,
+  isReviewerRole,
   isUnitLevelRole,
   parseMemberships,
   type Membership,
 } from "../lib/roleIdentity";
+import { wouldCreateUnitHistoryCycle } from "../lib/unitHistory";
 import {
   UNIT_TEMPLATE_HEADERS,
   USER_TEMPLATE_HEADERS,
@@ -67,6 +69,7 @@ interface UnitRow {
   code: string;
   name: string;
   groupId: string;
+  mergedFromUnitCodes: string[];
   groupName: string;
   memberCount: number | null;
 }
@@ -89,6 +92,7 @@ interface UserRow {
   /** 群組＋角色配對（v1.21；無則由舊 groupIds＋roles 推導） */
   memberships: Membership[];
   status: string;
+  reviewerAccessExpiresAt: string;
 }
 
 interface RoleRow {
@@ -134,6 +138,7 @@ interface UnitForm {
   code: string;
   name: string;
   groupId: string;
+  mergedFromUnitCodes: string[];
 }
 
 interface TitleForm {
@@ -156,6 +161,7 @@ interface UserForm {
   mustChangePassword: boolean;
   /** 督導負責的群組 id（v1.15.0：督導儀表板轄區用） */
   districtGroupIds: string[];
+  reviewerAccessExpiresAt: string;
 }
 
 interface PreviewRow {
@@ -170,7 +176,7 @@ function emptyGroupForm(): GroupForm {
 }
 
 function emptyUnitForm(): UnitForm {
-  return { code: "", name: "", groupId: "" };
+  return { code: "", name: "", groupId: "", mergedFromUnitCodes: [] };
 }
 
 function emptyTitleForm(): TitleForm {
@@ -190,6 +196,7 @@ function emptyUserForm(): UserForm {
     otherRoles: [],
     mustChangePassword: true,
     districtGroupIds: [],
+    reviewerAccessExpiresAt: "",
   };
 }
 
@@ -210,14 +217,14 @@ function auditFields(staffId: string, isCreate: boolean) {
     : { updatedAt: now, updatedBy: staffId };
 }
 
-/** Firestore batch 寫入，每批上限 500 */
+/** Firestore batch 寫入；每個操作最多包含人員更新＋auditLogs 兩次寫入 */
 async function commitInBatches(
   ops: Array<(b: WriteBatch) => void>,
 ): Promise<void> {
   const db = getFirebaseDb();
-  for (let i = 0; i < ops.length; i += 500) {
+  for (let i = 0; i < ops.length; i += 250) {
     const b = writeBatch(db);
-    ops.slice(i, i + 500).forEach((op) => op(b));
+    ops.slice(i, i + 250).forEach((op) => op(b));
     await b.commit();
   }
 }
@@ -861,6 +868,9 @@ export function GroupsPage({
             code: d.id,
             name: typeof data.name === "string" ? data.name : "",
             groupId,
+            mergedFromUnitCodes: Array.isArray(data.mergedFromUnitCodes)
+              ? data.mergedFromUnitCodes.map(String).filter(Boolean)
+              : [],
             groupName: groupIdToName.get(groupId) ?? "未分類",
             memberCount: counts.has(d.id) ? (counts.get(d.id) ?? 0) : null,
           };
@@ -963,6 +973,9 @@ export function GroupsPage({
                 : [],
             }),
             status: typeof data.status === "string" ? data.status : "在職",
+            reviewerAccessExpiresAt: typeof data.reviewerAccessExpiresAt === "string"
+              ? data.reviewerAccessExpiresAt
+              : "",
           };
         })
         .sort((a, b) => a.staffId.localeCompare(b.staffId, "zh-Hant"));
@@ -1181,13 +1194,19 @@ export function GroupsPage({
   function openUnitEdit(code: string) {
     const row = units.find((u) => u.code === code);
     if (!row) return;
-    setUnitForm({ code: row.code, name: row.name, groupId: row.groupId });
+    setUnitForm({
+      code: row.code,
+      name: row.name,
+      groupId: row.groupId,
+      mergedFromUnitCodes: [...row.mergedFromUnitCodes],
+    });
     setUnitError("");
     setUnitView({ kind: "edit", code });
   }
 
   async function handleUnitSave() {
     const view = unitView;
+    if (view.kind === "list") return;
     if (view.kind === "create" && !unitForm.code.trim()) {
       setUnitError("請填寫單位代號");
       return;
@@ -1200,6 +1219,13 @@ export function GroupsPage({
       setUnitError("請先登入");
       return;
     }
+    const code = view.kind === "create" ? unitForm.code.trim() : view.code;
+    const mergedFromUnitCodes = [...new Set(unitForm.mergedFromUnitCodes)]
+      .filter((source) => source && source !== code);
+    if (wouldCreateUnitHistoryCycle(units, code, mergedFromUnitCodes)) {
+      setUnitError("合併來源會形成單位沿革循環，請重新選擇");
+      return;
+    }
     setUnitError("");
     setUnitSaving(true);
     try {
@@ -1207,10 +1233,10 @@ export function GroupsPage({
       const payload = {
         name: unitForm.name.trim(),
         groupId: unitForm.groupId,
+        mergedFromUnitCodes,
         ...auditFields(user.staffId, false),
       };
       if (view.kind === "create") {
-        const code = unitForm.code.trim();
         const ref = doc(db, "units", code);
         const exists = await getDoc(ref);
         if (exists.exists()) {
@@ -1218,13 +1244,46 @@ export function GroupsPage({
           setUnitSaving(false);
           return;
         }
-        await setDoc(ref, {
-          ...payload,
-          ...auditFields(user.staffId, true),
-        });
+        const batch = writeBatch(db);
+        batch.set(ref, { ...payload, ...auditFields(user.staffId, true) });
+        if (mergedFromUnitCodes.length > 0) {
+          batch.set(doc(collection(db, "auditLogs")), {
+            actor: user.staffId,
+            actorName: user.name,
+            action: "單位合併沿革權限建立",
+            targetType: "unit",
+            targetId: code,
+            detail: `新增單位 ${code}，設定可存取的合併前單位資料`,
+            before: { mergedFromUnitCodes: [] },
+            after: { mergedFromUnitCodes },
+            createdAt: serverTimestamp(),
+          });
+        }
+        await batch.commit();
         onAction(`已新增單位 ${code}`);
       } else if (view.kind === "edit") {
-        await updateDoc(doc(db, "units", view.code), payload);
+        const ref = doc(db, "units", view.code);
+        const previous = (await getDoc(ref)).data() ?? {};
+        const beforeCodes = Array.isArray(previous.mergedFromUnitCodes)
+          ? previous.mergedFromUnitCodes.map(String).filter(Boolean)
+          : [];
+        const changed = JSON.stringify(beforeCodes) !== JSON.stringify(mergedFromUnitCodes);
+        const batch = writeBatch(db);
+        batch.update(ref, payload);
+        if (changed) {
+          batch.set(doc(collection(db, "auditLogs")), {
+            actor: user.staffId,
+            actorName: user.name,
+            action: "單位合併沿革權限異動",
+            targetType: "unit",
+            targetId: view.code,
+            detail: `更新單位 ${view.code} 的合併歷史資料可見範圍`,
+            before: { mergedFromUnitCodes: beforeCodes },
+            after: { mergedFromUnitCodes },
+            createdAt: serverTimestamp(),
+          });
+        }
+        await batch.commit();
         onAction(`單位 ${view.code} 已更新`);
       }
       setUnitView({ kind: "list" });
@@ -1238,6 +1297,13 @@ export function GroupsPage({
 
   async function handleUnitDelete(code: string) {
     if (!user) return;
+    const historicalReference = units.find(
+      (unit) => unit.code !== code && unit.mergedFromUnitCodes.includes(code),
+    );
+    if (historicalReference) {
+      onAction(`單位 ${code} 是 ${historicalReference.code} 的合併歷史來源，請先調整沿革設定，不能刪除`);
+      return;
+    }
     try {
       const db = getFirebaseDb();
       const memberSnap = await getDocs(
@@ -1404,6 +1470,7 @@ export function GroupsPage({
       otherRoles: row.roles.filter((r) => !isGroupScopedRole(r)),
       mustChangePassword: true,
       districtGroupIds: [],
+      reviewerAccessExpiresAt: row.reviewerAccessExpiresAt,
     });
     setUserError("");
     void (async () => {
@@ -1419,6 +1486,9 @@ export function GroupsPage({
             districtGroupIds: Array.isArray(data.districtGroupIds)
               ? data.districtGroupIds.map(String)
               : [],
+            reviewerAccessExpiresAt: typeof data.reviewerAccessExpiresAt === "string"
+              ? data.reviewerAccessExpiresAt
+              : "",
           }));
         }
       } catch {
@@ -1491,15 +1561,25 @@ export function GroupsPage({
       setUserError("請先登入");
       return;
     }
+    const roles = [
+      ...new Set([
+        ...deriveRoles(userForm.memberships.filter((m) => m.groupId)),
+        ...userForm.otherRoles,
+      ]),
+    ];
+    const reviewerAccessExpiresAt = isReviewerRole(roles)
+      ? userForm.reviewerAccessExpiresAt.trim()
+      : "";
+    if (reviewerAccessExpiresAt && !/^\d{4}-\d{2}-\d{2}$/.test(reviewerAccessExpiresAt)) {
+      setUserError("審查員效期請選擇有效日期；留白代表永久有效");
+      return;
+    }
     setUserError("");
     setUserSaving(true);
     try {
       const db = getFirebaseDb();
       // v1.21：memberships 為主；同步更新 groupIds（衍生）與 roles（聯集＋非群組角色）
       const memberships = userForm.memberships.filter((m) => m.groupId);
-      const roles = [
-        ...new Set([...deriveRoles(memberships), ...userForm.otherRoles]),
-      ];
       const payload = {
         name: userForm.name.trim(),
         unitCode: userForm.unitCode,
@@ -1510,6 +1590,7 @@ export function GroupsPage({
         memberships,
         groupIds: deriveGroupIds(memberships),
         roles,
+        reviewerAccessExpiresAt: reviewerAccessExpiresAt || null,
         districtGroupIds: userForm.districtGroupIds,
         ...auditFields(user.staffId, false),
       };
@@ -1522,16 +1603,67 @@ export function GroupsPage({
           setUserSaving(false);
           return;
         }
-        await setDoc(ref, {
+        const userPayload = {
           ...payload,
           mustChangePassword: userForm.mustChangePassword,
           ...auditFields(user.staffId, true),
-        });
+        };
+        const batch = writeBatch(db);
+        batch.set(ref, userPayload);
+        if (roles.length > 0 || memberships.length > 0) {
+          batch.set(doc(collection(db, "auditLogs")), {
+            actor: user.staffId,
+            actorName: user.name,
+            action: "建立人員權限",
+            targetType: "user",
+            targetId: staffId,
+            detail: `建立職編 ${staffId} 並設定角色／群組權限`,
+            before: { roles: [], memberships: [] },
+            after: { roles, memberships, reviewerAccessExpiresAt: reviewerAccessExpiresAt || null },
+            createdAt: serverTimestamp(),
+          });
+        }
+        await batch.commit();
         onAction(
           `已新增人員 ${staffId}。請再到 Firebase Console → Authentication 新增使用者，email 格式為 ${staffId}@nurseboard.internal`,
         );
       } else if (view.kind === "edit") {
-        await updateDoc(doc(db, "users", view.staffId), payload);
+        const userRef = doc(db, "users", view.staffId);
+        const previousSnap = await getDoc(userRef);
+        const previous = previousSnap.exists()
+          ? (previousSnap.data() as Record<string, unknown>)
+          : {};
+        const beforePermissions = {
+          roles: Array.isArray(previous.roles) ? previous.roles : [],
+          memberships: Array.isArray(previous.memberships) ? previous.memberships : [],
+          districtGroupIds: Array.isArray(previous.districtGroupIds) ? previous.districtGroupIds : [],
+          reviewerAccessExpiresAt: typeof previous.reviewerAccessExpiresAt === "string"
+            ? previous.reviewerAccessExpiresAt
+            : null,
+        };
+        const afterPermissions = {
+          roles,
+          memberships,
+          districtGroupIds: userForm.districtGroupIds,
+          reviewerAccessExpiresAt: reviewerAccessExpiresAt || null,
+        };
+        const permissionChanged = JSON.stringify(beforePermissions) !== JSON.stringify(afterPermissions);
+        const batch = writeBatch(db);
+        batch.update(userRef, payload);
+        if (permissionChanged) {
+          batch.set(doc(collection(db, "auditLogs")), {
+            actor: user.staffId,
+            actorName: user.name,
+            action: "人員權限異動",
+            targetType: "user",
+            targetId: view.staffId,
+            detail: `更新職編 ${view.staffId} 的角色／群組權限`,
+            before: beforePermissions,
+            after: afterPermissions,
+            createdAt: serverTimestamp(),
+          });
+        }
+        await batch.commit();
         onAction(`人員 ${view.staffId} 已更新`);
       }
       setUserView({ kind: "list" });
@@ -1596,10 +1728,25 @@ export function GroupsPage({
     );
     if (!ok) return;
     try {
-      await updateDoc(doc(getFirebaseDb(), "users", row.staffId), {
+      const db = getFirebaseDb();
+      const userRef = doc(db, "users", row.staffId);
+      const batch = writeBatch(db);
+      batch.update(userRef, {
         status: next,
         ...auditFields(user.staffId, false),
       });
+      batch.set(doc(collection(db, "auditLogs")), {
+        actor: user.staffId,
+        actorName: user.name,
+        action: "人員帳號狀態異動",
+        targetType: "user",
+        targetId: row.staffId,
+        detail: `職編 ${row.staffId} 帳號狀態由「${row.status}」改為「${next}」`,
+        before: { status: row.status },
+        after: { status: next },
+        createdAt: serverTimestamp(),
+      });
+      await batch.commit();
       onAction(`人員 ${row.staffId} 已設為${next}`);
       await loadUsers();
     } catch (error) {
@@ -1615,11 +1762,23 @@ export function GroupsPage({
       const memberships = row.memberships
         .map((m) => ({ ...m, roles: m.roles.filter((r) => r !== roleName) }))
         .filter((m) => m.roles.length > 0);
+      const roles = row.roles.filter((r) => r !== roleName);
       b.update(doc(getFirebaseDb(), "users", row.staffId), {
-        roles: row.roles.filter((r) => r !== roleName),
+        roles,
         memberships,
         groupIds: deriveGroupIds(memberships),
         ...auditFields(user?.staffId ?? "", false),
+      });
+      b.set(doc(collection(getFirebaseDb(), "auditLogs")), {
+        actor: user?.staffId ?? "",
+        actorName: user?.name ?? "",
+        action: "移除人員角色",
+        targetType: "user",
+        targetId: row.staffId,
+        detail: `移除職編 ${row.staffId} 的角色「${roleName}」`,
+        before: { roles: row.roles, memberships: row.memberships },
+        after: { roles, memberships },
+        createdAt: serverTimestamp(),
       });
     };
   }
@@ -1641,6 +1800,17 @@ export function GroupsPage({
           memberships = [...memberships, { groupId, roles: [roleName] }];
         }
       }
+      b.set(doc(collection(getFirebaseDb(), "auditLogs")), {
+        actor: user?.staffId ?? "",
+        actorName: user?.name ?? "",
+        action: "新增人員角色",
+        targetType: "user",
+        targetId: row.staffId,
+        detail: `為職編 ${row.staffId} 新增角色「${roleName}」${groupId ? `（群組 ${groupId}）` : ""}`,
+        before: { roles: row.roles, memberships: row.memberships },
+        after: { roles, memberships },
+        createdAt: serverTimestamp(),
+      });
       b.update(doc(getFirebaseDb(), "users", row.staffId), {
         roles,
         memberships,
@@ -2214,6 +2384,10 @@ export function GroupsPage({
   const isUnitEditing = unitView.kind === "edit";
   const isTitleEditing = titleView.kind === "edit";
   const isUserEditing = userView.kind === "edit";
+  const reviewerRoleSelected = isReviewerRole([
+    ...deriveRoles(userForm.memberships.filter((membership) => membership.groupId)),
+    ...userForm.otherRoles,
+  ]);
 
   const headingAction = (() => {
     const back = (reset: () => void) => (
@@ -2824,6 +2998,28 @@ export function GroupsPage({
                   <ChevronDown size={15} />
                 </div>
               </div>
+              <div className="form-field">
+                <label className="field-label" htmlFor="merged-from-units">合併自舊單位（可複選）</label>
+                <select
+                  id="merged-from-units"
+                  className="text-input"
+                  multiple
+                  size={Math.min(5, Math.max(3, units.length))}
+                  value={unitForm.mergedFromUnitCodes}
+                  onChange={(event) => setUnitForm((prev) => ({
+                    ...prev,
+                    mergedFromUnitCodes: Array.from(event.target.selectedOptions, (option) => option.value),
+                  }))}
+                >
+                  {units.filter((candidate) => candidate.code !== unitForm.code && (
+                    unitForm.mergedFromUnitCodes.includes(candidate.code) ||
+                    !units.some((other) => other.code !== unitForm.code && other.mergedFromUnitCodes.includes(candidate.code))
+                  )).map((candidate) => (
+                    <option key={candidate.code} value={candidate.code}>{candidate.name}（{candidate.code}）</option>
+                  ))}
+                </select>
+                <p className="settings-note">選取後，新單位護理長可在分析中查看合併前歷史資料；不會授予個人明細下鑽權限。</p>
+              </div>
             </div>
             <div className="form-actions">
               <button
@@ -3252,6 +3448,22 @@ export function GroupsPage({
                 }
               />
             </div>
+            {reviewerRoleSelected && (
+              <div className="form-field">
+                <label className="field-label" htmlFor="reviewer-access-expiry">審查員授權效期</label>
+                <input
+                  id="reviewer-access-expiry"
+                  className="text-input"
+                  type="date"
+                  value={userForm.reviewerAccessExpiresAt}
+                  onChange={(event) => setUserForm((prev) => ({
+                    ...prev,
+                    reviewerAccessExpiresAt: event.target.value,
+                  }))}
+                />
+                <p className="settings-note">留白為永久有效（預設）；設定日期後，審查員權限於該日結束後失效。</p>
+              </div>
+            )}
             {!isUserEditing && (
               <div className="form-field">
                 <label className="field-label">首次登入強制改密碼</label>

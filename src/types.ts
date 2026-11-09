@@ -25,6 +25,7 @@ export type PageId =
   | "audit"
   | "results"
   | "groups"
+  | "handoff"
   | "capa"
   | "admin"
   | "reviewers";

@@ -11,12 +11,14 @@ import {
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   getDocsFromServer,
   limit,
   query,
-  updateDoc,
+  serverTimestamp,
   where,
+  writeBatch,
 } from "./db";
 import { getCachedRefCollection } from "./refCache";
 import { getDocsCacheFirst } from "./cacheFirst";
@@ -26,6 +28,7 @@ import {
   isOfficerRole,
   isReviewerRole,
 } from "./roleIdentity";
+import { activeRolesForReviewerExpiry } from "./reviewerValidity";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY ?? "",
@@ -381,11 +384,12 @@ export async function readFirebaseUsersForReviewerManagement(): Promise<
   }
   return snapshot.docs.map((document) => {
     const raw = document.data() as Record<string, unknown>;
-    const roles = Array.isArray(raw.roles)
+    const storedRoles = Array.isArray(raw.roles)
       ? (raw.roles as unknown[]).filter(
           (value): value is string => typeof value === "string",
         )
       : [];
+    const roles = activeRolesForReviewerExpiry(storedRoles, raw.reviewerAccessExpiresAt);
     const groupIds = Array.isArray(raw.groupIds)
       ? (raw.groupIds as unknown[]).filter(
           (value): value is string => typeof value === "string",
@@ -427,13 +431,41 @@ export async function readFirebaseGroupsForReviewerManagement(): Promise<
 }
 
 /** 授予審查員角色（users/{staffId}.roles arrayUnion "審查員"） */
-export async function grantReviewerRole(staffId: string): Promise<void> {
+export async function grantReviewerRole(
+  staffId: string,
+  actor: { staffId: string; name: string },
+): Promise<void> {
   if (!isFirebaseReviewerRoleWriteEnabled())
     throw new Error("審查員角色寫入尚未啟用；需先完成 Firestore Rules 驗收。");
   const normalizedStaffId = staffId.trim();
   if (!normalizedStaffId) throw new Error("缺少人員職編，無法授予角色。");
   const db = getFirebaseDb();
-  await updateDoc(doc(db, "users", normalizedStaffId), {
+  const userRef = doc(db, "users", normalizedStaffId);
+  const userSnap = await getDoc(userRef);
+  if (!userSnap.exists()) throw new Error("找不到該人員資料。");
+  const before = userSnap.data();
+  const beforeRoles = Array.isArray(before.roles) ? before.roles.map(String) : [];
+  const afterRoles = [...new Set([...beforeRoles, "審查員"])];
+  const batch = writeBatch(db);
+  batch.update(userRef, {
     roles: arrayUnion("審查員"),
+    reviewerAccessExpiresAt: null,
   });
+  batch.set(doc(collection(db, "auditLogs")), {
+    actor: actor.staffId,
+    actorName: actor.name,
+    action: "授予審查員角色",
+    targetType: "user",
+    targetId: normalizedStaffId,
+    detail: `授予職編 ${normalizedStaffId} 審查員角色，效期設為永久有效`,
+    before: {
+      roles: beforeRoles,
+      reviewerAccessExpiresAt: typeof before.reviewerAccessExpiresAt === "string"
+        ? before.reviewerAccessExpiresAt
+        : null,
+    },
+    after: { roles: afterRoles, reviewerAccessExpiresAt: null },
+    createdAt: serverTimestamp(),
+  });
+  await batch.commit();
 }

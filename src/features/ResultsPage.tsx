@@ -91,6 +91,7 @@ import {
   recordsForIndex,
   type RecordIndex,
 } from "../lib/resultsMatrix";
+import { unitHistoryCodes } from "../lib/unitHistory";
 
 interface IndicatorOpt {
   id: string;
@@ -112,6 +113,7 @@ interface UnitOpt {
   code: string;
   name: string;
   groupId: string;
+  mergedFromUnitCodes: string[];
 }
 
 interface ResultSummaryDoc {
@@ -408,14 +410,28 @@ export function ResultsPage({
   const [unitPanel, setUnitPanel] = useState<UnitPanel | null>(null);
 
   // 資料範圍（沿用舊頁規則）
+  const isNurseLeader = !!user && (
+    ((user.title ?? "").includes("護理長") && !(user.title ?? "").includes("副")) ||
+    (user.roles ?? []).includes("護理長") ||
+    (user.roles ?? []).includes("單位護理長")
+  );
   const scope = useMemo(() => {
     const roles = user?.roles ?? [];
     if (roles.includes("系統管理員")) return { kind: "admin" as const };
+    if (user && isNurseLeader)
+      return { kind: "staff" as const, unitCode: user.unitCode };
     if (user && isReviewerRole(roles))
       return { kind: "reviewer" as const, staffId: user.staffId };
     if (user) return { kind: "staff" as const, unitCode: user.unitCode };
     return { kind: "admin" as const };
-  }, [user]);
+  }, [user, isNurseLeader]);
+
+  const visibleUnitCodes = useMemo(() => {
+    if (scope.kind !== "staff") return new Set<string>();
+    return isNurseLeader
+      ? unitHistoryCodes(units, scope.unitCode)
+      : new Set([scope.unitCode]);
+  }, [scope, isNurseLeader, units]);
 
   /** 按年份快取的權限範圍鍵（與 scope 同義，格式見 resultsCache） */
   const cacheScope: ResultsCacheScope = useMemo(() => {
@@ -492,6 +508,9 @@ export function ResultsPage({
                 name: typeof data.name === "string" ? data.name : d.id,
                 groupId:
                   typeof data.groupId === "string" ? data.groupId : "",
+                mergedFromUnitCodes: Array.isArray(data.mergedFromUnitCodes)
+                  ? data.mergedFromUnitCodes.map(String).filter(Boolean)
+                  : [],
               };
             })
             .sort((a, b) => a.code.localeCompare(b.code, "zh-Hant")),
@@ -593,8 +612,10 @@ export function ResultsPage({
             if (scope.kind === "admin") {
               // 管理者同時需要全院摘要及單位摘要（單位模式／篩選使用）。
             } else if (scope.kind === "staff") {
-              summaries = summaries.filter(
-                (summary) => summary.scope === "unit" && summary.unitId === scope.unitCode,
+              summaries = summaries.filter((summary) =>
+                isNurseLeader
+                  ? summary.scope === "all" || (summary.scope === "unit" && summary.unitId != null && visibleUnitCodes.has(summary.unitId))
+                  : summary.scope === "unit" && summary.unitId === scope.unitCode,
               );
             } else {
               const taskSnaps = await Promise.all(
@@ -673,6 +694,9 @@ export function ResultsPage({
                         typeof r.optionLabel === "string" ? r.optionLabel : "",
                       score: typeof r.score === "number" ? r.score : 0,
                       excluded: r.excluded === true,
+                      commonErrors: Array.isArray(r.commonErrors)
+                        ? r.commonErrors.filter((word): word is string => typeof word === "string")
+                        : [],
                     };
                   })
                 : [];
@@ -772,7 +796,7 @@ export function ResultsPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appliedYearsKey, reloadNonce, scope.kind, scope.kind === "reviewer" ? scope.staffId : "", tab, singleIndicatorId]);
+  }, [appliedYearsKey, reloadNonce, scope.kind, scope.kind === "reviewer" ? scope.staffId : "", scope.kind === "staff" ? scope.unitCode : "", tab, singleIndicatorId, isNurseLeader, visibleUnitCodes]);
 
   /** 每次查詢皆失效所選年份，避免再次查詢命中過期快取。 */
   function handleQuery() {
@@ -786,14 +810,29 @@ export function ResultsPage({
   const scopedRecords = useMemo(() => {
     if (scope.kind === "admin") return records;
     if (scope.kind === "staff")
-      return records.filter((r) => r.unitId === scope.unitCode);
+      return records.filter((r) => visibleUnitCodes.has(r.unitId));
     const unitIds = new Set(
       tasks
         .filter((t) => t.reviewerId === scope.staffId)
         .map((t) => t.unitId),
     );
     return records.filter((r) => unitIds.has(r.unitId));
-  }, [records, tasks, scope]);
+  }, [records, tasks, scope, visibleUnitCodes]);
+
+  const causeCountRows = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const record of recordsInMonths(scopedRecords, allMonths)) {
+      for (const answer of record.answers) {
+        for (const word of new Set(answer.commonErrors ?? [])) {
+          const cause = word.trim();
+          if (cause) counts.set(cause, (counts.get(cause) ?? 0) + 1);
+        }
+      }
+    }
+    return [...counts.entries()]
+      .map(([cause, count]) => ({ cause, count }))
+      .sort((a, b) => b.count - a.count || a.cause.localeCompare(b.cause, "zh-Hant"));
+  }, [scopedRecords, allMonths]);
 
   /**
    * v1.28 階段 7（A3）：矩陣索引——進資料時預建一次
@@ -807,13 +846,13 @@ export function ResultsPage({
 
   const scopedUnitCodes = useMemo(() => {
     if (scope.kind === "admin") return new Set(units.map((u) => u.code));
-    if (scope.kind === "staff") return new Set([scope.unitCode]);
+    if (scope.kind === "staff") return visibleUnitCodes;
     return new Set(
       tasks
         .filter((t) => t.reviewerId === scope.staffId)
         .map((t) => t.unitId),
     );
-  }, [units, tasks, scope]);
+  }, [units, tasks, scope, visibleUnitCodes]);
 
   const scopedUnits = useMemo(
     () => units.filter((u) => scopedUnitCodes.has(u.code)),
@@ -1004,6 +1043,7 @@ export function ResultsPage({
     mode: UnitMode,
     scopeUnitId?: string,
   ) {
+    if (isNurseLeader) return;
     if (summaryRecords.length > 0 && records.length === 0) {
       if (!applied || loading) return;
       setLoading(true);
@@ -1032,6 +1072,9 @@ export function ResultsPage({
                       optionLabel: String(answer.optionLabel ?? ""),
                       score: typeof answer.score === "number" ? answer.score : 0,
                       excluded: answer.excluded === true,
+                      commonErrors: Array.isArray(answer.commonErrors)
+                        ? answer.commonErrors.filter((word): word is string => typeof word === "string")
+                        : [],
                     };
                   })
                 : [];
@@ -1112,10 +1155,11 @@ export function ResultsPage({
     if (!indSel) return null;
     if (summaryRecords.length > 0) {
       const metrics = summaryRecords.filter((row) =>
-        scope.kind === "admin" ? row.scope === "all" : row.scope === "unit",
+        scope.kind === "admin" || isNurseLeader ? row.scope === "all" : row.scope === "unit",
       );
       const unitRows = summaryRecords.filter(
-        (row) => row.scope === "unit" && row.totalCount > 0,
+        (row) => row.scope === "unit" && row.totalCount > 0 &&
+          (scope.kind === "admin" || !isNurseLeader || (row.unitId != null && visibleUnitCodes.has(row.unitId))),
       );
       const unitPeriodRows = unitRows;
       const unitPassed = unitPeriodRows.filter((row) =>
@@ -1170,17 +1214,17 @@ export function ResultsPage({
       chartCols: pts.map((point) => point.column),
       optionRows: optionDetailRows(indRecs, indSel.questions),
     };
-  }, [indRecs, indSel, indUnit, appliedColumns, summaryRecords, scope.kind]);
+  }, [indRecs, indSel, indUnit, appliedColumns, summaryRecords, scope.kind, isNurseLeader, visibleUnitCodes]);
 
   const errorSummarySource = summaryRecords.length > 0
     ? summaryRecords.filter((row) => {
         if (errorUnit !== "all") return row.scope === "unit" && row.unitId === errorUnit;
-        return scope.kind === "admin" ? row.scope === "all" : row.scope === "unit";
+        return scope.kind === "admin" || isNurseLeader ? row.scope === "all" : row.scope === "unit";
       })
     : [];
   const thresholdLabels = [...new Map(
     summaryRecords
-      .filter((row) => scope.kind === "admin" ? row.scope === "all" : row.scope === "unit")
+      .filter((row) => scope.kind === "admin" || isNurseLeader ? row.scope === "all" : row.scope === "unit")
       .map((row) => [
         `${row.scheduleStartKey}-${row.indicatorVersion}-${row.threshold}`,
         `${row.scheduleStartYear}-${String(row.scheduleStartMonth).padStart(2, "0")} ${row.indicatorVersion} 閾值 ${row.threshold}%`,
@@ -1398,6 +1442,13 @@ export function ResultsPage({
           </p>
         )}
 
+      {tab !== "import" && tab !== "manage" && applied && !loading && causeCountRows.length > 0 && (
+        <section className="panel results-cause-summary">
+          <SectionTitle title="原因詞庫件數" note="依目前使用者可見資料及已查詢期間統計；只計入題目原因詞庫中已勾選的項目。" />
+          <div className="table-scroll"><table className="data-table"><thead><tr><th>原因詞庫項目</th><th>勾選件數</th></tr></thead><tbody>{causeCountRows.map((row) => <tr key={row.cause}><td>{row.cause}</td><td>{row.count}</td></tr>)}</tbody></table></div>
+        </section>
+      )}
+
       {tab === "group" && (
         <>
           {!applied ? (
@@ -1560,9 +1611,9 @@ export function ResultsPage({
             <>
               <div className="analysis-stats">
                 <SummaryCell
-                  label="受審單位數"
+                  label={isNurseLeader ? "本單位受審" : "受審單位數"}
                   value={String(indSummary.unitCount)}
-                  note="所選期間內有紀錄的單位"
+                  note={isNurseLeader ? "僅顯示本人所屬單位；不列其他單位" : "所選期間內有紀錄的單位"}
                 />
                 <SummaryCell
                   label="受審總人次"
@@ -1582,12 +1633,12 @@ export function ResultsPage({
               </div>
               {summaryRecords.length > 0 && (
                 <p className="settings-note" role="status">
-                  已使用預存摘要；逐筆下探時才讀取原始紀錄。排程快照閾值：{thresholdLabels.join("；")}。錯題排行依完全相同題目文字跨版本彙總，僅作排行、不代表版本等價或趨勢合併。
+                  {isNurseLeader ? "全院指標結果使用預存彙總，不提供其他單位或個人明細下探。" : "已使用預存摘要；逐筆下探時才讀取原始紀錄。"}排程快照閾值：{thresholdLabels.join("；")}。錯題排行依完全相同題目文字跨版本彙總，僅作排行、不代表版本等價或趨勢合併。
                 </p>
               )}
               {summaryRecords.length === 0 && indRecs.length > 0 && (
                 <p className="settings-note" role="status">
-                  此期間尚無預存摘要，暫以審查明細計算；明細中的閾值快照優先於指標現行閾值。
+                  {isNurseLeader ? "此期間尚無全院預存摘要；目前僅顯示本單位資料，無法提供全院彙總。" : "此期間尚無預存摘要，暫以審查明細計算；明細中的閾值快照優先於指標現行閾值。"}
                 </p>
               )}
               <section className="panel">
@@ -1607,12 +1658,8 @@ export function ResultsPage({
                     currentLabel={
                       indSummary.chartLabels[indSummary.chartLabels.length - 1]
                     }
-                    onPointClick={(i) =>
-                      openDrill(
-                        selIndicator,
-                        indSummary.chartCols[i],
-                        indUnit,
-                      )
+                    onPointClick={isNurseLeader ? undefined : (i) =>
+                      openDrill(selIndicator, indSummary.chartCols[i], indUnit)
                     }
                   />
                 )}

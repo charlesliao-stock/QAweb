@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import {
   Activity,
   ArrowRight,
+  ArrowRightLeft,
   BookOpenCheck,
   Bell,
   CalendarDays,
@@ -46,6 +47,9 @@ const CapaPage = lazy(() =>
 const GroupsPage = lazy(() =>
   import("../features/GroupsPage").then((m) => ({ default: m.GroupsPage })),
 );
+const TaskHandoffPage = lazy(() =>
+  import("../features/TaskHandoffPage").then((m) => ({ default: m.TaskHandoffPage })),
+);
 const IndicatorsPage = lazy(() =>
   import("../features/IndicatorsPage").then((m) => ({
     default: m.IndicatorsPage,
@@ -82,6 +86,7 @@ const NAV_GROUPS = [
     label: "組織與設定",
     items: [
       { id: "groups", label: "群組與人員", icon: GitBranch },
+      { id: "handoff", label: "任務交接", icon: ArrowRightLeft },
       { id: "admin", label: "系統管理", icon: Settings2 },
     ],
   },
@@ -563,6 +568,7 @@ function Shell() {
             {page === "audit" && <AuditPage onAction={notify} />}
             {page === "results" && <ResultsPage onAction={notify} />}
             {page === "groups" && <GroupsPage onAction={notify} />}
+            {page === "handoff" && <TaskHandoffPage onAction={notify} />}
             {page === "capa" && <CapaPage onAction={notify} />}
             {page === "admin" && <AdminPage onAction={notify} />}
           </Suspense>

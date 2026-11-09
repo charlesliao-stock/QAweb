@@ -87,6 +87,7 @@ interface RecordRow {
   year: number;
   month: number;
   reviewDate: string;
+  reviewerEmpNo: string;
   reviewerName: string;
   reviewedPersonName: string;
   rate: number | null;
@@ -200,6 +201,7 @@ export function AuditPage({
   const [execMonth, setExecMonth] = useState("");
   const [execBusy, setExecBusy] = useState(false);
   const [executing, setExecuting] = useState<ExecuteTarget | null>(null);
+  const [editableGroupIds, setEditableGroupIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (!user) {
@@ -315,6 +317,7 @@ export function AuditPage({
           [...CONVENER_ROLES, ...OFFICER_ROLES],
           user.unitCode ? unitGroup.get(user.unitCode) : undefined,
         );
+        setEditableGroupIds(myConvenerGroupIds);
 
         interface Cand {
           sched: IndicatorSchedule;
@@ -393,6 +396,8 @@ export function AuditPage({
               month: ym.month,
               reviewDate:
                 typeof v.reviewDate === "string" ? v.reviewDate : "",
+              reviewerEmpNo:
+                typeof v.reviewerEmpNo === "string" ? v.reviewerEmpNo : "",
               reviewerName:
                 typeof v.reviewerName === "string" ? v.reviewerName : "",
               reviewedPersonName:
@@ -561,7 +566,19 @@ export function AuditPage({
     }
   }
 
+  function canEditRecord(rec: RecordRow): boolean {
+    return (
+      (user?.roles ?? []).includes("系統管理員") ||
+      rec.reviewerEmpNo === user?.staffId ||
+      (!!viewRow && editableGroupIds.includes(viewRow.groupId))
+    );
+  }
+
   function editRecord(rec: RecordRow) {
+    if (!canEditRecord(rec)) {
+      onAction("只有系統管理員、該指標所屬組別的召集人／執行幹事，或原審查員本人可修改此結果");
+      return;
+    }
     setViewRow(null);
     setDetailListOpen(false);
     setExpandedRecordId(null);
@@ -1036,9 +1053,11 @@ export function AuditPage({
                             <button type="button" className="text-button" onClick={() => void toggleRecordDetail(record)}>
                               <Eye size={14} /> 檢視
                             </button>
-                            <button type="button" className="text-button" onClick={() => editRecord(record)}>
-                              <Pencil size={14} /> 修改
-                            </button>
+                            {canEditRecord(record) && (
+                              <button type="button" className="text-button" onClick={() => editRecord(record)}>
+                                <Pencil size={14} /> 修改
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1089,7 +1108,7 @@ export function AuditPage({
                   />
                 )}
                 <div className="form-actions">
-                  <button
+                  {viewRecords.some((record) => record.id === expandedRecordId && canEditRecord(record)) && <button
                     type="button"
                     className="button button-primary"
                     onClick={() => {
@@ -1099,7 +1118,7 @@ export function AuditPage({
                     }}
                   >
                     <Pencil size={15} /> 編輯審查結果
-                  </button>
+                  </button>}
                 </div>
                 <SectionTitle title="修改紀錄" note={`${expandedEditHistory.length} 次修改`} />
                 {expandedEditHistory.length === 0 ? (

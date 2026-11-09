@@ -18,6 +18,7 @@ import { doc, getDoc, updateDoc } from "./db";
 import { getFirebaseAuth, getFirebaseDb } from "./firebase";
 import { isDemoMode, setDemoMode } from "./demoMode";
 import { clearRefCache } from "./refCache";
+import { activeRolesForReviewerExpiry, isReviewerAccessActive } from "./reviewerValidity";
 
 /** 登入用 email 合成規則：職編即帳號，phase 1 不寄信故用內部網域 */
 export function staffEmail(staffId: string): string {
@@ -32,6 +33,7 @@ export interface StaffProfile {
   /** 職稱名稱（v1.12.0：權限交集判斷用；""＝未設定） */
   title: string;
   roles: string[];
+  reviewerAccessExpiresAt: string;
   /** 督導負責的群組 id（v1.15.0：督導儀表板轄區用） */
   districtGroupIds: string[];
   mustChangePassword: boolean;
@@ -57,6 +59,7 @@ const DEMO_USER: StaffProfile = {
   unitName: "",
   title: "督導",
   roles: ["系統管理員"],
+  reviewerAccessExpiresAt: "",
   districtGroupIds: [],
   mustChangePassword: false,
 };
@@ -102,7 +105,11 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
     await signOut(getFirebaseAuth());
     throw new Error("此帳號已停用，請聯絡系統管理員");
   }
-  const roles = Array.isArray(raw.roles) ? raw.roles.map(String) : [];
+  const storedRoles = Array.isArray(raw.roles) ? raw.roles.map(String) : [];
+  const reviewerAccessExpiresAt = typeof raw.reviewerAccessExpiresAt === "string"
+    ? raw.reviewerAccessExpiresAt
+    : "";
+  const roles = activeRolesForReviewerExpiry(storedRoles, reviewerAccessExpiresAt);
   const districtGroupIds = Array.isArray(raw.districtGroupIds)
     ? raw.districtGroupIds.map(String)
     : [];
@@ -113,6 +120,7 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
     unitName: typeof raw.unitName === "string" ? raw.unitName : "",
     title: typeof raw.title === "string" ? raw.title : "",
     roles,
+    reviewerAccessExpiresAt,
     districtGroupIds,
     mustChangePassword: raw.mustChangePassword === true,
   };
@@ -156,6 +164,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    const expiry = user?.reviewerAccessExpiresAt;
+    if (!expiry || !isReviewerAccessActive(expiry)) return;
+    const timer = window.setInterval(() => {
+      if (isReviewerAccessActive(expiry)) return;
+      window.clearInterval(timer);
+      setUser((current) => {
+        if (!current) return current;
+        const roles = activeRolesForReviewerExpiry(current.roles, expiry);
+        return roles.length === current.roles.length ? current : { ...current, roles };
+      });
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [user?.reviewerAccessExpiresAt]);
 
   const login = useCallback(async (staffId: string, password: string) => {
     const trimmed = staffId.trim();

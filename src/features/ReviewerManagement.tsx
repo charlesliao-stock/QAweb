@@ -160,7 +160,10 @@ export function ReviewerManagement({
     setSavingId(person.staffId);
     setActionError("");
     try {
-      await grantReviewerRole(person.staffId);
+      await grantReviewerRole(person.staffId, {
+        staffId: profile?.staffId ?? "",
+        name: profile?.name ?? "",
+      });
       setPeople((current) =>
         current.map((item) =>
           item.staffId === person.staffId
