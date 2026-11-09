@@ -1462,6 +1462,8 @@ export function GroupsPage({
       const db = getFirebaseDb();
       const batch = writeBatch(db);
       batch.delete(doc(db, "titles", row.id));
+      // v1.39.2：刪除職稱一併刪除其權限範本（單位類同名文件）
+      batch.delete(doc(db, "permissionTemplates", templateDocId("unit", row.name)));
       batch.set(doc(collection(db, "auditLogs")), {
         actor: user.staffId,
         actorName: user.name,
@@ -1990,6 +1992,13 @@ export function GroupsPage({
       const db = getFirebaseDb();
       const batch = writeBatch(db);
       batch.delete(doc(db, "roles", row.id));
+      // v1.39.2：刪除角色一併刪除其權限範本；新文件無 kind、分類由名稱決定，
+      // 群組／單位角色兩類都刪（與更名搬移兩類的做法一致，刪不存在的文件無作用）
+      for (const category of ["group", "unitRole"] as const) {
+        batch.delete(
+          doc(db, "permissionTemplates", templateDocId(category, row.name)),
+        );
+      }
       batch.set(doc(collection(db, "auditLogs")), {
         actor: user.staffId,
         actorName: user.name,

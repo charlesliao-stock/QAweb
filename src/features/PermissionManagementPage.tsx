@@ -7,14 +7,12 @@ import { isDemoMode} from "../lib/demoMode";
 import { getCachedRefCollection} from "../lib/refCache";
 import { getDocsCacheFirst} from "../lib/cacheFirst";
 import { useAuth} from "../lib/auth";
-import { isGroupScopedRole, isUnitLevelRole} from "../lib/roleIdentity";
 import { usePermissions} from "../lib/usePermissions";
 import {
 ACTION_PERMISSION_ITEMS,
+deriveTemplateRowNames,
 emptyPermissions,
-EXCLUDED_ROLE_NAMES,
 GROUP_ONLY_PERM_KEYS,
-GROUP_TEMPLATE_BASE_NAMES,
 PAGE_PERMISSION_ITEMS,
 parsePermissions,
 parseTemplateCategory,
@@ -22,8 +20,6 @@ PERM_LABELS,
 SHARED_PERM_KEYS,
 templateDocId,
 templateKey,
-UNIT_ROLE_TEMPLATE_BASE_NAMES,
-UNIT_TEMPLATE_BASE_NAMES,
 type PermKey,
 type TemplateCategory,
 } from "../lib/permissions";
@@ -50,17 +46,12 @@ unit: "單位",
 unitRole: "單位角色",
 };
 
-const BASE_NAMES: Record<Target, readonly string[]> = {
-group: GROUP_TEMPLATE_BASE_NAMES,
-unit: UNIT_TEMPLATE_BASE_NAMES,
-unitRole: UNIT_ROLE_TEMPLATE_BASE_NAMES,
+/** 目標尚無任何職稱／角色時的指引（v1.39.2：列只取實際建立的，不寫死名單）。 */
+const EMPTY_GUIDANCE: Record<Target, string> = {
+group: "尚未建立任何群組角色，請先到「群組與人員」建立角色，再回來設定權限。",
+unit: "尚未建立任何職稱，請先到「群組與人員」建立職稱，再回來設定權限。",
+unitRole: "尚未建立任何單位角色，請先到「群組與人員」建立角色，再回來設定權限。",
 };
-/** 全部固定基準名稱（動態補名時跳過已在固定名單的名稱，避免跨類重複列）。 */
-const BASE_ALL_NAMES = new Set<string>([
-...GROUP_TEMPLATE_BASE_NAMES,
-...UNIT_TEMPLATE_BASE_NAMES,
-...UNIT_ROLE_TEMPLATE_BASE_NAMES,
-]);
 
 const SHARED_ITEMS: MatrixItem[] = [
 ...PAGE_PERMISSION_ITEMS,
@@ -300,11 +291,12 @@ setResetBusy(false);
 }
 
 /**
-* 範本列＝固定基準名稱＋文件裡同類名稱（去重）：
-* 群組目標補群組限定名稱的角色文件、單位目標補 titles 文件名稱、
-* 單位角色目標補單位級名稱與其餘名稱的角色文件（v1.39.0：角色文件
-* 只剩名稱，分類改以名稱清單判斷）；系統管理員、一般人員永不列入。
+* 範本列只取系統實際建立的職稱／角色（v1.39.2，不寫死名單）：
+* 群組目標取 kind='group' 的角色文件名稱、單位目標取 titles 文件名稱、
+* 單位角色目標取 kind='unit' 的角色文件名稱（去重；舊文件無 kind 時
+* 以名稱清單分類）；系統管理員、一般人員永不列入。
 * 範本不存在時以全不勾、預設不跨顯示，改了即建立範本文件。
+* 角色／職稱文件已由上方 Promise.all 重新載入（refCache 內含 roles／titles）。
 */
 const loadData = useCallback(async () => {
 setLoading(true);
@@ -336,44 +328,22 @@ permissions: parsePermissions(data.permissions),
 cross: data.cross === true,
 });
 });
-const dynamicNames: Record<Target, string[]> = {
-group: [],
-unit: [],
-unitRole: [],
-};
-const pushName = (category: Target, name: string) => {
-if (!name || dynamicNames[category].includes(name)) return;
-dynamicNames[category].push(name);
-};
-roleSnapshot.docs.forEach((item) => {
+const namesByCategory = deriveTemplateRowNames(
+roleSnapshot.docs.map((item) => {
 const data = item.data() as Record<string, unknown>;
-const name = typeof data.name === "string"? data.name: item.id;
-if ((EXCLUDED_ROLE_NAMES as readonly string[]).includes(name)) return;
-if (BASE_ALL_NAMES.has(name)) return;
-// v1.39.0：角色文件只剩名稱，分類改以名稱清單判斷（不再讀 kind／groupId）。
-// 單位級名稱→單位角色；群組限定名稱→群組；其餘（僅 roles 持有、無 membership）
-// 只能走單位角色範本才授權得到，故歸單位角色。
-const category = isUnitLevelRole(name)
-? "unitRole"
-: isGroupScopedRole(name)
-? "group"
-: "unitRole";
-pushName(category, name);
-});
-titleSnapshot.docs.forEach((item) => {
+return {
+name: typeof data.name === "string"? data.name: item.id,
+kind: data.kind,
+};
+}),
+titleSnapshot.docs.map((item) => {
 const data = item.data() as Record<string, unknown>;
-const name = typeof data.name === "string"? data.name: item.id;
-pushName("unit", name);
-});
+return { name: typeof data.name === "string"? data.name: item.id };
+}),
+);
 const nextRows: TemplateRow[] = [];
-(Object.keys(BASE_NAMES) as Target[]).forEach((category) => {
-const names = [
-...BASE_NAMES[category],
-...[...dynamicNames[category]].sort((a, b) =>
-a.localeCompare(b, "zh-Hant"),
-),
-];
-for (const name of new Set(names)) {
+(Object.keys(namesByCategory) as Target[]).forEach((category) => {
+for (const name of namesByCategory[category]) {
 const key = templateKey(category, name);
 const tpl = templates.get(key);
 nextRows.push({
@@ -620,11 +590,19 @@ style={{ marginLeft: 8}}
 </section>
 <section className="panel data-panel">
 <SectionTitle title="一、權限是否跨單位／組" />
-{crossSection(rowsForTarget)}
+{rowsForTarget.length === 0? (
+<p className="settings-note">{EMPTY_GUIDANCE[target]}</p>
+): (
+crossSection(rowsForTarget)
+)}
 </section>
 <section className="panel data-panel">
 <SectionTitle title="二、權限設定" />
-{permissionMatrix(rowsForTarget, TARGET_ITEMS[target])}
+{rowsForTarget.length === 0? (
+<p className="settings-note">{EMPTY_GUIDANCE[target]}</p>
+): (
+permissionMatrix(rowsForTarget, TARGET_ITEMS[target])
+)}
 </section>
 <section className="panel data-panel">
 <SectionTitle title="重置權限資料（洗掉重來）" note="僅系統管理員。先備份、再刪除；刪除後無法復原。" />

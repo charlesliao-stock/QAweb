@@ -1,5 +1,9 @@
 import type { PageId } from "../types";
-import type { Membership } from "./roleIdentity";
+import {
+  isGroupScopedRole,
+  isUnitLevelRole,
+  type Membership,
+} from "./roleIdentity";
 
 /** 導覽頁面與功能權限使用同一矩陣；尚未實作的 reviewers 不列入。 */
 export const PAGE_PERMISSION_KEYS = {
@@ -116,28 +120,54 @@ export function parseTemplateCategory(raw: unknown): TemplateCategory | undefine
   return undefined;
 }
 
-/** 範本基準名稱（權限頁三個目標的固定列；文件裡同類名稱會動態補上）。 */
-export const GROUP_TEMPLATE_BASE_NAMES = [
-  "召集人",
-  "執行幹事",
-  "組長",
-  "組員",
-] as const;
-
-export const UNIT_TEMPLATE_BASE_NAMES = [
-  "護理部主任",
-  "護理部副主任",
-  "護理部督導",
-  "護理長",
-  "副護理長",
-  "護理師",
-] as const;
-
-export const UNIT_ROLE_TEMPLATE_BASE_NAMES = [
-  "單位召集人",
-  "單位執行幹事",
-  "單位審查員",
-] as const;
+/**
+ * 權限頁列來源（v1.39.2）：只取系統實際建立的職稱／角色，不寫死名單。
+ * 選單位時載入單位內已設定的職稱，選群組時載入群組內的角色；
+ * 還沒建立任何職稱／角色時，三個目標皆為空列。
+ * 角色分類：kind 有值時以 kind 為準（group／unit）；舊文件無 kind 時
+ * 以名稱清單分類（不讀 groupId）；其餘名稱歸單位角色（v1.39.1 做法）。
+ * 系統管理員、一般人員永不列入。
+ */
+export function deriveTemplateRowNames(
+  roles: Array<{ name: string; kind?: unknown }>,
+  titles: Array<{ name: string }>,
+): Record<TemplateCategory, string[]> {
+  const out: Record<TemplateCategory, string[]> = {
+    group: [],
+    unit: [],
+    unitRole: [],
+  };
+  const push = (category: TemplateCategory, name: string) => {
+    if (!name || out[category].includes(name)) return;
+    out[category].push(name);
+  };
+  for (const role of roles) {
+    const name = role.name;
+    if (!name || (EXCLUDED_ROLE_NAMES as readonly string[]).includes(name)) {
+      continue;
+    }
+    const kind =
+      role.kind === "group" || role.kind === "unit" ? role.kind : undefined;
+    const category: TemplateCategory =
+      kind === "group"
+        ? "group"
+        : kind === "unit"
+          ? "unitRole"
+          : isUnitLevelRole(name)
+            ? "unitRole"
+            : isGroupScopedRole(name)
+              ? "group"
+              : "unitRole";
+    push(category, name);
+  }
+  for (const title of titles) {
+    push("unit", title.name);
+  }
+  for (const category of Object.keys(out) as TemplateCategory[]) {
+    out[category].sort((a, b) => a.localeCompare(b, "zh-Hant"));
+  }
+  return out;
+}
 
 const PAGE_KEY_BY_ID = PAGE_PERMISSION_KEYS as Partial<Record<PageId, PermKey>>;
 
