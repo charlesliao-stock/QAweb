@@ -4974,6 +4974,35 @@ button:disabled {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+.score-breakdown {
+  display: grid;
+  gap: 2px;
+}
+.score-breakdown-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  min-height: 42px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line, #e6ebec);
+}
+.score-breakdown-row:last-child {
+  border-bottom: 0;
+}
+.score-breakdown-total {
+  font-weight: 700;
+  background: var(--bg, #f5f8f7);
+  border-radius: 8px;
+}
+.score-breakdown-detail {
+  padding-left: 28px;
+  color: var(--muted, #52615f);
+}
+.score-breakdown-row strong {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 :root[data-mode="dark"] .analysis-matrix th.ind-col,
 :root[data-mode="dark"] .analysis-matrix td.ind-col {
   background: var(--surface, #1b2a2e);

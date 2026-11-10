@@ -110,7 +110,17 @@ interface IndicatorOpt {
   status: string;
   version: string;
   threshold: number;
+  groupScoring: boolean;
   questions: AuditQuestion[];
+}
+
+interface ScoringBreakdownRow {
+  key: string;
+  label: string;
+  yes: number;
+  valid: number;
+  rate: number | null;
+  isTotal: boolean;
 }
 
 interface GroupOpt {
@@ -182,6 +192,112 @@ function summaryOptionRows(rows: ResultSummaryDoc[]): OptionDetailRow[] {
           ? round1((row.yes / (row.yes + row.no)) * 100) : null,
       };
     });
+}
+
+/** 由目前已載入的題目選項統計計算指標總分，以及分組或逐題得分。 */
+function scoringBreakdownRows(
+  rows: OptionDetailRow[],
+  questions: AuditQuestion[],
+  groupScoring: boolean,
+): ScoringBreakdownRow[] {
+  const hasGroups = questions.some((question) => Boolean(question.groupId));
+  if (!hasGroups && !groupScoring) return [];
+
+  const counts = new Map<string, { yes: number; no: number }>();
+  for (const row of rows) {
+    const current = counts.get(row.questionId) ?? { yes: 0, no: 0 };
+    current.yes += row.yes;
+    current.no += row.no;
+    counts.set(row.questionId, current);
+  }
+  const makeRow = (
+    key: string,
+    label: string,
+    yes: number,
+    no: number,
+    isTotal = false,
+  ): ScoringBreakdownRow => {
+    const valid = yes + no;
+    return {
+      key,
+      label,
+      yes,
+      valid,
+      rate: valid > 0 ? round1((yes / valid) * 100) : null,
+      isTotal,
+    };
+  };
+  const sumQuestions = (ids: Iterable<string>) => {
+    let yes = 0;
+    let no = 0;
+    for (const id of ids) {
+      const count = counts.get(id);
+      if (!count) continue;
+      yes += count.yes;
+      no += count.no;
+    }
+    return { yes, no };
+  };
+  const total = rows.reduce(
+    (sum, row) => ({ yes: sum.yes + row.yes, no: sum.no + row.no }),
+    { yes: 0, no: 0 },
+  );
+  const result = [makeRow("indicator-total", "", total.yes, total.no, true)];
+  const orderedQuestions = [...questions].sort((a, b) => a.order - b.order);
+
+  if (hasGroups) {
+    const sections = new Map<string, { label: string; ids: Set<string> }>();
+    for (const question of orderedQuestions) {
+      const key = question.groupId || "__ungrouped__";
+      let section = sections.get(key);
+      if (!section) {
+        section = {
+          label: question.groupId
+            ? question.groupName || "未命名分組"
+            : "未分組項目",
+          ids: new Set<string>(),
+        };
+        sections.set(key, section);
+      }
+      section.ids.add(question.id);
+    }
+    for (const [key, section] of sections) {
+      const score = sumQuestions(section.ids);
+      result.push(makeRow(`group-${key}`, section.label, score.yes, score.no));
+    }
+    const knownIds = new Set(questions.map((question) => question.id));
+    const historicalRows = rows.filter((row) => !knownIds.has(row.questionId));
+    if (historicalRows.length > 0) {
+      const score = historicalRows.reduce(
+        (sum, row) => ({ yes: sum.yes + row.yes, no: sum.no + row.no }),
+        { yes: 0, no: 0 },
+      );
+      result.push(makeRow("historical-questions", "其他／歷史題目", score.yes, score.no));
+    }
+  } else {
+    for (const question of orderedQuestions) {
+      const score = counts.get(question.id) ?? { yes: 0, no: 0 };
+      result.push(makeRow(`question-${question.id}`, question.itemText || "未命名項目", score.yes, score.no));
+    }
+    const knownIds = new Set(questions.map((question) => question.id));
+    const historicalQuestions = new Map<string, { label: string; yes: number; no: number }>();
+    for (const row of rows) {
+      if (knownIds.has(row.questionId)) continue;
+      const key = `${row.questionId}\u0000${row.itemText}`;
+      const current = historicalQuestions.get(key) ?? {
+        label: row.itemText || "未命名項目",
+        yes: 0,
+        no: 0,
+      };
+      current.yes += row.yes;
+      current.no += row.no;
+      historicalQuestions.set(key, current);
+    }
+    for (const [key, score] of historicalQuestions) {
+      result.push(makeRow(`historical-${key}`, `歷史題目：${score.label}`, score.yes, score.no));
+    }
+  }
+  return result;
 }
 
 type TabId = "group" | "unit" | "indicator" | "import" | "manage";
@@ -498,6 +614,7 @@ export function ResultsPage({
             status: typeof data.status === "string" ? data.status : "",
             version: typeof data.version === "string" ? data.version : "v1.0",
             threshold: effectiveThreshold(data),
+            groupScoring: data.groupScoring === true,
             questions: normalizeQuestions(data.questions).questions,
           });
         });
@@ -1256,6 +1373,7 @@ export function ResultsPage({
       const pts = perColumn.filter(
         (point): point is { column: AnalysisPeriodColumn; pr: PassRate & { rate: number } } => point.pr.rate != null,
       );
+      const optionRows = summaryOptionRows(metrics);
       return {
         unitCount: new Set(unitRows.map((row) => row.unitId).filter((id): id is string => Boolean(id))).size,
         total: personPr.total, unitPr, personPr,
@@ -1264,7 +1382,8 @@ export function ResultsPage({
         chartLabels: pts.map((point) => point.column.label),
         chartTips: pts.map((point) => `${point.column.label}：${formatPassRate(point.pr, true)}`),
         chartCols: pts.map((point) => point.column),
-        optionRows: summaryOptionRows(metrics),
+        optionRows,
+        scoringRows: scoringBreakdownRows(optionRows, indSel.questions, indSel.groupScoring),
       };
     }
     const th = indSel.threshold;
@@ -1278,6 +1397,7 @@ export function ResultsPage({
     const pts = perColumn.filter(
       (point): point is { column: AnalysisPeriodColumn; pr: PassRate } & { pr: { rate: number } } => point.pr.rate != null,
     );
+    const optionRows = optionDetailRows(indRecs, indSel.questions);
     return {
       unitCount: unitIds.size, total: indRecs.length, unitPr, personPr: merged,
       // 無預存摘要時無法算全院彙總（明細只含本人單位），全院比較留空並由畫面註明。
@@ -1286,7 +1406,8 @@ export function ResultsPage({
       chartLabels: pts.map((point) => point.column.label),
       chartTips: pts.map((point) => `${point.column.label}：${formatPassRate(point.pr, true)}`),
       chartCols: pts.map((point) => point.column),
-      optionRows: optionDetailRows(indRecs, indSel.questions),
+      optionRows,
+      scoringRows: scoringBreakdownRows(optionRows, indSel.questions, indSel.groupScoring),
     };
   }, [indRecs, indSel, indUnit, appliedColumns, summaryRecords, scope.kind, isNurseLeader, visibleUnitCodes]);
 
@@ -1765,6 +1886,27 @@ export function ResultsPage({
                 <p className="settings-note" role="status">
                   {isNurseLeader ? "此期間尚無全院預存摘要；目前僅顯示本單位資料，無法提供全院彙總。" : "此期間尚無預存摘要，暫以審查明細計算；明細中的閾值快照優先於指標現行閾值。"}
                 </p>
+              )}
+              {indSummary.scoringRows.length > 0 && (
+                <section className="panel">
+                  <SectionTitle
+                    title={indSel.questions.some((question) => Boolean(question.groupId)) ? "分組計分結果" : "審核項目計分結果"}
+                    note={`${indSel.questions.some((question) => Boolean(question.groupId)) ? "依目前審核表分組；歷史分組變更依現行設定對應。" : ""}得分率＝是／（是＋否）；不適用不列入分母。`}
+                  />
+                  <div className="score-breakdown" aria-label="指標計分明細">
+                    {indSummary.scoringRows.map((row) => (
+                      <div
+                        key={row.key}
+                        className={`score-breakdown-row${row.isTotal ? " score-breakdown-total" : " score-breakdown-detail"}`}
+                      >
+                        <span>{row.isTotal ? indSel.name : row.label}</span>
+                        <strong>
+                          {formatPassRate({ pass: row.yes, total: row.valid, rate: row.rate })}
+                        </strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
               )}
               <section className="panel">
                 <SectionTitle
