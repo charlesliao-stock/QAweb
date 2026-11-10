@@ -5,6 +5,12 @@
  * GitHub Actions 每日 07:00 台北時間執行（.github/workflows/sheet-sync.yml），
  * 另可 workflow_dispatch 手動觸發（可指定單一 mappingId）。
  *
+ * 手動同步（v1.42.2）：前端 [手動同步一次] 寫入 sheetSyncRequests（pending），
+ * 另一個 workflow（sheet-sync-poll.yml）每 5 分鐘以 SYNC_REQUESTS_ONLY=1
+ * 執行本檔的請求模式：只取 pending 請求，逐一標記 running 後執行
+ * syncMapping（草稿亦可跑，與手動觸發同規則），完成標記 done＋runId，
+ * 失敗標記 failed＋error；run 紀錄 trigger 記 manual。請求模式不跑定時排程。
+ *
  * 確認關卡（v1.42.1）：定時排程只跑 status == "confirmed" 且啟用的對照；
  * 草稿跳過並寫 run 紀錄記下跳過原因，不寫入審查紀錄。手動觸發指定單一對照時
  * 草稿亦可跑（測試連結用）；手動同步為選用步驟，不強制成功才能確認排程。
@@ -37,6 +43,8 @@
  * - LINE_USER_ID（選填，未設則不發 LINE）
  * - GCP_PROJECT_ID（選填，預設 nurseboard-492316）
  * - MAPPING_ID（選填，workflow_dispatch 指定單一對照時用）
+ * - SYNC_REQUESTS_ONLY（選填，設為 "1" 時只處理手動同步請求，不跑定時排程；
+ *   供 sheet-sync-poll.yml 每 5 分鐘輪詢用）
  *
  * 本檔只用 Node 內建模組（node:crypto＋fetch），不需 npm install。
  */
@@ -50,6 +58,7 @@ import {
   encodeFirestoreFields,
   isMappingConfirmed,
   mappingMissingRequired,
+  selectPendingRequests,
   selectSyncTargets,
   syncStateDocId,
 } from "./sheet-sync-lib.mjs";
@@ -293,7 +302,9 @@ async function syncMapping(mapping, ctx) {
     run.status = "failed";
     run.error = `指標不存在：${mapping.indicatorId}`;
     await writeRun();
-    throw new Error(run.error);
+    const err = new Error(run.error);
+    err.runId = runId;
+    throw err;
   }
   const questions = (indicator.questions ?? []).map((q) => q.itemText ?? "");
 
@@ -312,7 +323,9 @@ async function syncMapping(mapping, ctx) {
     run.status = "failed";
     run.error = `試算表內找不到分頁「${sheetTitle}」`;
     await writeRun();
-    throw new Error(run.error);
+    const err = new Error(run.error);
+    err.runId = runId;
+    throw err;
   }
   const range = `'${sheetTitle.replace(/'/g, "''")}'!A1:ZZ10000`;
   const values = await sheetsValues(mapping.spreadsheetId, range, token);
@@ -328,7 +341,7 @@ async function syncMapping(mapping, ctx) {
       ["lastSyncAt", "updatedAt"],
     );
     log(`對照 ${mapping.sheetName}：試算表無資料。`);
-    return run;
+    return { run, runId };
   }
   const headers = values[0].map((h) => cellToString(h));
   const dataRows = values.slice(1);
@@ -378,7 +391,7 @@ async function syncMapping(mapping, ctx) {
     run.finishedAt = new Date();
     await writeRun();
     log(`對照 ${mapping.sheetName}：對應未完成（${run.error}），跳過寫入。`);
-    return run;
+    return { run, runId };
   }
 
   // 3. 逐列檢核＋去重分類
@@ -533,7 +546,114 @@ async function syncMapping(mapping, ctx) {
   log(
     `對照 ${mapping.sheetName}：讀 ${run.rowsRead} 列，新增 ${inserted}、更新 ${updated}、跳過 ${skipped}、錯誤 ${errorRows.length} 列。`,
   );
-  return run;
+  return { run, runId };
+}
+
+/* ================= 手動同步請求模式（v1.42.2） ================= */
+
+/**
+ * 請求模式（SYNC_REQUESTS_ONLY=1）：只處理 status == "pending" 的手動同步請求。
+ * 逐一先以 updateMask 標記 running（避免重複執行），再執行 syncMapping
+ * （草稿亦可跑，與手動觸發同規則；run 紀錄 trigger 記 manual），
+ * 完成標記 done＋runId，失敗標記 failed＋error。定時排程不受影響（本模式不跑）。
+ * @returns {number} 處理的請求數（0＝無待執行請求）
+ */
+async function runRequestMode(token, lineToken, lineTo) {
+  const requests = await fsListCollection("sheetSyncRequests", token);
+  const pending = selectPendingRequests(requests);
+  if (pending.length === 0) {
+    log("沒有待執行的手動同步請求，本輪無事可做。");
+    return 0;
+  }
+  // 參考資料全量各讀 1 次（與定時流程相同，惰性驗證）
+  const [units, users, indicatorsList] = await Promise.all([
+    fsListCollection("units", token),
+    fsListCollection("users", token),
+    fsListCollection("indicators", token),
+  ]);
+  const unitHas = (code) => units.some((u) => u.id === code || u.code === code);
+  const staffById = new Map();
+  for (const u of users) {
+    staffById.set(u.id, u);
+    if (u.staffId) staffById.set(u.staffId, u);
+  }
+  const staffHas = (id) => staffById.has(id);
+  const staffName = (id) => staffById.get(id)?.name ?? id;
+  const indicators = new Map(indicatorsList.map((ind) => [ind.id, ind]));
+  const ctx = { token, indicators, unitHas, staffHas, staffName, taskCache: new Map(), trigger: "manual" };
+
+  const failures = [];
+  for (const req of pending) {
+    const reqPath = `sheetSyncRequests/${req.id}`;
+    // 先標記 running（updateMask 只改 status／updatedAt，避免洗掉其他欄位）
+    await fsPatchDoc(reqPath, { status: "running", updatedAt: new Date() }, token, [
+      "status",
+      "updatedAt",
+    ]);
+    const mapping = await fsGetDoc(`sheetSyncMappings/${req.mappingId}`, token);
+    if (!mapping) {
+      const msg = `找不到對照：${req.mappingId}`;
+      await fsPatchDoc(
+        reqPath,
+        { status: "failed", error: msg, updatedAt: new Date() },
+        token,
+        ["status", "error", "updatedAt"],
+      );
+      log(`請求 ${req.id}：${msg}`);
+      failures.push(msg);
+      continue;
+    }
+    if (mapping.enabled === false) {
+      const msg = `對照已停用：${mapping.sheetName}`;
+      await fsPatchDoc(
+        reqPath,
+        { status: "failed", error: msg, updatedAt: new Date() },
+        token,
+        ["status", "error", "updatedAt"],
+      );
+      log(`請求 ${req.id}：${msg}`);
+      failures.push(msg);
+      continue;
+    }
+    try {
+      const { run, runId } = await syncMapping({ id: req.mappingId, ...mapping }, ctx);
+      await fsPatchDoc(
+        reqPath,
+        { status: "done", runId, updatedAt: new Date() },
+        token,
+        ["status", "runId", "updatedAt"],
+      );
+      log(`請求 ${req.id}：對照 ${mapping.sheetName} 同步完成（run ${runId}，${run.status}）。`);
+    } catch (err) {
+      const msg = err?.message ?? String(err);
+      const failedValues = {
+        status: "failed",
+        error: msg.slice(0, 500),
+        updatedAt: new Date(),
+      };
+      const failedMask = ["status", "error", "updatedAt"];
+      if (err?.runId) {
+        failedValues.runId = err.runId;
+        failedMask.push("runId");
+      }
+      await fsPatchDoc(reqPath, failedValues, token, failedMask);
+      const line = `對照 ${mapping.sheetName} 手動同步失敗：${msg}`;
+      log(`請求 ${req.id}：${line}`);
+      failures.push(line);
+    }
+  }
+
+  if (failures.length > 0) {
+    await sendLine(
+      `Google Sheet 手動同步有 ${failures.length} 筆請求失敗：\n${failures.join("\n")}`,
+      lineToken,
+      lineTo,
+    );
+    console.error(`[sheet-sync] ${failures.length} 筆手動同步請求失敗`);
+    process.exit(1);
+  }
+  log(`手動同步請求全部完成（${pending.length} 筆）。`);
+  return pending.length;
 }
 
 /* ================= 主流程 ================= */
@@ -566,6 +686,13 @@ async function main() {
   const trigger = isManual ? "manual" : "schedule";
 
   const token = await getAccessToken(sa);
+
+  // 手動同步請求模式（v1.42.2）：SYNC_REQUESTS_ONLY=1 時只處理 pending 請求，
+  // 不跑定時排程；無待執行請求時靜默結束（供每 5 分鐘輪詢）。
+  if (process.env.SYNC_REQUESTS_ONLY === "1") {
+    await runRequestMode(token, lineToken, lineTo);
+    return;
+  }
 
   const mappings = await fsListCollection("sheetSyncMappings", token);
   if (onlyMappingId) {

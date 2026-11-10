@@ -310,6 +310,42 @@ export function selectSyncTargets(mappings, { manual, mappingId }) {
   return { targets, skipped };
 }
 
+/* ================= 手動同步請求（v1.42.2） ================= */
+
+/** 請求是否進行中（pending／running），進行中者前端不重複建立、輪詢不重取。 */
+export function isActiveSyncRequest(r) {
+  return r?.status === "pending" || r?.status === "running";
+}
+
+/** 請求時間字串（ISO 字串可直接比大小；缺失視為最舊）。 */
+function requestTs(r) {
+  const v = r?.requestedAt;
+  if (!v) return "";
+  return typeof v === "string" ? v : String(v);
+}
+
+/**
+ * 該對照進行中的手動同步請求（pending／running 取最早一筆），有則前端不重複建立。
+ * （與 src/lib/sheetSync.ts findActiveSyncRequest 同規則。）
+ */
+export function findActiveSyncRequest(requests, mappingId) {
+  const active = (requests ?? [])
+    .filter((r) => r.mappingId === mappingId && isActiveSyncRequest(r))
+    .sort((a, b) => requestTs(a).localeCompare(requestTs(b)));
+  return active[0] ?? null;
+}
+
+/**
+ * 輪詢模式的請求選擇（純函式）：只取 status == "pending" 的請求，
+ * 依請求時間由舊到新（先送出的先執行）；running／done／failed 不重取。
+ * @returns {object[]} 待執行的 pending 請求（依 requestedAt 遞增）
+ */
+export function selectPendingRequests(requests) {
+  return (requests ?? [])
+    .filter((r) => r?.status === "pending")
+    .sort((a, b) => requestTs(a).localeCompare(requestTs(b)));
+}
+
 /**
  * 欄位對應預覽：取前 3 列非空資料列，用目前對應解析並逐列檢核。
  * 與同步寫入同一條 buildSyncRecord 規則（taskSnapshot 傳 null，只驗欄位與內容）。

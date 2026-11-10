@@ -62,15 +62,19 @@ import {
 import {
   autoFieldMapping,
   canConfirmMapping,
+  findActiveSyncRequest,
   hasDuplicateMapping,
   isMappingConfirmed,
   mappingMissingRequired,
   mappingReadiness,
   parseSheetUrl,
+  requestStatusLabel,
+  requestTimestampString,
   runStatusLabel,
   sheetSystemFieldOptions,
   type SheetPreviewRow,
   type SheetSyncMapping,
+  type SheetSyncRequest,
   type SheetSyncRun,
 } from "../lib/sheetSync";
 import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
@@ -3278,7 +3282,8 @@ function SheetSyncSection({
   const [confirmDeleteId, setConfirmDeleteId] = useState("");
   const [latestRuns, setLatestRuns] = useState<Record<string, SheetSyncRun | null>>({});
   const [runsLoading, setRunsLoading] = useState(false);
-  const [copiedId, setCopiedId] = useState("");
+  const [mappingRequests, setMappingRequests] = useState<Record<string, SheetSyncRequest[]>>({});
+  const [reqLoading, setReqLoading] = useState(false);
 
   const loadMappings = useCallback(async () => {
     try {
@@ -3323,6 +3328,11 @@ function SheetSyncSection({
       })
     : null;
   const latestRun = selected ? latestRuns[selected.id] : undefined;
+  const selectedRequests = selected ? mappingRequests[selected.id] ?? [] : [];
+  const latestRequest = selectedRequests[0] ?? null;
+  const activeRequest = selected
+    ? findActiveSyncRequest(selectedRequests, selected.id)
+    : null;
   const selectedPreview: SheetPreviewRow[] = selected?.preview ?? [];
   const fieldLabel = (key: string) =>
     fieldOptions.find((o) => o.key === key)?.label ?? key;
@@ -3358,6 +3368,29 @@ function SheetSyncSection({
     }
   }, []);
 
+  /** 手動同步請求（v1.42.2）：依 mappingId 查詢、依請求時間由新到舊排序。 */
+  const loadRequests = useCallback(async (mappingId: string) => {
+    setReqLoading(true);
+    try {
+      const db = getFirebaseDb();
+      const snap = await getDocs(
+        query(collection(db, "sheetSyncRequests"), where("mappingId", "==", mappingId)),
+      );
+      const list = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<SheetSyncRequest, "id">),
+      }));
+      list.sort((a, b) =>
+        requestTimestampString(b.requestedAt).localeCompare(requestTimestampString(a.requestedAt)),
+      );
+      setMappingRequests((prev) => ({ ...prev, [mappingId]: list }));
+    } catch {
+      setMappingRequests((prev) => ({ ...prev, [mappingId]: [] }));
+    } finally {
+      setReqLoading(false);
+    }
+  }, []);
+
   const statusLabel = (m: SheetSyncMapping) => {
     const r = mappingReadiness(m);
     const readyLabel =
@@ -3375,6 +3408,7 @@ function SheetSyncSection({
     setMsg(null);
     setErrs([]);
     void loadLatestRun(m.id);
+    void loadRequests(m.id);
   }
 
   async function handleLink() {
@@ -3442,7 +3476,7 @@ function SheetSyncSection({
         updatedAt: serverTimestamp(),
       });
       setMsg(
-        "已要求讀取標題列：每日 07:00 自動同步時會讀取，或到 GitHub Actions 手動執行 sheet-sync，完成後按「重新整理」即可編輯對應；讀取時會一併帶回前 3 列預覽供核對。",
+        "已要求讀取標題列：按「手動同步一次」送出請求後，排程將於 5 分鐘內讀取標題列並帶回前 3 列預覽；每日 07:00 自動同步（僅已確認的對照）時也會讀取。完成後按「重新整理」即可編輯對應。",
       );
     } catch {
       setErrs(["要求讀取標題列失敗"]);
@@ -3520,26 +3554,40 @@ function SheetSyncSection({
     }
   }
 
-  /** 手動同步一次（v1.42.1，選用測試步驟）：前端無法直接觸發 GitHub Actions，
-   *  開啟 workflow_dispatch 頁面，由使用者在 Actions 上執行（草稿亦可跑）。 */
-  function handleManualSync(m: SheetSyncMapping) {
-    window.open(
-      "https://github.com/charlesliao-stock/QAweb/actions/workflows/sheet-sync.yml",
-      "_blank",
-      "noopener,noreferrer",
-    );
-    setMsg(
-      `已開啟 GitHub Actions 的 sheet-sync 頁面：按 Run workflow，分支選 firebase-mvp，在 mappingId 欄填入對照 ID（${m.id}），執行後回到這裡按「重新整理」查看結果。`,
-    );
-  }
-
-  async function handleCopyId(id: string) {
+  /** 手動同步一次（v1.42.2）：寫入一筆 pending 同步請求，Actions 每 5 分鐘輪詢執行；
+   *  草稿對照也可手動同步，不需先確認。已有進行中的請求時不重複建立。
+   *  前端沒有 server 可直接跑同步（service account 鑰匙不能放前端），
+   *  故為「送出請求、排程 5 分鐘內執行」，而非按下當下就跑。 */
+  async function handleManualSync(m: SheetSyncMapping) {
+    if (!user) return;
+    setMsg(null);
+    setErrs([]);
+    const existing = findActiveSyncRequest(mappingRequests[m.id] ?? [], m.id);
+    if (existing) {
+      setMsg(
+        `已有進行中的同步請求（${requestStatusLabel(existing.status)}），排程將於 5 分鐘內執行；完成後按「重新整理」查看結果。`,
+      );
+      return;
+    }
+    setBusy(true);
     try {
-      await navigator.clipboard.writeText(id);
-      setCopiedId(id);
-      window.setTimeout(() => setCopiedId((prev) => (prev === id ? "" : prev)), 2000);
+      const db = getFirebaseDb();
+      const ref = doc(collection(db, "sheetSyncRequests"));
+      await setDoc(ref, {
+        mappingId: m.id,
+        requestedBy: user.staffId,
+        requestedAt: serverTimestamp(),
+        status: "pending",
+        runId: null,
+        error: "",
+      });
+      setMsg("已送出同步請求，排程將於 5 分鐘內執行；完成後按「重新整理」查看結果。");
+      onAction(`手動同步請求：${m.sheetName}`);
+      await loadRequests(m.id);
     } catch {
-      setMsg("無法自動複製，請手動選取對照 ID。");
+      setErrs(["送出同步請求失敗，請確認權限後再試"]);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -3583,7 +3631,7 @@ function SheetSyncSection({
     <div className="settings-section" style={{ marginTop: 20 }}>
       <SectionTitle
         title="連結 Google Sheet（定時同步）"
-        note="貼試算表網址建立連結，先核對連線與欄位對應，按「確認並列入排程」才會每日 07:00 自動同步；未確認前不排程、不寫入紀錄，也可以先手動同步一次測試連結。同步以內容雜湊去重，同一列重複同步不會重複建檔；列被修改會覆寫更新，列被刪除則保留系統內紀錄。"
+        note="貼試算表網址建立連結，先核對連線與欄位對應，按「確認並列入排程」才會每日 07:00 自動同步；未確認前不排程、不寫入紀錄，也可以先手動同步一次測試連結（按下後送出請求，排程將於 5 分鐘內執行）。同步以內容雜湊去重，同一列重複同步不會重複建檔；列被修改會覆寫更新，列被刪除則保留系統內紀錄。"
       />
       <div className="form-stack">
         <div className="form-field">
@@ -3614,7 +3662,13 @@ function SheetSyncSection({
         <button
           className="button button-outline button-sm"
           disabled={busy}
-          onClick={() => void loadMappings()}
+          onClick={() => {
+            void loadMappings();
+            if (selectedId) {
+              void loadRequests(selectedId);
+              void loadLatestRun(selectedId);
+            }
+          }}
         >
           <RefreshCw size={14} /> 重新整理
         </button>
@@ -3775,7 +3829,7 @@ function SheetSyncSection({
           )}
           {/* 驗證區（v1.42.1 確認關卡）：連線狀態、對應完整性、預覽、最近一次同步結果 */}
           <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-            <SectionTitle title="確認排程" note="核對以下三項無誤後，再按「確認並列入排程」。手動同步為選用測試步驟，不強制成功才能確認。" />
+            <SectionTitle title="確認排程" note="核對以下內容無誤後，再按「確認並列入排程」。手動同步為選用測試步驟，不強制成功才能確認。" />
             <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
               <div>
                 連線狀態：
@@ -3796,6 +3850,14 @@ function SheetSyncSection({
                   : latestRun
                     ? `${runStatusLabel(latestRun.status)}（${latestRun.trigger === "manual" ? "手動同步" : "定時同步"}，${fmtTs(latestRun.startedAt) || "—"}）— 讀取 ${latestRun.rowsRead} 列／新增 ${latestRun.inserted}／更新 ${latestRun.updated}／跳過 ${latestRun.skipped}／錯誤 ${latestRun.errorRows?.length ?? 0} 列${latestRun.error ? `，${latestRun.error}` : ""}`
                     : "尚未執行過同步（手動同步或每日 07:00 後會顯示）"}
+              </div>
+              <div>
+                手動同步請求：
+                {reqLoading
+                  ? "讀取中…"
+                  : latestRequest
+                    ? `${requestStatusLabel(latestRequest.status)}（${fmtTs(latestRequest.requestedAt) || "—"}，由 ${latestRequest.requestedBy} 送出）${latestRequest.status === "failed" && latestRequest.error ? ` — ${latestRequest.error}` : ""}${latestRequest.status === "done" && latestRun && latestRun.trigger === "manual" ? ` — 讀取 ${latestRun.rowsRead} 列／新增 ${latestRun.inserted}／更新 ${latestRun.updated}／跳過 ${latestRun.skipped}／錯誤 ${latestRun.errorRows?.length ?? 0} 列` : ""}`
+                    : "尚未送出過手動同步請求"}
               </div>
             </div>
             {selectedPreview.length > 0 && (
@@ -3830,22 +3892,15 @@ function SheetSyncSection({
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "center" }}>
               <button
                 className="button button-sm"
-                disabled={busy}
-                onClick={() => handleManualSync(selected)}
+                disabled={busy || !user || !!activeRequest}
+                onClick={() => void handleManualSync(selected)}
               >
                 <Play size={14} /> 手動同步一次
               </button>
               <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                對照 ID：
-                <code>{selected.id}</code>{" "}
-                <button
-                  className="button button-sm"
-                  type="button"
-                  onClick={() => void handleCopyId(selected.id)}
-                >
-                  {copiedId === selected.id ? "已複製" : "複製"}
-                </button>
-                （在 Actions 頁按 Run workflow，分支選 firebase-mvp，mappingId 填此 ID）
+                {activeRequest
+                  ? `已送出同步請求（${requestStatusLabel(activeRequest.status)}），排程將於 5 分鐘內執行；完成後按「重新整理」查看結果。`
+                  : "按下後送出同步請求，排程將於 5 分鐘內執行。"}
               </span>
               {isMappingConfirmed(selected) ? (
                 <span style={{ fontSize: 13, fontWeight: 600, color: "var(--success, #2e7d32)" }}>

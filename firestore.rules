@@ -162,6 +162,14 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    // 手動同步請求（v1.42.2）：登入者可讀，僅系統管理員可建立／修改／刪除
+    // （由結果匯入頁「手動同步一次」寫入 pending 請求，GitHub Actions
+    // 每 5 分鐘輪詢執行；與 sheetSyncMappings 同級）
+    match /sheetSyncRequests/{id} {
+      allow read: if isAuthed();
+      allow create, update, delete: if isAdmin();
+    }
+
     // Google Sheet 同步執行紀錄（v1.42.0）：僅管理員可讀，前端不寫入
     // （由 GitHub Actions service account 寫入）
     match /sheetSyncRuns/{id} {
