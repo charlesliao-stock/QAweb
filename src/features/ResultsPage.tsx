@@ -8,24 +8,29 @@
  * 權限：can("resultQuery")；資料範圍：管理員全部、審查員只看負責單位、
  * 一般人員只看自己單位（沿用舊頁規則）。
  */
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
   FileText,
+  Link2,
+  RefreshCw,
   TrendingUp,
   Upload,
   X,
 } from "lucide-react";
 import {
   collection,
+  deleteDoc,
   doc,
   getDocs,
   getDocsFromServer,
   query,
   serverTimestamp,
+  setDoc,
+  updateDoc,
   where,
   writeBatch,
 } from "../lib/db";
@@ -45,10 +50,18 @@ import { maskName } from "../lib/mask";
 import { computeOptionSetScore } from "../lib/reviewRecords";
 import { logAudit } from "../lib/audit";
 import {
+  importRecordDocId,
   parseResultSheet,
   resultTemplateRows,
   validateResultSheet,
 } from "../lib/import";
+import {
+  autoFieldMapping,
+  mappingMissingRequired,
+  parseSheetUrl,
+  sheetSystemFieldOptions,
+  type SheetSyncMapping,
+} from "../lib/sheetSync";
 import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
 import { EmptyState, PageHeading, SectionTitle, SummaryCell } from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
@@ -1837,6 +1850,7 @@ export function ResultsPage({
         <ResultImportPanel
           indicators={indicators}
           user={user ? { staffId: user.staffId, name: user.name } : null}
+          isAdmin={isAdmin}
           onAction={onAction}
           onDone={(years) => {
             // 尚未查詢：不觸發重拉，否則匯入完又把整年紀錄拉回來、閘門白做。
@@ -2898,11 +2912,13 @@ function QuestionErrorTable({ rows }: { rows: QuestionErrorRow[] }) {
 function ResultImportPanel({
   indicators,
   user,
+  isAdmin,
   onAction,
   onDone,
 }: {
   indicators: IndicatorOpt[];
   user: { staffId: string; name: string } | null;
+  isAdmin: boolean;
   onAction: (m: string) => void;
   onDone: (years: number[]) => void;
 }) {
@@ -2999,7 +3015,9 @@ function ResultImportPanel({
     setBusy(true);
     try {
       const sheet = await readSheetFile(file);
-      const { headerErrors, data } = parseResultSheet(sheet);
+      const { headerErrors, data } = parseResultSheet(sheet, {
+        questionTitles: selInd.questions.map((q) => q.itemText),
+      });
       if (headerErrors.length > 0) {
         setErrors(headerErrors);
         onAction("審查結果匯入失敗：標題列不符，請下載範本對照");
@@ -3025,25 +3043,50 @@ function ResultImportPanel({
       const bad = rows.filter((r) => !r.ok);
       if (ok.length > 0) {
         const db = getFirebaseDb();
-        const batch = writeBatch(db);
+        // v1.42.0 去重：同一內容重複匯入以同一文件 ID 覆寫更新，不重複建檔；
+        // 每 500 筆分段提交（Firestore batch 上限）。
         const today = new Date().toISOString().slice(0, 10);
+        let batch = writeBatch(db);
+        let pending = 0;
+        const flush = async () => {
+          if (pending > 0) {
+            await batch.commit();
+            batch = writeBatch(db);
+            pending = 0;
+          }
+        };
         for (const r of ok) {
           const v = r.values!;
           const answers = selInd.questions.map((q, i) => {
             const label = v.answers[i] ?? "";
             const excluded = label === "不適用" || label === "";
+            const note = (v.notes[i] ?? "").trim();
             return {
               questionId: q.id,
               itemText: q.itemText,
               optionLabel: label,
               score: label === "是" ? 1 : 0,
               excluded,
+              ...(note ? { note } : {}),
             };
           });
           const { totalScore, maxScore, rate } = computeOptionSetScore(
             answers.map((a) => ({ score: a.score, excluded: a.excluded })),
           );
-          const ref = doc(collection(db, "reviewRecords"));
+          const ref = doc(
+            collection(db, "reviewRecords"),
+            importRecordDocId({
+              indicatorId: selInd.id,
+              unitCode: v.unitCode,
+              year: v.year,
+              month: v.month,
+              reviewerId: v.reviewerId,
+              personEmpNo: v.personEmpNo,
+              bedNo: v.bedNo,
+              answers: v.answers,
+              notes: v.notes,
+            }),
+          );
           batch.set(ref, {
             taskId: "",
             indicatorId: selInd.id,
@@ -3070,8 +3113,10 @@ function ResultImportPanel({
             submittedBy: user.staffId,
             source: "import",
           });
+          pending++;
+          if (pending >= 500) await flush();
         }
-        await batch.commit();
+        await flush();
         logAudit(db, {
           actor: user.staffId,
           actorName: user.name,
@@ -3102,7 +3147,7 @@ function ResultImportPanel({
     <section className="panel">
       <SectionTitle
         title="匯入品管審查結果"
-        note="先選組別與指標（只列啟用），再選 Excel／CSV 檔匯入。預檢不符（指標代號或題數）即整檔中止；逐列未填忽略、非法值該列跳過。匯入的紀錄計入審核進度，不自動建立審查任務。"
+        note="先選組別與指標（只列啟用），再選 Excel／CSV 檔匯入。預檢不符（指標代號或題數）即整檔中止；逐列未填忽略、非法值該列跳過。匯入的紀錄計入審核進度，不自動建立審查任務。同一內容重複匯入會以同一筆覆寫更新，不會重複建檔。"
       />
       <div className="form-stack">
         <div className="form-field">
@@ -3182,6 +3227,440 @@ function ResultImportPanel({
           ))}
         </div>
       )}
+      {isAdmin && (
+        <SheetSyncSection
+          indicators={indicators}
+          selIndicatorId={selIndicatorId}
+          user={user}
+          onAction={onAction}
+        />
+      )}
     </section>
+  );
+}
+
+/**
+ * 連結 Google Sheet（v1.42.0，僅系統管理員）：
+ * 貼試算表網址建立對照（存 sheetSyncMappings），再由 GitHub Actions
+ * 定時同步（每日 07:00）或手動觸發讀取標題列、完成欄位對應。
+ * 欄位對應缺必要欄時顯示錯誤、不建立同步。
+ */
+function SheetSyncSection({
+  indicators,
+  selIndicatorId,
+  user,
+  onAction,
+}: {
+  indicators: IndicatorOpt[];
+  selIndicatorId: string;
+  user: { staffId: string; name: string } | null;
+  onAction: (m: string) => void;
+}) {
+  const [url, setUrl] = useState("");
+  const [sheetName, setSheetName] = useState("表單回覆 1");
+  const [mappings, setMappings] = useState<SheetSyncMapping[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [errs, setErrs] = useState<string[]>([]);
+  const [confirmDeleteId, setConfirmDeleteId] = useState("");
+
+  const loadMappings = useCallback(async () => {
+    try {
+      const db = getFirebaseDb();
+      const snap = await getDocs(collection(db, "sheetSyncMappings"));
+      const list = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<SheetSyncMapping, "id">),
+      }));
+      list.sort((a, b) =>
+        `${a.indicatorId}${a.sheetName}`.localeCompare(
+          `${b.indicatorId}${b.sheetName}`,
+          "zh-Hant",
+        ),
+      );
+      setMappings(list);
+    } catch {
+      setErrs(["讀取同步對照失敗，請重新整理頁面再試"]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadMappings();
+  }, [loadMappings]);
+
+  const selInd =
+    indicators.find((i) => i.id === selIndicatorId) ?? null;
+  const selected = mappings.find((m) => m.id === selectedId) ?? null;
+  const selectedInd = selected
+    ? (indicators.find((i) => i.id === selected.indicatorId) ?? null)
+    : null;
+  const selectedQuestions = selectedInd
+    ? selectedInd.questions.map((q) => q.itemText)
+    : [];
+  const fieldOptions = sheetSystemFieldOptions(selectedQuestions);
+
+  const fmtTs = (v: unknown): string => {
+    if (!v) return "";
+    if (typeof v === "string") return v;
+    const t = v as { toDate?: () => Date };
+    if (typeof t.toDate === "function") return t.toDate().toISOString().slice(0, 16).replace("T", " ");
+    return "";
+  };
+
+  const statusLabel = (m: SheetSyncMapping) =>
+    m.status === "ready"
+      ? "可同步"
+      : m.status === "mapping-incomplete"
+        ? "對應未完成"
+        : "待讀取標題";
+
+  function selectMapping(m: SheetSyncMapping) {
+    setSelectedId(m.id);
+    setDraft(m.fieldMapping ?? {});
+    setMsg(null);
+    setErrs([]);
+  }
+
+  async function handleLink() {
+    if (!user) return;
+    setMsg(null);
+    setErrs([]);
+    if (!selInd) {
+      setErrs(["請先在上方選組別與指標，再連結 Google Sheet"]);
+      return;
+    }
+    const parsed = parseSheetUrl(url);
+    if ("error" in parsed) {
+      setErrs([parsed.error]);
+      return;
+    }
+    const name = sheetName.trim() || "表單回覆 1";
+    const existing = mappings.find(
+      (m) => m.spreadsheetId === parsed.spreadsheetId && m.sheetName === name,
+    );
+    if (existing) {
+      selectMapping(existing);
+      setMsg(`已連結過此試算表（${name}），請確認下方欄位對應。`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const db = getFirebaseDb();
+      const ref = doc(collection(db, "sheetSyncMappings"));
+      await setDoc(ref, {
+        spreadsheetId: parsed.spreadsheetId,
+        sheetName: name,
+        ...(parsed.gid ? { sheetGid: parsed.gid } : {}),
+        groupId: selInd.groupId,
+        indicatorId: selInd.id,
+        enabled: true,
+        detectedHeaders: [],
+        fieldMapping: {},
+        status: "pending",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      await loadMappings();
+      setSelectedId(ref.id);
+      setDraft({});
+      setMsg(
+        `已建立連結（${name}）。下一步：按「讀取欄位」，由同步排程讀取標題列後，再到下方完成欄位對應。`,
+      );
+      onAction(`連結 Google Sheet：${selInd.code}・${name}`);
+    } catch {
+      setErrs(["建立連結失敗，請確認權限後再試"]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRequestHeaders(m: SheetSyncMapping) {
+    setMsg(null);
+    setErrs([]);
+    setBusy(true);
+    try {
+      const db = getFirebaseDb();
+      await updateDoc(doc(db, "sheetSyncMappings", m.id), {
+        headerFetchRequestedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setMsg(
+        "已要求讀取標題列：每日 07:00 自動同步時會讀取，或到 GitHub Actions 手動執行 sheet-sync，完成後按「重新整理」即可編輯對應。",
+      );
+    } catch {
+      setErrs(["要求讀取標題列失敗"]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSaveMapping(m: SheetSyncMapping) {
+    setMsg(null);
+    setErrs([]);
+    const missing = mappingMissingRequired(draft, selectedQuestions);
+    if (missing.length > 0) {
+      setErrs([
+        `對應缺必要欄位：${missing.join("、")}，請補齊後再儲存（不同標題不可對到同一系統欄位）。`,
+      ]);
+      return;
+    }
+    const used = Object.values(draft).filter((v) => v !== "");
+    if (new Set(used).size !== used.length) {
+      setErrs(["不同標題不可對到同一系統欄位，請檢查後再儲存"]);
+      return;
+    }
+    setBusy(true);
+    try {
+      const db = getFirebaseDb();
+      await updateDoc(doc(db, "sheetSyncMappings", m.id), {
+        fieldMapping: draft,
+        status: "ready",
+        updatedAt: serverTimestamp(),
+      });
+      setMsg("欄位對應已儲存，下次同步將依此對應讀取。");
+      onAction(`儲存 Sheet 欄位對應：${m.sheetName}`);
+      await loadMappings();
+    } catch {
+      setErrs(["儲存對應失敗"]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleToggleEnabled(m: SheetSyncMapping) {
+    setBusy(true);
+    try {
+      const db = getFirebaseDb();
+      await updateDoc(doc(db, "sheetSyncMappings", m.id), {
+        enabled: !m.enabled,
+        updatedAt: serverTimestamp(),
+      });
+      await loadMappings();
+    } catch {
+      setErrs(["更新啟用狀態失敗"]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete(m: SheetSyncMapping) {
+    if (confirmDeleteId !== m.id) {
+      setConfirmDeleteId(m.id);
+      return;
+    }
+    setConfirmDeleteId("");
+    setBusy(true);
+    try {
+      const db = getFirebaseDb();
+      await deleteDoc(doc(db, "sheetSyncMappings", m.id));
+      if (selectedId === m.id) setSelectedId("");
+      setMsg(`已刪除連結（${m.sheetName}），已同步的審查紀錄不受影響。`);
+      await loadMappings();
+    } catch {
+      setErrs(["刪除連結失敗"]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="settings-section" style={{ marginTop: 20 }}>
+      <SectionTitle
+        title="連結 Google Sheet（定時同步）"
+        note="貼試算表網址建立連結，系統每日 07:00 自動同步表單回覆，也可到 GitHub Actions 手動觸發。同步以內容雜湊去重，同一列重複同步不會重複建檔；列被修改會覆寫更新，列被刪除則保留系統內紀錄。"
+      />
+      <div className="form-stack">
+        <div className="form-field">
+          <label className="field-label">試算表網址</label>
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://docs.google.com/spreadsheets/d/……/edit#gid=0"
+          />
+        </div>
+        <div className="form-field">
+          <label className="field-label">分頁名稱</label>
+          <input
+            value={sheetName}
+            onChange={(e) => setSheetName(e.target.value)}
+            placeholder="表單回覆 1"
+          />
+        </div>
+      </div>
+      <div className="batch-toolbar">
+        <button
+          className="button button-outline button-sm"
+          disabled={busy || !user}
+          onClick={() => void handleLink()}
+        >
+          <Link2 size={14} /> 連結
+        </button>
+        <button
+          className="button button-outline button-sm"
+          disabled={busy}
+          onClick={() => void loadMappings()}
+        >
+          <RefreshCw size={14} /> 重新整理
+        </button>
+      </div>
+      {msg && (
+        <p className="settings-note" role="status">
+          {msg}
+        </p>
+      )}
+      {errs.length > 0 &&
+        errs.map((e, i) => (
+          <div key={i} className="field-error">
+            {e}
+          </div>
+        ))}
+      {mappings.length > 0 && (
+        <div style={{ overflowX: "auto", marginTop: 12 }}>
+          <table className="settings-table">
+            <thead>
+              <tr>
+                <th>試算表分頁</th>
+                <th>指標</th>
+                <th>狀態</th>
+                <th>上次同步</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {mappings.map((m) => {
+                const ind = indicators.find((i) => i.id === m.indicatorId);
+                return (
+                  <tr key={m.id} style={m.id === selectedId ? { background: "var(--row-hover)" } : undefined}>
+                    <td>
+                      {m.sheetName}
+                      <div className="muted-text" style={{ fontSize: 12 }}>
+                        {m.spreadsheetId.slice(0, 12)}…
+                      </div>
+                    </td>
+                    <td>{ind ? `${ind.code}・${ind.name}` : m.indicatorId}</td>
+                    <td>
+                      {statusLabel(m)}
+                      {!m.enabled && "（已停用）"}
+                    </td>
+                    <td>{fmtTs(m.lastSyncAt) || "—"}</td>
+                    <td>
+                      <div className="inline-actions">
+                        <button
+                          className="button button-outline button-sm"
+                          disabled={busy}
+                          onClick={() => selectMapping(m)}
+                        >
+                          編輯對應
+                        </button>
+                        <button
+                          className="button button-outline button-sm"
+                          disabled={busy}
+                          onClick={() => void handleRequestHeaders(m)}
+                        >
+                          讀取欄位
+                        </button>
+                        <button
+                          className="button button-outline button-sm"
+                          disabled={busy}
+                          onClick={() => void handleToggleEnabled(m)}
+                        >
+                          {m.enabled ? "停用" : "啟用"}
+                        </button>
+                        <button
+                          className="button button-outline button-sm"
+                          disabled={busy}
+                          onClick={() => void handleDelete(m)}
+                        >
+                          {confirmDeleteId === m.id ? "確認刪除" : "刪除"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {selected && (
+        <div style={{ marginTop: 16 }}>
+          <SectionTitle
+            title={`欄位對應：${selected.sheetName}`}
+            note="左邊是 Sheet 實際欄名，右邊選系統欄位；儲存時會自動依欄名預填對應，未對上的請手動選擇。必要欄位（受審單位、受審人員職編、審查月份或時間戳記、各題結果）缺任一項都無法儲存。"
+          />
+          {selected.detectedHeaders.length === 0 ? (
+            <p className="settings-note">
+              尚未讀取到標題列。請按上方「讀取欄位」（由同步排程讀取），完成後按「重新整理」再回來編輯對應。
+            </p>
+          ) : (
+            <>
+              <div style={{ overflowX: "auto" }}>
+                <table className="settings-table">
+                  <thead>
+                    <tr>
+                      <th>Sheet 欄名</th>
+                      <th>系統欄位</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selected.detectedHeaders.map((h) => (
+                      <tr key={h}>
+                        <td>{h}</td>
+                        <td>
+                          <div className="select-wrap">
+                            <select
+                              value={draft[h] ?? ""}
+                              onChange={(e) =>
+                                setDraft((prev) => ({
+                                  ...prev,
+                                  [h]: e.target.value,
+                                }))
+                              }
+                            >
+                              <option value="">不對應</option>
+                              {fieldOptions.map((o) => (
+                                <option key={o.key} value={o.key}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
+                            <ChevronDown size={15} />
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="batch-toolbar" style={{ marginTop: 8 }}>
+                <button
+                  className="button button-outline button-sm"
+                  disabled={busy}
+                  onClick={() =>
+                    setDraft((prev) => ({
+                      ...autoFieldMapping(selected.detectedHeaders, selectedQuestions),
+                      ...Object.fromEntries(
+                        Object.entries(prev).filter(([, v]) => v !== ""),
+                      ),
+                    }))
+                  }
+                >
+                  <RefreshCw size={14} /> 自動對應（依欄名）
+                </button>
+                <button
+                  className="button button-primary button-sm"
+                  disabled={busy}
+                  onClick={() => void handleSaveMapping(selected)}
+                >
+                  儲存對應
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

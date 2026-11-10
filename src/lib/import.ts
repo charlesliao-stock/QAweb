@@ -474,6 +474,8 @@ export interface ResultImportRowInput {
   bedNo: string;
   /** 每題一欄（與題目順序對應；未填＝未答） */
   answers: string[];
+  /** 每題備註一欄（與 answers 對應；未填＝""；舊範本無備註欄時全為 ""） */
+  notes: string[];
 }
 
 export interface ResultImportRowResult {
@@ -489,6 +491,7 @@ export interface ResultImportRowResult {
     personEmpNo: string;
     bedNo: string;
     answers: string[];
+    notes: string[];
   } | null;
 }
 
@@ -558,17 +561,149 @@ export function normalizeResultAnswer(
   return null;
 }
 
+/* ================= SHA-1（純函式，零依賴） ================= */
+
+/**
+ * SHA-1（同步、零依賴；瀏覽器與 Node 共用）。
+ * 以 UTF-8 編碼輸入，回傳 40 字元小寫十六進位。
+ * 供匯入去重雜湊使用（importRecordHash）；標準測試向量：
+ * sha1("")＝da39a3ee5e6b4b0d3255bfef95601890afd80709、
+ * sha1("abc")＝a9993e364706816aba3e25717850c26c9cd0d89d。
+ */
+export function sha1Hex(input: string): string {
+  const bytes = new TextEncoder().encode(input);
+  const ml = bytes.length;
+  const paddedLen = (((ml + 9 + 63) >> 6) << 6);
+  const buf = new Uint8Array(paddedLen);
+  buf.set(bytes);
+  buf[ml] = 0x80;
+  const dv = new DataView(buf.buffer);
+  dv.setUint32(paddedLen - 4, (ml * 8) >>> 0);
+  let h0 = 0x67452301;
+  let h1 = 0xefcdab89;
+  let h2 = 0x98badcfe;
+  let h3 = 0x10325476;
+  let h4 = 0xc3d2e1f0;
+  const w = new Uint32Array(80);
+  const rotl = (x: number, n: number) => ((x << n) | (x >>> (32 - n))) >>> 0;
+  for (let off = 0; off < paddedLen; off += 64) {
+    for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4);
+    for (let i = 16; i < 80; i++)
+      w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+    let a = h0;
+    let b = h1;
+    let c = h2;
+    let d = h3;
+    let e = h4;
+    for (let i = 0; i < 80; i++) {
+      let f: number;
+      let k: number;
+      if (i < 20) {
+        f = (b & c) | (~b & d);
+        k = 0x5a827999;
+      } else if (i < 40) {
+        f = b ^ c ^ d;
+        k = 0x6ed9eba1;
+      } else if (i < 60) {
+        f = (b & c) | (b & d) | (c & d);
+        k = 0x8f1bbcdc;
+      } else {
+        f = b ^ c ^ d;
+        k = 0xca62c1d6;
+      }
+      const tmp = (rotl(a, 5) + f + e + k + w[i]) >>> 0;
+      e = d;
+      d = c;
+      c = rotl(b, 30);
+      b = a;
+      a = tmp;
+    }
+    h0 = (h0 + a) >>> 0;
+    h1 = (h1 + b) >>> 0;
+    h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0;
+  }
+  const hex = (x: number) => x.toString(16).padStart(8, "0");
+  return hex(h0) + hex(h1) + hex(h2) + hex(h3) + hex(h4);
+}
+
+/* ================= 匯入去重：內容雜湊 → 決定性文件 ID ================= */
+
+export interface ImportIdentityInput {
+  /** Google Sheet 來源才有（手動檔案匯入留空） */
+  spreadsheetId?: string;
+  sheetName?: string;
+  /** 表單回覆時間戳記（Sheet 來源才有；手動匯入留空） */
+  timestamp?: string;
+  indicatorId: string;
+  unitCode: string;
+  year: number;
+  month: number;
+  reviewerId: string;
+  personEmpNo: string;
+  bedNo: string;
+  /** 已正規化的答案（是／否／不適用／""） */
+  answers: string[];
+  /** 已去空白的備註（與 answers 對應） */
+  notes: string[];
+}
+
+/**
+ * 匯入紀錄內容雜湊（v1.42.0 去重核心）。
+ * 固定順序 JSON，欄位皆去空白。reviewDate 不在內——手動匯入的 reviewDate
+ * 是匯入當天，納入會讓隔天重匯同一檔案算成不同筆；指標與床號在內——
+ * 同人同月不同指標／不同床是不同筆。scripts/sheet-sync-lib.mjs 有同一
+ * 份邏輯（Node 版），兩邊以相同 fixture 測試守住一致。
+ */
+export function importRecordHash(input: ImportIdentityInput): string {
+  const canon = {
+    v: 1,
+    s: (input.spreadsheetId ?? "").trim(),
+    t: (input.sheetName ?? "").trim(),
+    ts: (input.timestamp ?? "").trim(),
+    ind: input.indicatorId.trim(),
+    unit: input.unitCode.trim(),
+    y: input.year,
+    m: input.month,
+    r: (input.reviewerId ?? "").trim(),
+    p: (input.personEmpNo ?? "").trim(),
+    b: (input.bedNo ?? "").trim(),
+    a: input.answers.map((x) => (x ?? "").trim()),
+    n: input.notes.map((x) => (x ?? "").trim()),
+  };
+  return sha1Hex(JSON.stringify(canon));
+}
+
+/**
+ * 匯入紀錄文件 ID：import_＋雜湊前 24 字元（96 位元）。
+ * 同一內容重複匯入／重複同步即 upsert（batch.set 覆寫），不會重複建檔。
+ * 邊界（誠實處理）：舊的隨機 ID 紀錄無法與新雜湊 ID 自動對上，重匯舊檔
+ * 案時舊紀錄仍留著、只保證不再新增重複；不自動刪舊紀錄。
+ */
+export function importRecordDocId(input: ImportIdentityInput): string {
+  return `import_${importRecordHash(input).slice(0, 24)}`;
+}
+
 /**
  * 結果匯入檔解析：第一列標題列（前 6 欄固定、其後為題目欄）。
+ * v1.42.0：每題結果欄後可跟一個備註欄（標題「{題目}備註」，與該題成對；
+ * 未填可留空）。opts.questionTitles 傳入時以題目文字精確配對；未傳時以
+ * 標題後綴「備註」判斷。舊範本（無備註欄）照常解析，notes 全為 ""。
+ * 備註欄不計入題數（題數仍以結果欄計）。
  * 回傳 headerErrors（標題列不符＝整檔中止）與資料列。
  */
-export function parseResultSheet(rows: string[][]): {
+export function parseResultSheet(
+  rows: string[][],
+  opts?: { questionTitles?: string[] },
+): {
   headerErrors: string[];
   data: ResultImportRowInput[];
 } {
   if (rows.length === 0)
     return { headerErrors: ["檔案為空，請使用範本格式"], data: [] };
-  const { col } = mapHeaders(rows[0], RESULT_HEADER_MAP);
+  const headerRow = rows[0];
+  const { col } = mapHeaders(headerRow, RESULT_HEADER_MAP);
   const required = ["code", "unitCode", "monthRaw"];
   const missingRequired = required.filter((k) => col[k] === undefined);
   if (missingRequired.length > 0) {
@@ -581,6 +716,60 @@ export function parseResultSheet(rows: string[][]): {
       ],
       data: [],
     };
+  }
+  // 題目欄／備註欄配對（第 7 欄起）。
+  const titles = opts?.questionTitles;
+  const isNoteHeader = (idx: number): boolean => {
+    const key = headerKey(headerRow[idx] ?? "");
+    if (titles) {
+      if (titles.some((t) => headerKey(t) === key)) return false;
+      return titles.some((t) => headerKey(`${t}備註`) === key);
+    }
+    return key.endsWith("備註");
+  };
+  const answerCols: number[] = [];
+  const noteCols: number[] = []; // -1＝該題無備註欄
+  const paired =
+    !!titles &&
+    titles.length > 0 &&
+    headerRow.length > 7 &&
+    headerKey(headerRow[7] ?? "") === headerKey(`${titles[0]}備註`);
+  if (paired && titles) {
+    // 成對版面：每題結果欄＋備註欄交錯
+    for (let i = 0; i < titles.length; i++) {
+      const aCol = 6 + 2 * i;
+      if (aCol >= headerRow.length) break;
+      answerCols.push(aCol);
+      const nCol = aCol + 1;
+      noteCols.push(
+        nCol < headerRow.length &&
+          headerKey(headerRow[nCol] ?? "") === headerKey(`${titles[i]}備註`)
+          ? nCol
+          : -1,
+      );
+    }
+    // 成對版面之後的額外欄位：非備註標題者視為多餘題目欄（題數檢核會擋）
+    for (let j = 6 + 2 * titles.length; j < headerRow.length; j++) {
+      if (!isNoteHeader(j)) {
+        answerCols.push(j);
+        noteCols.push(-1);
+      }
+    }
+  } else {
+    // 單欄版面（舊範本）或未傳題目：逐欄判斷
+    for (let j = 6; j < headerRow.length; j++) {
+      if (
+        isNoteHeader(j) &&
+        answerCols.length > 0 &&
+        noteCols[noteCols.length - 1] === -1
+      ) {
+        noteCols[noteCols.length - 1] = j;
+      } else if (!isNoteHeader(j)) {
+        answerCols.push(j);
+        noteCols.push(-1);
+      }
+      // 備註欄出現在無前導題目欄時忽略（不計入題數）
+    }
   }
   const data: ResultImportRowInput[] = [];
   for (let i = 1; i < rows.length; i++) {
@@ -595,19 +784,21 @@ export function parseResultSheet(rows: string[][]): {
       reviewerId: get("reviewerId"),
       personEmpNo: get("personEmpNo"),
       bedNo: get("bedNo"),
-      answers: r.slice(6).map((c) => c.trim()),
+      answers: answerCols.map((c) => (r[c] ?? "").trim()),
+      notes: noteCols.map((c) => (c >= 0 ? (r[c] ?? "").trim() : "")),
     });
   }
   return { headerErrors: [], data };
 }
 
 /**
- * 結果匯入驗證（v1.21.0，v1.40.4 補 Google 表單對應）：
- * - 檔案級預檢：全部列指標代號須等於所選指標 code；題數（欄數-6）須等於
- *   該指標題目數；任一不符即整檔中止（fileErrors 非空）。
+ * 結果匯入驗證（v1.21.0，v1.40.4 補 Google 表單對應，v1.42.0 補備註欄）：
+ * - 檔案級預檢：全部列指標代號須等於所選指標 code；題數（結果欄數）須等於
+ *   該指標題目數（備註欄不計入）；任一不符即整檔中止（fileErrors 非空）。
  * - 逐列：受審單位須存在、審查月份須合法、審查員職編須存在（未填留空）、
  *   各題答案須為 是／否／不適用（「正確」＝是、「不正確」＝否；未填＝未答）；
- *   任一不符該列跳過。驗證通過的列，values.answers 已正規化為 是／否／不適用。
+ *   任一不符該列跳過。驗證通過的列，values.answers 已正規化為 是／否／不適用，
+ *   values.notes 為去空白後的備註（與 answers 對應）。
  */
 export function validateResultSheet(
   data: ResultImportRowInput[],
@@ -684,19 +875,24 @@ export function validateResultSheet(
         personEmpNo: r.personEmpNo.trim(),
         bedNo: r.bedNo.trim(),
         answers: normalizedAnswers.map((a) => a ?? ""),
+        notes: r.notes.map((n) => n.trim()),
       },
     };
   });
   return { fileErrors: [], rows };
 }
 
-/** 結果匯入範本：前 6 欄固定＋每題一欄（標題＝題目文字），依所選指標即時產生 */
+/**
+ * 結果匯入範本：前 6 欄固定＋每題「結果欄＋備註欄」成對（標題＝題目文字、
+ * 「{題目}備註」），依所選指標即時產生。備註欄未填可留空；舊範本（無備註
+ * 欄）仍可匯入，見 parseResultSheet。
+ */
 export function resultTemplateRows(
   code: string,
   questions: string[],
 ): string[][] {
   return [
-    [...RESULT_FIXED_HEADERS, ...questions],
+    [...RESULT_FIXED_HEADERS, ...questions.flatMap((q) => [q, `${q}備註`])],
     [
       code,
       "9A",
@@ -704,7 +900,7 @@ export function resultTemplateRows(
       "A12345",
       "B67890",
       "9A-01",
-      ...questions.map(() => "是"),
+      ...questions.flatMap(() => ["是", ""]),
     ],
   ];
 }
