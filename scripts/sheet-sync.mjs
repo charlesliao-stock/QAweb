@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 /**
- * Google Sheet 定時同步 — 執行檔（v1.42.0）。
+ * Google Sheet 定時同步 — 執行檔（v1.42.0；v1.42.1 加確認關卡＋手動測試）。
  *
  * GitHub Actions 每日 07:00 台北時間執行（.github/workflows/sheet-sync.yml），
  * 另可 workflow_dispatch 手動觸發（可指定單一 mappingId）。
+ *
+ * 確認關卡（v1.42.1）：定時排程只跑 status == "confirmed" 且啟用的對照；
+ * 草稿跳過並寫 run 紀錄記下跳過原因，不寫入審查紀錄。手動觸發指定單一對照時
+ * 草稿亦可跑（測試連結用）；手動同步為選用步驟，不強制成功才能確認排程。
+ * 讀標題列時一併讀前 3 列資料列、用目前對應解析後寫回對照 preview 供核對。
  *
  * 流程（每份啟用的 sheetSyncMappings）：
  * 1. 讀試算表 metadata 找分頁（依 sheetName 或 sheetGid），讀全部值。
@@ -38,11 +43,14 @@
 import { createSign } from "node:crypto";
 import {
   autoFieldMapping,
+  buildMappingPreview,
   buildSyncRecord,
   cellToString,
   decodeFirestoreDoc,
   encodeFirestoreFields,
+  isMappingConfirmed,
   mappingMissingRequired,
+  selectSyncTargets,
   syncStateDocId,
 } from "./sheet-sync-lib.mjs";
 
@@ -260,11 +268,12 @@ async function runPool(tasks, limit) {
 /* ================= 單一對照同步 ================= */
 
 async function syncMapping(mapping, ctx) {
-  const { token, indicators, unitHas, staffHas, staffName, taskCache } = ctx;
+  const { token, indicators, unitHas, staffHas, staffName, taskCache, trigger } = ctx;
   const now = new Date();
   const runId = `run_${mapping.id}_${now.toISOString().replace(/[-:.]/g, "").slice(0, 15)}`;
   const run = {
     mappingId: mapping.id,
+    trigger,
     startedAt: now,
     finishedAt: null,
     rowsRead: 0,
@@ -332,10 +341,23 @@ async function syncMapping(mapping, ctx) {
     if (v) merged[h] = v;
   }
   const missing = mappingMissingRequired(merged, questions);
+  // 對應預覽（v1.42.1）：前 3 列資料列用目前對應解析，供使用者核對對應正確；
+  // 對應未完成時也寫回，讓使用者看到哪幾列、哪個欄位有問題。
+  const preview = buildMappingPreview({
+    headers,
+    rows: dataRows,
+    fieldMapping: merged,
+    indicator,
+    unitHas,
+    staffHas,
+    staffName,
+  });
   const mappingPatch = {
     detectedHeaders: headers,
     fieldMapping: merged,
-    status: missing.length > 0 ? "mapping-incomplete" : "ready",
+    readiness: missing.length > 0 ? "mapping-incomplete" : "ready",
+    preview,
+    previewAt: now,
     lastHeaderFetchAt: now,
     headerFetchRequestedAt: null,
     updatedAt: now,
@@ -343,7 +365,9 @@ async function syncMapping(mapping, ctx) {
   await fsPatchDoc(`sheetSyncMappings/${mapping.id}`, mappingPatch, token, [
     "detectedHeaders",
     "fieldMapping",
-    "status",
+    "readiness",
+    "preview",
+    "previewAt",
     "lastHeaderFetchAt",
     "headerFetchRequestedAt",
     "updatedAt",
@@ -536,20 +560,55 @@ async function main() {
   const lineToken = process.env.LINE_CHANNEL_ACCESS_TOKEN ?? "";
   const lineTo = process.env.LINE_USER_ID ?? "";
   const onlyMappingId = (process.env.MAPPING_ID ?? "").trim();
+  // 觸發來源（v1.42.1）：workflow_dispatch＝手動測試，schedule＝定時排程；
+  // 本機執行時無此變數，視為定時排程（安全預設，只跑已確認者）。
+  const isManual = process.env.GITHUB_EVENT_NAME === "workflow_dispatch";
+  const trigger = isManual ? "manual" : "schedule";
 
   const token = await getAccessToken(sa);
 
   const mappings = await fsListCollection("sheetSyncMappings", token);
-  let targets = mappings.filter((m) => m.enabled !== false);
   if (onlyMappingId) {
-    targets = targets.filter((m) => m.id === onlyMappingId);
-    if (targets.length === 0) {
-      console.error(`找不到對照：${onlyMappingId}（或該對照已停用）`);
+    const found = mappings.find((m) => m.id === onlyMappingId);
+    if (!found) {
+      console.error(`找不到對照：${onlyMappingId}`);
+      process.exit(1);
+    }
+    if (found.enabled === false) {
+      console.error(`對照已停用：${onlyMappingId}`);
       process.exit(1);
     }
   }
+  // 確認關卡（v1.42.1）：定時排程只跑已確認且啟用的對照；草稿跳過並寫 run
+  // 紀錄記下跳過原因，不寫入審查紀錄。手動觸發指定單一對照時草稿亦可跑。
+  const { targets, skipped } = selectSyncTargets(mappings, {
+    manual: isManual,
+    mappingId: onlyMappingId,
+  });
+  const now0 = new Date();
+  for (const { mapping, reason } of skipped) {
+    const skipRunId = `run_${mapping.id}_${now0.toISOString().replace(/[-:.]/g, "").slice(0, 15)}_skipped`;
+    await fsPatchDoc(
+      `sheetSyncRuns/${skipRunId}`,
+      {
+        mappingId: mapping.id,
+        trigger,
+        startedAt: now0,
+        finishedAt: now0,
+        rowsRead: 0,
+        inserted: 0,
+        updated: 0,
+        skipped: 0,
+        errorRows: [],
+        status: "skipped",
+        error: reason,
+      },
+      token,
+    );
+    log(`對照 ${mapping.sheetName}：${reason}`);
+  }
   if (targets.length === 0) {
-    log("沒有啟用的同步對照，本輪無事可做。");
+    log("沒有可同步的對照，本輪無事可做。");
     return;
   }
 
@@ -569,7 +628,7 @@ async function main() {
   const staffName = (id) => staffById.get(id)?.name ?? id;
   const indicators = new Map(indicatorsList.map((ind) => [ind.id, ind]));
 
-  const ctx = { token, indicators, unitHas, staffHas, staffName, taskCache: new Map() };
+  const ctx = { token, indicators, unitHas, staffHas, staffName, taskCache: new Map(), trigger };
   const failures = [];
   for (const mapping of targets) {
     try {

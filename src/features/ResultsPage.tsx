@@ -16,7 +16,9 @@ import {
   Download,
   FileText,
   Link2,
+  Play,
   RefreshCw,
+  ShieldCheck,
   TrendingUp,
   Upload,
   X,
@@ -27,6 +29,8 @@ import {
   doc,
   getDocs,
   getDocsFromServer,
+  limit,
+  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -57,10 +61,17 @@ import {
 } from "../lib/import";
 import {
   autoFieldMapping,
+  canConfirmMapping,
+  hasDuplicateMapping,
+  isMappingConfirmed,
   mappingMissingRequired,
+  mappingReadiness,
   parseSheetUrl,
+  runStatusLabel,
   sheetSystemFieldOptions,
+  type SheetPreviewRow,
   type SheetSyncMapping,
+  type SheetSyncRun,
 } from "../lib/sheetSync";
 import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
 import { EmptyState, PageHeading, SectionTitle, SummaryCell } from "../components/ui";
@@ -3265,6 +3276,9 @@ function SheetSyncSection({
   const [msg, setMsg] = useState<string | null>(null);
   const [errs, setErrs] = useState<string[]>([]);
   const [confirmDeleteId, setConfirmDeleteId] = useState("");
+  const [latestRuns, setLatestRuns] = useState<Record<string, SheetSyncRun | null>>({});
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [copiedId, setCopiedId] = useState("");
 
   const loadMappings = useCallback(async () => {
     try {
@@ -3300,6 +3314,18 @@ function SheetSyncSection({
     ? selectedInd.questions.map((q) => q.itemText)
     : [];
   const fieldOptions = sheetSystemFieldOptions(selectedQuestions);
+  /** 確認關卡（v1.42.1）：連線成功＋對應完整＋無重複對應，才可確認列入排程。 */
+  const gate = selected
+    ? canConfirmMapping({
+        headersRead: (selected.detectedHeaders ?? []).length > 0,
+        missing: mappingMissingRequired(draft, selectedQuestions),
+        hasDuplicate: hasDuplicateMapping(draft),
+      })
+    : null;
+  const latestRun = selected ? latestRuns[selected.id] : undefined;
+  const selectedPreview: SheetPreviewRow[] = selected?.preview ?? [];
+  const fieldLabel = (key: string) =>
+    fieldOptions.find((o) => o.key === key)?.label ?? key;
 
   const fmtTs = (v: unknown): string => {
     if (!v) return "";
@@ -3309,18 +3335,46 @@ function SheetSyncSection({
     return "";
   };
 
-  const statusLabel = (m: SheetSyncMapping) =>
-    m.status === "ready"
-      ? "可同步"
-      : m.status === "mapping-incomplete"
-        ? "對應未完成"
-        : "待讀取標題";
+  /** 最近一次同步執行紀錄（驗證區顯示用；orderBy 單欄查詢，不需複合索引）。 */
+  const loadLatestRun = useCallback(async (mappingId: string) => {
+    setRunsLoading(true);
+    try {
+      const db = getFirebaseDb();
+      const snap = await getDocs(
+        query(
+          collection(db, "sheetSyncRuns"),
+          orderBy("startedAt", "desc"),
+          limit(10),
+        ),
+      );
+      const mine = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<SheetSyncRun, "id">) }))
+        .filter((r) => r.mappingId === mappingId);
+      setLatestRuns((prev) => ({ ...prev, [mappingId]: mine[0] ?? null }));
+    } catch {
+      setLatestRuns((prev) => ({ ...prev, [mappingId]: null }));
+    } finally {
+      setRunsLoading(false);
+    }
+  }, []);
+
+  const statusLabel = (m: SheetSyncMapping) => {
+    const r = mappingReadiness(m);
+    const readyLabel =
+      r === "ready"
+        ? "可同步"
+        : r === "mapping-incomplete"
+          ? "對應未完成"
+          : "待讀取標題";
+    return isMappingConfirmed(m) ? `已確認・${readyLabel}` : `草稿・${readyLabel}`;
+  };
 
   function selectMapping(m: SheetSyncMapping) {
     setSelectedId(m.id);
     setDraft(m.fieldMapping ?? {});
     setMsg(null);
     setErrs([]);
+    void loadLatestRun(m.id);
   }
 
   async function handleLink() {
@@ -3358,7 +3412,8 @@ function SheetSyncSection({
         enabled: true,
         detectedHeaders: [],
         fieldMapping: {},
-        status: "pending",
+        status: "draft",
+        readiness: "pending",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -3387,7 +3442,7 @@ function SheetSyncSection({
         updatedAt: serverTimestamp(),
       });
       setMsg(
-        "已要求讀取標題列：每日 07:00 自動同步時會讀取，或到 GitHub Actions 手動執行 sheet-sync，完成後按「重新整理」即可編輯對應。",
+        "已要求讀取標題列：每日 07:00 自動同步時會讀取，或到 GitHub Actions 手動執行 sheet-sync，完成後按「重新整理」即可編輯對應；讀取時會一併帶回前 3 列預覽供核對。",
       );
     } catch {
       setErrs(["要求讀取標題列失敗"]);
@@ -3406,26 +3461,85 @@ function SheetSyncSection({
       ]);
       return;
     }
-    const used = Object.values(draft).filter((v) => v !== "");
-    if (new Set(used).size !== used.length) {
+    if (hasDuplicateMapping(draft)) {
       setErrs(["不同標題不可對到同一系統欄位，請檢查後再儲存"]);
       return;
     }
     setBusy(true);
     try {
       const db = getFirebaseDb();
+      // 儲存對應後回到草稿（v1.42.1 確認關卡）：須重新確認才列入排程。
       await updateDoc(doc(db, "sheetSyncMappings", m.id), {
         fieldMapping: draft,
-        status: "ready",
+        readiness: "ready",
+        status: "draft",
+        confirmedAt: null,
+        confirmedBy: null,
         updatedAt: serverTimestamp(),
       });
-      setMsg("欄位對應已儲存，下次同步將依此對應讀取。");
+      setMsg("欄位對應已儲存（草稿）。請核對下方預覽，確認無誤後按「確認並列入排程」。");
       onAction(`儲存 Sheet 欄位對應：${m.sheetName}`);
       await loadMappings();
     } catch {
       setErrs(["儲存對應失敗"]);
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** 確認並列入排程（v1.42.1）：連線成功且對應完整時才可用。 */
+  async function handleConfirm(m: SheetSyncMapping) {
+    if (!user) return;
+    setMsg(null);
+    setErrs([]);
+    const gate = canConfirmMapping({
+      headersRead: (m.detectedHeaders ?? []).length > 0,
+      missing: mappingMissingRequired(draft, selectedQuestions),
+      hasDuplicate: hasDuplicateMapping(draft),
+    });
+    if (!gate.ok) {
+      setErrs(gate.reasons);
+      return;
+    }
+    setBusy(true);
+    try {
+      const db = getFirebaseDb();
+      await updateDoc(doc(db, "sheetSyncMappings", m.id), {
+        status: "confirmed",
+        confirmedAt: serverTimestamp(),
+        confirmedBy: user.staffId,
+        updatedAt: serverTimestamp(),
+      });
+      setMsg("已確認並列入排程，每日 07:00 自動同步。");
+      onAction(`確認 Sheet 列入排程：${m.sheetName}`);
+      await loadMappings();
+    } catch {
+      setErrs(["確認列入排程失敗"]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 手動同步一次（v1.42.1，選用測試步驟）：前端無法直接觸發 GitHub Actions，
+   *  開啟 workflow_dispatch 頁面，由使用者在 Actions 上執行（草稿亦可跑）。 */
+  function handleManualSync(m: SheetSyncMapping) {
+    window.open(
+      "https://github.com/charlesliao-stock/QAweb/actions/workflows/sheet-sync.yml",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    setMsg(
+      `已開啟 GitHub Actions 的 sheet-sync 頁面：按 Run workflow，分支選 firebase-mvp，在 mappingId 欄填入對照 ID（${m.id}），執行後回到這裡按「重新整理」查看結果。`,
+    );
+  }
+
+  async function handleCopyId(id: string) {
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopiedId(id);
+      window.setTimeout(() => setCopiedId((prev) => (prev === id ? "" : prev)), 2000);
+    } catch {
+      setMsg("無法自動複製，請手動選取對照 ID。");
     }
   }
 
@@ -3469,7 +3583,7 @@ function SheetSyncSection({
     <div className="settings-section" style={{ marginTop: 20 }}>
       <SectionTitle
         title="連結 Google Sheet（定時同步）"
-        note="貼試算表網址建立連結，系統每日 07:00 自動同步表單回覆，也可到 GitHub Actions 手動觸發。同步以內容雜湊去重，同一列重複同步不會重複建檔；列被修改會覆寫更新，列被刪除則保留系統內紀錄。"
+        note="貼試算表網址建立連結，先核對連線與欄位對應，按「確認並列入排程」才會每日 07:00 自動同步；未確認前不排程、不寫入紀錄，也可以先手動同步一次測試連結。同步以內容雜湊去重，同一列重複同步不會重複建檔；列被修改會覆寫更新，列被刪除則保留系統內紀錄。"
       />
       <div className="form-stack">
         <div className="form-field">
@@ -3659,6 +3773,104 @@ function SheetSyncSection({
               </div>
             </>
           )}
+          {/* 驗證區（v1.42.1 確認關卡）：連線狀態、對應完整性、預覽、最近一次同步結果 */}
+          <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+            <SectionTitle title="確認排程" note="核對以下三項無誤後，再按「確認並列入排程」。手動同步為選用測試步驟，不強制成功才能確認。" />
+            <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+              <div>
+                連線狀態：
+                {selected.detectedHeaders.length > 0
+                  ? `已連線（標題列 ${selected.detectedHeaders.length} 欄，上次讀取 ${fmtTs(selected.lastHeaderFetchAt) || "—"}）`
+                  : "尚未讀取標題列 — 請先按上方「讀取欄位」"}
+              </div>
+              <div>
+                對應完整性：
+                {gate && gate.ok
+                  ? "完整（必要欄齊全、無重複對應）"
+                  : `未完成：${gate?.reasons.join("；") ?? "—"}`}
+              </div>
+              <div>
+                最近一次同步結果：
+                {runsLoading
+                  ? "讀取中…"
+                  : latestRun
+                    ? `${runStatusLabel(latestRun.status)}（${latestRun.trigger === "manual" ? "手動同步" : "定時同步"}，${fmtTs(latestRun.startedAt) || "—"}）— 讀取 ${latestRun.rowsRead} 列／新增 ${latestRun.inserted}／更新 ${latestRun.updated}／跳過 ${latestRun.skipped}／錯誤 ${latestRun.errorRows?.length ?? 0} 列${latestRun.error ? `，${latestRun.error}` : ""}`
+                    : "尚未執行過同步（手動同步或每日 07:00 後會顯示）"}
+              </div>
+            </div>
+            {selectedPreview.length > 0 && (
+              <div style={{ marginTop: 10 }}>
+                <div className="field-label" style={{ marginBottom: 6 }}>
+                  對應預覽（前 {selectedPreview.length} 列，讀取標題時一併帶回）
+                </div>
+                {selectedPreview.map((row) => (
+                  <div
+                    key={row.lineNo}
+                    style={{
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      padding: 8,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>
+                      第 {row.lineNo} 列：{row.ok ? "可匯入" : `有問題 — ${row.errors}`}
+                    </div>
+                    <div style={{ fontSize: 13, marginTop: 4, display: "grid", gap: 2 }}>
+                      {Object.entries(row.values).map(([key, value]) => (
+                        <div key={key}>
+                          {fieldLabel(key)}：{value || "（空）"}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "center" }}>
+              <button
+                className="button button-sm"
+                disabled={busy}
+                onClick={() => handleManualSync(selected)}
+              >
+                <Play size={14} /> 手動同步一次
+              </button>
+              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                對照 ID：
+                <code>{selected.id}</code>{" "}
+                <button
+                  className="button button-sm"
+                  type="button"
+                  onClick={() => void handleCopyId(selected.id)}
+                >
+                  {copiedId === selected.id ? "已複製" : "複製"}
+                </button>
+                （在 Actions 頁按 Run workflow，分支選 firebase-mvp，mappingId 填此 ID）
+              </span>
+              {isMappingConfirmed(selected) ? (
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--success, #2e7d32)" }}>
+                  已列入排程，每日 07:00 自動同步
+                  {selected.confirmedAt
+                    ? `（${fmtTs(selected.confirmedAt)}，${selected.confirmedBy ?? ""}）`
+                    : ""}
+                </span>
+              ) : (
+                <button
+                  className="button button-primary button-sm"
+                  disabled={busy || !gate?.ok}
+                  onClick={() => void handleConfirm(selected)}
+                  title={gate && !gate.ok ? gate.reasons.join("；") : undefined}
+                >
+                  <ShieldCheck size={14} /> 確認並列入排程
+                </button>
+              )}
+            </div>
+            {gate && !gate.ok && !isMappingConfirmed(selected) && (
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>
+                尚不能確認：{gate.reasons.join("；")}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -277,6 +277,79 @@ export function mappingMissingRequired(fieldMapping, questions) {
   return missing;
 }
 
+/* ================= 確認關卡（v1.42.1） ================= */
+
+/** 對照是否已確認列入排程（只認 "confirmed"；v1.42.0 舊就緒值一律視為草稿）。 */
+export function isMappingConfirmed(m) {
+  return m?.status === "confirmed";
+}
+
+/**
+ * 排程／手動觸發的對照選擇（純函式）。
+ * - 定時排程（manual=false）或未指定對照：只跑已確認且啟用的對照；
+ *   已啟用但未確認者列入 skipped（記跳過原因，不寫入審查紀錄）。
+ * - 手動觸發指定單一對照（manual=true 且 mappingId 指定）：草稿亦可跑（測試用）。
+ * - 已停用（enabled === false）者一律不跑、不記錄。
+ * @returns {{ targets: object[], skipped: { mapping: object, reason: string }[] }}
+ */
+export function selectSyncTargets(mappings, { manual, mappingId }) {
+  const targets = [];
+  const skipped = [];
+  for (const m of mappings ?? []) {
+    if (m.enabled === false) continue;
+    if (mappingId && m.id !== mappingId) continue;
+    if (!isMappingConfirmed(m) && !(manual && mappingId && m.id === mappingId)) {
+      skipped.push({
+        mapping: m,
+        reason: "草稿未確認，尚未列入排程；請先確認連結與欄位對應。",
+      });
+      continue;
+    }
+    targets.push(m);
+  }
+  return { targets, skipped };
+}
+
+/**
+ * 欄位對應預覽：取前 3 列非空資料列，用目前對應解析並逐列檢核。
+ * 與同步寫入同一條 buildSyncRecord 規則（taskSnapshot 傳 null，只驗欄位與內容）。
+ * @returns {{ lineNo: number, ok: boolean, errors: string, values: Record<string,string> }[]}
+ */
+export function buildMappingPreview({ headers, rows, fieldMapping, indicator, unitHas, staffHas, staffName }) {
+  const out = [];
+  for (let i = 0; i < rows.length && out.length < 3; i++) {
+    const cells = rows[i];
+    if (cells.every((c) => cellToString(c) === "")) continue;
+    const values = {};
+    headers.forEach((h, j) => {
+      const key = fieldMapping?.[h];
+      if (key) values[key] = cellToString(cells[j]);
+    });
+    const built = buildSyncRecord({
+      mapping: {
+        spreadsheetId: "",
+        sheetName: "",
+        indicatorId: indicator.id,
+        fieldMapping,
+      },
+      headers,
+      rowCells: cells,
+      indicator,
+      unitHas,
+      staffHas,
+      staffName,
+      taskSnapshot: null,
+    });
+    out.push({
+      lineNo: i + 2,
+      ok: built.ok,
+      errors: built.errors.join("；"),
+      values,
+    });
+  }
+  return out;
+}
+
 /* ================= Sheet 儲存格／時間戳記 ================= */
 
 /** Sheets API 儲存格值 → 字串（數字轉字串、null／undefined → ""）。 */

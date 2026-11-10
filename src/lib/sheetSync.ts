@@ -20,6 +20,18 @@ export type SheetSystemFieldKey =
   | `answer:${number}`
   | `note:${number}`;
 
+/** 預覽一列：前 3 列資料列用目前對應解析的結果（workflow 讀標題時一併寫回）。 */
+export interface SheetPreviewRow {
+  /** Sheet 列號（標題列為第 1 列，資料列自第 2 列起） */
+  lineNo: number;
+  /** 該列檢核是否通過 */
+  ok: boolean;
+  /** 檢核錯誤（以；連接，空字串＝無錯誤） */
+  errors: string;
+  /** 已對應的系統欄位鍵 → 原始儲存格字串 */
+  values: Record<string, string>;
+}
+
 /** 一份對照文件（Firestore sheetSyncMappings） */
 export interface SheetSyncMapping {
   id: string;
@@ -35,14 +47,113 @@ export interface SheetSyncMapping {
   detectedHeaders: string[];
   /** 欄位對應：Sheet 標題 → 系統欄位鍵 */
   fieldMapping: Record<string, string>;
-  /** 對照狀態：pending＝未讀取標題、mapping-incomplete＝對應缺必要欄、ready＝可同步 */
-  status: "pending" | "mapping-incomplete" | "ready";
+  /**
+   * 確認狀態（v1.42.1 確認關卡）：
+   * draft＝草稿（未列入排程，定時同步跳過）、confirmed＝已確認列入排程。
+   * v1.42.0 舊文件此欄是就緒值（pending／mapping-incomplete／ready），
+   * 讀取時一律視為草稿（isMappingConfirmed 只認 "confirmed"）。
+   */
+  status: "draft" | "confirmed";
+  /** 就緒狀態（v1.42.1 起獨立欄位；舊文件以 status 舊值推導，見 mappingReadiness） */
+  readiness?: "pending" | "mapping-incomplete" | "ready";
+  /** 確認時間／確認者職編（確認後寫入；編輯對應後清空） */
+  confirmedAt?: unknown;
+  confirmedBy?: string;
+  /** 對應預覽（前 3 列，workflow 讀標題時寫回） */
+  preview?: SheetPreviewRow[];
+  previewAt?: unknown;
   /** 前端要求讀取標題的時間（workflow 下次執行時處理） */
   headerFetchRequestedAt?: unknown;
   lastHeaderFetchAt?: unknown;
   lastSyncAt?: unknown;
   createdAt?: unknown;
   updatedAt?: unknown;
+}
+
+/** 一筆同步執行紀錄（Firestore sheetSyncRuns，僅管理員可讀） */
+export interface SheetSyncRun {
+  id?: string;
+  mappingId: string;
+  startedAt?: unknown;
+  finishedAt?: unknown;
+  rowsRead: number;
+  inserted: number;
+  updated: number;
+  skipped: number;
+  errorRows: { lineNo: number; errors: string }[];
+  /** ok／partial／failed／mapping-incomplete／skipped */
+  status: string;
+  error?: string;
+  /** manual＝手動觸發、schedule＝定時排程 */
+  trigger?: string;
+}
+
+/** 對照是否已確認列入排程（只認 "confirmed"；舊版就緒值一律視為草稿）。 */
+export function isMappingConfirmed(m: { status?: unknown }): boolean {
+  return m.status === "confirmed";
+}
+
+/** 就緒狀態（含 v1.42.0 舊文件相容：舊 status 值即就緒值）。 */
+export function mappingReadiness(
+  m: SheetSyncMapping,
+): "pending" | "mapping-incomplete" | "ready" {
+  if (
+    m.readiness === "ready" ||
+    m.readiness === "mapping-incomplete" ||
+    m.readiness === "pending"
+  )
+    return m.readiness;
+  const legacy = m.status as unknown as string;
+  if (
+    legacy === "ready" ||
+    legacy === "mapping-incomplete" ||
+    legacy === "pending"
+  )
+    return legacy;
+  return "pending";
+}
+
+/** 不同標題是否對到同一系統欄位（儲存／確認時皆須擋下）。 */
+export function hasDuplicateMapping(
+  fieldMapping: Record<string, string>,
+): boolean {
+  const used = Object.values(fieldMapping).filter((v) => v !== "");
+  return new Set(used).size !== used.length;
+}
+
+/**
+ * 確認列入排程的條件（純函式）：標題已讀取（連線成功）且對應完整、
+ * 無重複對應。手動同步是否成功不列入條件（選用步驟）。
+ */
+export function canConfirmMapping(input: {
+  headersRead: boolean;
+  missing: string[];
+  hasDuplicate: boolean;
+}): { ok: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  if (!input.headersRead) reasons.push("尚未讀取標題列，無法確認連線成功");
+  if (input.missing.length > 0)
+    reasons.push(`對應缺必要欄位：${input.missing.join("、")}`);
+  if (input.hasDuplicate) reasons.push("不同標題不可對到同一系統欄位");
+  return { ok: reasons.length === 0, reasons };
+}
+
+/** 同步執行紀錄狀態中文（驗證區顯示用）。 */
+export function runStatusLabel(status: string): string {
+  switch (status) {
+    case "ok":
+      return "成功";
+    case "partial":
+      return "部分成功";
+    case "failed":
+      return "失敗";
+    case "mapping-incomplete":
+      return "對應未完成";
+    case "skipped":
+      return "已跳過（草稿未確認）";
+    default:
+      return status || "—";
+  }
 }
 
 /** 標題列正規化：去空白與括號、％，供欄位比對（與 import.ts headerKey 同規則）。 */
