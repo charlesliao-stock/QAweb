@@ -64,12 +64,22 @@ export function parseCSV(text: string): string[][] {
   return rows.filter((r) => r.some((c) => c.trim() !== ""));
 }
 
-/** xlsx sheet_to_json({header:1}) 產出正規化為字串陣列。 */
+/** xlsx sheet_to_json({header:1}) 產出正規化為字串陣列。
+ * Date 物件（cellDates 讀取的日期格）轉為 YYYY-MM-DD 字串（取本地日期，
+ * 避免 UTC 換日），其餘照原樣轉字串。 */
 export function normalizeSheetRows(rows: unknown[][]): string[][] {
+  const fmtDate = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate(),
+    ).padStart(2, "0")}`;
   return rows
     .map((r) =>
       (Array.isArray(r) ? r : []).map((c) =>
-        c == null ? "" : String(c).trim(),
+        c == null
+          ? ""
+          : c instanceof Date
+            ? fmtDate(c)
+            : String(c).trim(),
       ),
     )
     .filter((r) => r.some((c) => c !== ""));
@@ -429,12 +439,13 @@ export function auditTemplateRows(): string[][] {
 
 /* ================= 品管審查結果匯入（v1.21.0） ================= */
 
-/** 結果匯入前 6 欄固定標題（第 7 欄起為該指標審查表題目文字） */
+/** 結果匯入前 6 欄固定標題（第 7 欄起為該指標審查表題目文字）
+ * v1.40.4：「審查員」改為「審查員職編」（範本表頭；舊表頭仍可匯入，見 RESULT_HEADER_MAP） */
 export const RESULT_FIXED_HEADERS = [
   "指標代號",
   "受審單位",
   "審查月份",
-  "審查員",
+  "審查員職編",
   "受審人員職編",
   "床號",
 ];
@@ -446,6 +457,7 @@ const RESULT_HEADER_MAP: Record<string, string> = {
   單位: "unitCode",
   審查月份: "monthRaw",
   月份: "monthRaw",
+  審查員職編: "reviewerId",
   審查員: "reviewerId",
   受審人員職編: "personEmpNo",
   受審人員: "personEmpNo",
@@ -480,16 +492,70 @@ export interface ResultImportRowResult {
   } | null;
 }
 
-/** 審查月份解析：接受 2026-11 / 2026/11（亦接受 2026.11）；其餘回傳 null */
+/**
+ * 審查月份解析（v1.40.4，配合 Google 表單匯出）：
+ * - 2026-11 / 2026/11 / 2026.11（既有）
+ * - 2026/11/05 / 2026-11-05（年月日，日忽略；單數日亦可）
+ * - Excel 日期序列（5 位數字，如 46331＝2026-11-05；xssx 未開 cellDates 時
+ *   日期格即以序列傳入）；範圍 1981-01-01～2100-12-31，其餘回傳 null
+ * - Date 物件先經 normalizeSheetRows 轉為 YYYY-MM-DD 再進此函式
+ * 其餘回傳 null（呼叫端逐列報錯，不靜默跳過）。
+ */
 export function parseReviewMonth(
   raw: string,
 ): { year: number; month: number } | null {
-  const m = /^(\d{4})[-/.](\d{1,2})$/.exec(raw.trim());
-  if (!m) return null;
-  const year = Number(m[1]);
-  const month = Number(m[2]);
-  if (month < 1 || month > 12) return null;
-  return { year, month };
+  const t = raw
+    .trim()
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/[／－．]/g, (c) =>
+      c === "／" ? "/" : c === "－" ? "-" : ".",
+    );
+  let m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(t);
+  if (m) {
+    const year = Number(m[1]);
+    const month = Number(m[2]);
+    const day = Number(m[3]);
+    if (month < 1 || month > 12) return null;
+    const d = new Date(Date.UTC(year, month - 1, day));
+    if (
+      d.getUTCFullYear() !== year ||
+      d.getUTCMonth() !== month - 1 ||
+      d.getUTCDate() !== day
+    )
+      return null;
+    return { year, month };
+  }
+  m = /^(\d{4})[-/.](\d{1,2})$/.exec(t);
+  if (m) {
+    const year = Number(m[1]);
+    const month = Number(m[2]);
+    if (month < 1 || month > 12) return null;
+    return { year, month };
+  }
+  const serial = /^\d{4,5}$/.exec(t);
+  if (serial) {
+    const n = Number(serial[0]);
+    if (n < 29580 || n > 73415) return null;
+    const d = new Date(Math.round((n - 25569) * 86400 * 1000));
+    return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 };
+  }
+  return null;
+}
+
+/**
+ * 結果匯入每題答案正規化（v1.40.4，配合 Google 表單選項）：
+ * 「正確」＝「是」、「不正確」＝「否」；「是／否／不適用」不變；
+ * 未填（空字串）回傳 null（呼叫端視為未答）；其餘回傳 null（報錯用）。
+ * 前後空白（全形空白亦同）先去除再比對。
+ */
+export function normalizeResultAnswer(
+  raw: string,
+): "是" | "否" | "不適用" | null {
+  const t = raw.replace(/　/g, " ").trim();
+  if (t === "正確" || t === "是") return "是";
+  if (t === "不正確" || t === "否") return "否";
+  if (t === "不適用") return "不適用";
+  return null;
 }
 
 /**
@@ -536,11 +602,12 @@ export function parseResultSheet(rows: string[][]): {
 }
 
 /**
- * 結果匯入驗證（v1.21.0）：
+ * 結果匯入驗證（v1.21.0，v1.40.4 補 Google 表單對應）：
  * - 檔案級預檢：全部列指標代號須等於所選指標 code；題數（欄數-6）須等於
  *   該指標題目數；任一不符即整檔中止（fileErrors 非空）。
  * - 逐列：受審單位須存在、審查月份須合法、審查員職編須存在（未填留空）、
- *   各題答案須為 是／否／不適用（未填＝未答）；任一不符該列跳過。
+ *   各題答案須為 是／否／不適用（「正確」＝是、「不正確」＝否；未填＝未答）；
+ *   任一不符該列跳過。驗證通過的列，values.answers 已正規化為 是／否／不適用。
  */
 export function validateResultSheet(
   data: ResultImportRowInput[],
@@ -585,15 +652,23 @@ export function validateResultSheet(
     if (!unitCode) errors.push("受審單位未填");
     else if (!ctx.unitHas(unitCode)) errors.push(`受審單位 ${unitCode} 不存在`);
     const ym = parseReviewMonth(r.monthRaw);
-    if (!ym) errors.push(`審查月份「${r.monthRaw || "（空白）"}」格式須為 2026-11`);
+    if (!ym)
+      errors.push(
+        `審查月份「${r.monthRaw || "（空白）"}」格式須為 YYYY-MM 或 YYYY/MM/DD（如 2026/11/05）`,
+      );
     const reviewerId = r.reviewerId.trim();
     if (reviewerId && ctx.staffLoaded && !ctx.staffHas(reviewerId))
       errors.push(`審查員職編 ${reviewerId} 不存在`);
+    const normalizedAnswers = r.answers.map((a) =>
+      a === "" ? "" : normalizeResultAnswer(a),
+    );
     const badAnswers = r.answers.filter(
-      (a) => a !== "" && a !== "是" && a !== "否" && a !== "不適用",
+      (a, i) => a !== "" && normalizedAnswers[i] === null,
     );
     if (badAnswers.length > 0)
-      errors.push(`答案須為 是／否／不適用：${badAnswers.join("、")}`);
+      errors.push(
+        `答案須為 是／否／不適用（正確＝是、不正確＝否）：${badAnswers.join("、")}`,
+      );
     if (errors.length > 0 || !ym)
       return { lineNo: r.lineNo, ok: false, errors, values: null };
     return {
@@ -608,7 +683,7 @@ export function validateResultSheet(
         reviewerId,
         personEmpNo: r.personEmpNo.trim(),
         bedNo: r.bedNo.trim(),
-        answers: r.answers,
+        answers: normalizedAnswers.map((a) => a ?? ""),
       },
     };
   });
