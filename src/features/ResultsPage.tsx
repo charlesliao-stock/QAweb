@@ -297,6 +297,199 @@ function scoringBreakdownRows(
   return result;
 }
 
+/** 單位模式：逐 unit-period 計算指標／各分組是否達閾值。 */
+function unitScoringBreakdownRows(
+  records: AnalysisRecord[],
+  questions: AuditQuestion[],
+  columns: AnalysisPeriodColumn[],
+  threshold: number,
+): ScoringBreakdownRow[] {
+  const total = unitPeriodPassRate(records, columns, threshold);
+  const sections = new Map<string, { label: string; ids: Set<string> }>();
+  const orderedQuestions = [...questions].sort((a, b) => a.order - b.order);
+  const hasGroups = orderedQuestions.some((question) => Boolean(question.groupId));
+  for (const question of orderedQuestions) {
+    const key = hasGroups
+      ? `group-${question.groupId || "__ungrouped__"}`
+      : `question-${question.id}`;
+    let section = sections.get(key);
+    if (!section) {
+      section = {
+        label: hasGroups
+          ? question.groupId
+            ? question.groupName || "未命名分組"
+            : "未分組項目"
+          : question.itemText || "未命名項目",
+        ids: new Set<string>(),
+      };
+      sections.set(key, section);
+    }
+    section.ids.add(question.id);
+  }
+
+  const result: ScoringBreakdownRow[] = [{
+    key: "indicator-total",
+    label: "",
+    yes: total.pass,
+    valid: total.total,
+    rate: total.rate,
+    isTotal: true,
+  }];
+  const totals = new Map(
+    [...sections].map(([key, section]) => [key, { ...section, pass: 0, valid: 0 }]),
+  );
+  for (const column of columns) {
+    const byUnit = new Map<string, AnalysisRecord[]>();
+    for (const record of recordsInMonths(records, column.months)) {
+      const unitRecords = byUnit.get(record.unitId) ?? [];
+      unitRecords.push(record);
+      byUnit.set(record.unitId, unitRecords);
+    }
+    for (const [key, section] of sections) {
+      for (const unitRecords of byUnit.values()) {
+        let yes = 0;
+        let no = 0;
+        for (const record of unitRecords) {
+          for (const answer of record.answers) {
+            if (!section.ids.has(answer.questionId) || answer.excluded) continue;
+            if (answer.optionLabel === "是") yes += 1;
+            else if (answer.optionLabel === "否") no += 1;
+          }
+        }
+        const valid = yes + no;
+        if (valid === 0) continue;
+        const row = totals.get(key)!;
+        row.valid += 1;
+        if (threshold > 0 && (yes / valid) * 100 >= threshold) row.pass += 1;
+      }
+    }
+  }
+  for (const [key, row] of totals) {
+    result.push({
+      key,
+      label: row.label,
+      yes: row.pass,
+      valid: row.valid,
+      rate: row.valid > 0 ? round1((row.pass / row.valid) * 100) : null,
+      isTotal: false,
+    });
+  }
+  return result;
+}
+
+interface SummaryUnitPeriod {
+  unitId: string;
+  scheduleStartKey: number;
+  passedCount: number;
+  totalCount: number;
+  questionOptions: ResultSummaryDoc["questionOptions"];
+}
+
+/** 同一單位、同一排程期間的多版本摘要合併為一個 unit-period。 */
+function aggregateSummaryUnitPeriods(rows: ResultSummaryDoc[]): SummaryUnitPeriod[] {
+  const periods = new Map<string, SummaryUnitPeriod>();
+  for (const row of rows) {
+    if (!row.unitId) continue;
+    const key = `${row.unitId}\u0000${row.scheduleStartKey}`;
+    const period = periods.get(key) ?? {
+      unitId: row.unitId,
+      scheduleStartKey: row.scheduleStartKey,
+      passedCount: 0,
+      totalCount: 0,
+      questionOptions: [],
+    };
+    period.passedCount += row.passedCount;
+    period.totalCount += row.totalCount;
+    const options = new Map(period.questionOptions.map((option) => [option.questionId, option]));
+    for (const option of row.questionOptions) {
+      const current = options.get(option.questionId) ?? {
+        questionId: option.questionId,
+        itemText: option.itemText,
+        yes: 0,
+        no: 0,
+        notApplicable: 0,
+      };
+      current.yes += option.yes;
+      current.no += option.no;
+      current.notApplicable += option.notApplicable;
+      options.set(option.questionId, current);
+    }
+    period.questionOptions = [...options.values()];
+    periods.set(key, period);
+  }
+  return [...periods.values()];
+}
+
+/** 使用 unit-scope 預存摘要計算單位／分組達標率，不讀取其他範圍原始明細。 */
+function summaryUnitScoringBreakdownRows(
+  rows: ResultSummaryDoc[],
+  questions: AuditQuestion[],
+  threshold: number,
+): ScoringBreakdownRow[] {
+  const sections = new Map<string, { label: string; ids: Set<string> }>();
+  const orderedQuestions = [...questions].sort((a, b) => a.order - b.order);
+  const hasGroups = orderedQuestions.some((question) => Boolean(question.groupId));
+  for (const question of orderedQuestions) {
+    const key = hasGroups
+      ? `group-${question.groupId || "__ungrouped__"}`
+      : `question-${question.id}`;
+    let section = sections.get(key);
+    if (!section) {
+      section = {
+        label: hasGroups
+          ? question.groupId
+            ? question.groupName || "未命名分組"
+            : "未分組項目"
+          : question.itemText || "未命名項目",
+        ids: new Set<string>(),
+      };
+      sections.set(key, section);
+    }
+    section.ids.add(question.id);
+  }
+  const periods = aggregateSummaryUnitPeriods(rows);
+  const eligiblePeriods = periods.filter((period) => period.totalCount > 0);
+  const totalPass = eligiblePeriods.filter((period) =>
+    threshold > 0 && (period.passedCount / period.totalCount) * 100 >= threshold,
+  ).length;
+  const result: ScoringBreakdownRow[] = [{
+    key: "indicator-total",
+    label: "",
+    yes: totalPass,
+    valid: eligiblePeriods.length,
+    rate: eligiblePeriods.length > 0 ? round1((totalPass / eligiblePeriods.length) * 100) : null,
+    isTotal: true,
+  }];
+  for (const [key, section] of sections) {
+    let pass = 0;
+    let valid = 0;
+    for (const summary of periods) {
+      const options = new Map(summary.questionOptions.map((option) => [option.questionId, option]));
+      let yes = 0;
+      let no = 0;
+      for (const id of section.ids) {
+        const option = options.get(id);
+        if (!option) continue;
+        yes += option.yes;
+        no += option.no;
+      }
+      const answered = yes + no;
+      if (answered === 0) continue;
+      valid += 1;
+      if (threshold > 0 && (yes / answered) * 100 >= threshold) pass += 1;
+    }
+    result.push({
+      key,
+      label: section.label,
+      yes: pass,
+      valid,
+      rate: valid > 0 ? round1((pass / valid) * 100) : null,
+      isTotal: false,
+    });
+  }
+  return result;
+}
+
 type TabId = "group" | "unit" | "indicator" | "import" | "manage";
 type UnitMode = "person" | "unit";
 
@@ -1169,6 +1362,39 @@ export function ResultsPage({
     };
   }
 
+  function matrixScoringDetails(
+    indicator: IndicatorOpt,
+    columns: AnalysisPeriodColumn[],
+    unitId: string | undefined,
+    mode: UnitMode,
+  ): { key: string; label: string; cells: Record<string, PassRate> }[] {
+    const details = new Map<string, {
+      label: string;
+      cells: Record<string, PassRate>;
+    }>();
+    for (const column of columns) {
+      const periodRecords = recordsForIndex(
+        recordIndex,
+        indicator.id,
+        column.months,
+        unitId,
+      );
+      const rows = mode === "unit"
+        ? unitScoringBreakdownRows(periodRecords, indicator.questions, [column], indicator.threshold)
+        : scoringBreakdownRows(optionDetailRows(periodRecords, indicator.questions), indicator.questions);
+      for (const row of rows.slice(1)) {
+        const current = details.get(row.key) ?? { label: row.label, cells: {} };
+        current.cells[column.key] = {
+          pass: row.yes,
+          total: row.valid,
+          rate: row.rate,
+        };
+        details.set(row.key, current);
+      }
+    }
+    return [...details].map(([key, value]) => ({ key, ...value }));
+  }
+
   /** 曲線圖數列（只取有資料的欄；附 hover 提示文字） */
   function chartSeries(
     indicatorId: string,
@@ -1339,14 +1565,16 @@ export function ResultsPage({
         (row) => row.scope === "unit" && row.totalCount > 0 &&
           (scope.kind === "admin" || !isNurseLeader || (row.unitId != null && visibleUnitCodes.has(row.unitId))),
       );
-      const unitPeriodRows = unitRows;
-      const unitPassed = unitPeriodRows.filter((row) =>
-        row.totalCount > 0 && (row.passedCount / row.totalCount) * 100 >= row.threshold,
+      const unitPeriodRows = aggregateSummaryUnitPeriods(unitRows);
+      const th = indSel.threshold;
+      const eligibleUnitPeriods = unitPeriodRows.filter((row) => row.totalCount > 0);
+      const unitPassed = eligibleUnitPeriods.filter((row) =>
+        th > 0 && (row.passedCount / row.totalCount) * 100 >= th,
       ).length;
       const unitPr: PassRate = {
         pass: unitPassed,
-        total: unitPeriodRows.length,
-        rate: unitPeriodRows.length ? round1((unitPassed / unitPeriodRows.length) * 100) : null,
+        total: eligibleUnitPeriods.length,
+        rate: eligibleUnitPeriods.length ? round1((unitPassed / eligibleUnitPeriods.length) * 100) : null,
       };
       const personPr = summaryPassRate(metrics);
       // v1.36.0（D12）：護理長同時看「本單位」與「全院彙總」比較——本單位來自 unit-scope 摘要，
@@ -1358,9 +1586,9 @@ export function ResultsPage({
       const perColumn = appliedColumns.map((column) => {
         const keys = new Set(column.months.map((month) => month.year * 100 + month.month));
         if (indUnit === "unit") {
-          const periodUnits = unitRows.filter((row) => keys.has(row.scheduleStartKey));
+          const periodUnits = eligibleUnitPeriods.filter((row) => keys.has(row.scheduleStartKey));
           const pass = periodUnits.filter((row) =>
-            row.totalCount > 0 && (row.passedCount / row.totalCount) * 100 >= row.threshold,
+            th > 0 && (row.passedCount / row.totalCount) * 100 >= th,
           ).length;
           return { column, pr: { pass, total: periodUnits.length, rate: periodUnits.length ? round1((pass / periodUnits.length) * 100) : null } as PassRate };
         }
@@ -1379,7 +1607,9 @@ export function ResultsPage({
         chartTips: pts.map((point) => `${point.column.label}：${formatPassRate(point.pr, true)}`),
         chartCols: pts.map((point) => point.column),
         optionRows,
-        scoringRows: scoringBreakdownRows(optionRows, indSel.questions),
+        scoringRows: indUnit === "unit"
+          ? summaryUnitScoringBreakdownRows(unitRows, indSel.questions, th)
+          : scoringBreakdownRows(optionRows, indSel.questions),
       };
     }
     const th = indSel.threshold;
@@ -1403,7 +1633,9 @@ export function ResultsPage({
       chartTips: pts.map((point) => `${point.column.label}：${formatPassRate(point.pr, true)}`),
       chartCols: pts.map((point) => point.column),
       optionRows,
-      scoringRows: scoringBreakdownRows(optionRows, indSel.questions),
+      scoringRows: indUnit === "unit"
+        ? unitScoringBreakdownRows(indRecs, indSel.questions, appliedColumns, th)
+        : scoringBreakdownRows(optionRows, indSel.questions),
     };
   }, [indRecs, indSel, indUnit, appliedColumns, summaryRecords, scope.kind, isNurseLeader, visibleUnitCodes]);
 
@@ -1686,6 +1918,7 @@ export function ResultsPage({
                 rows={groupIndicators.map((i) => ({
                   id: i.id,
                   label: `${i.code}・${i.name}`,
+                  details: matrixScoringDetails(i, visibleColumns, undefined, groupUnit),
                 }))}
                 columns={visibleColumns}
                 cellOf={(id, col) =>
@@ -1726,6 +1959,7 @@ export function ResultsPage({
                 rows={unitIndicators.map((i) => ({
                   id: i.id,
                   label: `${i.code}・${i.name}`,
+                  details: matrixScoringDetails(i, visibleColumns, selUnit, "person"),
                 }))}
                 columns={visibleColumns}
                 cellOf={(id, col) =>
@@ -2558,7 +2792,11 @@ function RateMatrix({
   onChart,
   onDoc,
 }: {
-  rows: { id: string; label: string }[];
+  rows: {
+    id: string;
+    label: string;
+    details?: { key: string; label: string; cells: Record<string, PassRate> }[];
+  }[];
   columns: AnalysisPeriodColumn[];
   cellOf: (rowId: string, col: AnalysisPeriodColumn) => CellValue;
   onCell?: (rowId: string, col: AnalysisPeriodColumn) => void;
@@ -2579,7 +2817,7 @@ function RateMatrix({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {rows.flatMap((row) => [
             <tr key={row.id}>
               <td className="ind-col">
                 <div className="analysis-indicator-sticky">
@@ -2634,8 +2872,20 @@ function RateMatrix({
                   </td>
                 );
               })}
-            </tr>
-          ))}
+            </tr>,
+            ...(row.details ?? []).map((detail) => (
+              <tr key={`${row.id}-detail-${detail.key}`} className="analysis-matrix-detail-row">
+                <td className="ind-col">
+                  <div className="analysis-matrix-subrow">{detail.label}</div>
+                </td>
+                {columns.map((column) => (
+                  <td key={column.key} className="rate-cell">
+                    {formatPassRate(detail.cells[column.key] ?? { pass: 0, total: 0, rate: null })}
+                  </td>
+                ))}
+              </tr>
+            )),
+          ])}
         </tbody>
       </table>
     </div>

@@ -4940,6 +4940,14 @@ button:disabled {
   flex: 0 0 auto;
   white-space: nowrap;
 }
+.analysis-matrix-detail-row td {
+  color: var(--muted, #52615f);
+  font-size: var(--font-small, 13px);
+}
+.analysis-matrix-subrow {
+  padding-left: 28px;
+  white-space: nowrap;
+}
 .analysis-indicator-actions {
   display: inline-flex;
   align-items: center;
