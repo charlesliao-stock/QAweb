@@ -12,6 +12,8 @@
  *   指標分析摘要的單位正確率以 unit-period 計：一個單位在兩個期間欄
  *   受審＝兩筆審查。
  * - 矩陣格格式：正確率＋（正確數／審查數），例 75%(3/4)。
+ * - 分組／逐題明細（v1.44.0）：人次模式與主格同口徑（分組達標人次／總人次，
+ *   每人先算分組 rate 再判達標）；單位模式維持彙總作答率判定。
  */
 import type { AuditQuestion } from "./indicators";
 import { mergeNoteParts } from "./import";
@@ -149,6 +151,221 @@ export function unitPeriodPassRate(
     total,
     rate: total > 0 ? round1((pass / total) * 100) : null,
   };
+}
+
+export interface ScoringBreakdownRow {
+  key: string;
+  label: string;
+  /** 人次模式＝達標人次數；單位模式＝達標單位期間數 */
+  yes: number;
+  /** 人次模式＝總人次數；單位模式＝單位期間數 */
+  valid: number;
+  rate: number | null;
+  isTotal: boolean;
+}
+
+/** 分組／逐題的題組定義：有分組按 groupId 分組（未分組題目併為一列），無分組逐題一列。 */
+function scoringSections(questions: AuditQuestion[]): {
+  key: string;
+  label: string;
+  ids: Set<string>;
+}[] {
+  const orderedQuestions = [...questions].sort((a, b) => a.order - b.order);
+  const hasGroups = orderedQuestions.some((question) => Boolean(question.groupId));
+  const sections = new Map<string, { label: string; ids: Set<string> }>();
+  for (const question of orderedQuestions) {
+    const key = hasGroups
+      ? `group-${question.groupId || "__ungrouped__"}`
+      : `question-${question.id}`;
+    let section = sections.get(key);
+    if (!section) {
+      section = {
+        label: hasGroups
+          ? question.groupId
+            ? question.groupName || "未命名分組"
+            : "未分組項目"
+          : question.itemText || "未命名項目",
+        ids: new Set<string>(),
+      };
+      sections.set(key, section);
+    }
+    section.ids.add(question.id);
+  }
+  return [...sections].map(([key, section]) => ({ key, ...section }));
+}
+
+/**
+ * 人次模式分組／逐題計分（v1.44.0，1A 口徑）：與主格 passRateOf 同口徑。
+ * 每人先算該分組 rate＝該組是題數／該組（是＋否）題數，再判 ≥ 閾值；
+ * 分子＝分組達標人次，分母＝總人次。全不適用者分組 rate 為 null→不達標，
+ * 仍計入分母。閾值逐筆優先用排程快照 thresholdAtSchedule，無快照（匯入
+ * 紀錄）用指標閾值；閾值 ≤0 視為不達標。指標整體列直接取 passRateOf，
+ * 保證與主格一致。無分組時逐題列：該題答「是」的人次／總人次。
+ */
+export function personScoringBreakdownRows(
+  records: AnalysisRecord[],
+  questions: AuditQuestion[],
+  threshold: number,
+): ScoringBreakdownRow[] {
+  const total = passRateOf(records, threshold);
+  const result: ScoringBreakdownRow[] = [{
+    key: "indicator-total",
+    label: "",
+    yes: total.pass,
+    valid: total.total,
+    rate: total.rate,
+    isTotal: true,
+  }];
+  const thresholdOf = (record: AnalysisRecord): number =>
+    typeof record.thresholdAtSchedule === "number" ? record.thresholdAtSchedule : threshold;
+  /** 單筆紀錄在指定題組內的（是，否）；excluded（不適用／空值）不列入。 */
+  const sectionCounts = (record: AnalysisRecord, ids: Set<string>) => {
+    let yes = 0;
+    let no = 0;
+    for (const answer of record.answers) {
+      if (!ids.has(answer.questionId) || answer.excluded) continue;
+      if (answer.optionLabel === "是") yes += 1;
+      else if (answer.optionLabel === "否") no += 1;
+    }
+    return { yes, no };
+  };
+  const pushRow = (key: string, label: string, pass: number, valid: number) => {
+    result.push({
+      key,
+      label,
+      yes: pass,
+      valid,
+      rate: valid > 0 ? round1((pass / valid) * 100) : null,
+      isTotal: false,
+    });
+  };
+  const knownIds = new Set(questions.map((question) => question.id));
+  const hasGroups = questions.some((question) => Boolean(question.groupId));
+  for (const section of scoringSections(questions)) {
+    let pass = 0;
+    if (hasGroups) {
+      for (const record of records) {
+        const { yes, no } = sectionCounts(record, section.ids);
+        const rate = yes + no > 0 ? round1((yes / (yes + no)) * 100) : null;
+        if (isPassing(rate, thresholdOf(record))) pass += 1;
+      }
+    } else {
+      // 無分組逐題列：該題答「是」的人次／總人次。
+      for (const record of records) {
+        const hit = record.answers.some((answer) =>
+          section.ids.has(answer.questionId) && !answer.excluded && answer.optionLabel === "是",
+        );
+        if (hit) pass += 1;
+      }
+    }
+    pushRow(section.key, section.label, pass, records.length);
+  }
+  if (hasGroups) {
+    const historicalIds = new Set<string>();
+    for (const record of records) {
+      for (const answer of record.answers) {
+        if (!knownIds.has(answer.questionId)) historicalIds.add(answer.questionId);
+      }
+    }
+    if (historicalIds.size > 0) {
+      let pass = 0;
+      for (const record of records) {
+        const { yes, no } = sectionCounts(record, historicalIds);
+        const rate = yes + no > 0 ? round1((yes / (yes + no)) * 100) : null;
+        if (isPassing(rate, thresholdOf(record))) pass += 1;
+      }
+      pushRow("historical-questions", "其他／歷史題目", pass, records.length);
+    }
+  } else {
+    const historical = new Map<string, { label: string; ids: Set<string> }>();
+    for (const record of records) {
+      for (const answer of record.answers) {
+        if (knownIds.has(answer.questionId)) continue;
+        const key = `${answer.questionId}\u0000${answer.itemText}`;
+        let entry = historical.get(key);
+        if (!entry) {
+          entry = { label: answer.itemText || "未命名項目", ids: new Set([answer.questionId]) };
+          historical.set(key, entry);
+        }
+        entry.ids.add(answer.questionId);
+      }
+    }
+    for (const [key, entry] of historical) {
+      let pass = 0;
+      for (const record of records) {
+        const hit = record.answers.some((answer) =>
+          entry.ids.has(answer.questionId) && !answer.excluded && answer.optionLabel === "是",
+        );
+        if (hit) pass += 1;
+      }
+      pushRow(`historical-${key}`, `歷史題目：${entry.label}`, pass, records.length);
+    }
+  }
+  return result;
+}
+
+/**
+ * 單位模式分組／逐題計分（2B 口徑，維持現行判定不改）：每單位期間先把
+ * 該分組全部作答彙總成作答率 是／（是＋否），再以 ≥ 指標閾值判該單位
+ * 期間達標；分子＝達標單位期間數，分母＝有該分組有效作答的單位期間數
+ * （全不適用不計入分母）。閾值維持現行指標閾值，總列不動。
+ */
+export function unitScoringBreakdownRows(
+  records: AnalysisRecord[],
+  questions: AuditQuestion[],
+  columns: { months: { year: number; month: number }[] }[],
+  threshold: number,
+): ScoringBreakdownRow[] {
+  const total = unitPeriodPassRate(records, columns, threshold);
+  const sections = scoringSections(questions);
+  const result: ScoringBreakdownRow[] = [{
+    key: "indicator-total",
+    label: "",
+    yes: total.pass,
+    valid: total.total,
+    rate: total.rate,
+    isTotal: true,
+  }];
+  const totals = new Map(
+    sections.map((section) => [section.key, { ...section, pass: 0, valid: 0 }]),
+  );
+  for (const column of columns) {
+    const byUnit = new Map<string, AnalysisRecord[]>();
+    for (const record of recordsInMonths(records, column.months)) {
+      const unitRecords = byUnit.get(record.unitId) ?? [];
+      unitRecords.push(record);
+      byUnit.set(record.unitId, unitRecords);
+    }
+    for (const section of sections) {
+      for (const unitRecords of byUnit.values()) {
+        let yes = 0;
+        let no = 0;
+        for (const record of unitRecords) {
+          for (const answer of record.answers) {
+            if (!section.ids.has(answer.questionId) || answer.excluded) continue;
+            if (answer.optionLabel === "是") yes += 1;
+            else if (answer.optionLabel === "否") no += 1;
+          }
+        }
+        const valid = yes + no;
+        if (valid === 0) continue;
+        const row = totals.get(section.key)!;
+        row.valid += 1;
+        if (threshold > 0 && (yes / valid) * 100 >= threshold) row.pass += 1;
+      }
+    }
+  }
+  for (const [key, row] of totals) {
+    result.push({
+      key,
+      label: row.label,
+      yes: row.pass,
+      valid: row.valid,
+      rate: row.valid > 0 ? round1((row.pass / row.valid) * 100) : null,
+      isTotal: false,
+    });
+  }
+  return result;
 }
 
 /** 下探 L1 的單位清單：該指標該期間欄內有審查紀錄的單位（依單位代號排序） */
