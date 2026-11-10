@@ -110,7 +110,6 @@ interface IndicatorOpt {
   status: string;
   version: string;
   threshold: number;
-  groupScoring: boolean;
   questions: AuditQuestion[];
 }
 
@@ -198,10 +197,8 @@ function summaryOptionRows(rows: ResultSummaryDoc[]): OptionDetailRow[] {
 function scoringBreakdownRows(
   rows: OptionDetailRow[],
   questions: AuditQuestion[],
-  groupScoring: boolean,
 ): ScoringBreakdownRow[] {
   const hasGroups = questions.some((question) => Boolean(question.groupId));
-  if (!hasGroups && !groupScoring) return [];
 
   const counts = new Map<string, { yes: number; no: number }>();
   for (const row of rows) {
@@ -614,7 +611,6 @@ export function ResultsPage({
             status: typeof data.status === "string" ? data.status : "",
             version: typeof data.version === "string" ? data.version : "v1.0",
             threshold: effectiveThreshold(data),
-            groupScoring: data.groupScoring === true,
             questions: normalizeQuestions(data.questions).questions,
           });
         });
@@ -1383,7 +1379,7 @@ export function ResultsPage({
         chartTips: pts.map((point) => `${point.column.label}：${formatPassRate(point.pr, true)}`),
         chartCols: pts.map((point) => point.column),
         optionRows,
-        scoringRows: scoringBreakdownRows(optionRows, indSel.questions, indSel.groupScoring),
+        scoringRows: scoringBreakdownRows(optionRows, indSel.questions),
       };
     }
     const th = indSel.threshold;
@@ -1407,7 +1403,7 @@ export function ResultsPage({
       chartTips: pts.map((point) => `${point.column.label}：${formatPassRate(point.pr, true)}`),
       chartCols: pts.map((point) => point.column),
       optionRows,
-      scoringRows: scoringBreakdownRows(optionRows, indSel.questions, indSel.groupScoring),
+      scoringRows: scoringBreakdownRows(optionRows, indSel.questions),
     };
   }, [indRecs, indSel, indUnit, appliedColumns, summaryRecords, scope.kind, isNurseLeader, visibleUnitCodes]);
 
