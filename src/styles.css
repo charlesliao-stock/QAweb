@@ -5625,6 +5625,71 @@ body {
   background: #912018;
 }
 
+/* v1.40.7：結果分析捲動時固定篩選器與表格標頭
+   頁面為視窗捲動（.main-area 無 overflow；.topbar 樣式已無任何元件使用，
+   頁面頂部只有 PageHeading＋頁籤），篩選器 sticky top 取 0。
+   矩陣包在 .analysis-table-wrap（overflow-x: auto）內，thead 無法相對
+   視窗 sticky，改以 max-height 讓表格區內部捲動、thead 在包層內固定。 */
+.results-page .results-filters.results-analysis-filters,
+.results-page .review-results-manager .results-filters {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  background: var(--bg);
+  margin: 0 -34px 16px;
+  padding: 12px 34px;
+  border-bottom: 1px solid var(--line, #e6ebec);
+  box-shadow: 0 6px 14px rgba(30, 54, 60, 0.06);
+}
+/* v1.40.7：矩陣／管理／下探表格區內部捲動，標頭列固定（到月份欄位）。
+   thead 須不透明背景＋底部分隔線，否則內容捲動時會從標頭後方透出。 */
+.results-page .analysis-table-wrap {
+  max-height: calc(100vh - 250px);
+  overflow: auto;
+}
+.results-page .analysis-table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #fafbfb;
+  box-shadow: 0 1px 0 var(--line, #e6ebec);
+}
+.results-page .analysis-table-wrap thead th.ind-col {
+  z-index: 4;
+}
+:root[data-mode="dark"] .results-page .analysis-table-wrap thead th {
+  background: var(--surface, #152024);
+}
+/* v1.40.7：下探彈窗內的表格（彈窗本身 max-height 100dvh-32px 且內部捲動），
+   表格區留出彈窗標頭與返回列空間；L2 表格橫向捲動時第一欄（題目）固定。 */
+.results-page .reviewer-modal .analysis-table-wrap {
+  max-height: calc(100dvh - 330px);
+}
+.results-page .reviewer-modal .analysis-table-wrap thead th:first-child {
+  z-index: 4;
+}
+.results-page .reviewer-modal .analysis-table-wrap .data-table tbody td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface, #fff);
+  box-shadow: 1px 0 0 var(--line, #e6ebec);
+}
+@media (max-width: 1180px) {
+  .results-page .results-filters.results-analysis-filters,
+  .results-page .review-results-manager .results-filters {
+    margin: 0 -25px 16px;
+    padding: 12px 25px;
+  }
+}
+@media (max-width: 760px) {
+  .results-page .results-filters.results-analysis-filters,
+  .results-page .review-results-manager .results-filters {
+    margin: 0 -15px 16px;
+    padding: 10px 15px;
+  }
+}
+
 @media (max-width: 640px) {
   .review-results-manager .results-filters > * {
     min-width: 0;

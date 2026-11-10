@@ -1,7 +1,7 @@
 {
   "name": "nursing-quality-demo",
   "private": true,
-  "version": "1.40.6",
+  "version": "1.40.7",
   "type": "module",
   "packageManager": "pnpm@11.25.0",
   "scripts": {
