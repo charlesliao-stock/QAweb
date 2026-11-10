@@ -388,7 +388,7 @@ export function ResultsPage({
   const [endMonth, setEndMonth] = useState(
     `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`,
   );
-  const [interval, setInterval] = useState<AnalysisGranularity>("quarter");
+  const [interval, setInterval] = useState<AnalysisGranularity>("month");
   // 組別分析
   const [selGroup, setSelGroup] = useState("");
   const [groupUnit, setGroupUnit] = useState<UnitMode>("person");
@@ -1293,7 +1293,7 @@ export function ResultsPage({
                 ]}
               />
               <SelectField
-                label="錯誤分析單位"
+                label="單位"
                 value={errorUnit}
                 onChange={setErrorUnit}
                 options={[
@@ -1372,14 +1372,14 @@ export function ResultsPage({
             </>
           )}
           <ResultMonthPicker
-            label="西元年/月"
+            label="西元年/月(起)"
             value={startMonth}
             onChange={setStartMonth}
             ariaLabel="起始西元年/月"
           />
           <span className="results-range-separator">~</span>
           <ResultMonthPicker
-            label="西元年/月"
+            label="西元年/月(訖)"
             value={endMonth}
             onChange={setEndMonth}
             ariaLabel="結束西元年/月"
@@ -2029,18 +2029,6 @@ function ReviewResultManager({
     <section className="review-results-manager">
       <div className="results-filters">
         <SelectField
-          label="單位"
-          value={unitId}
-          onChange={setUnitId}
-          options={[
-            { value: "", label: "全部單位" },
-            ...units.map((unit) => ({
-              value: unit.code,
-              label: `${unit.code}・${unit.name}`,
-            })),
-          ]}
-        />
-        <SelectField
           label="組別"
           value={groupId}
           onChange={(value) => {
@@ -2054,6 +2042,18 @@ function ReviewResultManager({
             ).map((id) => ({
               value: id,
               label: groups.find((group) => group.id === id)?.name ?? id,
+            })),
+          ]}
+        />
+        <SelectField
+          label="單位"
+          value={unitId}
+          onChange={setUnitId}
+          options={[
+            { value: "", label: "全部單位" },
+            ...units.map((unit) => ({
+              value: unit.code,
+              label: `${unit.code}・${unit.name}`,
             })),
           ]}
         />
