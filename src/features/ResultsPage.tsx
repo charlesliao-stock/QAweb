@@ -1884,12 +1884,8 @@ export function ResultsPage({
                 </p>
               )}
               {indSummary.scoringRows.length > 0 && (
-                <section className="panel">
-                  <SectionTitle
-                    title={indSel.questions.some((question) => Boolean(question.groupId)) ? "分組計分結果" : "審核項目計分結果"}
-                    note={`${indSel.questions.some((question) => Boolean(question.groupId)) ? "依目前審核表分組；歷史分組變更依現行設定對應。" : ""}得分率＝是／（是＋否）；不適用不列入分母。`}
-                  />
-                  <div className="score-breakdown" aria-label="指標計分明細">
+                <section className="panel score-breakdown-panel" aria-label="指標計分明細">
+                  <div className="score-breakdown">
                     {indSummary.scoringRows.map((row) => (
                       <div
                         key={row.key}
