@@ -312,6 +312,35 @@ export function selectSyncTargets(mappings, { manual, mappingId }) {
 
 /* ================= 手動同步請求（v1.42.2） ================= */
 
+/**
+ * 兩份欄位對應是否相同（鍵與值皆等；空字串視為未對應，與缺鍵同義）。
+ * （與 src/lib/sheetSync.ts sameFieldMapping 同規則。）
+ */
+export function sameFieldMapping(a, b) {
+  const norm = (m) =>
+    Object.keys(m ?? {})
+      .filter((k) => m[k])
+      .sort()
+      .map((k) => `${k}=${m[k]}`)
+      .join("&");
+  return norm(a) === norm(b);
+}
+
+/**
+ * 待讀取標題的對照（v1.42.3，純函式）：headerFetchRequestedAt 有值且尚未讀到
+ * （最後讀取時間為空或早於要求時間）者；已停用者不取。
+ * 同步端以字串 ISO 時間戳比較（decodeFirestoreDoc 將 timestamp 轉為字串）。
+ * @returns {object[]} 待讀取標題的對照
+ */
+export function selectHeaderFetchTargets(mappings) {
+  return (mappings ?? []).filter((m) => {
+    if (!m || m.enabled === false) return false;
+    if (!m.headerFetchRequestedAt) return false;
+    if (!m.lastHeaderFetchAt) return true;
+    return String(m.lastHeaderFetchAt) < String(m.headerFetchRequestedAt);
+  });
+}
+
 /** 請求是否進行中（pending／running），進行中者前端不重複建立、輪詢不重取。 */
 export function isActiveSyncRequest(r) {
   return r?.status === "pending" || r?.status === "running";

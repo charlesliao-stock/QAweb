@@ -61,8 +61,10 @@ import {
 } from "../lib/import";
 import {
   autoFieldMapping,
-  canConfirmMapping,
+  canEnrollMapping,
+  deriveSyncSteps,
   findActiveSyncRequest,
+  findQualifyingManualRun,
   hasDuplicateMapping,
   isMappingConfirmed,
   mappingMissingRequired,
@@ -71,7 +73,10 @@ import {
   requestStatusLabel,
   requestTimestampString,
   runStatusLabel,
+  sameFieldMapping,
   sheetSystemFieldOptions,
+  syncStepStateLabel,
+  tsMillis,
   type SheetPreviewRow,
   type SheetSyncMapping,
   type SheetSyncRequest,
@@ -3255,10 +3260,13 @@ function ResultImportPanel({
 }
 
 /**
- * 連結 Google Sheet（v1.42.0，僅系統管理員）：
- * 貼試算表網址建立對照（存 sheetSyncMappings），再由 GitHub Actions
- * 定時同步（每日 07:00）或手動觸發讀取標題列、完成欄位對應。
- * 欄位對應缺必要欄時顯示錯誤、不建立同步。
+ * 連結 Google Sheet（v1.42.0，僅系統管理員；v1.42.3 改為四步驟線性流程）：
+ * 1 連線確認（貼網址、讀取欄位名稱）→ 2 欄位對應 → 3 手動同步（測試資料
+ * 是否能順利匯入）→ 4 列入排程（每日 07:00 自動同步）。
+ * 貼試算表網址建立對照（存 sheetSyncMappings），標題讀取與手動同步由
+ * GitHub Actions 每 5 分鐘輪詢執行；列入排程前不排程、不寫入紀錄。
+ * 欄位對應缺必要欄時顯示錯誤、不建立同步；對應改過後須重跑手動同步、
+ * 重新列入排程。
  */
 function SheetSyncSection({
   indicators,
@@ -3280,7 +3288,7 @@ function SheetSyncSection({
   const [msg, setMsg] = useState<string | null>(null);
   const [errs, setErrs] = useState<string[]>([]);
   const [confirmDeleteId, setConfirmDeleteId] = useState("");
-  const [latestRuns, setLatestRuns] = useState<Record<string, SheetSyncRun | null>>({});
+  const [recentRuns, setRecentRuns] = useState<Record<string, SheetSyncRun[]>>({});
   const [runsLoading, setRunsLoading] = useState(false);
   const [mappingRequests, setMappingRequests] = useState<Record<string, SheetSyncRequest[]>>({});
   const [reqLoading, setReqLoading] = useState(false);
@@ -3319,15 +3327,40 @@ function SheetSyncSection({
     ? selectedInd.questions.map((q) => q.itemText)
     : [];
   const fieldOptions = sheetSystemFieldOptions(selectedQuestions);
-  /** 確認關卡（v1.42.1）：連線成功＋對應完整＋無重複對應，才可確認列入排程。 */
-  const gate = selected
-    ? canConfirmMapping({
-        headersRead: (selected.detectedHeaders ?? []).length > 0,
-        missing: mappingMissingRequired(draft, selectedQuestions),
-        hasDuplicate: hasDuplicateMapping(draft),
+  /** 四步驟（v1.42.3）：連線確認 → 欄位對應 → 手動同步 → 列入排程，依序完成。
+   * 步驟 2 以已儲存的對應為準（草稿未儲存＝未完成）；步驟 3 以對應最後修改
+   * 時間之後的手動同步成功紀錄為準（對應改過要重跑）；步驟 4 須前三步皆完成。
+   * 各步採鏈式推導：前一步未完成，後面的步驟也不算完成。 */
+  const savedMapping = selected?.fieldMapping ?? {};
+  const mappingDirty = selected ? !sameFieldMapping(draft, savedMapping) : false;
+  const step1Done = (selected?.detectedHeaders ?? []).length > 0;
+  const step2Done =
+    step1Done &&
+    mappingMissingRequired(savedMapping, selectedQuestions).length === 0 &&
+    !hasDuplicateMapping(savedMapping) &&
+    !mappingDirty;
+  const selectedRuns = selected ? recentRuns[selected.id] ?? [] : [];
+  const qualifyingRun = selected
+    ? findQualifyingManualRun(
+        selectedRuns,
+        tsMillis(selected.fieldMappingUpdatedAt ?? null),
+      )
+    : null;
+  const step3Done = step2Done && !!qualifyingRun;
+  const step4Done = step3Done && !!selected && isMappingConfirmed(selected);
+  const steps = deriveSyncSteps({ step1Done, step2Done, step3Done, step4Done });
+  /** 列入排程 gate（v1.42.3）：第 1–3 步皆完成才可按 [列入排程]。 */
+  const enrollGate = selected
+    ? canEnrollMapping({
+        headersRead: step1Done,
+        missing: mappingMissingRequired(savedMapping, selectedQuestions),
+        hasDuplicate: hasDuplicateMapping(savedMapping),
+        manualSyncOk: step3Done,
       })
     : null;
-  const latestRun = selected ? latestRuns[selected.id] : undefined;
+  const latestRun = selectedRuns[0] ?? null;
+  const latestManualRun =
+    selectedRuns.find((r) => r.trigger === "manual") ?? null;
   const selectedRequests = selected ? mappingRequests[selected.id] ?? [] : [];
   const latestRequest = selectedRequests[0] ?? null;
   const activeRequest = selected
@@ -3345,8 +3378,8 @@ function SheetSyncSection({
     return "";
   };
 
-  /** 最近一次同步執行紀錄（驗證區顯示用；orderBy 單欄查詢，不需複合索引）。 */
-  const loadLatestRun = useCallback(async (mappingId: string) => {
+  /** 最近 10 筆同步執行紀錄（步驟 3 判斷用；orderBy 單欄查詢，不需複合索引）。 */
+  const loadRecentRuns = useCallback(async (mappingId: string) => {
     setRunsLoading(true);
     try {
       const db = getFirebaseDb();
@@ -3360,9 +3393,9 @@ function SheetSyncSection({
       const mine = snap.docs
         .map((d) => ({ id: d.id, ...(d.data() as Omit<SheetSyncRun, "id">) }))
         .filter((r) => r.mappingId === mappingId);
-      setLatestRuns((prev) => ({ ...prev, [mappingId]: mine[0] ?? null }));
+      setRecentRuns((prev) => ({ ...prev, [mappingId]: mine }));
     } catch {
-      setLatestRuns((prev) => ({ ...prev, [mappingId]: null }));
+      setRecentRuns((prev) => ({ ...prev, [mappingId]: [] }));
     } finally {
       setRunsLoading(false);
     }
@@ -3407,10 +3440,12 @@ function SheetSyncSection({
     setDraft(m.fieldMapping ?? {});
     setMsg(null);
     setErrs([]);
-    void loadLatestRun(m.id);
+    void loadRecentRuns(m.id);
     void loadRequests(m.id);
   }
 
+  /** 步驟 1 連線確認（v1.42.3）：貼網址建連結，同時要求讀取標題列；
+   * 同步排程每 5 分鐘處理待讀取標題的對照，讀到後寫回欄位名稱清單。 */
   async function handleLink() {
     if (!user) return;
     setMsg(null);
@@ -3430,7 +3465,24 @@ function SheetSyncSection({
     );
     if (existing) {
       selectMapping(existing);
-      setMsg(`已連結過此試算表（${name}），請確認下方欄位對應。`);
+      // 已連結過、但尚未讀到標題時，順便再要求讀取一次。
+      if ((existing.detectedHeaders ?? []).length === 0) {
+        try {
+          const db = getFirebaseDb();
+          await updateDoc(doc(db, "sheetSyncMappings", existing.id), {
+            headerFetchRequestedAt: serverTimestamp(),
+            headerFetchError: "",
+            updatedAt: serverTimestamp(),
+          });
+          setMsg(
+            `已連結過此試算表（${name}）。已再次送出連線確認，排程將於 5 分鐘內讀取標題列；完成後按「重新整理」即可查看讀到的欄位名稱。`,
+          );
+        } catch {
+          setMsg(`已連結過此試算表（${name}），請確認下方欄位對應。`);
+        }
+      } else {
+        setMsg(`已連結過此試算表（${name}），請確認下方欄位對應。`);
+      }
       return;
     }
     setBusy(true);
@@ -3448,6 +3500,8 @@ function SheetSyncSection({
         fieldMapping: {},
         status: "draft",
         readiness: "pending",
+        headerFetchRequestedAt: serverTimestamp(),
+        headerFetchError: "",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -3455,7 +3509,7 @@ function SheetSyncSection({
       setSelectedId(ref.id);
       setDraft({});
       setMsg(
-        `已建立連結（${name}）。下一步：按「讀取欄位」，由同步排程讀取標題列後，再到下方完成欄位對應。`,
+        `已建立連結（${name}）並送出連線確認，排程將於 5 分鐘內讀取標題列；完成後按「重新整理」即可查看讀到的欄位名稱，再到下方完成欄位對應。`,
       );
       onAction(`連結 Google Sheet：${selInd.code}・${name}`);
     } catch {
@@ -3473,10 +3527,11 @@ function SheetSyncSection({
       const db = getFirebaseDb();
       await updateDoc(doc(db, "sheetSyncMappings", m.id), {
         headerFetchRequestedAt: serverTimestamp(),
+        headerFetchError: "",
         updatedAt: serverTimestamp(),
       });
       setMsg(
-        "已要求讀取標題列：按「手動同步一次」送出請求後，排程將於 5 分鐘內讀取標題列並帶回前 3 列預覽；每日 07:00 自動同步（僅已確認的對照）時也會讀取。完成後按「重新整理」即可編輯對應。",
+        "已再次送出連線確認，排程將於 5 分鐘內讀取標題列並帶回前 3 列預覽；完成後按「重新整理」即可查看。",
       );
     } catch {
       setErrs(["要求讀取標題列失敗"]);
@@ -3502,16 +3557,19 @@ function SheetSyncSection({
     setBusy(true);
     try {
       const db = getFirebaseDb();
-      // 儲存對應後回到草稿（v1.42.1 確認關卡）：須重新確認才列入排程。
+      // 儲存對應後回到草稿（v1.42.1 確認關卡）：須重新列入排程。
+      // 同時寫 fieldMappingUpdatedAt（v1.42.3）：步驟 3 的手動同步成功紀錄
+      // 須在此時間之後才算數，對應改過就要重跑手動同步。
       await updateDoc(doc(db, "sheetSyncMappings", m.id), {
         fieldMapping: draft,
         readiness: "ready",
         status: "draft",
         confirmedAt: null,
         confirmedBy: null,
+        fieldMappingUpdatedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      setMsg("欄位對應已儲存（草稿）。請核對下方預覽，確認無誤後按「確認並列入排程」。");
+      setMsg("欄位對應已儲存。下一步：按「手動同步一次」，測試資料是否能順利匯入。");
       onAction(`儲存 Sheet 欄位對應：${m.sheetName}`);
       await loadMappings();
     } catch {
@@ -3521,15 +3579,17 @@ function SheetSyncSection({
     }
   }
 
-  /** 確認並列入排程（v1.42.1）：連線成功且對應完整時才可用。 */
-  async function handleConfirm(m: SheetSyncMapping) {
+  /** 步驟 4 列入排程（v1.42.3）：第 1–3 步皆完成才可用。查詢正常由使用者
+   * 自行到結果分析確認，按下即代表已確認查詢正常。 */
+  async function handleEnroll(m: SheetSyncMapping) {
     if (!user) return;
     setMsg(null);
     setErrs([]);
-    const gate = canConfirmMapping({
-      headersRead: (m.detectedHeaders ?? []).length > 0,
-      missing: mappingMissingRequired(draft, selectedQuestions),
-      hasDuplicate: hasDuplicateMapping(draft),
+    const gate = canEnrollMapping({
+      headersRead: step1Done,
+      missing: mappingMissingRequired(savedMapping, selectedQuestions),
+      hasDuplicate: hasDuplicateMapping(savedMapping),
+      manualSyncOk: step3Done,
     });
     if (!gate.ok) {
       setErrs(gate.reasons);
@@ -3544,11 +3604,11 @@ function SheetSyncSection({
         confirmedBy: user.staffId,
         updatedAt: serverTimestamp(),
       });
-      setMsg("已確認並列入排程，每日 07:00 自動同步。");
-      onAction(`確認 Sheet 列入排程：${m.sheetName}`);
+      setMsg("已列入排程，每日 07:00 自動同步。");
+      onAction(`Sheet 列入排程：${m.sheetName}`);
       await loadMappings();
     } catch {
-      setErrs(["確認列入排程失敗"]);
+      setErrs(["列入排程失敗"]);
     } finally {
       setBusy(false);
     }
@@ -3631,7 +3691,7 @@ function SheetSyncSection({
     <div className="settings-section" style={{ marginTop: 20 }}>
       <SectionTitle
         title="連結 Google Sheet（定時同步）"
-        note="貼試算表網址建立連結，先核對連線與欄位對應，按「確認並列入排程」才會每日 07:00 自動同步；未確認前不排程、不寫入紀錄，也可以先手動同步一次測試連結（按下後送出請求，排程將於 5 分鐘內執行）。同步以內容雜湊去重，同一列重複同步不會重複建檔；列被修改會覆寫更新，列被刪除則保留系統內紀錄。"
+        note="四步驟：1 連線確認（貼網址、讀取欄位名稱）→ 2 欄位對應 → 3 手動同步（測試資料是否能順利匯入）→ 4 列入排程（每日 07:00 自動同步）。未列入排程前不排程、不寫入紀錄；手動同步按下後送出請求，排程將於 5 分鐘內執行。同步以內容雜湊去重，同一列重複同步不會重複建檔；列被修改會覆寫更新，列被刪除則保留系統內紀錄。"
       />
       <div className="form-stack">
         <div className="form-field">
@@ -3657,7 +3717,7 @@ function SheetSyncSection({
           disabled={busy || !user}
           onClick={() => void handleLink()}
         >
-          <Link2 size={14} /> 連結
+          <Link2 size={14} /> 連線確認
         </button>
         <button
           className="button button-outline button-sm"
@@ -3666,7 +3726,7 @@ function SheetSyncSection({
             void loadMappings();
             if (selectedId) {
               void loadRequests(selectedId);
-              void loadLatestRun(selectedId);
+              void loadRecentRuns(selectedId);
             }
           }}
         >
@@ -3754,13 +3814,76 @@ function SheetSyncSection({
       )}
       {selected && (
         <div style={{ marginTop: 16 }}>
+          {/* 四步驟狀態（v1.42.3）：連線確認 → 欄位對應 → 手動同步 → 列入排程 */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 13, marginBottom: 12 }}>
+            {[
+              { n: 1, name: "連線確認", state: steps.step1 },
+              { n: 2, name: "欄位對應", state: steps.step2 },
+              { n: 3, name: "手動同步", state: steps.step3 },
+              { n: 4, name: "列入排程", state: steps.step4 },
+            ].map((s) => (
+              <span
+                key={s.n}
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  padding: "4px 8px",
+                  fontWeight: s.state === "active" ? 700 : 400,
+                }}
+              >
+                步驟 {s.n} {s.name}：{syncStepStateLabel(s.state)}
+              </span>
+            ))}
+          </div>
+          {/* 步驟 1：連線確認 */}
           <SectionTitle
-            title={`欄位對應：${selected.sheetName}`}
-            note="左邊是 Sheet 實際欄名，右邊選系統欄位；儲存時會自動依欄名預填對應，未對上的請手動選擇。必要欄位（受審單位、受審人員職編、審查月份或時間戳記、各題結果）缺任一項都無法儲存。"
+            title="步驟 1：連線確認"
+            note="貼上 Google Sheet 網址後，進行連線，讀取 Google Sheet 上的欄位名稱。連線確認後排程將於 5 分鐘內讀取標題列。"
+          />
+          <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+            <div>
+              連線狀態：
+              {selected.detectedHeaders.length > 0
+                ? `已連線（標題列 ${selected.detectedHeaders.length} 欄，上次讀取 ${fmtTs(selected.lastHeaderFetchAt) || "—"}）`
+                : selected.headerFetchRequestedAt
+                  ? "連線確認進行中 — 排程將於 5 分鐘內讀取標題列，完成後按「重新整理」查看"
+                  : "尚未讀取標題列 — 請按上方「連線確認」"}
+              {selected.headerFetchError ? `（上次失敗：${selected.headerFetchError}）` : ""}
+            </div>
+            {selected.detectedHeaders.length > 0 && (
+              <div>
+                讀到的欄位名稱：
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                  {selected.detectedHeaders.map((h) => (
+                    <span
+                      key={h}
+                      style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "2px 8px", fontSize: 12 }}
+                    >
+                      {h}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="batch-toolbar" style={{ marginTop: 8 }}>
+            <button
+              className="button button-outline button-sm"
+              disabled={busy}
+              onClick={() => void handleRequestHeaders(selected)}
+            >
+              <RefreshCw size={14} /> 重新讀取欄位
+            </button>
+          </div>
+          {/* 步驟 2：欄位對應 */}
+          <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+          <SectionTitle
+            title={`步驟 2：欄位對應（${selected.sheetName}）`}
+            note="讓系統知道匯入時各欄位要抓 Google Sheet 上哪個欄位。左邊是 Sheet 實際欄名，右邊選系統欄位；儲存時會自動依欄名預填對應，未對上的請手動選擇。必要欄位（受審單位、受審人員職編、審查月份或時間戳記、各題結果）缺任一項都無法儲存。"
           />
           {selected.detectedHeaders.length === 0 ? (
             <p className="settings-note">
-              尚未讀取到標題列。請按上方「讀取欄位」（由同步排程讀取），完成後按「重新整理」再回來編輯對應。
+              尚未讀取到標題列。請先完成步驟 1 連線確認，排程讀取標題列後按「重新整理」再回來編輯對應。
             </p>
           ) : (
             <>
@@ -3827,29 +3950,54 @@ function SheetSyncSection({
               </div>
             </>
           )}
-          {/* 驗證區（v1.42.1 確認關卡）：連線狀態、對應完整性、預覽、最近一次同步結果 */}
+          {mappingDirty && (
+            <p className="settings-note" style={{ marginTop: 8 }}>
+              對應尚未儲存（步驟 2 未完成）。儲存後需重跑步驟 3 手動同步、重新列入排程。
+            </p>
+          )}
+          {selectedPreview.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div className="field-label" style={{ marginBottom: 6 }}>
+                對應預覽（前 {selectedPreview.length} 列，讀取標題時一併帶回）
+              </div>
+              {selectedPreview.map((row) => (
+                <div
+                  key={row.lineNo}
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: 6,
+                    padding: 8,
+                    marginBottom: 8,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>
+                    第 {row.lineNo} 列：{row.ok ? "可匯入" : `有問題 — ${row.errors}`}
+                  </div>
+                  <div style={{ fontSize: 13, marginTop: 4, display: "grid", gap: 2 }}>
+                    {Object.entries(row.values).map(([key, value]) => (
+                      <div key={key}>
+                        {fieldLabel(key)}：{value || "（空）"}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          </div>
+          {/* 步驟 3：手動同步 */}
           <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-            <SectionTitle title="確認排程" note="核對以下內容無誤後，再按「確認並列入排程」。手動同步為選用測試步驟，不強制成功才能確認。" />
+            <SectionTitle title="步驟 3：手動同步" note="欄位對應後，進行資料同步，測試資料是否能順利匯入。須有一次手動同步成功匯入至少 1 筆資料，才可進行步驟 4；對應改過後要重跑手動同步。" />
             <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
               <div>
-                連線狀態：
-                {selected.detectedHeaders.length > 0
-                  ? `已連線（標題列 ${selected.detectedHeaders.length} 欄，上次讀取 ${fmtTs(selected.lastHeaderFetchAt) || "—"}）`
-                  : "尚未讀取標題列 — 請先按上方「讀取欄位」"}
-              </div>
-              <div>
-                對應完整性：
-                {gate && gate.ok
-                  ? "完整（必要欄齊全、無重複對應）"
-                  : `未完成：${gate?.reasons.join("；") ?? "—"}`}
-              </div>
-              <div>
-                最近一次同步結果：
-                {runsLoading
-                  ? "讀取中…"
-                  : latestRun
-                    ? `${runStatusLabel(latestRun.status)}（${latestRun.trigger === "manual" ? "手動同步" : "定時同步"}，${fmtTs(latestRun.startedAt) || "—"}）— 讀取 ${latestRun.rowsRead} 列／新增 ${latestRun.inserted}／更新 ${latestRun.updated}／跳過 ${latestRun.skipped}／錯誤 ${latestRun.errorRows?.length ?? 0} 列${latestRun.error ? `，${latestRun.error}` : ""}`
-                    : "尚未執行過同步（手動同步或每日 07:00 後會顯示）"}
+                手動同步狀態：
+                {step3Done && qualifyingRun
+                  ? `已完成 — 最近一次成功匯入：讀取 ${qualifyingRun.rowsRead} 列／新增 ${qualifyingRun.inserted}／更新 ${qualifyingRun.updated}（${fmtTs(qualifyingRun.finishedAt ?? qualifyingRun.startedAt) || "—"}）`
+                  : activeRequest
+                    ? `進行中（${requestStatusLabel(activeRequest.status)}），排程將於 5 分鐘內執行；完成後按「重新整理」查看結果`
+                    : latestManualRun
+                      ? `尚未完成 — 最近一次手動同步：${runStatusLabel(latestManualRun.status)}（${fmtTs(latestManualRun.startedAt) || "—"}），讀取 ${latestManualRun.rowsRead} 列／新增 ${latestManualRun.inserted}／更新 ${latestManualRun.updated}／跳過 ${latestManualRun.skipped}／錯誤 ${latestManualRun.errorRows?.length ?? 0} 列${latestManualRun.error ? `，${latestManualRun.error}` : ""}`
+                      : "尚未執行過手動同步"}
               </div>
               <div>
                 手動同步請求：
@@ -3859,36 +4007,15 @@ function SheetSyncSection({
                     ? `${requestStatusLabel(latestRequest.status)}（${fmtTs(latestRequest.requestedAt) || "—"}，由 ${latestRequest.requestedBy} 送出）${latestRequest.status === "failed" && latestRequest.error ? ` — ${latestRequest.error}` : ""}${latestRequest.status === "done" && latestRun && latestRun.trigger === "manual" ? ` — 讀取 ${latestRun.rowsRead} 列／新增 ${latestRun.inserted}／更新 ${latestRun.updated}／跳過 ${latestRun.skipped}／錯誤 ${latestRun.errorRows?.length ?? 0} 列` : ""}`
                     : "尚未送出過手動同步請求"}
               </div>
-            </div>
-            {selectedPreview.length > 0 && (
-              <div style={{ marginTop: 10 }}>
-                <div className="field-label" style={{ marginBottom: 6 }}>
-                  對應預覽（前 {selectedPreview.length} 列，讀取標題時一併帶回）
-                </div>
-                {selectedPreview.map((row) => (
-                  <div
-                    key={row.lineNo}
-                    style={{
-                      border: "1px solid var(--border)",
-                      borderRadius: 6,
-                      padding: 8,
-                      marginBottom: 8,
-                    }}
-                  >
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>
-                      第 {row.lineNo} 列：{row.ok ? "可匯入" : `有問題 — ${row.errors}`}
-                    </div>
-                    <div style={{ fontSize: 13, marginTop: 4, display: "grid", gap: 2 }}>
-                      {Object.entries(row.values).map(([key, value]) => (
-                        <div key={key}>
-                          {fieldLabel(key)}：{value || "（空）"}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+              <div>
+                最近一次同步結果：
+                {runsLoading
+                  ? "讀取中…"
+                  : latestRun
+                    ? `${runStatusLabel(latestRun.status)}（${latestRun.trigger === "manual" ? "手動同步" : "定時同步"}，${fmtTs(latestRun.startedAt) || "—"}）— 讀取 ${latestRun.rowsRead} 列／新增 ${latestRun.inserted}／更新 ${latestRun.updated}／跳過 ${latestRun.skipped}／錯誤 ${latestRun.errorRows?.length ?? 0} 列${latestRun.error ? `，${latestRun.error}` : ""}`
+                    : "尚未執行過同步（手動同步或每日 07:00 後會顯示）"}
               </div>
-            )}
+            </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "center" }}>
               <button
                 className="button button-sm"
@@ -3902,6 +4029,15 @@ function SheetSyncSection({
                   ? `已送出同步請求（${requestStatusLabel(activeRequest.status)}），排程將於 5 分鐘內執行；完成後按「重新整理」查看結果。`
                   : "按下後送出同步請求，排程將於 5 分鐘內執行。"}
               </span>
+            </div>
+          </div>
+          {/* 步驟 4：列入排程 */}
+          <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+            <SectionTitle title="步驟 4：列入排程" note="資料匯入且查詢正常，則可列入每日同步的排程。" />
+            <p className="settings-note">
+              請先到結果分析查詢，確認匯入的資料顯示正常，再按列入排程。
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "center" }}>
               {isMappingConfirmed(selected) ? (
                 <span style={{ fontSize: 13, fontWeight: 600, color: "var(--success, #2e7d32)" }}>
                   已列入排程，每日 07:00 自動同步
@@ -3912,17 +4048,17 @@ function SheetSyncSection({
               ) : (
                 <button
                   className="button button-primary button-sm"
-                  disabled={busy || !gate?.ok}
-                  onClick={() => void handleConfirm(selected)}
-                  title={gate && !gate.ok ? gate.reasons.join("；") : undefined}
+                  disabled={busy || !enrollGate?.ok}
+                  onClick={() => void handleEnroll(selected)}
+                  title={enrollGate && !enrollGate.ok ? enrollGate.reasons.join("；") : undefined}
                 >
-                  <ShieldCheck size={14} /> 確認並列入排程
+                  <ShieldCheck size={14} /> 列入排程
                 </button>
               )}
             </div>
-            {gate && !gate.ok && !isMappingConfirmed(selected) && (
+            {enrollGate && !enrollGate.ok && !isMappingConfirmed(selected) && (
               <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>
-                尚不能確認：{gate.reasons.join("；")}
+                尚不能列入排程：{enrollGate.reasons.join("；")}
               </div>
             )}
           </div>

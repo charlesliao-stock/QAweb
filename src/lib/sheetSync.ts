@@ -64,6 +64,11 @@ export interface SheetSyncMapping {
   previewAt?: unknown;
   /** 前端要求讀取標題的時間（workflow 下次執行時處理） */
   headerFetchRequestedAt?: unknown;
+  /** 最近一次讀取標題失敗的原因（成功時清空；步驟 1 顯示用） */
+  headerFetchError?: string;
+  /** 欄位對應最後修改時間（前端儲存對應時寫入；同步端合併自動對應改變對應時亦寫入。
+   * 步驟 3 的手動同步成功紀錄須在此時間之後才算數，對應改過就要重跑手動同步） */
+  fieldMappingUpdatedAt?: unknown;
   lastHeaderFetchAt?: unknown;
   lastSyncAt?: unknown;
   createdAt?: unknown;
@@ -183,6 +188,8 @@ export function hasDuplicateMapping(
 /**
  * 確認列入排程的條件（純函式）：標題已讀取（連線成功）且對應完整、
  * 無重複對應。手動同步是否成功不列入條件（選用步驟）。
+ * v1.42.3 起列入排程改用 canEnrollMapping（手動同步成功為必要條件），
+ * 本函式保留為步驟 1＋2 的 gate（與舊測試相容）。
  */
 export function canConfirmMapping(input: {
   headersRead: boolean;
@@ -194,6 +201,133 @@ export function canConfirmMapping(input: {
   if (input.missing.length > 0)
     reasons.push(`對應缺必要欄位：${input.missing.join("、")}`);
   if (input.hasDuplicate) reasons.push("不同標題不可對到同一系統欄位");
+  return { ok: reasons.length === 0, reasons };
+}
+
+/** 時間值 → 毫秒時間戳（Firestore Timestamp／{seconds}／ISO 字串／Date／數字皆可；缺失為 null）。 */
+export function tsMillis(v: unknown): number | null {
+  if (!v) return null;
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    const t = Date.parse(v);
+    return Number.isNaN(t) ? null : t;
+  }
+  if (v instanceof Date) return v.getTime();
+  const t = v as {
+    toMillis?: () => number;
+    toDate?: () => Date;
+    seconds?: number;
+    nanoseconds?: number;
+  };
+  if (typeof t.toMillis === "function") return t.toMillis();
+  if (typeof t.toDate === "function") return t.toDate().getTime();
+  if (typeof t.seconds === "number")
+    return t.seconds * 1000 + Math.floor((t.nanoseconds ?? 0) / 1e6);
+  return null;
+}
+
+/** 兩份欄位對應是否相同（鍵與值皆等；空字串視為未對應，與缺鍵同義）。 */
+export function sameFieldMapping(
+  a: Record<string, string>,
+  b: Record<string, string>,
+): boolean {
+  const norm = (m: Record<string, string>) =>
+    Object.keys(m ?? {})
+      .filter((k) => m[k])
+      .sort()
+      .map((k) => `${k}=${m[k]}`)
+      .join("&");
+  return norm(a) === norm(b);
+}
+
+/**
+ * 步驟 3 的合格手動同步紀錄（純函式）：最近一次 trigger=manual、status 為
+ * ok 或 partial、且 inserted＋updated ≥ 1 的紀錄；對應改過後（editTimeMs
+ * 有值）只取該時間之後的紀錄。editTimeMs 為 null＝無對應修改紀錄（舊對照相容）。
+ */
+export function findQualifyingManualRun(
+  runs: SheetSyncRun[],
+  editTimeMs: number | null,
+): SheetSyncRun | null {
+  const ok = (runs ?? [])
+    .filter(
+      (r) =>
+        r.trigger === "manual" &&
+        (r.status === "ok" || r.status === "partial") &&
+        (r.inserted ?? 0) + (r.updated ?? 0) >= 1,
+    )
+    .filter((r) => {
+      if (editTimeMs === null) return true;
+      const t = tsMillis(r.finishedAt ?? r.startedAt);
+      return t !== null && t > editTimeMs;
+    })
+    .sort(
+      (a, b) =>
+        (tsMillis(b.finishedAt ?? b.startedAt) ?? 0) -
+        (tsMillis(a.finishedAt ?? a.startedAt) ?? 0),
+    );
+  return ok[0] ?? null;
+}
+
+/** 四步驟狀態：done＝已完成、active＝進行中（第一個未完成的步驟）、todo＝未完成。 */
+export type SyncStepState = "done" | "active" | "todo";
+
+/** 四步驟狀態推導（純函式）：四步須依序完成；第一個未完成的步驟為進行中，其後為未完成。 */
+export function deriveSyncSteps(input: {
+  step1Done: boolean;
+  step2Done: boolean;
+  step3Done: boolean;
+  step4Done: boolean;
+}): {
+  step1: SyncStepState;
+  step2: SyncStepState;
+  step3: SyncStepState;
+  step4: SyncStepState;
+  /** 目前步驟（1–4；0＝四步皆完成） */
+  current: 0 | 1 | 2 | 3 | 4;
+} {
+  const dones = [input.step1Done, input.step2Done, input.step3Done, input.step4Done];
+  const firstOpen = dones.findIndex((d) => !d);
+  const states: SyncStepState[] = dones.map((d, i) => {
+    if (d) return "done";
+    return i === firstOpen ? "active" : "todo";
+  });
+  return {
+    step1: states[0],
+    step2: states[1],
+    step3: states[2],
+    step4: states[3],
+    current: (firstOpen === -1 ? 0 : firstOpen + 1) as 0 | 1 | 2 | 3 | 4,
+  };
+}
+
+/** 四步驟狀態中文（步驟條顯示用）。 */
+export function syncStepStateLabel(state: SyncStepState): string {
+  switch (state) {
+    case "done":
+      return "已完成";
+    case "active":
+      return "進行中";
+    case "todo":
+      return "未完成";
+    default:
+      return state || "—";
+  }
+}
+
+/**
+ * 列入排程的條件（純函式，v1.42.3 四步驟 gate）：第 1–3 步皆完成才可列入。
+ * 第 3 步＝手動同步成功（至少匯入 1 筆），0 筆匯入不算成功。
+ */
+export function canEnrollMapping(input: {
+  headersRead: boolean;
+  missing: string[];
+  hasDuplicate: boolean;
+  manualSyncOk: boolean;
+}): { ok: boolean; reasons: string[] } {
+  const reasons = [...canConfirmMapping(input).reasons];
+  if (!input.manualSyncOk)
+    reasons.push("尚未完成手動同步（須有一次手動同步成功匯入至少 1 筆資料）");
   return { ok: reasons.length === 0, reasons };
 }
 
