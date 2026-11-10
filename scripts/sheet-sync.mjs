@@ -1,29 +1,17 @@
 #!/usr/bin/env node
 /**
- * Google Sheet 定時同步 — 執行檔（v1.42.0；v1.42.1 加確認關卡＋手動測試）。
+ * Google Sheet 定時同步 — 執行檔（v1.42.0；v1.42.1 加確認關卡）。
  *
  * GitHub Actions 每日 07:00 台北時間執行（.github/workflows/sheet-sync.yml），
  * 另可 workflow_dispatch 手動觸發（可指定單一 mappingId）。
  *
- * 手動同步（v1.42.2）：前端 [手動同步一次] 寫入 sheetSyncRequests（pending），
- * 另一個 workflow（sheet-sync-poll.yml）每 5 分鐘以 SYNC_REQUESTS_ONLY=1
- * 執行本檔的請求模式：只取 pending 請求，逐一標記 running 後執行
- * syncMapping（草稿亦可跑，與手動觸發同規則），完成標記 done＋runId，
- * 失敗標記 failed＋error；run 紀錄 trigger 記 manual。請求模式不跑定時排程。
- *
- * 標題讀取（v1.42.3）：前端 [連線確認]／[重新讀取欄位] 設 headerFetchRequestedAt，
- * 請求模式每 5 分鐘一併處理待讀取標題的對照（fetchHeadersOnly：只讀標題列＋
- * 前 3 列預覽，不寫入審查紀錄），讀到後寫回 detectedHeaders 與對應建議；
- * 讀取失敗時把原因寫回 headerFetchError（前端步驟 1 顯示），不發 LINE、不讓
- * 整輪失敗（常見失敗是 Sheet 尚未分享給 service account，屬使用者待辦）。
- * 完整同步（syncMapping）讀到標題時同樣會清掉 headerFetchRequestedAt。
- * 對應合併後與原本不同時，兩處皆寫 fieldMappingUpdatedAt（步驟 3 的手動同步
- * 成功紀錄須在此時間之後才算數，對應改過就要重跑手動同步）。
+ * 連線確認與手動同步（v1.42.4）：由瀏覽器直接讀 Sheet、立即執行，
+ * 不走本檔；本檔只負責每日 07:00 定時排程（已確認的對照）與手動觸發。
  *
  * 確認關卡（v1.42.1）：定時排程只跑 status == "confirmed" 且啟用的對照；
  * 草稿跳過並寫 run 紀錄記下跳過原因，不寫入審查紀錄。手動觸發指定單一對照時
- * 草稿亦可跑（測試連結用）；手動同步為選用步驟，不強制成功才能確認排程。
- * 讀標題列時一併讀前 3 列資料列、用目前對應解析後寫回對照 preview 供核對。
+ * 草稿亦可跑（測試連結用）。讀標題列時一併讀前 3 列資料列、用目前對應解析後
+ * 寫回對照 preview 供核對。
  *
  * 流程（每份啟用的 sheetSyncMappings）：
  * 1. 讀試算表 metadata 找分頁（依 sheetName 或 sheetGid），讀全部值。
@@ -52,8 +40,6 @@
  * - LINE_USER_ID（選填，未設則不發 LINE）
  * - GCP_PROJECT_ID（選填，預設 nurseboard-492316）
  * - MAPPING_ID（選填，workflow_dispatch 指定單一對照時用）
- * - SYNC_REQUESTS_ONLY（選填，設為 "1" 時只處理手動同步請求，不跑定時排程；
- *   供 sheet-sync-poll.yml 每 5 分鐘輪詢用）
  *
  * 本檔只用 Node 內建模組（node:crypto＋fetch），不需 npm install。
  */
@@ -68,8 +54,6 @@ import {
   isMappingConfirmed,
   mappingMissingRequired,
   sameFieldMapping,
-  selectHeaderFetchTargets,
-  selectPendingRequests,
   selectSyncTargets,
   syncStateDocId,
 } from "./sheet-sync-lib.mjs";
@@ -567,223 +551,6 @@ async function syncMapping(mapping, ctx) {
   return { run, runId };
 }
 
-/* ================= 標題讀取（v1.42.3） ================= */
-
-/**
- * 只讀標題列＋前 3 列預覽（不寫入審查紀錄），供步驟 1 連線確認用。
- * 成功：寫回 detectedHeaders、合併後的 fieldMapping、readiness、preview、
- * lastHeaderFetchAt，並清掉 headerFetchRequestedAt／headerFetchError；
- * 對應合併後與原本不同時一併寫 fieldMappingUpdatedAt（步驟 3 須重跑手動同步）。
- * 失敗：清掉 headerFetchRequestedAt、把原因寫回 headerFetchError（前端顯示），
- * 不拋錯、不發 LINE（常見失敗是 Sheet 尚未分享，屬使用者待辦）。
- * @returns {{ ok: boolean, error?: string }}
- */
-async function fetchHeadersOnly(mapping, ctx) {
-  const { token, indicators, unitHas, staffHas, staffName } = ctx;
-  const now = new Date();
-  const patchMapping = async (values, mask) =>
-    fsPatchDoc(`sheetSyncMappings/${mapping.id}`, values, token, mask);
-  try {
-    const indicator = indicators.get(mapping.indicatorId);
-    if (!indicator) throw new Error(`指標不存在：${mapping.indicatorId}`);
-    const questions = (indicator.questions ?? []).map((q) => q.itemText ?? "");
-    const meta = await sheetsMetadata(mapping.spreadsheetId, token);
-    const sheets = meta.sheets ?? [];
-    let sheetTitle = mapping.sheetName;
-    if (mapping.sheetGid) {
-      const byGid = sheets.find(
-        (s) => String(s.properties?.sheetId) === String(mapping.sheetGid),
-      );
-      if (byGid) sheetTitle = byGid.properties.title;
-    }
-    if (!sheets.some((s) => s.properties?.title === sheetTitle)) {
-      throw new Error(`試算表內找不到分頁「${sheetTitle}」`);
-    }
-    const values = await sheetsValues(
-      mapping.spreadsheetId,
-      `'${sheetTitle.replace(/'/g, "''")}'!A1:ZZ5`,
-      token,
-    );
-    if (values.length === 0) throw new Error("試算表無資料（標題列為空）");
-    const headers = values[0].map((h) => cellToString(h));
-    const dataRows = values.slice(1);
-    const auto = autoFieldMapping(headers, questions);
-    const merged = { ...auto };
-    for (const [h, v] of Object.entries(mapping.fieldMapping ?? {})) {
-      if (v) merged[h] = v;
-    }
-    const missing = mappingMissingRequired(merged, questions);
-    const preview = buildMappingPreview({
-      headers,
-      rows: dataRows,
-      fieldMapping: merged,
-      indicator,
-      unitHas,
-      staffHas,
-      staffName,
-    });
-    const values2 = {
-      detectedHeaders: headers,
-      fieldMapping: merged,
-      readiness: missing.length > 0 ? "mapping-incomplete" : "ready",
-      preview,
-      previewAt: now,
-      lastHeaderFetchAt: now,
-      headerFetchRequestedAt: null,
-      headerFetchError: "",
-      updatedAt: now,
-    };
-    const mask = [
-      "detectedHeaders",
-      "fieldMapping",
-      "readiness",
-      "preview",
-      "previewAt",
-      "lastHeaderFetchAt",
-      "headerFetchRequestedAt",
-      "headerFetchError",
-      "updatedAt",
-    ];
-    if (!sameFieldMapping(merged, mapping.fieldMapping ?? {})) {
-      values2.fieldMappingUpdatedAt = now;
-      mask.push("fieldMappingUpdatedAt");
-    }
-    await patchMapping(values2, mask);
-    log(`對照 ${mapping.sheetName}：標題列已讀取（${headers.length} 欄）。`);
-    return { ok: true };
-  } catch (err) {
-    const msg = (err?.message ?? String(err)).slice(0, 500);
-    await patchMapping(
-      {
-        headerFetchRequestedAt: null,
-        headerFetchError: msg,
-        updatedAt: now,
-      },
-      ["headerFetchRequestedAt", "headerFetchError", "updatedAt"],
-    );
-    log(`對照 ${mapping.sheetName}：讀取標題列失敗：${msg}`);
-    return { ok: false, error: msg };
-  }
-}
-
-/* ================= 手動同步請求模式（v1.42.2） ================= */
-
-/**
- * 請求模式（SYNC_REQUESTS_ONLY=1）：先處理待讀取標題的對照（v1.42.3，
- * fetchHeadersOnly，只讀標題＋預覽、不寫入紀錄），再處理 status == "pending"
- * 的手動同步請求。請求逐一先以 updateMask 標記 running（避免重複執行），
- * 再執行 syncMapping（草稿亦可跑，與手動觸發同規則；run 紀錄 trigger 記
- * manual），完成標記 done＋runId，失敗標記 failed＋error。定時排程不受影響
- * （本模式不跑）。
- * @returns {number} 處理的項目數（標題讀取＋手動同步請求；0＝無事可做）
- */
-async function runRequestMode(token, lineToken, lineTo) {
-  const mappings = await fsListCollection("sheetSyncMappings", token);
-  const headerTargets = selectHeaderFetchTargets(mappings);
-  const requests = await fsListCollection("sheetSyncRequests", token);
-  const pending = selectPendingRequests(requests);
-  if (headerTargets.length === 0 && pending.length === 0) {
-    log("沒有待讀取標題的對照與待執行的手動同步請求，本輪無事可做。");
-    return 0;
-  }
-  // 參考資料全量各讀 1 次（與定時流程相同，惰性驗證）
-  const [units, users, indicatorsList] = await Promise.all([
-    fsListCollection("units", token),
-    fsListCollection("users", token),
-    fsListCollection("indicators", token),
-  ]);
-  const unitHas = (code) => units.some((u) => u.id === code || u.code === code);
-  const staffById = new Map();
-  for (const u of users) {
-    staffById.set(u.id, u);
-    if (u.staffId) staffById.set(u.staffId, u);
-  }
-  const staffHas = (id) => staffById.has(id);
-  const staffName = (id) => staffById.get(id)?.name ?? id;
-  const indicators = new Map(indicatorsList.map((ind) => [ind.id, ind]));
-  const ctx = { token, indicators, unitHas, staffHas, staffName, taskCache: new Map(), trigger: "manual" };
-
-  // 步驟 1 連線確認（v1.42.3）：先處理待讀取標題的對照（只讀標題＋預覽，
-  // 不寫入審查紀錄），讓 [連線確認] 後 5 分鐘內讀到欄位名稱；讀取失敗只寫
-  // 回 headerFetchError（前端步驟 1 顯示），不發 LINE、不讓整輪失敗。
-  for (const mapping of headerTargets) {
-    await fetchHeadersOnly(mapping, ctx);
-  }
-
-  const failures = [];
-  for (const req of pending) {
-    const reqPath = `sheetSyncRequests/${req.id}`;
-    // 先標記 running（updateMask 只改 status／updatedAt，避免洗掉其他欄位）
-    await fsPatchDoc(reqPath, { status: "running", updatedAt: new Date() }, token, [
-      "status",
-      "updatedAt",
-    ]);
-    const mapping = await fsGetDoc(`sheetSyncMappings/${req.mappingId}`, token);
-    if (!mapping) {
-      const msg = `找不到對照：${req.mappingId}`;
-      await fsPatchDoc(
-        reqPath,
-        { status: "failed", error: msg, updatedAt: new Date() },
-        token,
-        ["status", "error", "updatedAt"],
-      );
-      log(`請求 ${req.id}：${msg}`);
-      failures.push(msg);
-      continue;
-    }
-    if (mapping.enabled === false) {
-      const msg = `對照已停用：${mapping.sheetName}`;
-      await fsPatchDoc(
-        reqPath,
-        { status: "failed", error: msg, updatedAt: new Date() },
-        token,
-        ["status", "error", "updatedAt"],
-      );
-      log(`請求 ${req.id}：${msg}`);
-      failures.push(msg);
-      continue;
-    }
-    try {
-      const { run, runId } = await syncMapping({ id: req.mappingId, ...mapping }, ctx);
-      await fsPatchDoc(
-        reqPath,
-        { status: "done", runId, updatedAt: new Date() },
-        token,
-        ["status", "runId", "updatedAt"],
-      );
-      log(`請求 ${req.id}：對照 ${mapping.sheetName} 同步完成（run ${runId}，${run.status}）。`);
-    } catch (err) {
-      const msg = err?.message ?? String(err);
-      const failedValues = {
-        status: "failed",
-        error: msg.slice(0, 500),
-        updatedAt: new Date(),
-      };
-      const failedMask = ["status", "error", "updatedAt"];
-      if (err?.runId) {
-        failedValues.runId = err.runId;
-        failedMask.push("runId");
-      }
-      await fsPatchDoc(reqPath, failedValues, token, failedMask);
-      const line = `對照 ${mapping.sheetName} 手動同步失敗：${msg}`;
-      log(`請求 ${req.id}：${line}`);
-      failures.push(line);
-    }
-  }
-
-  if (failures.length > 0) {
-    await sendLine(
-      `Google Sheet 手動同步有 ${failures.length} 筆請求失敗：\n${failures.join("\n")}`,
-      lineToken,
-      lineTo,
-    );
-    console.error(`[sheet-sync] ${failures.length} 筆手動同步請求失敗`);
-    process.exit(1);
-  }
-  log(`標題讀取 ${headerTargets.length} 份、手動同步請求全部完成（${pending.length} 筆）。`);
-  return headerTargets.length + pending.length;
-}
-
 /* ================= 主流程 ================= */
 
 async function main() {
@@ -814,13 +581,6 @@ async function main() {
   const trigger = isManual ? "manual" : "schedule";
 
   const token = await getAccessToken(sa);
-
-  // 手動同步請求模式（v1.42.2）：SYNC_REQUESTS_ONLY=1 時只處理 pending 請求，
-  // 不跑定時排程；無待執行請求時靜默結束（供每 5 分鐘輪詢）。
-  if (process.env.SYNC_REQUESTS_ONLY === "1") {
-    await runRequestMode(token, lineToken, lineTo);
-    return;
-  }
 
   const mappings = await fsListCollection("sheetSyncMappings", token);
   if (onlyMappingId) {

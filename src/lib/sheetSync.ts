@@ -91,65 +91,8 @@ export interface SheetSyncRun {
   error?: string;
   /** manual＝手動觸發、schedule＝定時排程 */
   trigger?: string;
-}
-
-/**
- * 一筆手動同步請求（Firestore sheetSyncRequests，v1.42.2）。
- * 前端 [手動同步一次] 寫入 pending，GitHub Actions 每 5 分鐘輪詢執行
- * （sheet-sync-poll.yml，SYNC_REQUESTS_ONLY=1）；草稿對照也可手動同步。
- */
-export interface SheetSyncRequest {
-  id?: string;
-  mappingId: string;
-  /** 請求者職編 */
-  requestedBy: string;
-  requestedAt?: unknown;
-  /** pending＝等待執行中、running＝執行中、done＝已完成、failed＝失敗 */
-  status: "pending" | "running" | "done" | "failed";
-  /** 完成後對應的 sheetSyncRuns 文件 ID（失敗時為空） */
-  runId?: string;
-  /** 失敗原因（失敗時寫入） */
-  error?: string;
-}
-
-/** 手動同步請求狀態中文（驗證區顯示用）。 */
-export function requestStatusLabel(status: string): string {
-  switch (status) {
-    case "pending":
-      return "等待執行中";
-    case "running":
-      return "執行中";
-    case "done":
-      return "已完成";
-    case "failed":
-      return "失敗";
-    default:
-      return status || "—";
-  }
-}
-
-/** 請求／執行紀錄時間轉 ISO 字串（字串、Timestamp、{seconds} 皆可；缺失為 ""）。 */
-export function requestTimestampString(v: unknown): string {
-  if (!v) return "";
-  if (typeof v === "string") return v;
-  const t = v as { toDate?: () => Date; seconds?: number };
-  if (typeof t.toDate === "function") return t.toDate().toISOString();
-  if (typeof t.seconds === "number") return new Date(t.seconds * 1000).toISOString();
-  return "";
-}
-
-/**
- * 該對照是否已有進行中的手動同步請求（pending／running），有則不重複建立。
- * 比較 requestedAt 取最早的一筆進行中請求。
- */
-export function findActiveSyncRequest(
-  requests: SheetSyncRequest[],
-  mappingId: string,
-): SheetSyncRequest | null {
-  const active = (requests ?? [])
-    .filter((r) => r.mappingId === mappingId && (r.status === "pending" || r.status === "running"))
-    .sort((a, b) => requestTimestampString(a.requestedAt).localeCompare(requestTimestampString(b.requestedAt)));
-  return active[0] ?? null;
+  /** 執行來源（v1.42.4）：browser＝瀏覽器直接讀 Sheet（手動同步）、actions＝GitHub Actions（定時排程／手動觸發） */
+  source?: string;
 }
 
 /** 對照是否已確認列入排程（只認 "confirmed"；舊版就緒值一律視為草稿）。 */

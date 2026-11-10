@@ -27,6 +27,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   getDocsFromServer,
   limit,
@@ -63,15 +64,12 @@ import {
   autoFieldMapping,
   canEnrollMapping,
   deriveSyncSteps,
-  findActiveSyncRequest,
   findQualifyingManualRun,
   hasDuplicateMapping,
   isMappingConfirmed,
   mappingMissingRequired,
   mappingReadiness,
   parseSheetUrl,
-  requestStatusLabel,
-  requestTimestampString,
   runStatusLabel,
   sameFieldMapping,
   sheetSystemFieldOptions,
@@ -79,9 +77,15 @@ import {
   tsMillis,
   type SheetPreviewRow,
   type SheetSyncMapping,
-  type SheetSyncRequest,
   type SheetSyncRun,
 } from "../lib/sheetSync";
+import {
+  fetchSheetAllValues,
+  fetchSheetPreviewValues,
+  mapSheetValuesToResultRows,
+  parseSheetTimestampDate,
+  resultRowToPreviewValues,
+} from "../lib/sheetBrowser";
 import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
 import { EmptyState, PageHeading, SectionTitle, SummaryCell } from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
@@ -3260,11 +3264,13 @@ function ResultImportPanel({
 }
 
 /**
- * 連結 Google Sheet（v1.42.0，僅系統管理員；v1.42.3 改為四步驟線性流程）：
- * 1 連線確認（貼網址、讀取欄位名稱）→ 2 欄位對應 → 3 手動同步（測試資料
- * 是否能順利匯入）→ 4 列入排程（每日 07:00 自動同步）。
- * 貼試算表網址建立對照（存 sheetSyncMappings），標題讀取與手動同步由
- * GitHub Actions 每 5 分鐘輪詢執行；列入排程前不排程、不寫入紀錄。
+ * 連結 Google Sheet（v1.42.0，僅系統管理員；v1.42.3 改為四步驟線性流程；
+ * v1.42.4 連線確認與手動同步改為瀏覽器直接讀 Sheet、立即連線）：
+ * 1 連線確認（貼網址、立即讀取欄位名稱）→ 2 欄位對應 → 3 手動同步
+ * （瀏覽器立即連線同步，測試資料是否能順利匯入）→ 4 列入排程
+ * （每日 07:00 自動同步，仍走 service account／Actions）。
+ * 連線確認與手動同步由瀏覽器直接呼叫 Sheets API（需設定 API 金鑰、
+ * Sheet 設為知道連結者皆可查看），不用等排程。列入排程前不排程、不寫入紀錄。
  * 欄位對應缺必要欄時顯示錯誤、不建立同步；對應改過後須重跑手動同步、
  * 重新列入排程。
  */
@@ -3290,8 +3296,76 @@ function SheetSyncSection({
   const [confirmDeleteId, setConfirmDeleteId] = useState("");
   const [recentRuns, setRecentRuns] = useState<Record<string, SheetSyncRun[]>>({});
   const [runsLoading, setRunsLoading] = useState(false);
-  const [mappingRequests, setMappingRequests] = useState<Record<string, SheetSyncRequest[]>>({});
-  const [reqLoading, setReqLoading] = useState(false);
+  /** Google Sheets API 金鑰（v1.42.4，瀏覽器直讀用；存 configs/sheetApiKey）。 */
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [apiKeyTail, setApiKeyTail] = useState("");
+  const [apiKeyLoaded, setApiKeyLoaded] = useState(false);
+  /** 匯入檢核用參考資料（單位代號、人員職編→姓名；與檔案匯入同一規則）。 */
+  const [unitCodes, setUnitCodes] = useState<Set<string>>(new Set());
+  const [staffMap, setStaffMap] = useState<Map<string, string>>(new Map());
+  const [staffLoaded, setStaffLoaded] = useState(false);
+
+  const loadApiKey = useCallback(async () => {
+    try {
+      const db = getFirebaseDb();
+      const snap = await getDoc(doc(db, "configs", "sheetApiKey"));
+      const v = snap.exists() ? (snap.data() as { apiKey?: unknown }) : null;
+      const key = typeof v?.apiKey === "string" ? v.apiKey : "";
+      setApiKeyTail(key ? key.slice(-4) : "");
+    } catch {
+      setApiKeyTail("");
+    } finally {
+      setApiKeyLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadApiKey();
+  }, [loadApiKey]);
+
+  /** 讀取 API 金鑰值（連線確認／手動同步前呼叫；未設定回傳 ""）。 */
+  const readApiKey = useCallback(async (): Promise<string> => {
+    try {
+      const db = getFirebaseDb();
+      const snap = await getDoc(doc(db, "configs", "sheetApiKey"));
+      const v = snap.exists() ? (snap.data() as { apiKey?: unknown }) : null;
+      return typeof v?.apiKey === "string" ? v.apiKey : "";
+    } catch {
+      return "";
+    }
+  }, []);
+
+  /** 單位＋人員參考資料（需要時載入一次；單位走記憶體快取）。
+   * 回傳最新資料（避免 state 尚未更新的舊閉包問題）。 */
+  const loadRefData = useCallback(async (): Promise<{
+    unitCodes: Set<string>;
+    staffMap: Map<string, string>;
+    staffLoaded: boolean;
+  }> => {
+    if (staffLoaded) return { unitCodes, staffMap, staffLoaded: true };
+    try {
+      const db = getFirebaseDb();
+      const [uSnap, sSnap] = await Promise.all([
+        getCachedRefCollection("units", () =>
+          getDocsCacheFirst(collection(db, "units")),
+        ),
+        getDocsFromServer(collection(db, "users")),
+      ]);
+      const codes = new Set(uSnap.docs.map((d) => d.id));
+      const sm = new Map<string, string>();
+      sSnap.docs.forEach((d) => {
+        const name = d.data().name;
+        sm.set(d.id, typeof name === "string" ? name : d.id);
+      });
+      setUnitCodes(codes);
+      setStaffMap(sm);
+      setStaffLoaded(true);
+      return { unitCodes: codes, staffMap: sm, staffLoaded: true };
+    } catch {
+      setStaffLoaded(false);
+      return { unitCodes, staffMap, staffLoaded: false };
+    }
+  }, [staffLoaded, unitCodes, staffMap]);
 
   const loadMappings = useCallback(async () => {
     try {
@@ -3361,11 +3435,6 @@ function SheetSyncSection({
   const latestRun = selectedRuns[0] ?? null;
   const latestManualRun =
     selectedRuns.find((r) => r.trigger === "manual") ?? null;
-  const selectedRequests = selected ? mappingRequests[selected.id] ?? [] : [];
-  const latestRequest = selectedRequests[0] ?? null;
-  const activeRequest = selected
-    ? findActiveSyncRequest(selectedRequests, selected.id)
-    : null;
   const selectedPreview: SheetPreviewRow[] = selected?.preview ?? [];
   const fieldLabel = (key: string) =>
     fieldOptions.find((o) => o.key === key)?.label ?? key;
@@ -3401,29 +3470,6 @@ function SheetSyncSection({
     }
   }, []);
 
-  /** 手動同步請求（v1.42.2）：依 mappingId 查詢、依請求時間由新到舊排序。 */
-  const loadRequests = useCallback(async (mappingId: string) => {
-    setReqLoading(true);
-    try {
-      const db = getFirebaseDb();
-      const snap = await getDocs(
-        query(collection(db, "sheetSyncRequests"), where("mappingId", "==", mappingId)),
-      );
-      const list = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<SheetSyncRequest, "id">),
-      }));
-      list.sort((a, b) =>
-        requestTimestampString(b.requestedAt).localeCompare(requestTimestampString(a.requestedAt)),
-      );
-      setMappingRequests((prev) => ({ ...prev, [mappingId]: list }));
-    } catch {
-      setMappingRequests((prev) => ({ ...prev, [mappingId]: [] }));
-    } finally {
-      setReqLoading(false);
-    }
-  }, []);
-
   const statusLabel = (m: SheetSyncMapping) => {
     const r = mappingReadiness(m);
     const readyLabel =
@@ -3441,11 +3487,150 @@ function SheetSyncSection({
     setMsg(null);
     setErrs([]);
     void loadRecentRuns(m.id);
-    void loadRequests(m.id);
   }
 
-  /** 步驟 1 連線確認（v1.42.3）：貼網址建連結，同時要求讀取標題列；
-   * 同步排程每 5 分鐘處理待讀取標題的對照，讀到後寫回欄位名稱清單。 */
+  /** API 金鑰儲存（v1.42.4）：存 configs/sheetApiKey（登入可讀、管理員可寫；
+   * 瀏覽器金鑰為公開設計，靠 GCP 限制來源網域；絕不存 service account 私鑰）。 */
+  async function handleSaveApiKey() {
+    if (!user) return;
+    setMsg(null);
+    setErrs([]);
+    const key = apiKeyInput.trim();
+    if (!key) {
+      setErrs(["請先貼上 Google Sheets API 金鑰"]);
+      return;
+    }
+    setBusy(true);
+    try {
+      const db = getFirebaseDb();
+      await setDoc(doc(db, "configs", "sheetApiKey"), {
+        apiKey: key,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.staffId,
+      });
+      setApiKeyInput("");
+      setApiKeyTail(key.slice(-4));
+      setMsg("API 金鑰已儲存。連線確認與手動同步現在會由瀏覽器直接讀取 Google Sheet。");
+      onAction("儲存 Google Sheets API 金鑰");
+    } catch {
+      setErrs(["儲存 API 金鑰失敗"]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleClearApiKey() {
+    if (!user) return;
+    setBusy(true);
+    try {
+      const db = getFirebaseDb();
+      await deleteDoc(doc(db, "configs", "sheetApiKey"));
+      setApiKeyTail("");
+      setApiKeyInput("");
+      setMsg("API 金鑰已清除。連線確認與手動同步須重新設定金鑰才能使用。");
+    } catch {
+      setErrs(["清除 API 金鑰失敗"]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * 讀取標題列＋前 3 列預覽並寫回對照（v1.42.4，瀏覽器直接讀 Sheet、立即完成）。
+   * 成功：寫回 detectedHeaders、合併後的對應（自動對應＋既有手動對應優先）、
+   * readiness、preview、lastHeaderFetchAt；失敗：原因寫回 headerFetchError。
+   * 回傳 true＝讀取成功。
+   */
+  async function fetchHeadersAndPreview(
+    m: SheetSyncMapping,
+    apiKey: string,
+  ): Promise<boolean> {
+    const ind = indicators.find((i) => i.id === m.indicatorId) ?? null;
+    if (!ind) {
+      setErrs(["連結的指標不存在"]);
+      return false;
+    }
+    const questions = ind.questions.map((q) => q.itemText);
+    const r = await fetchSheetPreviewValues(m.spreadsheetId, m.sheetName, apiKey);
+    if ("error" in r) {
+      try {
+        const db = getFirebaseDb();
+        await updateDoc(doc(db, "sheetSyncMappings", m.id), {
+          headerFetchError: r.error.message,
+          updatedAt: serverTimestamp(),
+        });
+      } catch {
+        /* 寫回失敗不影響錯誤顯示 */
+      }
+      setErrs([`連線確認失敗：${r.error.message}`]);
+      await loadMappings();
+      return false;
+    }
+    const values = r.values;
+    if (values.length === 0 || (values[0] ?? []).every((h) => h === "")) {
+      setErrs(["連線確認失敗：試算表標題列為空，請確認分頁名稱正確，且第一列有欄位名稱。"]);
+      return false;
+    }
+    const headers = values[0];
+    const auto = autoFieldMapping(headers, questions);
+    const merged: Record<string, string> = { ...auto };
+    for (const [h, v] of Object.entries(m.fieldMapping ?? {})) {
+      if (v) merged[h] = v;
+    }
+    const missing = mappingMissingRequired(merged, questions);
+    // 預覽（前 3 列資料列）：與檔案匯入同一條解析／檢核規則。
+    let preview: SheetPreviewRow[] = [];
+    try {
+      const ref = await loadRefData();
+      const mapped = mapSheetValuesToResultRows(
+        values.slice(0, 5),
+        merged,
+        questions,
+        ind.code,
+      );
+      const parsed = parseResultSheet(mapped.rows, { questionTitles: questions });
+      const validated = validateResultSheet(parsed.data, {
+        code: ind.code,
+        questionCount: questions.length,
+        unitHas: (c) => ref.unitCodes.has(c),
+        staffHas: (id) => ref.staffMap.has(id),
+        staffLoaded: ref.staffLoaded,
+      });
+      preview = validated.rows.slice(0, 3).map((row) => {
+        const extra = mapped.rowErrors.get(row.lineNo) ?? [];
+        const allErrors = [...row.errors, ...extra];
+        return {
+          lineNo: row.lineNo,
+          ok: row.ok && extra.length === 0,
+          errors: allErrors.join("；"),
+          values: resultRowToPreviewValues(mapped.rows[row.lineNo - 1] ?? [], questions),
+        };
+      });
+    } catch {
+      preview = [];
+    }
+    const db = getFirebaseDb();
+    const patch: Record<string, unknown> = {
+      detectedHeaders: headers,
+      fieldMapping: merged,
+      readiness: missing.length > 0 ? "mapping-incomplete" : "ready",
+      preview,
+      previewAt: serverTimestamp(),
+      lastHeaderFetchAt: serverTimestamp(),
+      headerFetchError: "",
+      updatedAt: serverTimestamp(),
+    };
+    if (!sameFieldMapping(merged, m.fieldMapping ?? {})) {
+      patch.fieldMappingUpdatedAt = serverTimestamp();
+    }
+    await updateDoc(doc(db, "sheetSyncMappings", m.id), patch);
+    await loadMappings();
+    return true;
+  }
+
+  /** 步驟 1 連線確認（v1.42.4）：貼網址建連結，瀏覽器立即用 API key 讀標題列；
+   * 成功即寫回欄位名稱清單與自動對應；失敗顯示具體原因（未設連結共用／
+   * 未啟用 Sheets API／未設 API key）。不再走排程。 */
   async function handleLink() {
     if (!user) return;
     setMsg(null);
@@ -3459,59 +3644,65 @@ function SheetSyncSection({
       setErrs([parsed.error]);
       return;
     }
+    const apiKey = await readApiKey();
+    if (!apiKey) {
+      setErrs(["尚未設定 Google Sheets API 金鑰：請先在上方貼上金鑰並儲存，再按連線確認。"]);
+      return;
+    }
     const name = sheetName.trim() || "表單回覆 1";
     const existing = mappings.find(
       (m) => m.spreadsheetId === parsed.spreadsheetId && m.sheetName === name,
     );
-    if (existing) {
-      selectMapping(existing);
-      // 已連結過、但尚未讀到標題時，順便再要求讀取一次。
-      if ((existing.detectedHeaders ?? []).length === 0) {
-        try {
-          const db = getFirebaseDb();
-          await updateDoc(doc(db, "sheetSyncMappings", existing.id), {
-            headerFetchRequestedAt: serverTimestamp(),
-            headerFetchError: "",
-            updatedAt: serverTimestamp(),
-          });
-          setMsg(
-            `已連結過此試算表（${name}）。已再次送出連線確認，排程將於 5 分鐘內讀取標題列；完成後按「重新整理」即可查看讀到的欄位名稱。`,
-          );
-        } catch {
-          setMsg(`已連結過此試算表（${name}），請確認下方欄位對應。`);
-        }
-      } else {
-        setMsg(`已連結過此試算表（${name}），請確認下方欄位對應。`);
-      }
-      return;
-    }
     setBusy(true);
     try {
-      const db = getFirebaseDb();
-      const ref = doc(collection(db, "sheetSyncMappings"));
-      await setDoc(ref, {
-        spreadsheetId: parsed.spreadsheetId,
-        sheetName: name,
-        ...(parsed.gid ? { sheetGid: parsed.gid } : {}),
-        groupId: selInd.groupId,
-        indicatorId: selInd.id,
-        enabled: true,
-        detectedHeaders: [],
-        fieldMapping: {},
-        status: "draft",
-        readiness: "pending",
-        headerFetchRequestedAt: serverTimestamp(),
-        headerFetchError: "",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      await loadMappings();
-      setSelectedId(ref.id);
-      setDraft({});
-      setMsg(
-        `已建立連結（${name}）並送出連線確認，排程將於 5 分鐘內讀取標題列；完成後按「重新整理」即可查看讀到的欄位名稱，再到下方完成欄位對應。`,
-      );
-      onAction(`連結 Google Sheet：${selInd.code}・${name}`);
+      let target: SheetSyncMapping;
+      if (existing) {
+        target = existing;
+        selectMapping(existing);
+      } else {
+        const db = getFirebaseDb();
+        const ref = doc(collection(db, "sheetSyncMappings"));
+        await setDoc(ref, {
+          spreadsheetId: parsed.spreadsheetId,
+          sheetName: name,
+          ...(parsed.gid ? { sheetGid: parsed.gid } : {}),
+          groupId: selInd.groupId,
+          indicatorId: selInd.id,
+          enabled: true,
+          detectedHeaders: [],
+          fieldMapping: {},
+          status: "draft",
+          readiness: "pending",
+          headerFetchError: "",
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        await loadMappings();
+        target = {
+          id: ref.id,
+          spreadsheetId: parsed.spreadsheetId,
+          sheetName: name,
+          groupId: selInd.groupId,
+          indicatorId: selInd.id,
+          enabled: true,
+          detectedHeaders: [],
+          fieldMapping: {},
+          status: "draft",
+          readiness: "pending",
+        };
+        setSelectedId(ref.id);
+        setDraft({});
+        onAction(`連結 Google Sheet：${selInd.code}・${name}`);
+      }
+      setMsg("連線確認中，正在讀取標題列…");
+      const ok = await fetchHeadersAndPreview(target, apiKey);
+      if (ok) {
+        setMsg(
+          existing
+            ? `連線確認成功，已讀到「${name}」的欄位名稱。請確認下方欄位對應。`
+            : `已建立連結（${name}），連線確認成功，已讀到欄位名稱。請到下方完成欄位對應。`,
+        );
+      }
     } catch {
       setErrs(["建立連結失敗，請確認權限後再試"]);
     } finally {
@@ -3522,19 +3713,18 @@ function SheetSyncSection({
   async function handleRequestHeaders(m: SheetSyncMapping) {
     setMsg(null);
     setErrs([]);
+    const apiKey = await readApiKey();
+    if (!apiKey) {
+      setErrs(["尚未設定 Google Sheets API 金鑰：請先在上方貼上金鑰並儲存。"]);
+      return;
+    }
     setBusy(true);
     try {
-      const db = getFirebaseDb();
-      await updateDoc(doc(db, "sheetSyncMappings", m.id), {
-        headerFetchRequestedAt: serverTimestamp(),
-        headerFetchError: "",
-        updatedAt: serverTimestamp(),
-      });
-      setMsg(
-        "已再次送出連線確認，排程將於 5 分鐘內讀取標題列並帶回前 3 列預覽；完成後按「重新整理」即可查看。",
-      );
+      setMsg("正在重新讀取欄位…");
+      const ok = await fetchHeadersAndPreview(m, apiKey);
+      if (ok) setMsg("已重新讀取欄位名稱與預覽。");
     } catch {
-      setErrs(["要求讀取標題列失敗"]);
+      setErrs(["重新讀取欄位失敗"]);
     } finally {
       setBusy(false);
     }
@@ -3614,38 +3804,260 @@ function SheetSyncSection({
     }
   }
 
-  /** 手動同步一次（v1.42.2）：寫入一筆 pending 同步請求，Actions 每 5 分鐘輪詢執行；
-   *  草稿對照也可手動同步，不需先確認。已有進行中的請求時不重複建立。
-   *  前端沒有 server 可直接跑同步（service account 鑰匙不能放前端），
-   *  故為「送出請求、排程 5 分鐘內執行」，而非按下當下就跑。 */
+  /** 步驟 3 手動同步（v1.42.4）：瀏覽器立即用 API key 讀全部資料，沿用檔案
+   * 匯入流程（parse／validate）與雜湊去重（import_＋雜湊前綴、每批 ≤500 筆），
+   * 立即寫入並顯示結果。草稿對照也可手動同步，不需先確認。
+   * 不填排程快照欄位（與檔案匯入同一限制；同一列之後由每日 07:00 排程
+   * 以相同文件 ID 覆寫補上快照）。成功後寫 sheetSyncRuns（trigger manual、
+   * source browser），列入排程 gate 直接認可。
+   * inserted／skipped 以文件 ID 是否已存在區分（雜湊即內容，存在＝內容相同）；
+   * updated 恆為 0（內容改過會產生新文件 ID，舊文件由每日排程刪舊寫新）。 */
   async function handleManualSync(m: SheetSyncMapping) {
     if (!user) return;
     setMsg(null);
     setErrs([]);
-    const existing = findActiveSyncRequest(mappingRequests[m.id] ?? [], m.id);
-    if (existing) {
-      setMsg(
-        `已有進行中的同步請求（${requestStatusLabel(existing.status)}），排程將於 5 分鐘內執行；完成後按「重新整理」查看結果。`,
-      );
+    const ind = selectedInd;
+    if (!ind) {
+      setErrs(["連結的指標不存在"]);
       return;
     }
+    const apiKey = await readApiKey();
+    if (!apiKey) {
+      setErrs(["尚未設定 Google Sheets API 金鑰：請先在上方貼上金鑰並儲存。"]);
+      return;
+    }
+    const questions = ind.questions.map((q) => q.itemText);
     setBusy(true);
-    try {
-      const db = getFirebaseDb();
-      const ref = doc(collection(db, "sheetSyncRequests"));
-      await setDoc(ref, {
+    setMsg("手動同步執行中，正在讀取試算表…");
+    const db = getFirebaseDb();
+    const writeRun = async (run: {
+      status: string;
+      error: string;
+      rowsRead: number;
+      inserted: number;
+      updated: number;
+      skipped: number;
+      errorRows: { lineNo: number; errors: string }[];
+    }) => {
+      await setDoc(doc(collection(db, "sheetSyncRuns")), {
+        ...run,
         mappingId: m.id,
-        requestedBy: user.staffId,
-        requestedAt: serverTimestamp(),
-        status: "pending",
-        runId: null,
-        error: "",
+        trigger: "manual",
+        source: "browser",
+        startedAt: serverTimestamp(),
+        finishedAt: serverTimestamp(),
       });
-      setMsg("已送出同步請求，排程將於 5 分鐘內執行；完成後按「重新整理」查看結果。");
-      onAction(`手動同步請求：${m.sheetName}`);
-      await loadRequests(m.id);
-    } catch {
-      setErrs(["送出同步請求失敗，請確認權限後再試"]);
+    };
+    try {
+      const ref = await loadRefData();
+      const fetched = await fetchSheetAllValues(m.spreadsheetId, m.sheetName, apiKey);
+      if ("error" in fetched) {
+        setErrs([`手動同步失敗：${fetched.error.message}`]);
+        await writeRun({
+          status: "failed",
+          error: fetched.error.message,
+          rowsRead: 0,
+          inserted: 0,
+          updated: 0,
+          skipped: 0,
+          errorRows: [],
+        });
+        await loadRecentRuns(m.id);
+        return;
+      }
+      const values = fetched.values;
+      const rowsRead = values
+        .slice(1)
+        .filter((row) => row.some((c) => c !== "")).length;
+      const mapped = mapSheetValuesToResultRows(values, savedMapping, questions, ind.code);
+      const { headerErrors, data } = parseResultSheet(mapped.rows, {
+        questionTitles: questions,
+      });
+      if (headerErrors.length > 0) {
+        setErrs(headerErrors);
+        await writeRun({
+          status: "failed",
+          error: headerErrors.join("；"),
+          rowsRead,
+          inserted: 0,
+          updated: 0,
+          skipped: 0,
+          errorRows: [],
+        });
+        await loadRecentRuns(m.id);
+        return;
+      }
+      const { fileErrors, rows } = validateResultSheet(data, {
+        code: ind.code,
+        questionCount: questions.length,
+        unitHas: (c) => ref.unitCodes.has(c),
+        staffHas: (id) => ref.staffMap.has(id),
+        staffLoaded: ref.staffLoaded,
+      });
+      if (fileErrors.length > 0) {
+        setErrs(fileErrors);
+        await writeRun({
+          status: "failed",
+          error: fileErrors.join("；"),
+          rowsRead,
+          inserted: 0,
+          updated: 0,
+          skipped: 0,
+          errorRows: [],
+        });
+        await loadRecentRuns(m.id);
+        return;
+      }
+      // 合併逐列額外錯誤（指標代號不符、受審人員職編未填）。
+      const results = rows.map((row) => {
+        const extra = mapped.rowErrors.get(row.lineNo) ?? [];
+        if (extra.length === 0) return row;
+        return {
+          ...row,
+          ok: false,
+          errors: [...row.errors, ...extra],
+          values: null,
+        };
+      });
+      const ok = results.filter((r) => r.ok && r.values);
+      const bad = results.filter((r) => !r.ok);
+      let inserted = 0;
+      let skipped = 0;
+      if (ok.length > 0) {
+        // 去重：文件 ID 即內容雜湊，已存在＝內容相同，跳過不寫。
+        const targets = ok.map((r) => {
+          const v = r.values!;
+          const ts = mapped.timestamps.get(r.lineNo) ?? "";
+          const docId = importRecordDocId({
+            spreadsheetId: m.spreadsheetId,
+            sheetName: m.sheetName,
+            timestamp: ts,
+            indicatorId: ind.id,
+            unitCode: v.unitCode,
+            year: v.year,
+            month: v.month,
+            reviewerId: v.reviewerId,
+            personEmpNo: v.personEmpNo,
+            bedNo: v.bedNo,
+            answers: v.answers,
+            notes: v.notes,
+          });
+          return { row: r, v, ts, docId };
+        });
+        const existingIds = new Set<string>();
+        try {
+          for (let i = 0; i < targets.length; i += 50) {
+            const chunk = targets.slice(i, i + 50);
+            const snaps = await Promise.all(
+              chunk.map((t) => getDoc(doc(db, "reviewRecords", t.docId))),
+            );
+            snaps.forEach((s, j) => {
+              if (s.exists()) existingIds.add(chunk[j].docId);
+            });
+          }
+        } catch {
+          // 存在檢查失敗時一律視為新寫入（batch.set upsert 本來就安全，不會重複建檔）
+        }
+        const toWrite = targets.filter((t) => !existingIds.has(t.docId));
+        skipped = targets.length - toWrite.length;
+        inserted = toWrite.length;
+        let batch = writeBatch(db);
+        let pending = 0;
+        const flush = async () => {
+          if (pending > 0) {
+            await batch.commit();
+            batch = writeBatch(db);
+            pending = 0;
+          }
+        };
+        for (const t of toWrite) {
+          const v = t.v;
+          const answers = ind.questions.map((q, i) => {
+            const label = v.answers[i] ?? "";
+            const excluded = label === "不適用" || label === "";
+            const note = (v.notes[i] ?? "").trim();
+            return {
+              questionId: q.id,
+              itemText: q.itemText,
+              optionLabel: label,
+              score: label === "是" ? 1 : 0,
+              excluded,
+              ...(note ? { note } : {}),
+            };
+          });
+          const { totalScore, maxScore, rate } = computeOptionSetScore(
+            answers.map((a) => ({ score: a.score, excluded: a.excluded })),
+          );
+          const tsDate = t.ts ? parseSheetTimestampDate(t.ts) : null;
+          batch.set(doc(db, "reviewRecords", t.docId), {
+            taskId: "",
+            indicatorId: ind.id,
+            unitId: v.unitCode,
+            reviewerId: v.reviewerId,
+            year: v.year,
+            month: v.month,
+            caseSeq: null,
+            reviewDate: tsDate ?? `${v.year}-${String(v.month).padStart(2, "0")}-01`,
+            reviewerEmpNo: v.reviewerId,
+            reviewerName: v.reviewerId
+              ? (ref.staffMap.get(v.reviewerId) ?? v.reviewerId)
+              : "",
+            reviewedPersonEmpNo: v.personEmpNo,
+            reviewedPersonName: v.personEmpNo
+              ? (ref.staffMap.get(v.personEmpNo) ?? v.personEmpNo)
+              : "",
+            bedNo: v.bedNo,
+            answers,
+            totalScore,
+            maxScore,
+            rate,
+            submittedAt: serverTimestamp(),
+            submittedBy: user.staffId,
+            source: "sheet-sync",
+          });
+          pending++;
+          if (pending >= 500) await flush();
+        }
+        await flush();
+        logAudit(db, {
+          actor: user.staffId,
+          actorName: user.name,
+          action: "手動同步 Google Sheet",
+          targetType: "indicator",
+          targetId: ind.id,
+          detail: `${ind.code}・${m.sheetName}：手動同步寫入 ${inserted} 筆、跳過 ${skipped} 筆、錯誤 ${bad.length} 列`,
+        });
+        await updateDoc(doc(db, "sheetSyncMappings", m.id), {
+          lastSyncAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      const status = bad.length > 0 ? "partial" : "ok";
+      await writeRun({
+        status,
+        error: "",
+        rowsRead,
+        inserted,
+        updated: 0,
+        skipped,
+        errorRows: bad
+          .slice(0, 50)
+          .map((r) => ({ lineNo: r.lineNo, errors: r.errors.join("；") })),
+      });
+      if (rowsRead === 0) {
+        setErrs(["試算表內無資料列（第 2 列起）"]);
+      } else {
+        setErrs(bad.map((r) => `第 ${r.lineNo} 列：${r.errors.join("；")}`));
+      }
+      const msg = `手動同步完成：讀取 ${rowsRead} 列、新增 ${inserted} 筆、跳過 ${skipped} 筆、錯誤 ${bad.length} 列`;
+      setMsg(msg);
+      onAction(msg);
+      await loadRecentRuns(m.id);
+      await loadMappings();
+    } catch (error) {
+      setErrs([
+        `手動同步失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
+      ]);
     } finally {
       setBusy(false);
     }
@@ -3691,9 +4103,44 @@ function SheetSyncSection({
     <div className="settings-section" style={{ marginTop: 20 }}>
       <SectionTitle
         title="連結 Google Sheet（定時同步）"
-        note="四步驟：1 連線確認（貼網址、讀取欄位名稱）→ 2 欄位對應 → 3 手動同步（測試資料是否能順利匯入）→ 4 列入排程（每日 07:00 自動同步）。未列入排程前不排程、不寫入紀錄；手動同步按下後送出請求，排程將於 5 分鐘內執行。同步以內容雜湊去重，同一列重複同步不會重複建檔；列被修改會覆寫更新，列被刪除則保留系統內紀錄。"
+        note="四步驟：1 連線確認（貼網址、立即讀取欄位名稱）→ 2 欄位對應 → 3 手動同步（立即連線同步，測試資料是否能順利匯入）→ 4 列入排程（每日 07:00 自動同步）。連線確認與手動同步由瀏覽器直接讀取 Google Sheet（需先設定 API 金鑰、Sheet 設為知道連結者皆可查看），按下去立即執行，不用等排程。未列入排程前不排程、不寫入紀錄；同步以內容雜湊去重，同一列重複同步不會重複建檔；列被修改會覆寫更新，列被刪除則保留系統內紀錄。"
       />
       <div className="form-stack">
+        <div className="form-field">
+          <label className="field-label">Google Sheets API 金鑰</label>
+          <input
+            type="password"
+            value={apiKeyInput}
+            onChange={(e) => setApiKeyInput(e.target.value)}
+            placeholder="貼上 Google Cloud Console 建立的瀏覽器金鑰"
+            autoComplete="off"
+          />
+          <p className="settings-note" style={{ marginTop: 4 }}>
+            {apiKeyLoaded
+              ? apiKeyTail
+                ? `已設定（尾碼 …${apiKeyTail}）。連線確認與手動同步會由瀏覽器直接讀取 Sheet。`
+                : "尚未設定 API 金鑰：請到 Google Cloud Console（專案 nurseboard-492316）建立瀏覽器金鑰（API 和服務 → 憑證 → 建立 API 金鑰，限制來源網域為本站網址），貼上後儲存。未設定前無法連線確認與手動同步。"
+              : "正在讀取 API 金鑰設定…"}
+          </p>
+          <div className="batch-toolbar" style={{ marginTop: 6 }}>
+            <button
+              className="button button-outline button-sm"
+              disabled={busy || !apiKeyInput.trim()}
+              onClick={() => void handleSaveApiKey()}
+            >
+              儲存金鑰
+            </button>
+            {apiKeyTail && (
+              <button
+                className="button button-outline button-sm"
+                disabled={busy}
+                onClick={() => void handleClearApiKey()}
+              >
+                清除金鑰
+              </button>
+            )}
+          </div>
+        </div>
         <div className="form-field">
           <label className="field-label">試算表網址</label>
           <input
@@ -3725,7 +4172,6 @@ function SheetSyncSection({
           onClick={() => {
             void loadMappings();
             if (selectedId) {
-              void loadRequests(selectedId);
               void loadRecentRuns(selectedId);
             }
           }}
@@ -3838,16 +4284,14 @@ function SheetSyncSection({
           {/* 步驟 1：連線確認 */}
           <SectionTitle
             title="步驟 1：連線確認"
-            note="貼上 Google Sheet 網址後，進行連線，讀取 Google Sheet 上的欄位名稱。連線確認後排程將於 5 分鐘內讀取標題列。"
+            note="貼上 Google Sheet 網址後，按「連線確認」立即連線，讀取 Google Sheet 上的欄位名稱（瀏覽器直接讀取，不用等排程）。"
           />
           <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
             <div>
               連線狀態：
               {selected.detectedHeaders.length > 0
                 ? `已連線（標題列 ${selected.detectedHeaders.length} 欄，上次讀取 ${fmtTs(selected.lastHeaderFetchAt) || "—"}）`
-                : selected.headerFetchRequestedAt
-                  ? "連線確認進行中 — 排程將於 5 分鐘內讀取標題列，完成後按「重新整理」查看"
-                  : "尚未讀取標題列 — 請按上方「連線確認」"}
+                : "尚未讀取標題列 — 請按上方「連線確認」"}
               {selected.headerFetchError ? `（上次失敗：${selected.headerFetchError}）` : ""}
             </div>
             {selected.detectedHeaders.length > 0 && (
@@ -3883,7 +4327,7 @@ function SheetSyncSection({
           />
           {selected.detectedHeaders.length === 0 ? (
             <p className="settings-note">
-              尚未讀取到標題列。請先完成步驟 1 連線確認，排程讀取標題列後按「重新整理」再回來編輯對應。
+              尚未讀取到標題列。請先完成步驟 1 連線確認（按上方「連線確認」立即讀取），再回來編輯對應。
             </p>
           ) : (
             <>
@@ -3987,25 +4431,15 @@ function SheetSyncSection({
           </div>
           {/* 步驟 3：手動同步 */}
           <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-            <SectionTitle title="步驟 3：手動同步" note="欄位對應後，進行資料同步，測試資料是否能順利匯入。須有一次手動同步成功匯入至少 1 筆資料，才可進行步驟 4；對應改過後要重跑手動同步。" />
+            <SectionTitle title="步驟 3：手動同步" note="欄位對應後，進行資料同步，測試資料是否能順利匯入。按下去立即連線同步（瀏覽器直接讀取 Sheet）。須有一次手動同步成功匯入至少 1 筆資料，才可進行步驟 4；對應改過後要重跑手動同步。" />
             <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
               <div>
                 手動同步狀態：
                 {step3Done && qualifyingRun
                   ? `已完成 — 最近一次成功匯入：讀取 ${qualifyingRun.rowsRead} 列／新增 ${qualifyingRun.inserted}／更新 ${qualifyingRun.updated}（${fmtTs(qualifyingRun.finishedAt ?? qualifyingRun.startedAt) || "—"}）`
-                  : activeRequest
-                    ? `進行中（${requestStatusLabel(activeRequest.status)}），排程將於 5 分鐘內執行；完成後按「重新整理」查看結果`
-                    : latestManualRun
-                      ? `尚未完成 — 最近一次手動同步：${runStatusLabel(latestManualRun.status)}（${fmtTs(latestManualRun.startedAt) || "—"}），讀取 ${latestManualRun.rowsRead} 列／新增 ${latestManualRun.inserted}／更新 ${latestManualRun.updated}／跳過 ${latestManualRun.skipped}／錯誤 ${latestManualRun.errorRows?.length ?? 0} 列${latestManualRun.error ? `，${latestManualRun.error}` : ""}`
-                      : "尚未執行過手動同步"}
-              </div>
-              <div>
-                手動同步請求：
-                {reqLoading
-                  ? "讀取中…"
-                  : latestRequest
-                    ? `${requestStatusLabel(latestRequest.status)}（${fmtTs(latestRequest.requestedAt) || "—"}，由 ${latestRequest.requestedBy} 送出）${latestRequest.status === "failed" && latestRequest.error ? ` — ${latestRequest.error}` : ""}${latestRequest.status === "done" && latestRun && latestRun.trigger === "manual" ? ` — 讀取 ${latestRun.rowsRead} 列／新增 ${latestRun.inserted}／更新 ${latestRun.updated}／跳過 ${latestRun.skipped}／錯誤 ${latestRun.errorRows?.length ?? 0} 列` : ""}`
-                    : "尚未送出過手動同步請求"}
+                  : latestManualRun
+                    ? `尚未完成 — 最近一次手動同步：${runStatusLabel(latestManualRun.status)}（${fmtTs(latestManualRun.startedAt) || "—"}），讀取 ${latestManualRun.rowsRead} 列／新增 ${latestManualRun.inserted}／更新 ${latestManualRun.updated}／跳過 ${latestManualRun.skipped}／錯誤 ${latestManualRun.errorRows?.length ?? 0} 列${latestManualRun.error ? `，${latestManualRun.error}` : ""}`
+                    : "尚未執行過手動同步"}
               </div>
               <div>
                 最近一次同步結果：
@@ -4019,15 +4453,28 @@ function SheetSyncSection({
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "center" }}>
               <button
                 className="button button-sm"
-                disabled={busy || !user || !!activeRequest}
+                disabled={busy || !user || !step2Done || !apiKeyLoaded || !apiKeyTail}
                 onClick={() => void handleManualSync(selected)}
+                title={
+                  !apiKeyLoaded
+                    ? "正在讀取 API 金鑰設定"
+                    : !apiKeyTail
+                      ? "尚未設定 API 金鑰，請先在上方設定"
+                      : !step2Done
+                        ? "請先完成步驟 1 連線確認與步驟 2 欄位對應"
+                        : undefined
+                }
               >
                 <Play size={14} /> 手動同步一次
               </button>
               <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                {activeRequest
-                  ? `已送出同步請求（${requestStatusLabel(activeRequest.status)}），排程將於 5 分鐘內執行；完成後按「重新整理」查看結果。`
-                  : "按下後送出同步請求，排程將於 5 分鐘內執行。"}
+                {!apiKeyLoaded
+                  ? "正在讀取 API 金鑰設定…"
+                  : !apiKeyTail
+                    ? "尚未設定 API 金鑰，請先在上方設定。"
+                    : !step2Done
+                      ? "請先完成步驟 1 連線確認與步驟 2 欄位對應。"
+                      : "按下後立即連線同步。"}
               </span>
             </div>
           </div>

@@ -327,55 +327,6 @@ export function sameFieldMapping(a, b) {
 }
 
 /**
- * 待讀取標題的對照（v1.42.3，純函式）：headerFetchRequestedAt 有值且尚未讀到
- * （最後讀取時間為空或早於要求時間）者；已停用者不取。
- * 同步端以字串 ISO 時間戳比較（decodeFirestoreDoc 將 timestamp 轉為字串）。
- * @returns {object[]} 待讀取標題的對照
- */
-export function selectHeaderFetchTargets(mappings) {
-  return (mappings ?? []).filter((m) => {
-    if (!m || m.enabled === false) return false;
-    if (!m.headerFetchRequestedAt) return false;
-    if (!m.lastHeaderFetchAt) return true;
-    return String(m.lastHeaderFetchAt) < String(m.headerFetchRequestedAt);
-  });
-}
-
-/** 請求是否進行中（pending／running），進行中者前端不重複建立、輪詢不重取。 */
-export function isActiveSyncRequest(r) {
-  return r?.status === "pending" || r?.status === "running";
-}
-
-/** 請求時間字串（ISO 字串可直接比大小；缺失視為最舊）。 */
-function requestTs(r) {
-  const v = r?.requestedAt;
-  if (!v) return "";
-  return typeof v === "string" ? v : String(v);
-}
-
-/**
- * 該對照進行中的手動同步請求（pending／running 取最早一筆），有則前端不重複建立。
- * （與 src/lib/sheetSync.ts findActiveSyncRequest 同規則。）
- */
-export function findActiveSyncRequest(requests, mappingId) {
-  const active = (requests ?? [])
-    .filter((r) => r.mappingId === mappingId && isActiveSyncRequest(r))
-    .sort((a, b) => requestTs(a).localeCompare(requestTs(b)));
-  return active[0] ?? null;
-}
-
-/**
- * 輪詢模式的請求選擇（純函式）：只取 status == "pending" 的請求，
- * 依請求時間由舊到新（先送出的先執行）；running／done／failed 不重取。
- * @returns {object[]} 待執行的 pending 請求（依 requestedAt 遞增）
- */
-export function selectPendingRequests(requests) {
-  return (requests ?? [])
-    .filter((r) => r?.status === "pending")
-    .sort((a, b) => requestTs(a).localeCompare(requestTs(b)));
-}
-
-/**
  * 欄位對應預覽：取前 3 列非空資料列，用目前對應解析並逐列檢核。
  * 與同步寫入同一條 buildSyncRecord 規則（taskSnapshot 傳 null，只驗欄位與內容）。
  * @returns {{ lineNo: number, ok: boolean, errors: string, values: Record<string,string> }[]}
