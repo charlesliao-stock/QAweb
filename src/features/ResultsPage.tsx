@@ -8,7 +8,7 @@
  * 權限：can("resultQuery")；資料範圍：管理員全部、審查員只看負責單位、
  * 一般人員只看自己單位（沿用舊頁規則）。
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown,
   ChevronLeft,
@@ -60,6 +60,7 @@ import {
 } from "../lib/analysisPeriod";
 import {
   formatPassRate,
+  collectRecordNotes,
   optionDetailRows,
   questionErrorRows,
   questionErrorRowsFromSummaries,
@@ -703,6 +704,7 @@ export function ResultsPage({
                       commonErrors: Array.isArray(r.commonErrors)
                         ? r.commonErrors.filter((word): word is string => typeof word === "string")
                         : [],
+                      note: typeof r.note === "string" ? r.note : "",
                     };
                   })
                 : [];
@@ -1128,6 +1130,7 @@ export function ResultsPage({
                       commonErrors: Array.isArray(answer.commonErrors)
                         ? answer.commonErrors.filter((word): word is string => typeof word === "string")
                         : [],
+                      note: typeof answer.note === "string" ? answer.note : "",
                     };
                   })
                 : [];
@@ -1300,6 +1303,19 @@ export function ResultsPage({
           ? indRecs
           : indRecs.filter((record) => record.unitId === errorUnit),
       );
+
+  /**
+   * 指標分析補充說明（v1.41.1）：取即時明細（indRecs）中有備註的作答；
+   * 預存摘要模式無原始明細時為空，整區不顯示。只收有備註者。
+   */
+  const indNotes = useMemo(() => {
+    if (!indSel) return [];
+    const source =
+      errorUnit === "all"
+        ? indRecs
+        : indRecs.filter((record) => record.unitId === errorUnit);
+    return collectRecordNotes(source, indSel.questions);
+  }, [indRecs, indSel, errorUnit]);
   return (
     <div className="results-page">
       <PageHeading page="results" />
@@ -1778,6 +1794,40 @@ export function ResultsPage({
                 />
                 <QuestionErrorTable rows={errorAnalysisRows} />
               </section>
+              {indNotes.length > 0 && (
+                <section className="panel">
+                  <SectionTitle
+                    title="補充說明"
+                    note={`${indSel.code}・${indSel.name}・${periodDesc}・審查員備註未通過原因；只列有填寫備註的題目。`}
+                  />
+                  <div className="analysis-table-wrap">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>被審人員</th>
+                          <th>題目</th>
+                          <th>結果</th>
+                          <th>補充說明</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {indNotes.map((entry, i) => (
+                          <tr
+                            key={`${entry.personEmpNo}-${entry.year}-${entry.month}-${entry.questionId}-${i}`}
+                          >
+                            <td>
+                              {staffLabel(entry.personEmpNo, entry.personName)}
+                            </td>
+                            <td>{entry.itemText}</td>
+                            <td>{entry.optionLabel || "—"}</td>
+                            <td className="supp-note-cell">{entry.note}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
             </>
           )}
         </>
@@ -1897,6 +1947,14 @@ interface ManagedResult {
   reviewerName: string;
   reviewedPersonName: string;
   submittedAt: unknown;
+  /** 逐題作答快照（v1.41.1：明細展開顯示常見錯誤與補充說明） */
+  answers: {
+    questionId: string;
+    itemText: string;
+    optionLabel: string;
+    commonErrors: string[];
+    note: string;
+  }[];
 }
 
 /** 顯示「職編/遮罩姓名」（半形斜線；v1.40.2）。姓名缺值或與職編相同（舊資料以職編代姓名）時只顯示職編，兩者皆無顯示 —。 */
@@ -1934,12 +1992,15 @@ function ReviewResultManager({
   const [busy, setBusy] = useState(false);
   const [queried, setQueried] = useState(false);
   const [error, setError] = useState("");
+  /** 展開明細的紀錄 id（v1.41.1：逐題常見錯誤與補充說明） */
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     setRows([]);
     setSelected([]);
     setQueried(false);
     setError("");
+    setExpandedId(null);
   }, [unitId, groupId, indicatorId, start, end]);
 
   const unitName = (id: string) =>
@@ -1952,7 +2013,7 @@ function ReviewResultManager({
     setBusy(true);
     setError("");
     setSelected([]);
-    try {
+    setExpandedId(null);    try {
       const db = getFirebaseDb();
       const firstYear = Number(start.slice(0, 4));
       const lastYear = Number(end.slice(0, 4));
@@ -2001,6 +2062,22 @@ function ReviewResultManager({
             reviewerName: String(value.reviewerName ?? value.reviewerId ?? ""),
             reviewedPersonName: String(value.reviewedPersonName ?? ""),
             submittedAt: value.submittedAt,
+            answers: Array.isArray(value.answers)
+              ? value.answers.map((raw) => {
+                  const answer = (raw ?? {}) as Record<string, unknown>;
+                  return {
+                    questionId: String(answer.questionId ?? ""),
+                    itemText: String(answer.itemText ?? ""),
+                    optionLabel: String(answer.optionLabel ?? ""),
+                    commonErrors: Array.isArray(answer.commonErrors)
+                      ? answer.commonErrors.filter(
+                          (word): word is string => typeof word === "string",
+                        )
+                      : [],
+                    note: typeof answer.note === "string" ? answer.note : "",
+                  };
+                })
+              : [],
           });
         });
       });
@@ -2207,37 +2284,92 @@ function ReviewResultManager({
                   <th>被審人員</th>
                   <th>正確率</th>
                   <th>提交時間</th>
+                  <th>明細</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        aria-label={`選取 ${row.year}/${String(row.month).padStart(2, "0")} ${indicatorName(row.indicatorId)} ${row.reviewedPersonName || "審查結果"}`}
-                        checked={selected.includes(row.id)}
-                        disabled={busy}
-                        onChange={(event) =>
-                          setSelected((current) =>
-                            event.target.checked
-                              ? [...current, row.id]
-                              : current.filter((id) => id !== row.id),
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      {row.year}/{String(row.month).padStart(2, "0")}
-                    </td>
-                    <td>{unitName(row.unitId)}</td>
-                    <td>{indicatorName(row.indicatorId)}</td>
-                    <td>{staffLabel(row.reviewerEmpNo, row.reviewerName)}</td>
-                    <td>{row.reviewedPersonName || "—"}</td>
-                    <td>{row.rate == null ? "—" : `${row.rate}%`}</td>
-                    <td>{formatSubmittedAt(row.submittedAt)}</td>
-                  </tr>
-                ))}
+                {rows.map((row) => {
+                  const noted = row.answers.filter(
+                    (a) => a.note.trim() !== "" || a.commonErrors.length > 0,
+                  );
+                  const expanded = expandedId === row.id;
+                  return (
+                    <Fragment key={row.id}>
+                      <tr>
+                        <td>
+                          <input
+                            type="checkbox"
+                            aria-label={`選取 ${row.year}/${String(row.month).padStart(2, "0")} ${indicatorName(row.indicatorId)} ${row.reviewedPersonName || "審查結果"}`}
+                            checked={selected.includes(row.id)}
+                            disabled={busy}
+                            onChange={(event) =>
+                              setSelected((current) =>
+                                event.target.checked
+                                  ? [...current, row.id]
+                                  : current.filter((id) => id !== row.id),
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          {row.year}/{String(row.month).padStart(2, "0")}
+                        </td>
+                        <td>{unitName(row.unitId)}</td>
+                        <td>{indicatorName(row.indicatorId)}</td>
+                        <td>{staffLabel(row.reviewerEmpNo, row.reviewerName)}</td>
+                        <td>{row.reviewedPersonName || "—"}</td>
+                        <td>{row.rate == null ? "—" : `${row.rate}%`}</td>
+                        <td>{formatSubmittedAt(row.submittedAt)}</td>
+                        <td>
+                          {noted.length > 0 ? (
+                            <button
+                              type="button"
+                              className="button button-ghost button-sm"
+                              onClick={() =>
+                                setExpandedId(expanded ? null : row.id)
+                              }
+                              aria-expanded={expanded}
+                            >
+                              {expanded ? "收合" : `明細（${noted.length}）`}
+                            </button>
+                          ) : null}
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr className="review-record-expanded">
+                          <td colSpan={9}>
+                            <table className="data-table supp-note-table">
+                              <thead>
+                                <tr>
+                                  <th>題目</th>
+                                  <th>結果</th>
+                                  <th>常見錯誤</th>
+                                  <th>補充說明</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {noted.map((a, i) => (
+                                  <tr key={`${a.questionId}-${i}`}>
+                                    <td>{a.itemText || `第 ${i + 1} 題`}</td>
+                                    <td>{a.optionLabel || "—"}</td>
+                                    <td>
+                                      {a.commonErrors.length > 0
+                                        ? a.commonErrors.join("、")
+                                        : "—"}
+                                    </td>
+                                    <td className="supp-note-cell">
+                                      {a.note.trim() || "—"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -2465,6 +2597,36 @@ function DrillModal({
     [l2Rows, ind],
   );
 
+  // L2 補充說明（v1.41.1）：每欄＝一筆紀錄，依欄位順序分組，只列有備註的題目。
+  const l2NoteGroups = useMemo(() => {
+    if (!drill.l2UnitId || !ind) return [];
+    return l2Rows
+      .map((row, i) => {
+        const items = ind.questions
+          .map((q, qi) => {
+            const note = row.notes.get(q.id) ?? "";
+            if (!note.trim()) return null;
+            return {
+              questionId: q.id,
+              num: qi + 1,
+              itemText: q.itemText,
+              optionLabel: row.answers.get(q.id) ?? "—",
+              note: note.trim(),
+            };
+          })
+          .filter((x): x is NonNullable<typeof x> => x != null);
+        if (items.length === 0) return null;
+        return {
+          key: `${row.personEmpNo}-${row.year}-${row.month}-${i}`,
+          label: l2Matrix.headers[i] ?? row.personEmpNo,
+          monthLabel: `${row.year}/${String(row.month).padStart(2, "0")}`,
+          bedNo: row.bedNo,
+          items,
+        };
+      })
+      .filter((g): g is NonNullable<typeof g> => g != null);
+  }, [l2Rows, ind, drill.l2UnitId, l2Matrix]);
+
   if (!ind) return null;
   const title = `${ind.code}・${ind.name}`;
   return (
@@ -2565,11 +2727,12 @@ function DrillModal({
             {l2Rows.length === 0 ? (
               <EmptyState title="無資料" description="該單位該期間尚無審查紀錄。" />
             ) : (
-              <div className="analysis-table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>題目</th>
+              <>
+                <div className="analysis-table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>題目</th>
                       {l2Matrix.headers.map((h, i) => (
                         <th
                           key={`${l2Rows[i].personEmpNo}-${l2Rows[i].year}-${l2Rows[i].month}-${i}`}
@@ -2612,6 +2775,33 @@ function DrillModal({
                   </tbody>
                 </table>
               </div>
+              {l2NoteGroups.length > 0 && (
+                <section className="supp-notes">
+                  <SectionTitle
+                    title="補充說明"
+                    note="審查員備註未通過原因；只列有填寫備註的題目。"
+                  />
+                  {l2NoteGroups.map((g) => (
+                    <div key={g.key} className="supp-notes-group">
+                      <p className="supp-notes-person">
+                        {g.label}・{g.monthLabel}
+                        {g.bedNo ? `・床號 ${g.bedNo}` : ""}
+                      </p>
+                      <ul className="supp-notes-list">
+                        {g.items.map((it) => (
+                          <li key={it.questionId}>
+                            <span className="supp-notes-q">
+                              {it.num}. {it.itemText}（{it.optionLabel}）
+                            </span>
+                            <span className="supp-note-text">{it.note}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </section>
+              )}
+              </>
             )}
           </>
         )}

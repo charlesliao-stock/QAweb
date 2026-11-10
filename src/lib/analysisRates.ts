@@ -24,6 +24,8 @@ export interface AnalysisAnswer {
   excluded?: boolean;
   /** 該題從指標原因詞庫勾選的原因；分析僅計入已列詞庫項目。 */
   commonErrors?: string[];
+  /** 該題補充說明（審查員備註未通過原因；v1.41.1，查詢畫面顯示用） */
+  note?: string;
 }
 
 export interface AnalysisRecord {
@@ -171,6 +173,8 @@ export interface PersonOptionRow {
   passing: boolean;
   /** questionId → 選項標籤（是／否／不適用／未填為 ""） */
   answers: Map<string, string>;
+  /** questionId → 該題補充說明（v1.41.1；無備註為 ""） */
+  notes: Map<string, string>;
 }
 
 /**
@@ -197,6 +201,9 @@ export function personOptionRows(
       rate: r.rate,
       passing: isPassing(r.rate, threshold),
       answers: new Map(r.answers.map((a) => [a.questionId, a.optionLabel])),
+      notes: new Map(
+        r.answers.map((a) => [a.questionId, (a.note ?? "").trim()]),
+      ),
     }));
 }
 
@@ -206,7 +213,7 @@ export interface TransposedPersonMatrix {
   /** 每欄對應紀錄的床號（與 headers 一一對應；無床號為 ""，表頭下行留空） */
   bedNos: string[];
   /** 每列一題：題目文字＋每欄的作答（是／否／不適用；無作答為 "—"） */
-  rows: { questionId: string; itemText: string; values: string[] }[];
+  rows: { questionId: string; itemText: string; values: string[]; notes: string[] }[];
   /** 最下方「正確率」列：每欄的得分（null 表無分數）與達閾值標示 */
   rates: { rate: number | null; passing: boolean }[];
 }
@@ -232,9 +239,61 @@ export function transposePersonOptionRows(
       questionId: q.id,
       itemText: q.itemText,
       values: rows.map((r) => r.answers.get(q.id) || "—"),
+      // 補充說明與 values 一一對應（v1.41.1；無備註為 ""）
+      notes: rows.map((r) => r.notes.get(q.id) ?? ""),
     })),
     rates: rows.map((r) => ({ rate: r.rate, passing: r.passing })),
   };
+}
+
+/** 單筆補充說明（v1.41.1）：某筆紀錄某題的備註。 */
+export interface RecordNoteEntry {
+  personEmpNo: string;
+  personName: string;
+  year: number;
+  month: number;
+  questionId: string;
+  itemText: string;
+  optionLabel: string;
+  note: string;
+}
+
+/**
+ * 收集指定紀錄中有補充說明的作答（v1.41.1，純函式）：只收 note 非空者
+ * （無備註不列入、不佔位）；依指標題目順序排列，無對應題目者排最後；
+ * 同題依人員職編、年月排序。
+ */
+export function collectRecordNotes(
+  records: AnalysisRecord[],
+  questions: AuditQuestion[],
+): RecordNoteEntry[] {
+  const order = new Map(questions.map((q, i) => [q.id, i]));
+  const entries: RecordNoteEntry[] = [];
+  for (const r of records) {
+    for (const a of r.answers) {
+      const note = (a.note ?? "").trim();
+      if (!note) continue;
+      entries.push({
+        personEmpNo: r.personEmpNo,
+        personName: r.personName,
+        year: r.year,
+        month: r.month,
+        questionId: a.questionId,
+        itemText: a.itemText,
+        optionLabel: a.optionLabel,
+        note,
+      });
+    }
+  }
+  entries.sort(
+    (x, y) =>
+      (order.get(x.questionId) ?? Infinity) -
+        (order.get(y.questionId) ?? Infinity) ||
+      x.personEmpNo.localeCompare(y.personEmpNo, "zh-Hant") ||
+      x.year - y.year ||
+      x.month - y.month,
+  );
+  return entries;
 }
 
 /** 曆年月鍵（過濾用） */
