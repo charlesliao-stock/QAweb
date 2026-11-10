@@ -147,6 +147,14 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // 流量控管（v1.41.0）：configs/system_status（維護開關，監測 workflow 寫入）
+    // 與 configs/quotaSettings（提醒／關站門檻、監測開關、LINE 開關，系統管理頁維護）。
+    // 登入者可讀（前端攔截需讀取開關；Admin SDK 寫入繞過 rules），寫入限管理員。
+    match /configs/{id} {
+      allow read: if isAuthed();
+      allow write: if isAdmin();
+    }
+
     // UI 主題定義（v1.32.0，資料驅動）：登入可讀，管理員可寫（與 systemParams 同級，無擴權）
     match /uiThemes/{id} {
       allow read: if isAuthed();

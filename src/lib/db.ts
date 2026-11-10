@@ -10,6 +10,7 @@
  */
 import { isDemoMode } from "./demoMode";
 import { invalidateRefForDocPath } from "./refCache";
+import { assertFirestoreAllowed } from "./maintenance";
 import * as demo from "./demoStore";
 import {
   collection as fsCollection,
@@ -48,41 +49,50 @@ export function doc(first: any, ...segments: string[]): any {
   return demoOn() ? demo.docOf(first, ...segments) : fsDoc(first, ...segments);
 }
 
-export function getDoc(ref: any): Promise<DocumentSnapshot> {
-  return demoOn()
-    ? Promise.resolve(demo.getDoc(ref) as unknown as DocumentSnapshot)
-    : fsGetDoc(ref);
+export async function getDoc(ref: any): Promise<DocumentSnapshot> {
+  if (demoOn()) return Promise.resolve(demo.getDoc(ref) as unknown as DocumentSnapshot);
+  // v1.41.0 流量控管：維護開啟且非管理員時阻擋（登入 profile 與狀態文件讀取豁免）
+  await assertFirestoreAllowed({ path: ref?.path, kind: "read" });
+  return fsGetDoc(ref);
 }
 
-export function getDocs(ref: any): Promise<QuerySnapshot> {
-  return demoOn()
-    ? Promise.resolve(demo.getDocs(ref) as unknown as QuerySnapshot)
-    : fsGetDocs(ref);
+export async function getDocs(ref: any): Promise<QuerySnapshot> {
+  if (demoOn()) return Promise.resolve(demo.getDocs(ref) as unknown as QuerySnapshot);
+  // v1.41.0 流量控管：維護開啟且非管理員時阻擋
+  await assertFirestoreAllowed({ kind: "read" });
+  return fsGetDocs(ref);
 }
 
 /** 需要完整清單時繞過可能不完整的本機 IndexedDB 查詢快取。 */
-export function getDocsFromServer(ref: any): Promise<QuerySnapshot> {
-  return demoOn()
-    ? Promise.resolve(demo.getDocs(ref) as unknown as QuerySnapshot)
-    : fsGetDocsFromServer(ref);
+export async function getDocsFromServer(ref: any): Promise<QuerySnapshot> {
+  if (demoOn()) return Promise.resolve(demo.getDocs(ref) as unknown as QuerySnapshot);
+  // v1.41.0 流量控管：維護開啟且非管理員時阻擋
+  await assertFirestoreAllowed({ kind: "read" });
+  return fsGetDocsFromServer(ref);
 }
 
-export function setDoc(ref: any, data: any, options?: any): Promise<void> {
+export async function setDoc(ref: any, data: any, options?: any): Promise<void> {
   if (demoOn()) return Promise.resolve(demo.setDoc(ref, data, options));
+  // v1.41.0 流量控管：維護開啟且非管理員時阻擋寫入
+  await assertFirestoreAllowed({ kind: "write" });
   return fsSetDoc(ref, data, options).then(() => {
     invalidateRefAfterWrite(ref);
   });
 }
 
-export function updateDoc(ref: any, data: any): Promise<void> {
+export async function updateDoc(ref: any, data: any): Promise<void> {
   if (demoOn()) return Promise.resolve(demo.updateDoc(ref, data));
+  // v1.41.0 流量控管：維護開啟且非管理員時阻擋寫入
+  await assertFirestoreAllowed({ kind: "write" });
   return fsUpdateDoc(ref, data).then(() => {
     invalidateRefAfterWrite(ref);
   });
 }
 
-export function deleteDoc(ref: any): Promise<void> {
+export async function deleteDoc(ref: any): Promise<void> {
   if (demoOn()) return Promise.resolve(demo.deleteDoc(ref));
+  // v1.41.0 流量控管：維護開啟且非管理員時阻擋寫入
+  await assertFirestoreAllowed({ kind: "write" });
   return fsDeleteDoc(ref).then(() => {
     invalidateRefAfterWrite(ref);
   });
@@ -153,9 +163,12 @@ export function writeBatch(db: any): any {
       return wrapped;
     },
     commit(): Promise<void> {
-      return batch.commit().then(() => {
+      return (async () => {
+        // v1.41.0 流量控管：維護開啟且非管理員時阻擋整批寫入
+        await assertFirestoreAllowed({ kind: "write" });
+        await batch.commit();
         for (const path of touched) invalidateRefForDocPath(path);
-      });
+      })();
     },
   };
   return wrapped;

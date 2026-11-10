@@ -21,6 +21,7 @@ import { clearRefCache } from "./refCache";
 import { activeRolesForReviewerExpiry, isReviewerAccessActive } from "./reviewerValidity";
 import { parseMemberships, type Membership } from "./roleIdentity";
 import { buildRoleMetaMap, type RoleMetaMap } from "./orgMeta";
+import { setMaintenanceAdmin } from "./maintenance";
 
 /** 登入時載入的角色詮釋資料快取（效期計時器共用，避免每 30 秒重讀）。 */
 let cachedRoleMeta: RoleMetaMap | undefined;
@@ -200,9 +201,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const profile = await loadProfile(staffId);
         setUser(profile);
+        // v1.41.0 流量控管：管理員在維護期間豁免攔截
+        setMaintenanceAdmin(profile.roles.includes("系統管理員"));
         setNeedsPasswordChange(profile.mustChangePassword);
       } catch {
         setUser(null);
+        setMaintenanceAdmin(false);
         setNeedsPasswordChange(false);
       } finally {
         setLoading(false);
@@ -244,6 +248,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await signInWithEmailAndPassword(auth, staffEmail(trimmed), password);
       const profile = await loadProfile(trimmed);
       setUser(profile);
+      // v1.41.0 流量控管：管理員在維護期間豁免攔截
+      setMaintenanceAdmin(profile.roles.includes("系統管理員"));
       setNeedsPasswordChange(profile.mustChangePassword);
     } catch (error) {
       throw new Error(toAuthErrorMessage(error));
@@ -282,6 +288,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     // v1.28 階段 4：登出清空參考快取（換帳號不沿用上一人的記憶體快取）
     clearRefCache();
+    // v1.41.0 流量控管：登出即取消管理員豁免
+    setMaintenanceAdmin(false);
     if (isDemoMode()) {
       setDemoMode(false);
       setUser(null);

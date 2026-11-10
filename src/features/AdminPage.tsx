@@ -17,6 +17,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   limit,
   orderBy,
@@ -55,6 +56,13 @@ import {
 } from "../lib/themeRegistry";
 import { isHexColor, validateThemeContrast } from "../lib/colorContrast";
 import { usePermissions } from "../lib/usePermissions";
+import {
+  clearMaintenanceCache,
+  DEFAULT_QUOTA_SETTINGS,
+  normalizeQuotaSettings,
+  type QuotaSettings,
+  type SystemStatus,
+} from "../lib/maintenance";
 
 function formatParamValue(key: keyof SystemParams, value: unknown): string {
   const opts = SYSTEM_PARAM_SELECT_OPTIONS[key];
@@ -1290,6 +1298,229 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
   );
 }
 
+/**
+ * 流量控管設定區（v1.41.0，僅系統管理員可見、可改）：
+ * 提醒門檻 %、關站門檻 %、監測開關、LINE 提醒開關，存於
+ * configs/quotaSettings；目前維護狀態讀自 configs/system_status，
+ * 管理員可手動開站／關站（監測 workflow 用 Admin SDK 寫入同一文件）。
+ */
+function QuotaControlSection({
+  onAction,
+}: {
+  onAction: (message: string) => void;
+}) {
+  const { user } = useAuth();
+  const [settings, setSettings] = useState<QuotaSettings | null | undefined>(undefined);
+  const [status, setStatus] = useState<SystemStatus | null | undefined>(undefined);
+  const [warnInput, setWarnInput] = useState(String(DEFAULT_QUOTA_SETTINGS.warnPercent));
+  const [stopInput, setStopInput] = useState(String(DEFAULT_QUOTA_SETTINGS.shutdownPercent));
+  const [monitoringOn, setMonitoringOn] = useState(true);
+  const [lineOn, setLineOn] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [toggling, setToggling] = useState(false);
+
+  async function loadAll() {
+    try {
+      const snap = await getDoc(doc(getFirebaseDb(), "configs", "quotaSettings"));
+      const s = snap.exists()
+        ? normalizeQuotaSettings(snap.data() as Record<string, unknown>)
+        : { ...DEFAULT_QUOTA_SETTINGS };
+      setSettings(s);
+      setWarnInput(String(s.warnPercent));
+      setStopInput(String(s.shutdownPercent));
+      setMonitoringOn(s.monitoringEnabled);
+      setLineOn(s.lineEnabled);
+    } catch {
+      setSettings(null);
+    }
+    try {
+      const snap = await getDoc(doc(getFirebaseDb(), "configs", "system_status"));
+      if (!snap.exists()) {
+        setStatus(null);
+        return;
+      }
+      const v = snap.data() as Record<string, unknown>;
+      setStatus({
+        maintenance: v.maintenance === true,
+        reason: typeof v.reason === "string" ? v.reason : "",
+        updatedAt: "",
+        alert80SentFor: typeof v.alert80SentFor === "string" ? v.alert80SentFor : "",
+        shutdownSentFor: typeof v.shutdownSentFor === "string" ? v.shutdownSentFor : "",
+      });
+    } catch {
+      setStatus(null);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (!cancelled) await loadAll();
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const warnNum = Number(warnInput);
+  const stopNum = Number(stopInput);
+  const validation =
+    settings === undefined
+      ? ""
+      : !Number.isFinite(warnNum) || warnNum < 50 || warnNum > 95
+        ? "提醒門檻須為 50–95 的整數"
+        : !Number.isFinite(stopNum) || stopNum < 51 || stopNum > 99
+          ? "關站門檻須為 51–99 的整數"
+          : warnNum >= stopNum
+            ? "提醒門檻必須小於關站門檻"
+            : "";
+
+  async function handleSave() {
+    if (!user || saving || validation !== "") return;
+    setSaving(true);
+    try {
+      const next: QuotaSettings = {
+        warnPercent: Math.floor(warnNum),
+        shutdownPercent: Math.floor(stopNum),
+        monitoringEnabled: monitoringOn,
+        lineEnabled: lineOn,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.staffId,
+      };
+      await setDoc(doc(getFirebaseDb(), "configs", "quotaSettings"), next, { merge: true });
+      setSettings(next);
+      onAction("流量控管設定已儲存（下次監測執行起生效）");
+    } catch {
+      onAction("儲存失敗：權限不足或網路異常");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleToggleMaintenance(next: boolean) {
+    if (!user || toggling) return;
+    setToggling(true);
+    try {
+      await setDoc(
+        doc(getFirebaseDb(), "configs", "system_status"),
+        {
+          maintenance: next,
+          reason: next ? "管理員手動關站" : "",
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      // 手動切換後立即失效本機狀態快取，下次檢查重新讀取
+      clearMaintenanceCache();
+      await loadAll();
+      onAction(next ? "已手動關站（非管理員將無法存取）" : "已手動開站");
+    } catch {
+      onAction("切換失敗：權限不足或網路異常");
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  return (
+    <section className="panel" id="quota-control">
+      <SectionTitle
+        title="流量控管"
+        note="免費額度 80% 提醒、95% 關站（太平洋時間每日重置）"
+      />
+      {settings === undefined || status === undefined ? (
+        <p className="settings-note">讀取中…</p>
+      ) : (
+        <>
+          <p className="settings-note">
+            目前狀態：
+            {status?.maintenance ? (
+              <b>維護中（已關站{status.reason ? `：${status.reason}` : ""}）</b>
+            ) : (
+              "正常運作"
+            )}
+            {status?.shutdownSentFor
+              ? ` · 本日已關站通知 ${status.shutdownSentFor}`
+              : ""}
+            {status?.alert80SentFor
+              ? ` · 本日已提醒 ${status.alert80SentFor}`
+              : ""}
+          </p>
+          <div className="form-grid">
+            <div className="form-field">
+              <label className="field-label">提醒門檻（%）</label>
+              <input
+                className="text-input"
+                type="number"
+                min={50}
+                max={95}
+                value={warnInput}
+                onChange={(e) => setWarnInput(e.target.value)}
+                aria-label="提醒門檻百分比"
+              />
+            </div>
+            <div className="form-field">
+              <label className="field-label">關站門檻（%）</label>
+              <input
+                className="text-input"
+                type="number"
+                min={51}
+                max={99}
+                value={stopInput}
+                onChange={(e) => setStopInput(e.target.value)}
+                aria-label="關站門檻百分比"
+              />
+            </div>
+            <div className="form-field">
+              <label className="field-label">監測開關</label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={monitoringOn}
+                  onChange={(e) => setMonitoringOn(e.target.checked)}
+                />
+                <span>啟用定時監測</span>
+              </label>
+            </div>
+            <div className="form-field">
+              <label className="field-label">LINE 提醒</label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={lineOn}
+                  onChange={(e) => setLineOn(e.target.checked)}
+                />
+                <span>達門檻時發 LINE 提醒</span>
+              </label>
+            </div>
+          </div>
+          {validation !== "" && <p className="settings-note">{validation}</p>}
+          <p className="settings-note">
+            門檻以免費額度（讀 50,000／寫 20,000／刪 20,000 次／天）計算，讀、寫、刪任一先到即觸發；
+            監測每 10 分鐘檢查一次，停用監測後不會自動提醒、關站或恢復。
+          </p>
+          <div className="form-actions">
+            <button
+              className="button button-primary"
+              disabled={saving || validation !== ""}
+              onClick={handleSave}
+            >
+              {saving ? "儲存中…" : "儲存設定"}
+            </button>
+            <button
+              className="button button-outline"
+              disabled={toggling}
+              onClick={() => void handleToggleMaintenance(!(status?.maintenance ?? false))}
+            >
+              {toggling ? "切換中…" : status?.maintenance ? "手動開站" : "手動關站"}
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function AdminPage({
   onAction,
 }: {
@@ -1329,6 +1560,7 @@ export function AdminPage({
         canManageRoles={canManageRoles}
         themeTick={themeTick}
       />
+      {canManageRoles && <QuotaControlSection onAction={onAction} />}
       {canManageRoles && (
         <TemplateManagementSection
           onAction={onAction}

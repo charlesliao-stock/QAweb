@@ -34,6 +34,7 @@ import { BrandMark } from "../components/ui";
 import { VERSION_LABEL } from "../version";
 import { pagePermissionKey } from "../lib/permissions";
 import { usePermissions } from "../lib/usePermissions";
+import { MAINTENANCE_EVENT } from "../lib/maintenance";
 import { DashboardPage } from "../features/DashboardPage";
 // v1.28 階段 6（A1）：儀表板是登入後首頁，留在首屏 chunk；其餘 7 頁懶載入，
 // 切頁時才載入對應 chunk（首次切頁多一次請求，以 Suspense 顯示載入中、不空白卡住）。
@@ -476,6 +477,19 @@ function Shell() {
       window.matchMedia("(max-width: 760px)").matches,
   );
   const [toast, setToast] = useState("");
+  // v1.41.0 流量控管：攔截到維護中阻擋時，db.ts 會發出事件，這裡顯示橫幅
+  const [maintenanceBanner, setMaintenanceBanner] = useState("");
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const reason = (event as CustomEvent<{ reason?: string }>).detail?.reason ?? "";
+      setMaintenanceBanner(
+        reason && reason.length > 0 ? `系統維護中：${reason}` : "系統維護中，暫時無法存取資料。",
+      );
+    };
+    window.addEventListener(MAINTENANCE_EVENT, handler);
+    return () => window.removeEventListener(MAINTENANCE_EVENT, handler);
+  }, []);
   const canViewPage = useCallback(
     (target: PageId) => {
       const key = pagePermissionKey(target);
@@ -595,6 +609,18 @@ function Shell() {
         )}
       </button>
       <main className="main-area">
+        {maintenanceBanner && (
+          <div className="maintenance-banner" role="alert">
+            <span>{maintenanceBanner}</span>
+            <button
+              type="button"
+              onClick={() => setMaintenanceBanner("")}
+              aria-label="關閉維護提示"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
         <div className="page-content">
           <Suspense
             fallback={<p className="settings-note">頁面載入中…</p>}

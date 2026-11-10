@@ -40,6 +40,7 @@ import {
 } from "firebase/firestore";
 import { getDoc as dbGetDoc, getDocs as dbGetDocs } from "./db";
 import { isDemoMode } from "./demoMode";
+import { assertFirestoreAllowed, isMaintenanceError } from "./maintenance";
 
 export interface CacheFirstApi {
   isDemoMode: () => boolean;
@@ -98,12 +99,20 @@ export function clearServerOnly(): void {
  */
 export async function getDocsCacheFirst(q: any): Promise<QuerySnapshot> {
   if (api.isDemoMode()) return api.getDocs(q);
-  if (isServerOnlyNow()) return api.getDocsFromServer(q);
+  if (isServerOnlyNow()) {
+    // v1.41.0 流量控管：強制走伺服器前先檢查維護開關
+    await assertFirestoreAllowed({ kind: "read" });
+    return api.getDocsFromServer(q);
+  }
   try {
     const cached = await api.getDocsFromCache(q);
     if (!cached.empty) return cached;
+    // v1.41.0 流量控管：快取未命中、回伺服器前先檢查維護開關
+    await assertFirestoreAllowed({ kind: "read" });
     return await api.getDocsFromServer(q);
-  } catch {
+  } catch (err) {
+    // 維護中阻擋不得退回 db.ts 再試一次（會再被擋一次且多一次檢查）
+    if (isMaintenanceError(err)) throw err;
     return api.getDocs(q);
   }
 }
@@ -114,12 +123,20 @@ export async function getDocsCacheFirst(q: any): Promise<QuerySnapshot> {
  */
 export async function getDocCacheFirst(ref: any): Promise<DocumentSnapshot> {
   if (api.isDemoMode()) return api.getDoc(ref);
-  if (isServerOnlyNow()) return api.getDocFromServer(ref);
+  if (isServerOnlyNow()) {
+    // v1.41.0 流量控管：強制走伺服器前先檢查維護開關
+    await assertFirestoreAllowed({ path: ref?.path, kind: "read" });
+    return api.getDocFromServer(ref);
+  }
   try {
     const cached = await api.getDocFromCache(ref);
     if (cached.exists()) return cached;
+    // v1.41.0 流量控管：快取未命中、回伺服器前先檢查維護開關
+    await assertFirestoreAllowed({ path: ref?.path, kind: "read" });
     return await api.getDocFromServer(ref);
-  } catch {
+  } catch (err) {
+    // 維護中阻擋不得退回 db.ts 再試一次
+    if (isMaintenanceError(err)) throw err;
     return api.getDoc(ref);
   }
 }

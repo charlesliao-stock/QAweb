@@ -2493,6 +2493,37 @@ button:disabled {
   font-weight: 600;
 }
 
+/* v1.41.0：流量控管維護中橫幅（攔截到維護阻擋時顯示於主內容區頂部）。 */
+.maintenance-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  margin: 12px 16px 0;
+  color: #8a6d1b;
+  background: #fff7e0;
+  border: 1px solid #f0dfa8;
+  border-radius: 8px;
+  font-size: var(--font-small);
+}
+.maintenance-banner button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: #8a6d1b;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.maintenance-banner button:hover {
+  background: #f5e9c4;
+}
 .admin-alert {
   display: flex;
   align-items: center;
