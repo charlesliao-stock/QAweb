@@ -213,6 +213,13 @@ button:disabled {
   color: #51615f;
   margin-bottom: 8px;
 }
+/* 欄位下方診斷提示（v1.43.1：結果匯入指標下拉為空時說明原因）。 */
+.field-hint {
+  margin-top: 8px;
+  font-size: var(--font-small);
+  line-height: 1.5;
+  color: #92400e;
+}
 .select-wrap {
   position: relative;
   display: inline-flex;
@@ -3932,6 +3939,9 @@ button:disabled {
 :root[data-mode="dark"] .login-lead,
 :root[data-mode="dark"] .field-label {
   color: var(--muted);
+}
+:root[data-mode="dark"] .field-hint {
+  color: #d3a75e;
 }
 /* RAG 燈號：色相不變，深色下略調亮度 */
 :root[data-mode="dark"] .status-pill.success {

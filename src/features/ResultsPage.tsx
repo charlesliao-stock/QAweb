@@ -45,6 +45,8 @@ import { maskName } from "../lib/mask";
 import { computeOptionSetScore } from "../lib/reviewRecords";
 import { logAudit } from "../lib/audit";
 import {
+  filterImportIndicators,
+  importIndicatorEmptyHint,
   importRecordDocId,
   mergeNoteParts,
   parseResultSheet,
@@ -359,6 +361,8 @@ export function ResultsPage({
   const { can } = usePermissions();
   const now = new Date();
   const [indicators, setIndicators] = useState<IndicatorOpt[]>([]);
+  /** 指標／組別／單位參考資料是否已載入完成（v1.43.1：匯入面板據此決定是否顯示指標下拉為空的診斷提示，載入中不顯示、避免閃爍）。 */
+  const [metaLoaded, setMetaLoaded] = useState(false);
   const [groups, setGroups] = useState<GroupOpt[]>([]);
   const [units, setUnits] = useState<UnitOpt[]>([]);
   const [records, setRecords] = useState<AnalysisRecord[]>([]);
@@ -530,6 +534,8 @@ export function ResultsPage({
           setGroups([]);
           setUnits([]);
         }
+      } finally {
+        if (!cancelled) setMetaLoaded(true);
       }
     })();
     return () => {
@@ -1835,6 +1841,7 @@ export function ResultsPage({
       {tab === "import" && (
         <ResultImportPanel
           indicators={indicators}
+          indicatorsLoaded={metaLoaded}
           user={user ? { staffId: user.staffId, name: user.name } : null}
           onAction={onAction}
           onDone={(years) => {
@@ -2890,11 +2897,14 @@ function QuestionErrorTable({ rows }: { rows: QuestionErrorRow[] }) {
  */
 function ResultImportPanel({
   indicators,
+  indicatorsLoaded,
   user,
   onAction,
   onDone,
 }: {
   indicators: IndicatorOpt[];
+  /** 指標參考資料是否已載入完成（v1.43.1：未完成前不顯示下拉為空的診斷提示）。 */
+  indicatorsLoaded: boolean;
   user: { staffId: string; name: string } | null;
   onAction: (m: string) => void;
   onDone: (years: number[]) => void;
@@ -2948,13 +2958,15 @@ function ResultImportPanel({
     })();
   }, []);
 
+  // v1.43.1：指標下拉只列啟用指標、依所選組別過濾（純函式在 lib/import，
+  // 單測覆蓋）。為空時顯示診斷提示而非靜默空白——原因只可能是資料面。
   const enabledByGroup = useMemo(
-    () =>
-      indicators.filter(
-        (i) => i.status === "啟用" && (!selGroup || i.groupId === selGroup),
-      ),
+    () => filterImportIndicators(indicators, selGroup),
     [indicators, selGroup],
   );
+  const indicatorHint = indicatorsLoaded
+    ? importIndicatorEmptyHint(indicators, selGroup)
+    : null;
   const selInd = indicators.find((i) => i.id === selIndicatorId) ?? null;
 
   function handleGroupChange(groupId: string) {
@@ -3160,6 +3172,9 @@ function ResultImportPanel({
             </select>
             <ChevronDown size={15} />
           </div>
+          {indicatorHint ? (
+            <p className="field-hint">{indicatorHint}</p>
+          ) : null}
         </div>
       </div>
       <div className="batch-toolbar">

@@ -592,6 +592,51 @@ export function mergeNoteParts(parts: NotePart[]): string {
     .join("；");
 }
 
+/* ================= 結果匯入指標下拉（v1.43.1） ================= */
+
+/** 結果匯入指標下拉用的最小指標形狀（欄位與 ResultsPage 的 IndicatorOpt 一致）。 */
+export interface ImportIndicatorOpt {
+  id: string;
+  status: string;
+  groupId: string;
+}
+
+/**
+ * 結果匯入指標下拉選項（v1.43.1）：只列「啟用」指標；選了組別時只列
+ * 該組別（groupId 須與組別文件 ID 一致）；不選組別列出全部啟用指標。
+ * 泛型保留呼叫端元素的完整型別（IndicatorOpt 的 code／name／questions）。
+ */
+export function filterImportIndicators<T extends ImportIndicatorOpt>(
+  indicators: T[],
+  groupId: string,
+): T[] {
+  return indicators.filter(
+    (i) => i.status === "啟用" && (!groupId || i.groupId === groupId),
+  );
+}
+
+/**
+ * 指標下拉為空時的診斷提示（v1.43.1）：下拉本身沒有 disabled、選項
+ * 就是過濾結果，所以為空只可能是資料面——尚未載入任何指標、沒有
+ * 啟用指標、或所選組別沒有啟用指標。回傳 null 表示有選項、不用提示。
+ * 呼叫端只在指標資料已載入後才顯示（載入中不顯示，避免閃爍）。
+ */
+export function importIndicatorEmptyHint(
+  indicators: ImportIndicatorOpt[],
+  groupId: string,
+): string | null {
+  if (indicators.length === 0)
+    return "尚未載入任何指標資料，請重新整理頁面；若持續為空，請到指標管理確認指標資料。";
+  if (!indicators.some((i) => i.status === "啟用"))
+    return "尚無「啟用」狀態的指標，請先到指標管理將指標設為啟用。";
+  if (
+    groupId &&
+    !indicators.some((i) => i.status === "啟用" && i.groupId === groupId)
+  )
+    return "該組別尚無啟用指標，請到指標管理確認指標的組別與狀態，或改選「全部組別」查看。";
+  return null;
+}
+
 /* ================= SHA-1（純函式，零依賴） ================= */
 
 /**
