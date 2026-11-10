@@ -37,7 +37,6 @@ import { templateDocId } from "../lib/permissions";
 import {
   deriveGroupIds,
   deriveRoles,
-  isGroupScopedRole,
   isReviewerRole,
   isUnitLevelRole,
   parseMemberships,
@@ -1511,8 +1510,9 @@ export function GroupsPage({
         groupId: m.groupId,
         roles: [...m.roles],
       })),
+      // v1.40.3：全域角色＝聯集中未出現在任何 membership 者；角色分區不再看寫死名稱清單
       otherRoles: row.roles.filter((r) =>
-        !isGroupScopedRole(r) && !row.memberships.some((membership) => membership.roles.includes(r)),
+        !row.memberships.some((membership) => membership.roles.includes(r)),
       ),
       mustChangePassword: true,
       districtGroupIds: [],
@@ -1853,12 +1853,13 @@ export function GroupsPage({
     };
   }
 
-  /** 將角色加入人員（群組範圍角色需指定群組；單位級以其單位所屬群組計） */
+  /** 將角色加入人員（指定群組 → 寫入該群組 membership；未指定 → 只進聯集，為全域指派；單位級以其單位所屬群組計） */
   function addRoleToUser(row: UserRow, roleName: string, groupId: string) {
     return (b: WriteBatch) => {
       const roles = [...new Set([...row.roles, roleName])];
       let memberships = row.memberships;
-      if (groupId || isGroupScopedRole(roleName)) {
+      // v1.40.3：有指定群組才寫 membership；未指定群組只進聯集（全域指派），不再看寫死名稱清單
+      if (groupId) {
         const existing = memberships.find((m) => m.groupId === groupId);
         if (existing) {
           memberships = memberships.map((m) =>
@@ -1929,7 +1930,6 @@ export function GroupsPage({
   async function handleRoleMembersAdd() {
     const role = roleRows.find((r) => r.id === managingRoleId);
     if (!role || roleAddChecked.length === 0) return;
-    const groupScoped = isGroupScopedRole(role.name);
     const unitLevel = isUnitLevelRole(role.name);
     const unitGroupOf = (unitCode: string) =>
       units.find((u) => u.code === unitCode)?.groupId ?? "";
@@ -1944,7 +1944,8 @@ export function GroupsPage({
           noUnit.push(u.staffId);
           continue;
         }
-      } else if (groupScoped) {
+      } else {
+        // v1.40.3：非單位級角色一律指定群組加入（角色分類建立的角色皆可按群組指派）
         gid = roleAddGroupId;
         if (!gid) {
           onAction("請先選擇此角色適用的群組");
@@ -2673,9 +2674,12 @@ export function GroupsPage({
             patch.titleId = assignedTitle?.id ?? "";
           }
           if (v.memberships !== null) {
-            // 更新 memberships 時保留既有非群組角色（匯入檔不含此欄）
+            // 更新 memberships 時保留既有全域角色（匯入檔不含此欄；全域＝未出現在舊 membership 者）
+            const oldMembershipRoles = new Set(
+              deriveRoles(existing?.memberships ?? []),
+            );
             const keep = (existing?.roles ?? []).filter(
-              (x) => !isGroupScopedRole(x),
+              (x) => !oldMembershipRoles.has(x),
             );
             patch.memberships = v.memberships;
             patch.groupIds = deriveGroupIds(v.memberships);
@@ -3867,9 +3871,8 @@ export function GroupsPage({
                 </div>
               </div>
               <div className="form-grid">
-                {roleOptions
-                  .filter((r) => isGroupScopedRole(r.name))
-                  .map((r) => (
+                {/* v1.40.3：群組＋角色配對列出角色分類的全部角色，不再只列寫死名單 */}
+                {roleOptions.map((r) => (
                     <label className="check-row" key={r.id}>
                       <input
                         type="checkbox"
@@ -3895,16 +3898,15 @@ export function GroupsPage({
             <Plus size={14} /> 新增群組＋角色配對
           </button>
 
-          <SectionTitle title="其他角色" note="非群組限定角色可取聯集；仍須與適用單位職稱權限交集才生效。" />
+          <SectionTitle title="其他角色" note="不指定群組的角色（全院適用）；仍須與適用單位職稱權限交集才生效。" />
           {roleOptions.length === 0 ? (
             <p className="settings-note">
               尚未建立角色，請先到「角色」頁籤建立角色。
             </p>
           ) : (
             <div className="form-grid">
-              {roleOptions
-                .filter((r) => !isGroupScopedRole(r.name))
-                .map((r) => (
+              {/* v1.40.3：其他角色列出角色分類的全部角色，不再只列寫死名單以外的角色 */}
+              {roleOptions.map((r) => (
                   <label className="check-row" key={r.id}>
                     <input
                       type="checkbox"
@@ -4048,8 +4050,8 @@ export function GroupsPage({
                 onChange={(e) => setRoleAddSearch(e.target.value)}
               />
             </div>
-            {isGroupScopedRole(managingRole.name) &&
-              !isUnitLevelRole(managingRole.name) && (
+            {/* v1.40.3：非單位級角色一律可指定群組加入，不再只對寫死名單顯示群組選單 */}
+            {!isUnitLevelRole(managingRole.name) && (
                 <div className="form-field" style={{ maxWidth: 320 }}>
                   <label className="field-label">適用群組 *</label>
                   <div className="select-wrap">
