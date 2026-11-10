@@ -8,34 +8,24 @@
  * 權限：can("resultQuery")；資料範圍：管理員全部、審查員只看負責單位、
  * 一般人員只看自己單位（沿用舊頁規則）。
  */
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
   FileText,
-  Link2,
-  Play,
-  RefreshCw,
-  ShieldCheck,
   TrendingUp,
   Upload,
   X,
 } from "lucide-react";
 import {
   collection,
-  deleteDoc,
   doc,
-  getDoc,
   getDocs,
   getDocsFromServer,
-  limit,
-  orderBy,
   query,
   serverTimestamp,
-  setDoc,
-  updateDoc,
   where,
   writeBatch,
 } from "../lib/db";
@@ -56,36 +46,11 @@ import { computeOptionSetScore } from "../lib/reviewRecords";
 import { logAudit } from "../lib/audit";
 import {
   importRecordDocId,
+  mergeNoteParts,
   parseResultSheet,
   resultTemplateRows,
   validateResultSheet,
 } from "../lib/import";
-import {
-  autoFieldMapping,
-  canEnrollMapping,
-  deriveSyncSteps,
-  findQualifyingManualRun,
-  hasDuplicateMapping,
-  isMappingConfirmed,
-  mappingMissingRequired,
-  mappingReadiness,
-  parseSheetUrl,
-  runStatusLabel,
-  sameFieldMapping,
-  sheetSystemFieldOptions,
-  syncStepStateLabel,
-  tsMillis,
-  type SheetPreviewRow,
-  type SheetSyncMapping,
-  type SheetSyncRun,
-} from "../lib/sheetSync";
-import {
-  fetchSheetAllValues,
-  fetchSheetPreviewValues,
-  mapSheetValuesToResultRows,
-  parseSheetTimestampDate,
-  resultRowToPreviewValues,
-} from "../lib/sheetBrowser";
 import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
 import { EmptyState, PageHeading, SectionTitle, SummaryCell } from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
@@ -97,7 +62,7 @@ import {
 } from "../lib/analysisPeriod";
 import {
   formatPassRate,
-  collectRecordNotes,
+  collectConsolidatedRecordNotes,
   optionDetailRows,
   questionErrorRows,
   questionErrorRowsFromSummaries,
@@ -1342,8 +1307,9 @@ export function ResultsPage({
       );
 
   /**
-   * 指標分析補充說明（v1.41.1）：取即時明細（indRecs）中有備註的作答；
-   * 預存摘要模式無原始明細時為空，整區不顯示。只收有備註者。
+   * 指標分析補充說明（v1.43.0）：取即時明細（indRecs）中有備註的紀錄，
+   * 每筆彙整為一則（單則為備註原文、多則每則附題號）；預存摘要模式無
+   * 原始明細時為空，整區不顯示。只收有備註者。
    */
   const indNotes = useMemo(() => {
     if (!indSel) return [];
@@ -1351,7 +1317,7 @@ export function ResultsPage({
       errorUnit === "all"
         ? indRecs
         : indRecs.filter((record) => record.unitId === errorUnit);
-    return collectRecordNotes(source, indSel.questions);
+    return collectConsolidatedRecordNotes(source, indSel.questions);
   }, [indRecs, indSel, errorUnit]);
   return (
     <div className="results-page">
@@ -1835,28 +1801,24 @@ export function ResultsPage({
                 <section className="panel">
                   <SectionTitle
                     title="補充說明"
-                    note={`${indSel.code}・${indSel.name}・${periodDesc}・審查員備註未通過原因；只列有填寫備註的題目。`}
+                    note={`${indSel.code}・${indSel.name}・${periodDesc}・審查員備註未通過原因；每筆紀錄彙整為一則，只列有填寫備註的紀錄。`}
                   />
                   <div className="analysis-table-wrap">
                     <table className="data-table">
                       <thead>
                         <tr>
                           <th>被審人員</th>
-                          <th>題目</th>
-                          <th>結果</th>
                           <th>補充說明</th>
                         </tr>
                       </thead>
                       <tbody>
                         {indNotes.map((entry, i) => (
                           <tr
-                            key={`${entry.personEmpNo}-${entry.year}-${entry.month}-${entry.questionId}-${i}`}
+                            key={`${entry.personEmpNo}-${entry.year}-${entry.month}-${i}`}
                           >
                             <td>
                               {staffLabel(entry.personEmpNo, entry.personName)}
                             </td>
-                            <td>{entry.itemText}</td>
-                            <td>{entry.optionLabel || "—"}</td>
                             <td className="supp-note-cell">{entry.note}</td>
                           </tr>
                         ))}
@@ -1874,7 +1836,6 @@ export function ResultsPage({
         <ResultImportPanel
           indicators={indicators}
           user={user ? { staffId: user.staffId, name: user.name } : null}
-          isAdmin={isAdmin}
           onAction={onAction}
           onDone={(years) => {
             // 尚未查詢：不觸發重拉，否則匯入完又把整年紀錄拉回來、閘門白做。
@@ -2330,6 +2291,13 @@ function ReviewResultManager({
                   const noted = row.answers.filter(
                     (a) => a.note.trim() !== "" || a.commonErrors.length > 0,
                   );
+                  // v1.43.0：補充說明彙整為一則（單則為備註原文、多則每則附題號）
+                  const mergedNote = mergeNoteParts(
+                    row.answers.map((a, i) => ({
+                      questionNo: i + 1,
+                      note: a.note,
+                    })),
+                  );
                   const expanded = expandedId === row.id;
                   return (
                     <Fragment key={row.id}>
@@ -2382,7 +2350,6 @@ function ReviewResultManager({
                                   <th>題目</th>
                                   <th>結果</th>
                                   <th>常見錯誤</th>
-                                  <th>補充說明</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -2395,13 +2362,16 @@ function ReviewResultManager({
                                         ? a.commonErrors.join("、")
                                         : "—"}
                                     </td>
-                                    <td className="supp-note-cell">
-                                      {a.note.trim() || "—"}
-                                    </td>
                                   </tr>
                                 ))}
                               </tbody>
                             </table>
+                            {mergedNote ? (
+                              <div className="supp-notes-block">
+                                <p className="supp-notes-title">補充說明</p>
+                                <p className="supp-note-text">{mergedNote}</p>
+                              </div>
+                            ) : null}
                           </td>
                         </tr>
                       )}
@@ -2635,31 +2605,25 @@ function DrillModal({
     [l2Rows, ind],
   );
 
-  // L2 補充說明（v1.41.1）：每欄＝一筆紀錄，依欄位順序分組，只列有備註的題目。
+  // L2 補充說明（v1.43.0）：每欄＝一筆紀錄，每筆彙整為一則（單則為備註
+  // 原文、多則每則附題號），顯示於矩陣下方。
   const l2NoteGroups = useMemo(() => {
     if (!drill.l2UnitId || !ind) return [];
     return l2Rows
       .map((row, i) => {
-        const items = ind.questions
-          .map((q, qi) => {
-            const note = row.notes.get(q.id) ?? "";
-            if (!note.trim()) return null;
-            return {
-              questionId: q.id,
-              num: qi + 1,
-              itemText: q.itemText,
-              optionLabel: row.answers.get(q.id) ?? "—",
-              note: note.trim(),
-            };
-          })
-          .filter((x): x is NonNullable<typeof x> => x != null);
-        if (items.length === 0) return null;
+        const text = mergeNoteParts(
+          ind.questions.map((q, qi) => ({
+            questionNo: qi + 1,
+            note: row.notes.get(q.id) ?? "",
+          })),
+        );
+        if (!text) return null;
         return {
           key: `${row.personEmpNo}-${row.year}-${row.month}-${i}`,
           label: l2Matrix.headers[i] ?? row.personEmpNo,
           monthLabel: `${row.year}/${String(row.month).padStart(2, "0")}`,
           bedNo: row.bedNo,
-          items,
+          text,
         };
       })
       .filter((g): g is NonNullable<typeof g> => g != null);
@@ -2817,7 +2781,7 @@ function DrillModal({
                 <section className="supp-notes">
                   <SectionTitle
                     title="補充說明"
-                    note="審查員備註未通過原因；只列有填寫備註的題目。"
+                    note="審查員備註未通過原因；每筆紀錄彙整為一則，只列有填寫備註的紀錄。"
                   />
                   {l2NoteGroups.map((g) => (
                     <div key={g.key} className="supp-notes-group">
@@ -2825,16 +2789,7 @@ function DrillModal({
                         {g.label}・{g.monthLabel}
                         {g.bedNo ? `・床號 ${g.bedNo}` : ""}
                       </p>
-                      <ul className="supp-notes-list">
-                        {g.items.map((it) => (
-                          <li key={it.questionId}>
-                            <span className="supp-notes-q">
-                              {it.num}. {it.itemText}（{it.optionLabel}）
-                            </span>
-                            <span className="supp-note-text">{it.note}</span>
-                          </li>
-                        ))}
-                      </ul>
+                      <p className="supp-note-text">{g.text}</p>
                     </div>
                   ))}
                 </section>
@@ -2936,13 +2891,11 @@ function QuestionErrorTable({ rows }: { rows: QuestionErrorRow[] }) {
 function ResultImportPanel({
   indicators,
   user,
-  isAdmin,
   onAction,
   onDone,
 }: {
   indicators: IndicatorOpt[];
   user: { staffId: string; name: string } | null;
-  isAdmin: boolean;
   onAction: (m: string) => void;
   onDone: (years: number[]) => void;
 }) {
@@ -3251,1266 +3204,6 @@ function ResultImportPanel({
           ))}
         </div>
       )}
-      {isAdmin && (
-        <SheetSyncSection
-          indicators={indicators}
-          selIndicatorId={selIndicatorId}
-          user={user}
-          onAction={onAction}
-        />
-      )}
     </section>
-  );
-}
-
-/**
- * 連結 Google Sheet（v1.42.0，僅系統管理員；v1.42.3 改為四步驟線性流程；
- * v1.42.4 連線確認與手動同步改為瀏覽器直接讀 Sheet、立即連線）：
- * 1 連線確認（貼網址、立即讀取欄位名稱）→ 2 欄位對應 → 3 手動同步
- * （瀏覽器立即連線同步，測試資料是否能順利匯入）→ 4 列入排程
- * （每日 07:00 自動同步，仍走 service account／Actions）。
- * 連線確認與手動同步由瀏覽器直接呼叫 Sheets API（需設定 API 金鑰、
- * Sheet 設為知道連結者皆可查看），不用等排程。列入排程前不排程、不寫入紀錄。
- * 欄位對應缺必要欄時顯示錯誤、不建立同步；對應改過後須重跑手動同步、
- * 重新列入排程。
- */
-function SheetSyncSection({
-  indicators,
-  selIndicatorId,
-  user,
-  onAction,
-}: {
-  indicators: IndicatorOpt[];
-  selIndicatorId: string;
-  user: { staffId: string; name: string } | null;
-  onAction: (m: string) => void;
-}) {
-  const [url, setUrl] = useState("");
-  const [sheetName, setSheetName] = useState("表單回覆 1");
-  const [mappings, setMappings] = useState<SheetSyncMapping[]>([]);
-  const [selectedId, setSelectedId] = useState("");
-  const [draft, setDraft] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [errs, setErrs] = useState<string[]>([]);
-  const [confirmDeleteId, setConfirmDeleteId] = useState("");
-  const [recentRuns, setRecentRuns] = useState<Record<string, SheetSyncRun[]>>({});
-  const [runsLoading, setRunsLoading] = useState(false);
-  /** Google Sheets API 金鑰（v1.42.4，瀏覽器直讀用；存 configs/sheetApiKey）。 */
-  const [apiKeyInput, setApiKeyInput] = useState("");
-  const [apiKeyTail, setApiKeyTail] = useState("");
-  const [apiKeyLoaded, setApiKeyLoaded] = useState(false);
-  /** 匯入檢核用參考資料（單位代號、人員職編→姓名；與檔案匯入同一規則）。 */
-  const [unitCodes, setUnitCodes] = useState<Set<string>>(new Set());
-  const [staffMap, setStaffMap] = useState<Map<string, string>>(new Map());
-  const [staffLoaded, setStaffLoaded] = useState(false);
-
-  const loadApiKey = useCallback(async () => {
-    try {
-      const db = getFirebaseDb();
-      const snap = await getDoc(doc(db, "configs", "sheetApiKey"));
-      const v = snap.exists() ? (snap.data() as { apiKey?: unknown }) : null;
-      const key = typeof v?.apiKey === "string" ? v.apiKey : "";
-      setApiKeyTail(key ? key.slice(-4) : "");
-    } catch {
-      setApiKeyTail("");
-    } finally {
-      setApiKeyLoaded(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadApiKey();
-  }, [loadApiKey]);
-
-  /** 讀取 API 金鑰值（連線確認／手動同步前呼叫；未設定回傳 ""）。 */
-  const readApiKey = useCallback(async (): Promise<string> => {
-    try {
-      const db = getFirebaseDb();
-      const snap = await getDoc(doc(db, "configs", "sheetApiKey"));
-      const v = snap.exists() ? (snap.data() as { apiKey?: unknown }) : null;
-      return typeof v?.apiKey === "string" ? v.apiKey : "";
-    } catch {
-      return "";
-    }
-  }, []);
-
-  /** 單位＋人員參考資料（需要時載入一次；單位走記憶體快取）。
-   * 回傳最新資料（避免 state 尚未更新的舊閉包問題）。 */
-  const loadRefData = useCallback(async (): Promise<{
-    unitCodes: Set<string>;
-    staffMap: Map<string, string>;
-    staffLoaded: boolean;
-  }> => {
-    if (staffLoaded) return { unitCodes, staffMap, staffLoaded: true };
-    try {
-      const db = getFirebaseDb();
-      const [uSnap, sSnap] = await Promise.all([
-        getCachedRefCollection("units", () =>
-          getDocsCacheFirst(collection(db, "units")),
-        ),
-        getDocsFromServer(collection(db, "users")),
-      ]);
-      const codes = new Set(uSnap.docs.map((d) => d.id));
-      const sm = new Map<string, string>();
-      sSnap.docs.forEach((d) => {
-        const name = d.data().name;
-        sm.set(d.id, typeof name === "string" ? name : d.id);
-      });
-      setUnitCodes(codes);
-      setStaffMap(sm);
-      setStaffLoaded(true);
-      return { unitCodes: codes, staffMap: sm, staffLoaded: true };
-    } catch {
-      setStaffLoaded(false);
-      return { unitCodes, staffMap, staffLoaded: false };
-    }
-  }, [staffLoaded, unitCodes, staffMap]);
-
-  const loadMappings = useCallback(async () => {
-    try {
-      const db = getFirebaseDb();
-      const snap = await getDocs(collection(db, "sheetSyncMappings"));
-      const list = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<SheetSyncMapping, "id">),
-      }));
-      list.sort((a, b) =>
-        `${a.indicatorId}${a.sheetName}`.localeCompare(
-          `${b.indicatorId}${b.sheetName}`,
-          "zh-Hant",
-        ),
-      );
-      setMappings(list);
-    } catch {
-      setErrs(["讀取同步對照失敗，請重新整理頁面再試"]);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadMappings();
-  }, [loadMappings]);
-
-  const selInd =
-    indicators.find((i) => i.id === selIndicatorId) ?? null;
-  const selected = mappings.find((m) => m.id === selectedId) ?? null;
-  const selectedInd = selected
-    ? (indicators.find((i) => i.id === selected.indicatorId) ?? null)
-    : null;
-  const selectedQuestions = selectedInd
-    ? selectedInd.questions.map((q) => q.itemText)
-    : [];
-  const fieldOptions = sheetSystemFieldOptions(selectedQuestions);
-  /** 四步驟（v1.42.3）：連線確認 → 欄位對應 → 手動同步 → 列入排程，依序完成。
-   * 步驟 2 以已儲存的對應為準（草稿未儲存＝未完成）；步驟 3 以對應最後修改
-   * 時間之後的手動同步成功紀錄為準（對應改過要重跑）；步驟 4 須前三步皆完成。
-   * 各步採鏈式推導：前一步未完成，後面的步驟也不算完成。 */
-  const savedMapping = selected?.fieldMapping ?? {};
-  const mappingDirty = selected ? !sameFieldMapping(draft, savedMapping) : false;
-  const step1Done = (selected?.detectedHeaders ?? []).length > 0;
-  const step2Done =
-    step1Done &&
-    mappingMissingRequired(savedMapping, selectedQuestions).length === 0 &&
-    !hasDuplicateMapping(savedMapping) &&
-    !mappingDirty;
-  const selectedRuns = selected ? recentRuns[selected.id] ?? [] : [];
-  const qualifyingRun = selected
-    ? findQualifyingManualRun(
-        selectedRuns,
-        tsMillis(selected.fieldMappingUpdatedAt ?? null),
-      )
-    : null;
-  const step3Done = step2Done && !!qualifyingRun;
-  const step4Done = step3Done && !!selected && isMappingConfirmed(selected);
-  const steps = deriveSyncSteps({ step1Done, step2Done, step3Done, step4Done });
-  /** 列入排程 gate（v1.42.3）：第 1–3 步皆完成才可按 [列入排程]。 */
-  const enrollGate = selected
-    ? canEnrollMapping({
-        headersRead: step1Done,
-        missing: mappingMissingRequired(savedMapping, selectedQuestions),
-        hasDuplicate: hasDuplicateMapping(savedMapping),
-        manualSyncOk: step3Done,
-      })
-    : null;
-  const latestRun = selectedRuns[0] ?? null;
-  const latestManualRun =
-    selectedRuns.find((r) => r.trigger === "manual") ?? null;
-  const selectedPreview: SheetPreviewRow[] = selected?.preview ?? [];
-  const fieldLabel = (key: string) =>
-    fieldOptions.find((o) => o.key === key)?.label ?? key;
-
-  const fmtTs = (v: unknown): string => {
-    if (!v) return "";
-    if (typeof v === "string") return v;
-    const t = v as { toDate?: () => Date };
-    if (typeof t.toDate === "function") return t.toDate().toISOString().slice(0, 16).replace("T", " ");
-    return "";
-  };
-
-  /** 最近 10 筆同步執行紀錄（步驟 3 判斷用；orderBy 單欄查詢，不需複合索引）。 */
-  const loadRecentRuns = useCallback(async (mappingId: string) => {
-    setRunsLoading(true);
-    try {
-      const db = getFirebaseDb();
-      const snap = await getDocs(
-        query(
-          collection(db, "sheetSyncRuns"),
-          orderBy("startedAt", "desc"),
-          limit(10),
-        ),
-      );
-      const mine = snap.docs
-        .map((d) => ({ id: d.id, ...(d.data() as Omit<SheetSyncRun, "id">) }))
-        .filter((r) => r.mappingId === mappingId);
-      setRecentRuns((prev) => ({ ...prev, [mappingId]: mine }));
-    } catch {
-      setRecentRuns((prev) => ({ ...prev, [mappingId]: [] }));
-    } finally {
-      setRunsLoading(false);
-    }
-  }, []);
-
-  const statusLabel = (m: SheetSyncMapping) => {
-    const r = mappingReadiness(m);
-    const readyLabel =
-      r === "ready"
-        ? "可同步"
-        : r === "mapping-incomplete"
-          ? "對應未完成"
-          : "待讀取標題";
-    return isMappingConfirmed(m) ? `已確認・${readyLabel}` : `草稿・${readyLabel}`;
-  };
-
-  function selectMapping(m: SheetSyncMapping) {
-    setSelectedId(m.id);
-    setDraft(m.fieldMapping ?? {});
-    setMsg(null);
-    setErrs([]);
-    void loadRecentRuns(m.id);
-  }
-
-  /** API 金鑰儲存（v1.42.4）：存 configs/sheetApiKey（登入可讀、管理員可寫；
-   * 瀏覽器金鑰為公開設計，靠 GCP 限制來源網域；絕不存 service account 私鑰）。 */
-  async function handleSaveApiKey() {
-    if (!user) return;
-    setMsg(null);
-    setErrs([]);
-    const key = apiKeyInput.trim();
-    if (!key) {
-      setErrs(["請先貼上 Google Sheets API 金鑰"]);
-      return;
-    }
-    setBusy(true);
-    try {
-      const db = getFirebaseDb();
-      await setDoc(doc(db, "configs", "sheetApiKey"), {
-        apiKey: key,
-        updatedAt: serverTimestamp(),
-        updatedBy: user.staffId,
-      });
-      setApiKeyInput("");
-      setApiKeyTail(key.slice(-4));
-      setMsg("API 金鑰已儲存。連線確認與手動同步現在會由瀏覽器直接讀取 Google Sheet。");
-      onAction("儲存 Google Sheets API 金鑰");
-    } catch {
-      setErrs(["儲存 API 金鑰失敗"]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleClearApiKey() {
-    if (!user) return;
-    setBusy(true);
-    try {
-      const db = getFirebaseDb();
-      await deleteDoc(doc(db, "configs", "sheetApiKey"));
-      setApiKeyTail("");
-      setApiKeyInput("");
-      setMsg("API 金鑰已清除。連線確認與手動同步須重新設定金鑰才能使用。");
-    } catch {
-      setErrs(["清除 API 金鑰失敗"]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  /**
-   * 讀取標題列＋前 3 列預覽並寫回對照（v1.42.4，瀏覽器直接讀 Sheet、立即完成）。
-   * 成功：寫回 detectedHeaders、合併後的對應（自動對應＋既有手動對應優先）、
-   * readiness、preview、lastHeaderFetchAt；失敗：原因寫回 headerFetchError。
-   * 回傳 true＝讀取成功。
-   */
-  async function fetchHeadersAndPreview(
-    m: SheetSyncMapping,
-    apiKey: string,
-  ): Promise<boolean> {
-    const ind = indicators.find((i) => i.id === m.indicatorId) ?? null;
-    if (!ind) {
-      setErrs(["連結的指標不存在"]);
-      return false;
-    }
-    const questions = ind.questions.map((q) => q.itemText);
-    const r = await fetchSheetPreviewValues(m.spreadsheetId, m.sheetName, apiKey);
-    if ("error" in r) {
-      try {
-        const db = getFirebaseDb();
-        await updateDoc(doc(db, "sheetSyncMappings", m.id), {
-          headerFetchError: r.error.message,
-          updatedAt: serverTimestamp(),
-        });
-      } catch {
-        /* 寫回失敗不影響錯誤顯示 */
-      }
-      setErrs([`連線確認失敗：${r.error.message}`]);
-      await loadMappings();
-      return false;
-    }
-    const values = r.values;
-    if (values.length === 0 || (values[0] ?? []).every((h) => h === "")) {
-      setErrs(["連線確認失敗：試算表標題列為空，請確認分頁名稱正確，且第一列有欄位名稱。"]);
-      return false;
-    }
-    const headers = values[0];
-    const auto = autoFieldMapping(headers, questions);
-    const merged: Record<string, string> = { ...auto };
-    for (const [h, v] of Object.entries(m.fieldMapping ?? {})) {
-      if (v) merged[h] = v;
-    }
-    const missing = mappingMissingRequired(merged, questions);
-    // 預覽（前 3 列資料列）：與檔案匯入同一條解析／檢核規則。
-    let preview: SheetPreviewRow[] = [];
-    try {
-      const ref = await loadRefData();
-      const mapped = mapSheetValuesToResultRows(
-        values.slice(0, 5),
-        merged,
-        questions,
-        ind.code,
-      );
-      const parsed = parseResultSheet(mapped.rows, { questionTitles: questions });
-      const validated = validateResultSheet(parsed.data, {
-        code: ind.code,
-        questionCount: questions.length,
-        unitHas: (c) => ref.unitCodes.has(c),
-        staffHas: (id) => ref.staffMap.has(id),
-        staffLoaded: ref.staffLoaded,
-      });
-      preview = validated.rows.slice(0, 3).map((row) => {
-        const extra = mapped.rowErrors.get(row.lineNo) ?? [];
-        const allErrors = [...row.errors, ...extra];
-        return {
-          lineNo: row.lineNo,
-          ok: row.ok && extra.length === 0,
-          errors: allErrors.join("；"),
-          values: resultRowToPreviewValues(mapped.rows[row.lineNo - 1] ?? [], questions),
-        };
-      });
-    } catch {
-      preview = [];
-    }
-    const db = getFirebaseDb();
-    const patch: Record<string, unknown> = {
-      detectedHeaders: headers,
-      fieldMapping: merged,
-      readiness: missing.length > 0 ? "mapping-incomplete" : "ready",
-      preview,
-      previewAt: serverTimestamp(),
-      lastHeaderFetchAt: serverTimestamp(),
-      headerFetchError: "",
-      updatedAt: serverTimestamp(),
-    };
-    if (!sameFieldMapping(merged, m.fieldMapping ?? {})) {
-      patch.fieldMappingUpdatedAt = serverTimestamp();
-    }
-    await updateDoc(doc(db, "sheetSyncMappings", m.id), patch);
-    await loadMappings();
-    return true;
-  }
-
-  /** 步驟 1 連線確認（v1.42.4）：貼網址建連結，瀏覽器立即用 API key 讀標題列；
-   * 成功即寫回欄位名稱清單與自動對應；失敗顯示具體原因（未設連結共用／
-   * 未啟用 Sheets API／未設 API key）。不再走排程。 */
-  async function handleLink() {
-    if (!user) return;
-    setMsg(null);
-    setErrs([]);
-    if (!selInd) {
-      setErrs(["請先在上方選組別與指標，再連結 Google Sheet"]);
-      return;
-    }
-    const parsed = parseSheetUrl(url);
-    if ("error" in parsed) {
-      setErrs([parsed.error]);
-      return;
-    }
-    const apiKey = await readApiKey();
-    if (!apiKey) {
-      setErrs(["尚未設定 Google Sheets API 金鑰：請先在上方貼上金鑰並儲存，再按連線確認。"]);
-      return;
-    }
-    const name = sheetName.trim() || "表單回覆 1";
-    const existing = mappings.find(
-      (m) => m.spreadsheetId === parsed.spreadsheetId && m.sheetName === name,
-    );
-    setBusy(true);
-    try {
-      let target: SheetSyncMapping;
-      if (existing) {
-        target = existing;
-        selectMapping(existing);
-      } else {
-        const db = getFirebaseDb();
-        const ref = doc(collection(db, "sheetSyncMappings"));
-        await setDoc(ref, {
-          spreadsheetId: parsed.spreadsheetId,
-          sheetName: name,
-          ...(parsed.gid ? { sheetGid: parsed.gid } : {}),
-          groupId: selInd.groupId,
-          indicatorId: selInd.id,
-          enabled: true,
-          detectedHeaders: [],
-          fieldMapping: {},
-          status: "draft",
-          readiness: "pending",
-          headerFetchError: "",
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-        await loadMappings();
-        target = {
-          id: ref.id,
-          spreadsheetId: parsed.spreadsheetId,
-          sheetName: name,
-          groupId: selInd.groupId,
-          indicatorId: selInd.id,
-          enabled: true,
-          detectedHeaders: [],
-          fieldMapping: {},
-          status: "draft",
-          readiness: "pending",
-        };
-        setSelectedId(ref.id);
-        setDraft({});
-        onAction(`連結 Google Sheet：${selInd.code}・${name}`);
-      }
-      setMsg("連線確認中，正在讀取標題列…");
-      const ok = await fetchHeadersAndPreview(target, apiKey);
-      if (ok) {
-        setMsg(
-          existing
-            ? `連線確認成功，已讀到「${name}」的欄位名稱。請確認下方欄位對應。`
-            : `已建立連結（${name}），連線確認成功，已讀到欄位名稱。請到下方完成欄位對應。`,
-        );
-      }
-    } catch {
-      setErrs(["建立連結失敗，請確認權限後再試"]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleRequestHeaders(m: SheetSyncMapping) {
-    setMsg(null);
-    setErrs([]);
-    const apiKey = await readApiKey();
-    if (!apiKey) {
-      setErrs(["尚未設定 Google Sheets API 金鑰：請先在上方貼上金鑰並儲存。"]);
-      return;
-    }
-    setBusy(true);
-    try {
-      setMsg("正在重新讀取欄位…");
-      const ok = await fetchHeadersAndPreview(m, apiKey);
-      if (ok) setMsg("已重新讀取欄位名稱與預覽。");
-    } catch {
-      setErrs(["重新讀取欄位失敗"]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleSaveMapping(m: SheetSyncMapping) {
-    setMsg(null);
-    setErrs([]);
-    const missing = mappingMissingRequired(draft, selectedQuestions);
-    if (missing.length > 0) {
-      setErrs([
-        `對應缺必要欄位：${missing.join("、")}，請補齊後再儲存（不同標題不可對到同一系統欄位）。`,
-      ]);
-      return;
-    }
-    if (hasDuplicateMapping(draft)) {
-      setErrs(["不同標題不可對到同一系統欄位，請檢查後再儲存"]);
-      return;
-    }
-    setBusy(true);
-    try {
-      const db = getFirebaseDb();
-      // 儲存對應後回到草稿（v1.42.1 確認關卡）：須重新列入排程。
-      // 同時寫 fieldMappingUpdatedAt（v1.42.3）：步驟 3 的手動同步成功紀錄
-      // 須在此時間之後才算數，對應改過就要重跑手動同步。
-      await updateDoc(doc(db, "sheetSyncMappings", m.id), {
-        fieldMapping: draft,
-        readiness: "ready",
-        status: "draft",
-        confirmedAt: null,
-        confirmedBy: null,
-        fieldMappingUpdatedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      setMsg("欄位對應已儲存。下一步：按「手動同步一次」，測試資料是否能順利匯入。");
-      onAction(`儲存 Sheet 欄位對應：${m.sheetName}`);
-      await loadMappings();
-    } catch {
-      setErrs(["儲存對應失敗"]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  /** 步驟 4 列入排程（v1.42.3）：第 1–3 步皆完成才可用。查詢正常由使用者
-   * 自行到結果分析確認，按下即代表已確認查詢正常。 */
-  async function handleEnroll(m: SheetSyncMapping) {
-    if (!user) return;
-    setMsg(null);
-    setErrs([]);
-    const gate = canEnrollMapping({
-      headersRead: step1Done,
-      missing: mappingMissingRequired(savedMapping, selectedQuestions),
-      hasDuplicate: hasDuplicateMapping(savedMapping),
-      manualSyncOk: step3Done,
-    });
-    if (!gate.ok) {
-      setErrs(gate.reasons);
-      return;
-    }
-    setBusy(true);
-    try {
-      const db = getFirebaseDb();
-      await updateDoc(doc(db, "sheetSyncMappings", m.id), {
-        status: "confirmed",
-        confirmedAt: serverTimestamp(),
-        confirmedBy: user.staffId,
-        updatedAt: serverTimestamp(),
-      });
-      setMsg("已列入排程，每日 07:00 自動同步。");
-      onAction(`Sheet 列入排程：${m.sheetName}`);
-      await loadMappings();
-    } catch {
-      setErrs(["列入排程失敗"]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  /** 步驟 3 手動同步（v1.42.4）：瀏覽器立即用 API key 讀全部資料，沿用檔案
-   * 匯入流程（parse／validate）與雜湊去重（import_＋雜湊前綴、每批 ≤500 筆），
-   * 立即寫入並顯示結果。草稿對照也可手動同步，不需先確認。
-   * 不填排程快照欄位（與檔案匯入同一限制；同一列之後由每日 07:00 排程
-   * 以相同文件 ID 覆寫補上快照）。成功後寫 sheetSyncRuns（trigger manual、
-   * source browser），列入排程 gate 直接認可。
-   * inserted／skipped 以文件 ID 是否已存在區分（雜湊即內容，存在＝內容相同）；
-   * updated 恆為 0（內容改過會產生新文件 ID，舊文件由每日排程刪舊寫新）。 */
-  async function handleManualSync(m: SheetSyncMapping) {
-    if (!user) return;
-    setMsg(null);
-    setErrs([]);
-    const ind = selectedInd;
-    if (!ind) {
-      setErrs(["連結的指標不存在"]);
-      return;
-    }
-    const apiKey = await readApiKey();
-    if (!apiKey) {
-      setErrs(["尚未設定 Google Sheets API 金鑰：請先在上方貼上金鑰並儲存。"]);
-      return;
-    }
-    const questions = ind.questions.map((q) => q.itemText);
-    setBusy(true);
-    setMsg("手動同步執行中，正在讀取試算表…");
-    const db = getFirebaseDb();
-    const writeRun = async (run: {
-      status: string;
-      error: string;
-      rowsRead: number;
-      inserted: number;
-      updated: number;
-      skipped: number;
-      errorRows: { lineNo: number; errors: string }[];
-    }) => {
-      await setDoc(doc(collection(db, "sheetSyncRuns")), {
-        ...run,
-        mappingId: m.id,
-        trigger: "manual",
-        source: "browser",
-        startedAt: serverTimestamp(),
-        finishedAt: serverTimestamp(),
-      });
-    };
-    try {
-      const ref = await loadRefData();
-      const fetched = await fetchSheetAllValues(m.spreadsheetId, m.sheetName, apiKey);
-      if ("error" in fetched) {
-        setErrs([`手動同步失敗：${fetched.error.message}`]);
-        await writeRun({
-          status: "failed",
-          error: fetched.error.message,
-          rowsRead: 0,
-          inserted: 0,
-          updated: 0,
-          skipped: 0,
-          errorRows: [],
-        });
-        await loadRecentRuns(m.id);
-        return;
-      }
-      const values = fetched.values;
-      const rowsRead = values
-        .slice(1)
-        .filter((row) => row.some((c) => c !== "")).length;
-      const mapped = mapSheetValuesToResultRows(values, savedMapping, questions, ind.code);
-      const { headerErrors, data } = parseResultSheet(mapped.rows, {
-        questionTitles: questions,
-      });
-      if (headerErrors.length > 0) {
-        setErrs(headerErrors);
-        await writeRun({
-          status: "failed",
-          error: headerErrors.join("；"),
-          rowsRead,
-          inserted: 0,
-          updated: 0,
-          skipped: 0,
-          errorRows: [],
-        });
-        await loadRecentRuns(m.id);
-        return;
-      }
-      const { fileErrors, rows } = validateResultSheet(data, {
-        code: ind.code,
-        questionCount: questions.length,
-        unitHas: (c) => ref.unitCodes.has(c),
-        staffHas: (id) => ref.staffMap.has(id),
-        staffLoaded: ref.staffLoaded,
-      });
-      if (fileErrors.length > 0) {
-        setErrs(fileErrors);
-        await writeRun({
-          status: "failed",
-          error: fileErrors.join("；"),
-          rowsRead,
-          inserted: 0,
-          updated: 0,
-          skipped: 0,
-          errorRows: [],
-        });
-        await loadRecentRuns(m.id);
-        return;
-      }
-      // 合併逐列額外錯誤（指標代號不符、受審人員職編未填）。
-      const results = rows.map((row) => {
-        const extra = mapped.rowErrors.get(row.lineNo) ?? [];
-        if (extra.length === 0) return row;
-        return {
-          ...row,
-          ok: false,
-          errors: [...row.errors, ...extra],
-          values: null,
-        };
-      });
-      const ok = results.filter((r) => r.ok && r.values);
-      const bad = results.filter((r) => !r.ok);
-      let inserted = 0;
-      let skipped = 0;
-      if (ok.length > 0) {
-        // 去重：文件 ID 即內容雜湊，已存在＝內容相同，跳過不寫。
-        const targets = ok.map((r) => {
-          const v = r.values!;
-          const ts = mapped.timestamps.get(r.lineNo) ?? "";
-          const docId = importRecordDocId({
-            spreadsheetId: m.spreadsheetId,
-            sheetName: m.sheetName,
-            timestamp: ts,
-            indicatorId: ind.id,
-            unitCode: v.unitCode,
-            year: v.year,
-            month: v.month,
-            reviewerId: v.reviewerId,
-            personEmpNo: v.personEmpNo,
-            bedNo: v.bedNo,
-            answers: v.answers,
-            notes: v.notes,
-          });
-          return { row: r, v, ts, docId };
-        });
-        const existingIds = new Set<string>();
-        try {
-          for (let i = 0; i < targets.length; i += 50) {
-            const chunk = targets.slice(i, i + 50);
-            const snaps = await Promise.all(
-              chunk.map((t) => getDoc(doc(db, "reviewRecords", t.docId))),
-            );
-            snaps.forEach((s, j) => {
-              if (s.exists()) existingIds.add(chunk[j].docId);
-            });
-          }
-        } catch {
-          // 存在檢查失敗時一律視為新寫入（batch.set upsert 本來就安全，不會重複建檔）
-        }
-        const toWrite = targets.filter((t) => !existingIds.has(t.docId));
-        skipped = targets.length - toWrite.length;
-        inserted = toWrite.length;
-        let batch = writeBatch(db);
-        let pending = 0;
-        const flush = async () => {
-          if (pending > 0) {
-            await batch.commit();
-            batch = writeBatch(db);
-            pending = 0;
-          }
-        };
-        for (const t of toWrite) {
-          const v = t.v;
-          const answers = ind.questions.map((q, i) => {
-            const label = v.answers[i] ?? "";
-            const excluded = label === "不適用" || label === "";
-            const note = (v.notes[i] ?? "").trim();
-            return {
-              questionId: q.id,
-              itemText: q.itemText,
-              optionLabel: label,
-              score: label === "是" ? 1 : 0,
-              excluded,
-              ...(note ? { note } : {}),
-            };
-          });
-          const { totalScore, maxScore, rate } = computeOptionSetScore(
-            answers.map((a) => ({ score: a.score, excluded: a.excluded })),
-          );
-          const tsDate = t.ts ? parseSheetTimestampDate(t.ts) : null;
-          batch.set(doc(db, "reviewRecords", t.docId), {
-            taskId: "",
-            indicatorId: ind.id,
-            unitId: v.unitCode,
-            reviewerId: v.reviewerId,
-            year: v.year,
-            month: v.month,
-            caseSeq: null,
-            reviewDate: tsDate ?? `${v.year}-${String(v.month).padStart(2, "0")}-01`,
-            reviewerEmpNo: v.reviewerId,
-            reviewerName: v.reviewerId
-              ? (ref.staffMap.get(v.reviewerId) ?? v.reviewerId)
-              : "",
-            reviewedPersonEmpNo: v.personEmpNo,
-            reviewedPersonName: v.personEmpNo
-              ? (ref.staffMap.get(v.personEmpNo) ?? v.personEmpNo)
-              : "",
-            bedNo: v.bedNo,
-            answers,
-            totalScore,
-            maxScore,
-            rate,
-            submittedAt: serverTimestamp(),
-            submittedBy: user.staffId,
-            source: "sheet-sync",
-          });
-          pending++;
-          if (pending >= 500) await flush();
-        }
-        await flush();
-        logAudit(db, {
-          actor: user.staffId,
-          actorName: user.name,
-          action: "手動同步 Google Sheet",
-          targetType: "indicator",
-          targetId: ind.id,
-          detail: `${ind.code}・${m.sheetName}：手動同步寫入 ${inserted} 筆、跳過 ${skipped} 筆、錯誤 ${bad.length} 列`,
-        });
-        await updateDoc(doc(db, "sheetSyncMappings", m.id), {
-          lastSyncAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      }
-      const status = bad.length > 0 ? "partial" : "ok";
-      await writeRun({
-        status,
-        error: "",
-        rowsRead,
-        inserted,
-        updated: 0,
-        skipped,
-        errorRows: bad
-          .slice(0, 50)
-          .map((r) => ({ lineNo: r.lineNo, errors: r.errors.join("；") })),
-      });
-      if (rowsRead === 0) {
-        setErrs(["試算表內無資料列（第 2 列起）"]);
-      } else {
-        setErrs(bad.map((r) => `第 ${r.lineNo} 列：${r.errors.join("；")}`));
-      }
-      const msg = `手動同步完成：讀取 ${rowsRead} 列、新增 ${inserted} 筆、跳過 ${skipped} 筆、錯誤 ${bad.length} 列`;
-      setMsg(msg);
-      onAction(msg);
-      await loadRecentRuns(m.id);
-      await loadMappings();
-    } catch (error) {
-      setErrs([
-        `手動同步失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
-      ]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleToggleEnabled(m: SheetSyncMapping) {
-    setBusy(true);
-    try {
-      const db = getFirebaseDb();
-      await updateDoc(doc(db, "sheetSyncMappings", m.id), {
-        enabled: !m.enabled,
-        updatedAt: serverTimestamp(),
-      });
-      await loadMappings();
-    } catch {
-      setErrs(["更新啟用狀態失敗"]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleDelete(m: SheetSyncMapping) {
-    if (confirmDeleteId !== m.id) {
-      setConfirmDeleteId(m.id);
-      return;
-    }
-    setConfirmDeleteId("");
-    setBusy(true);
-    try {
-      const db = getFirebaseDb();
-      await deleteDoc(doc(db, "sheetSyncMappings", m.id));
-      if (selectedId === m.id) setSelectedId("");
-      setMsg(`已刪除連結（${m.sheetName}），已同步的審查紀錄不受影響。`);
-      await loadMappings();
-    } catch {
-      setErrs(["刪除連結失敗"]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="settings-section" style={{ marginTop: 20 }}>
-      <SectionTitle
-        title="連結 Google Sheet（定時同步）"
-        note="四步驟：1 連線確認（貼網址、立即讀取欄位名稱）→ 2 欄位對應 → 3 手動同步（立即連線同步，測試資料是否能順利匯入）→ 4 列入排程（每日 07:00 自動同步）。連線確認與手動同步由瀏覽器直接讀取 Google Sheet（需先設定 API 金鑰、Sheet 設為知道連結者皆可查看），按下去立即執行，不用等排程。未列入排程前不排程、不寫入紀錄；同步以內容雜湊去重，同一列重複同步不會重複建檔；列被修改會覆寫更新，列被刪除則保留系統內紀錄。"
-      />
-      <div className="form-stack">
-        <div className="form-field">
-          <label className="field-label">Google Sheets API 金鑰</label>
-          <input
-            type="password"
-            value={apiKeyInput}
-            onChange={(e) => setApiKeyInput(e.target.value)}
-            placeholder="貼上 Google Cloud Console 建立的瀏覽器金鑰"
-            autoComplete="off"
-          />
-          <p className="settings-note" style={{ marginTop: 4 }}>
-            {apiKeyLoaded
-              ? apiKeyTail
-                ? `已設定（尾碼 …${apiKeyTail}）。連線確認與手動同步會由瀏覽器直接讀取 Sheet。`
-                : "尚未設定 API 金鑰：請到 Google Cloud Console（專案 nurseboard-492316）建立瀏覽器金鑰（API 和服務 → 憑證 → 建立 API 金鑰，限制來源網域為本站網址），貼上後儲存。未設定前無法連線確認與手動同步。"
-              : "正在讀取 API 金鑰設定…"}
-          </p>
-          <div className="batch-toolbar" style={{ marginTop: 6 }}>
-            <button
-              className="button button-outline button-sm"
-              disabled={busy || !apiKeyInput.trim()}
-              onClick={() => void handleSaveApiKey()}
-            >
-              儲存金鑰
-            </button>
-            {apiKeyTail && (
-              <button
-                className="button button-outline button-sm"
-                disabled={busy}
-                onClick={() => void handleClearApiKey()}
-              >
-                清除金鑰
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="form-field">
-          <label className="field-label">試算表網址</label>
-          <input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://docs.google.com/spreadsheets/d/……/edit#gid=0"
-          />
-        </div>
-        <div className="form-field">
-          <label className="field-label">分頁名稱</label>
-          <input
-            value={sheetName}
-            onChange={(e) => setSheetName(e.target.value)}
-            placeholder="表單回覆 1"
-          />
-        </div>
-      </div>
-      <div className="batch-toolbar">
-        <button
-          className="button button-outline button-sm"
-          disabled={busy || !user}
-          onClick={() => void handleLink()}
-        >
-          <Link2 size={14} /> 連線確認
-        </button>
-        <button
-          className="button button-outline button-sm"
-          disabled={busy}
-          onClick={() => {
-            void loadMappings();
-            if (selectedId) {
-              void loadRecentRuns(selectedId);
-            }
-          }}
-        >
-          <RefreshCw size={14} /> 重新整理
-        </button>
-      </div>
-      {msg && (
-        <p className="settings-note" role="status">
-          {msg}
-        </p>
-      )}
-      {errs.length > 0 &&
-        errs.map((e, i) => (
-          <div key={i} className="field-error">
-            {e}
-          </div>
-        ))}
-      {mappings.length > 0 && (
-        <div style={{ overflowX: "auto", marginTop: 12 }}>
-          <table className="settings-table">
-            <thead>
-              <tr>
-                <th>試算表分頁</th>
-                <th>指標</th>
-                <th>狀態</th>
-                <th>上次同步</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {mappings.map((m) => {
-                const ind = indicators.find((i) => i.id === m.indicatorId);
-                return (
-                  <tr key={m.id} style={m.id === selectedId ? { background: "var(--row-hover)" } : undefined}>
-                    <td>
-                      {m.sheetName}
-                      <div className="muted-text" style={{ fontSize: 12 }}>
-                        {m.spreadsheetId.slice(0, 12)}…
-                      </div>
-                    </td>
-                    <td>{ind ? `${ind.code}・${ind.name}` : m.indicatorId}</td>
-                    <td>
-                      {statusLabel(m)}
-                      {!m.enabled && "（已停用）"}
-                    </td>
-                    <td>{fmtTs(m.lastSyncAt) || "—"}</td>
-                    <td>
-                      <div className="inline-actions">
-                        <button
-                          className="button button-outline button-sm"
-                          disabled={busy}
-                          onClick={() => selectMapping(m)}
-                        >
-                          編輯對應
-                        </button>
-                        <button
-                          className="button button-outline button-sm"
-                          disabled={busy}
-                          onClick={() => void handleRequestHeaders(m)}
-                        >
-                          讀取欄位
-                        </button>
-                        <button
-                          className="button button-outline button-sm"
-                          disabled={busy}
-                          onClick={() => void handleToggleEnabled(m)}
-                        >
-                          {m.enabled ? "停用" : "啟用"}
-                        </button>
-                        <button
-                          className="button button-outline button-sm"
-                          disabled={busy}
-                          onClick={() => void handleDelete(m)}
-                        >
-                          {confirmDeleteId === m.id ? "確認刪除" : "刪除"}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {selected && (
-        <div style={{ marginTop: 16 }}>
-          {/* 四步驟狀態（v1.42.3）：連線確認 → 欄位對應 → 手動同步 → 列入排程 */}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 13, marginBottom: 12 }}>
-            {[
-              { n: 1, name: "連線確認", state: steps.step1 },
-              { n: 2, name: "欄位對應", state: steps.step2 },
-              { n: 3, name: "手動同步", state: steps.step3 },
-              { n: 4, name: "列入排程", state: steps.step4 },
-            ].map((s) => (
-              <span
-                key={s.n}
-                style={{
-                  border: "1px solid var(--border)",
-                  borderRadius: 6,
-                  padding: "4px 8px",
-                  fontWeight: s.state === "active" ? 700 : 400,
-                }}
-              >
-                步驟 {s.n} {s.name}：{syncStepStateLabel(s.state)}
-              </span>
-            ))}
-          </div>
-          {/* 步驟 1：連線確認 */}
-          <SectionTitle
-            title="步驟 1：連線確認"
-            note="貼上 Google Sheet 網址後，按「連線確認」立即連線，讀取 Google Sheet 上的欄位名稱（瀏覽器直接讀取，不用等排程）。"
-          />
-          <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
-            <div>
-              連線狀態：
-              {selected.detectedHeaders.length > 0
-                ? `已連線（標題列 ${selected.detectedHeaders.length} 欄，上次讀取 ${fmtTs(selected.lastHeaderFetchAt) || "—"}）`
-                : "尚未讀取標題列 — 請按上方「連線確認」"}
-              {selected.headerFetchError ? `（上次失敗：${selected.headerFetchError}）` : ""}
-            </div>
-            {selected.detectedHeaders.length > 0 && (
-              <div>
-                讀到的欄位名稱：
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
-                  {selected.detectedHeaders.map((h) => (
-                    <span
-                      key={h}
-                      style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "2px 8px", fontSize: 12 }}
-                    >
-                      {h}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="batch-toolbar" style={{ marginTop: 8 }}>
-            <button
-              className="button button-outline button-sm"
-              disabled={busy}
-              onClick={() => void handleRequestHeaders(selected)}
-            >
-              <RefreshCw size={14} /> 重新讀取欄位
-            </button>
-          </div>
-          {/* 步驟 2：欄位對應 */}
-          <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-          <SectionTitle
-            title={`步驟 2：欄位對應（${selected.sheetName}）`}
-            note="讓系統知道匯入時各欄位要抓 Google Sheet 上哪個欄位。左邊是 Sheet 實際欄名，右邊選系統欄位；儲存時會自動依欄名預填對應，未對上的請手動選擇。必要欄位（受審單位、受審人員職編、審查月份或時間戳記、各題結果）缺任一項都無法儲存。"
-          />
-          {selected.detectedHeaders.length === 0 ? (
-            <p className="settings-note">
-              尚未讀取到標題列。請先完成步驟 1 連線確認（按上方「連線確認」立即讀取），再回來編輯對應。
-            </p>
-          ) : (
-            <>
-              <div style={{ overflowX: "auto" }}>
-                <table className="settings-table">
-                  <thead>
-                    <tr>
-                      <th>Sheet 欄名</th>
-                      <th>系統欄位</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selected.detectedHeaders.map((h) => (
-                      <tr key={h}>
-                        <td>{h}</td>
-                        <td>
-                          <div className="select-wrap">
-                            <select
-                              value={draft[h] ?? ""}
-                              onChange={(e) =>
-                                setDraft((prev) => ({
-                                  ...prev,
-                                  [h]: e.target.value,
-                                }))
-                              }
-                            >
-                              <option value="">不對應</option>
-                              {fieldOptions.map((o) => (
-                                <option key={o.key} value={o.key}>
-                                  {o.label}
-                                </option>
-                              ))}
-                            </select>
-                            <ChevronDown size={15} />
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="batch-toolbar" style={{ marginTop: 8 }}>
-                <button
-                  className="button button-outline button-sm"
-                  disabled={busy}
-                  onClick={() =>
-                    setDraft((prev) => ({
-                      ...autoFieldMapping(selected.detectedHeaders, selectedQuestions),
-                      ...Object.fromEntries(
-                        Object.entries(prev).filter(([, v]) => v !== ""),
-                      ),
-                    }))
-                  }
-                >
-                  <RefreshCw size={14} /> 自動對應（依欄名）
-                </button>
-                <button
-                  className="button button-primary button-sm"
-                  disabled={busy}
-                  onClick={() => void handleSaveMapping(selected)}
-                >
-                  儲存對應
-                </button>
-              </div>
-            </>
-          )}
-          {mappingDirty && (
-            <p className="settings-note" style={{ marginTop: 8 }}>
-              對應尚未儲存（步驟 2 未完成）。儲存後需重跑步驟 3 手動同步、重新列入排程。
-            </p>
-          )}
-          {selectedPreview.length > 0 && (
-            <div style={{ marginTop: 10 }}>
-              <div className="field-label" style={{ marginBottom: 6 }}>
-                對應預覽（前 {selectedPreview.length} 列，讀取標題時一併帶回）
-              </div>
-              {selectedPreview.map((row) => (
-                <div
-                  key={row.lineNo}
-                  style={{
-                    border: "1px solid var(--border)",
-                    borderRadius: 6,
-                    padding: 8,
-                    marginBottom: 8,
-                  }}
-                >
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>
-                    第 {row.lineNo} 列：{row.ok ? "可匯入" : `有問題 — ${row.errors}`}
-                  </div>
-                  <div style={{ fontSize: 13, marginTop: 4, display: "grid", gap: 2 }}>
-                    {Object.entries(row.values).map(([key, value]) => (
-                      <div key={key}>
-                        {fieldLabel(key)}：{value || "（空）"}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          </div>
-          {/* 步驟 3：手動同步 */}
-          <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-            <SectionTitle title="步驟 3：手動同步" note="欄位對應後，進行資料同步，測試資料是否能順利匯入。按下去立即連線同步（瀏覽器直接讀取 Sheet）。須有一次手動同步成功匯入至少 1 筆資料，才可進行步驟 4；對應改過後要重跑手動同步。" />
-            <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
-              <div>
-                手動同步狀態：
-                {step3Done && qualifyingRun
-                  ? `已完成 — 最近一次成功匯入：讀取 ${qualifyingRun.rowsRead} 列／新增 ${qualifyingRun.inserted}／更新 ${qualifyingRun.updated}（${fmtTs(qualifyingRun.finishedAt ?? qualifyingRun.startedAt) || "—"}）`
-                  : latestManualRun
-                    ? `尚未完成 — 最近一次手動同步：${runStatusLabel(latestManualRun.status)}（${fmtTs(latestManualRun.startedAt) || "—"}），讀取 ${latestManualRun.rowsRead} 列／新增 ${latestManualRun.inserted}／更新 ${latestManualRun.updated}／跳過 ${latestManualRun.skipped}／錯誤 ${latestManualRun.errorRows?.length ?? 0} 列${latestManualRun.error ? `，${latestManualRun.error}` : ""}`
-                    : "尚未執行過手動同步"}
-              </div>
-              <div>
-                最近一次同步結果：
-                {runsLoading
-                  ? "讀取中…"
-                  : latestRun
-                    ? `${runStatusLabel(latestRun.status)}（${latestRun.trigger === "manual" ? "手動同步" : "定時同步"}，${fmtTs(latestRun.startedAt) || "—"}）— 讀取 ${latestRun.rowsRead} 列／新增 ${latestRun.inserted}／更新 ${latestRun.updated}／跳過 ${latestRun.skipped}／錯誤 ${latestRun.errorRows?.length ?? 0} 列${latestRun.error ? `，${latestRun.error}` : ""}`
-                    : "尚未執行過同步（手動同步或每日 07:00 後會顯示）"}
-              </div>
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "center" }}>
-              <button
-                className="button button-sm"
-                disabled={busy || !user || !step2Done || !apiKeyLoaded || !apiKeyTail}
-                onClick={() => void handleManualSync(selected)}
-                title={
-                  !apiKeyLoaded
-                    ? "正在讀取 API 金鑰設定"
-                    : !apiKeyTail
-                      ? "尚未設定 API 金鑰，請先在上方設定"
-                      : !step2Done
-                        ? "請先完成步驟 1 連線確認與步驟 2 欄位對應"
-                        : undefined
-                }
-              >
-                <Play size={14} /> 手動同步一次
-              </button>
-              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                {!apiKeyLoaded
-                  ? "正在讀取 API 金鑰設定…"
-                  : !apiKeyTail
-                    ? "尚未設定 API 金鑰，請先在上方設定。"
-                    : !step2Done
-                      ? "請先完成步驟 1 連線確認與步驟 2 欄位對應。"
-                      : "按下後立即連線同步。"}
-              </span>
-            </div>
-          </div>
-          {/* 步驟 4：列入排程 */}
-          <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-            <SectionTitle title="步驟 4：列入排程" note="資料匯入且查詢正常，則可列入每日同步的排程。" />
-            <p className="settings-note">
-              請先到結果分析查詢，確認匯入的資料顯示正常，再按列入排程。
-            </p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "center" }}>
-              {isMappingConfirmed(selected) ? (
-                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--success, #2e7d32)" }}>
-                  已列入排程，每日 07:00 自動同步
-                  {selected.confirmedAt
-                    ? `（${fmtTs(selected.confirmedAt)}，${selected.confirmedBy ?? ""}）`
-                    : ""}
-                </span>
-              ) : (
-                <button
-                  className="button button-primary button-sm"
-                  disabled={busy || !enrollGate?.ok}
-                  onClick={() => void handleEnroll(selected)}
-                  title={enrollGate && !enrollGate.ok ? enrollGate.reasons.join("；") : undefined}
-                >
-                  <ShieldCheck size={14} /> 列入排程
-                </button>
-              )}
-            </div>
-            {enrollGate && !enrollGate.ok && !isMappingConfirmed(selected) && (
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>
-                尚不能列入排程：{enrollGate.reasons.join("；")}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
   );
 }

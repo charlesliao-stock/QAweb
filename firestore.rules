@@ -155,28 +155,6 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Google Sheet 同步對照（v1.42.0）：登入者可讀清單（結果匯入頁顯示對照
-    // 與欄位對應編輯器），僅系統管理員可建立／修改／刪除
-    match /sheetSyncMappings/{id} {
-      allow read: if isAuthed();
-      allow create, update, delete: if isAdmin();
-    }
-
-    // Google Sheet 同步執行紀錄（v1.42.0）：僅管理員可讀；建立限管理員
-    // （v1.42.4 瀏覽器手動同步寫入 run 紀錄；GitHub Actions service account
-    // 寫入繞過 rules）；更新／刪除一律禁止
-    match /sheetSyncRuns/{id} {
-      allow read: if isAdmin();
-      allow create: if isAdmin();
-      allow update, delete: if false;
-    }
-
-    // 同步列狀態（v1.42.0，行級去重追蹤；僅管理員可讀，前端不寫入）
-    match /sheetSyncState/{id} {
-      allow read: if isAdmin();
-      allow write: if false;
-    }
-
     // UI 主題定義（v1.32.0，資料驅動）：登入可讀，管理員可寫（與 systemParams 同級，無擴權）
     match /uiThemes/{id} {
       allow read: if isAuthed();

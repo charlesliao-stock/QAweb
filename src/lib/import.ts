@@ -474,7 +474,8 @@ export interface ResultImportRowInput {
   bedNo: string;
   /** 每題一欄（與題目順序對應；未填＝未答） */
   answers: string[];
-  /** 每題備註一欄（與 answers 對應；未填＝""；舊範本無備註欄時全為 ""） */
+  /** 備註（與 answers 對應；v1.43.0 已彙整至最後一題：僅最後一題可能有
+   * 值，舊格式各題備註＋新格式單一備註欄合併進此處，其餘為 ""） */
   notes: string[];
 }
 
@@ -561,6 +562,36 @@ export function normalizeResultAnswer(
   return null;
 }
 
+/* ================= 備註彙整（v1.43.0） ================= */
+
+/** 備註彙整的一則：questionNo 為題號（依題目順序 1 起算）；
+ * 0＝不屬於任何一題（新格式最後一題後的單一備註欄）。 */
+export interface NotePart {
+  questionNo: number;
+  note: string;
+}
+
+/**
+ * 備註彙整（v1.43.0）：多則備註合併為一則。
+ * 單則時保持原文、不加題號；多則時有題號者前面加「第N題：」、無題號者
+ * 直接接在後面，各則以「；」連接；空字串不計入。
+ * 用途：(1)匯入時舊格式各題備註＋新格式單一備註欄合併進最後一題；
+ * (2)查詢顯示時一筆紀錄的多題備註彙整為一則；(3)雜湊輸入正規化——
+ * 同一內容用新格式或舊格式匯入，合併結果相同、文件 ID 相同。
+ */
+export function mergeNoteParts(parts: NotePart[]): string {
+  const items = parts
+    .map((p) => ({ questionNo: p.questionNo, note: (p.note ?? "").trim() }))
+    .filter((p) => p.note !== "");
+  if (items.length === 0) return "";
+  if (items.length === 1) return items[0].note;
+  return items
+    .map((p) =>
+      p.questionNo > 0 ? `第${p.questionNo}題：${p.note}` : p.note,
+    )
+    .join("；");
+}
+
 /* ================= SHA-1（純函式，零依賴） ================= */
 
 /**
@@ -631,11 +662,6 @@ export function sha1Hex(input: string): string {
 /* ================= 匯入去重：內容雜湊 → 決定性文件 ID ================= */
 
 export interface ImportIdentityInput {
-  /** Google Sheet 來源才有（手動檔案匯入留空） */
-  spreadsheetId?: string;
-  sheetName?: string;
-  /** 表單回覆時間戳記（Sheet 來源才有；手動匯入留空） */
-  timestamp?: string;
   indicatorId: string;
   unitCode: string;
   year: number;
@@ -645,23 +671,27 @@ export interface ImportIdentityInput {
   bedNo: string;
   /** 已正規化的答案（是／否／不適用／""） */
   answers: string[];
-  /** 已去空白的備註（與 answers 對應） */
+  /** 備註（與 answers 對應；v1.43.0 備註已彙整至最後一題，其餘為 ""） */
   notes: string[];
 }
 
 /**
- * 匯入紀錄內容雜湊（v1.42.0 去重核心）。
+ * 匯入紀錄內容雜湊（v1.42.0 去重核心，v1.43.0 改雜湊正規化 v2）。
  * 固定順序 JSON，欄位皆去空白。reviewDate 不在內——手動匯入的 reviewDate
  * 是匯入當天，納入會讓隔天重匯同一檔案算成不同筆；指標與床號在內——
- * 同人同月不同指標／不同床是不同筆。scripts/sheet-sync-lib.mjs 有同一
- * 份邏輯（Node 版），兩邊以相同 fixture 測試守住一致。
+ * 同人同月不同指標／不同床是不同筆。
+ * v1.43.0：備註先經 mergeNoteParts 彙整（各題備註合併進最後一題）再雜湊，
+ * 因此同一內容用新格式（單一備註欄）或舊格式（各題備註欄）匯入，雜湊
+ * 相同、文件 ID 相同。邊界：v1.42.0–v1.42.4 期間以每題備註匯入的紀錄，
+ * 當時雜湊用的是未彙整的各題備註陣列，重匯同一檔案會因雜湊不同產生
+ * 新文件、舊的留著（與 v1.42.0 舊隨機 ID 邊界同類，不自動刪舊紀錄）。
  */
 export function importRecordHash(input: ImportIdentityInput): string {
+  const mergedNote = mergeNoteParts(
+    input.notes.map((x, i) => ({ questionNo: i + 1, note: x ?? "" })),
+  );
   const canon = {
-    v: 1,
-    s: (input.spreadsheetId ?? "").trim(),
-    t: (input.sheetName ?? "").trim(),
-    ts: (input.timestamp ?? "").trim(),
+    v: 2,
     ind: input.indicatorId.trim(),
     unit: input.unitCode.trim(),
     y: input.year,
@@ -670,7 +700,7 @@ export function importRecordHash(input: ImportIdentityInput): string {
     p: (input.personEmpNo ?? "").trim(),
     b: (input.bedNo ?? "").trim(),
     a: input.answers.map((x) => (x ?? "").trim()),
-    n: input.notes.map((x) => (x ?? "").trim()),
+    n: mergedNote,
   };
   return sha1Hex(JSON.stringify(canon));
 }
@@ -687,10 +717,12 @@ export function importRecordDocId(input: ImportIdentityInput): string {
 
 /**
  * 結果匯入檔解析：第一列標題列（前 6 欄固定、其後為題目欄）。
- * v1.42.0：每題結果欄後可跟一個備註欄（標題「{題目}備註」，與該題成對；
- * 未填可留空）。opts.questionTitles 傳入時以題目文字精確配對；未傳時以
- * 標題後綴「備註」判斷。舊範本（無備註欄）照常解析，notes 全為 ""。
- * 備註欄不計入題數（題數仍以結果欄計）。
+ * v1.43.0：範本改為最後一題後一個「備註」欄（所有指標一律如此）；
+ * 備註欄不計入題數（題數仍以結果欄計）。舊格式檔案（每題各有
+ * 「{題目}備註」欄）仍可匯入：各題備註＋單一備註欄經 mergeNoteParts
+ * 合併進最後一題答案的 note（單則不加題號、多則每則附題號）。
+ * opts.questionTitles 傳入時以題目文字精確配對；未傳時以標題後綴
+ * 「備註」判斷。無備註欄的檔案照常解析，notes 全為 ""。
  * 回傳 headerErrors（標題列不符＝整檔中止）與資料列。
  */
 export function parseResultSheet(
@@ -719,6 +751,19 @@ export function parseResultSheet(
   }
   // 題目欄／備註欄配對（第 7 欄起）。
   const titles = opts?.questionTitles;
+  // 單一備註欄（v1.43.0 新格式）：標題恰為「備註」，位於最後一題之後。
+  // 題目本身就叫「備註」時不誤判（此時不視為單一備註欄）。
+  const isTitleNamedNote =
+    !!titles && titles.some((t) => headerKey(t) === "備註");
+  let singleNoteCol = -1;
+  if (!isTitleNamedNote) {
+    for (let j = 6; j < headerRow.length; j++) {
+      if (headerKey(headerRow[j] ?? "") === "備註") {
+        singleNoteCol = j;
+        break;
+      }
+    }
+  }
   const isNoteHeader = (idx: number): boolean => {
     const key = headerKey(headerRow[idx] ?? "");
     if (titles) {
@@ -735,7 +780,7 @@ export function parseResultSheet(
     headerRow.length > 7 &&
     headerKey(headerRow[7] ?? "") === headerKey(`${titles[0]}備註`);
   if (paired && titles) {
-    // 成對版面：每題結果欄＋備註欄交錯
+    // 成對版面（舊格式）：每題結果欄＋備註欄交錯
     for (let i = 0; i < titles.length; i++) {
       const aCol = 6 + 2 * i;
       if (aCol >= headerRow.length) break;
@@ -750,14 +795,16 @@ export function parseResultSheet(
     }
     // 成對版面之後的額外欄位：非備註標題者視為多餘題目欄（題數檢核會擋）
     for (let j = 6 + 2 * titles.length; j < headerRow.length; j++) {
+      if (j === singleNoteCol) continue;
       if (!isNoteHeader(j)) {
         answerCols.push(j);
         noteCols.push(-1);
       }
     }
   } else {
-    // 單欄版面（舊範本）或未傳題目：逐欄判斷
+    // 單欄版面（新格式或舊範本）或未傳題目：逐欄判斷
     for (let j = 6; j < headerRow.length; j++) {
+      if (j === singleNoteCol) continue;
       if (
         isNoteHeader(j) &&
         answerCols.length > 0 &&
@@ -776,6 +823,21 @@ export function parseResultSheet(
     const r = rows[i];
     const get = (k: string) => r[col[k]] ?? "";
     if (r.every((c) => c.trim() === "")) continue;
+    const answers = answerCols.map((c) => (r[c] ?? "").trim());
+    // 備註彙整（v1.43.0）：舊格式各題備註＋新格式單一備註欄合併進最後一題
+    const mergedNote = mergeNoteParts([
+      ...noteCols.map((c, qi) => ({
+        questionNo: qi + 1,
+        note: c >= 0 ? (r[c] ?? "").trim() : "",
+      })),
+      {
+        questionNo: 0,
+        note: singleNoteCol >= 0 ? (r[singleNoteCol] ?? "").trim() : "",
+      },
+    ]);
+    const notes = answers.map((_, qi) =>
+      qi === answers.length - 1 ? mergedNote : "",
+    );
     data.push({
       lineNo: i + 1,
       code: get("code"),
@@ -784,21 +846,21 @@ export function parseResultSheet(
       reviewerId: get("reviewerId"),
       personEmpNo: get("personEmpNo"),
       bedNo: get("bedNo"),
-      answers: answerCols.map((c) => (r[c] ?? "").trim()),
-      notes: noteCols.map((c) => (c >= 0 ? (r[c] ?? "").trim() : "")),
+      answers,
+      notes,
     });
   }
   return { headerErrors: [], data };
 }
 
 /**
- * 結果匯入驗證（v1.21.0，v1.40.4 補 Google 表單對應，v1.42.0 補備註欄）：
+ * 結果匯入驗證（v1.21.0，v1.40.4 補 Google 表單對應，v1.43.0 備註改彙整）：
  * - 檔案級預檢：全部列指標代號須等於所選指標 code；題數（結果欄數）須等於
  *   該指標題目數（備註欄不計入）；任一不符即整檔中止（fileErrors 非空）。
  * - 逐列：受審單位須存在、審查月份須合法、審查員職編須存在（未填留空）、
  *   各題答案須為 是／否／不適用（「正確」＝是、「不正確」＝否；未填＝未答）；
  *   任一不符該列跳過。驗證通過的列，values.answers 已正規化為 是／否／不適用，
- *   values.notes 為去空白後的備註（與 answers 對應）。
+ *   values.notes 為已彙整的備註（僅最後一題有值，其餘為 ""）。
  */
 export function validateResultSheet(
   data: ResultImportRowInput[],
@@ -883,16 +945,16 @@ export function validateResultSheet(
 }
 
 /**
- * 結果匯入範本：前 6 欄固定＋每題「結果欄＋備註欄」成對（標題＝題目文字、
- * 「{題目}備註」），依所選指標即時產生。備註欄未填可留空；舊範本（無備註
- * 欄）仍可匯入，見 parseResultSheet。
+ * 結果匯入範本（v1.43.0）：前 6 欄固定＋每題結果欄，最後一題後再加一個
+ * 「備註」欄（所有指標一律如此）；備註欄未填可留空。舊格式檔案（每題
+ * 各有「{題目}備註」欄、或無備註欄）仍可匯入，見 parseResultSheet。
  */
 export function resultTemplateRows(
   code: string,
   questions: string[],
 ): string[][] {
   return [
-    [...RESULT_FIXED_HEADERS, ...questions.flatMap((q) => [q, `${q}備註`])],
+    [...RESULT_FIXED_HEADERS, ...questions, "備註"],
     [
       code,
       "9A",
@@ -900,7 +962,8 @@ export function resultTemplateRows(
       "A12345",
       "B67890",
       "9A-01",
-      ...questions.flatMap(() => ["是", ""]),
+      ...questions.map(() => "是"),
+      "",
     ],
   ];
 }

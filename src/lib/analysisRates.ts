@@ -14,6 +14,7 @@
  * - 矩陣格格式：正確率＋（正確數／審查數），例 75%(3/4)。
  */
 import type { AuditQuestion } from "./indicators";
+import { mergeNoteParts } from "./import";
 import { maskName } from "./mask";
 
 export interface AnalysisAnswer {
@@ -289,6 +290,61 @@ export function collectRecordNotes(
     (x, y) =>
       (order.get(x.questionId) ?? Infinity) -
         (order.get(y.questionId) ?? Infinity) ||
+      x.personEmpNo.localeCompare(y.personEmpNo, "zh-Hant") ||
+      x.year - y.year ||
+      x.month - y.month,
+  );
+  return entries;
+}
+
+/** 彙整後單筆補充說明（v1.43.0）：一筆紀錄的所有備註彙整為一則。 */
+export interface ConsolidatedRecordNote {
+  personEmpNo: string;
+  personName: string;
+  year: number;
+  month: number;
+  /** 彙整文字：單則備註時為備註原文；多則時每則附題號，如「第1題：xxx；第2題：yyy」 */
+  note: string;
+  /** 彙整的各則備註（題號依指標題目順序；無對應題目者題號為 0） */
+  parts: { questionNo: number; itemText: string; optionLabel: string; note: string }[];
+}
+
+/**
+ * 彙整指定紀錄的補充說明（v1.43.0，純函式）：每筆紀錄彙整為一則，只收
+ * 有備註的紀錄（無備註不列入、不佔位）。單則備註時不加題號，多則時每則
+ * 附題號（依指標題目順序；無對應題目者排最後、不加題號）；依人員職編、
+ * 年月排序。審查執行頁來的紀錄（每題各有備註）與匯入的紀錄（備註在最
+ * 後一題）皆以同一規則彙整，查詢畫面只顯示彙整後的一則。
+ */
+export function collectConsolidatedRecordNotes(
+  records: AnalysisRecord[],
+  questions: AuditQuestion[],
+): ConsolidatedRecordNote[] {
+  const order = new Map(questions.map((q, i) => [q.id, i]));
+  const entries: ConsolidatedRecordNote[] = [];
+  for (const r of records) {
+    const parts = r.answers
+      .map((a) => ({
+        questionNo: (order.get(a.questionId) ?? -1) + 1,
+        itemText: a.itemText,
+        optionLabel: a.optionLabel,
+        note: (a.note ?? "").trim(),
+      }))
+      .filter((p) => p.note !== "")
+      // 題號 0（無對應題目）排最後
+      .sort((x, y) => (x.questionNo || Infinity) - (y.questionNo || Infinity));
+    if (parts.length === 0) continue;
+    entries.push({
+      personEmpNo: r.personEmpNo,
+      personName: r.personName,
+      year: r.year,
+      month: r.month,
+      note: mergeNoteParts(parts.map((p) => ({ questionNo: p.questionNo, note: p.note }))),
+      parts,
+    });
+  }
+  entries.sort(
+    (x, y) =>
       x.personEmpNo.localeCompare(y.personEmpNo, "zh-Hant") ||
       x.year - y.year ||
       x.month - y.month,
