@@ -39,6 +39,7 @@ import {
   type AuditQuestion,
 } from "../lib/indicators";
 import { isReviewerRole } from "../lib/roleIdentity";
+import { maskName } from "../lib/mask";
 import { computeOptionSetScore } from "../lib/reviewRecords";
 import { logAudit } from "../lib/audit";
 import {
@@ -88,6 +89,7 @@ import {
 } from "../lib/indexedRecords";
 import {
   buildRecordIndex,
+  columnRecordCount,
   recordsForIndex,
   type RecordIndex,
 } from "../lib/resultsMatrix";
@@ -389,6 +391,8 @@ export function ResultsPage({
     `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`,
   );
   const [interval, setInterval] = useState<AnalysisGranularity>("month");
+  /** v1.40.2「未審月份不顯示」：勾選時隱藏該期間欄內零審查的欄位；預設不勾選，全部顯示。純顯示切換，不觸發重新查詢。 */
+  const [hideEmptyMonths, setHideEmptyMonths] = useState(false);
   // 組別分析
   const [selGroup, setSelGroup] = useState("");
   const [groupUnit, setGroupUnit] = useState<UnitMode>("person");
@@ -715,6 +719,7 @@ export function ResultsPage({
                 answers,
                 personEmpNo: String(v.reviewedPersonEmpNo ?? ""),
                 personName: String(v.reviewedPersonName ?? ""),
+                bedNo: typeof v.bedNo === "string" ? v.bedNo : "",
               });
             });
             setCachedYear("reviewRecords", y, cacheScope, docs, indFilter);
@@ -948,6 +953,52 @@ export function ResultsPage({
       setSelIndU("all");
   }, [unitIndOptions, selIndU]);
 
+  /**
+   * v1.40.2「未審月份不顯示」：勾選時只保留該期間欄內有審查紀錄的欄位。
+   * 判斷以目前查詢範圍內的審查紀錄為準（組別分析＝該組指標、單位分析＝該單位
+   * 該組／指標、指標分析＝該支指標；皆限已查詢的年份區間）：該欄總審查數為 0
+   * 就隱藏，≥1 就顯示。區間單位為季／半年／年時同理（該區間全部月份合計）。
+   * 只影響矩陣的期間欄位顯示，不改計算公式、不改下探邏輯、不動 allMonths。
+   */
+  const visibleColumns = useMemo(() => {
+    if (!hideEmptyMonths) return appliedColumns;
+    const hasRecords = (col: AnalysisPeriodColumn): boolean => {
+      if (tab === "unit") {
+        return (
+          columnRecordCount(
+            recordIndex,
+            unitIndicators.map((ind) => ind.id),
+            col.months,
+            selUnit,
+          ) > 0
+        );
+      }
+      if (tab === "indicator") {
+        return (
+          selIndicator !== "" &&
+          columnRecordCount(recordIndex, [selIndicator], col.months) > 0
+        );
+      }
+      return (
+        columnRecordCount(
+          recordIndex,
+          groupIndicators.map((ind) => ind.id),
+          col.months,
+        ) > 0
+      );
+    };
+    return appliedColumns.filter(hasRecords);
+  }, [
+    hideEmptyMonths,
+    appliedColumns,
+    recordIndex,
+    tab,
+    groupIndicators,
+    unitIndicators,
+    selIndicator,
+    selUnit,
+  ]);
+
   // 期間說明文字（modal 副標共用；顯示已生效的查詢條件）
   const periodDesc = useMemo(() => {
     const from = applied?.startMonth ?? startMonth;
@@ -1093,6 +1144,7 @@ export function ResultsPage({
                 answers,
                 personEmpNo: String(value.reviewedPersonEmpNo ?? ""),
                 personName: String(value.reviewedPersonName ?? ""),
+                bedNo: typeof value.bedNo === "string" ? value.bedNo : "",
               });
             });
           }
@@ -1395,6 +1447,14 @@ export function ResultsPage({
               { value: "year", label: "年" },
             ]}
           />
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={hideEmptyMonths}
+              onChange={(event) => setHideEmptyMonths(event.target.checked)}
+            />
+            未審月份不顯示
+          </label>
           <div className="results-query-actions">
             <button
               type="button"
@@ -1483,7 +1543,7 @@ export function ResultsPage({
                   id: i.id,
                   label: `${i.code}・${i.name}`,
                 }))}
-                columns={appliedColumns}
+                columns={visibleColumns}
                 cellOf={(id, col) =>
                   cellValue(id, col, undefined, groupUnit)
                 }
@@ -1523,7 +1583,7 @@ export function ResultsPage({
                   id: i.id,
                   label: `${i.code}・${i.name}`,
                 }))}
-                columns={appliedColumns}
+                columns={visibleColumns}
                 cellOf={(id, col) =>
                   cellValue(id, col, selUnit, "person")
                 }
@@ -1831,9 +1891,17 @@ interface ManagedResult {
   unitId: string;
   indicatorId: string;
   rate: number | null;
+  reviewerEmpNo: string;
   reviewerName: string;
   reviewedPersonName: string;
   submittedAt: unknown;
+}
+
+/** 顯示「職編/遮罩姓名」（半形斜線；v1.40.2）。姓名缺值或與職編相同（舊資料以職編代姓名）時只顯示職編，兩者皆無顯示 —。 */
+function staffLabel(empNo: string, name: string): string {
+  const masked = name && name !== empNo ? maskName(name) : "";
+  if (empNo && masked) return `${empNo}/${masked}`;
+  return empNo || masked || "—";
 }
 
 function ReviewResultManager({
@@ -1927,6 +1995,7 @@ function ReviewResultManager({
             unitId: recordUnitId,
             indicatorId: recordIndicatorId,
             rate: typeof value.rate === "number" ? value.rate : null,
+            reviewerEmpNo: String(value.reviewerEmpNo ?? value.reviewerId ?? ""),
             reviewerName: String(value.reviewerName ?? value.reviewerId ?? ""),
             reviewedPersonName: String(value.reviewedPersonName ?? ""),
             submittedAt: value.submittedAt,
@@ -2161,7 +2230,7 @@ function ReviewResultManager({
                     </td>
                     <td>{unitName(row.unitId)}</td>
                     <td>{indicatorName(row.indicatorId)}</td>
-                    <td>{row.reviewerName || "—"}</td>
+                    <td>{staffLabel(row.reviewerEmpNo, row.reviewerName)}</td>
                     <td>{row.reviewedPersonName || "—"}</td>
                     <td>{row.rate == null ? "—" : `${row.rate}%`}</td>
                     <td>{formatSubmittedAt(row.submittedAt)}</td>
@@ -2385,12 +2454,12 @@ function DrillModal({
     );
     return personOptionRows(recs, th);
   }, [recordIndex, drill.indicatorId, drill.l2UnitId, col, th]);
-  // L2 轉置（v1.27.1）：直向＝題目、橫向＝人員姓名，中間＝審查結果
+  // L2 轉置（v1.27.1）：直向＝題目、橫向＝人員（職編/遮罩姓名，v1.40.2），中間＝審查結果
   const l2Matrix = useMemo(
     () =>
       ind
         ? transposePersonOptionRows(l2Rows, ind.questions)
-        : { headers: [] as string[], rows: [], rates: [] },
+        : { headers: [] as string[], bedNos: [] as string[], rows: [], rates: [] },
     [l2Rows, ind],
   );
 
@@ -2503,7 +2572,8 @@ function DrillModal({
                         <th
                           key={`${l2Rows[i].personEmpNo}-${l2Rows[i].year}-${l2Rows[i].month}-${i}`}
                         >
-                          {h}
+                          <div>{h}</div>
+                          <div>{l2Matrix.bedNos[i] ?? ""}</div>
                         </th>
                       ))}
                     </tr>

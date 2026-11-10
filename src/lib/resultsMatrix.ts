@@ -34,6 +34,23 @@ export function buildRecordIndex(records: AnalysisRecord[]): RecordIndex {
 }
 
 /**
+ * v1.40.2「未審月份不顯示」：某期間欄內的審查總數（指定指標集合＋可再限單位）。
+ * 欄位為季／半年／年時，months 涵蓋該區間全部月份，有一筆就算有審查。
+ */
+export function columnRecordCount(
+  index: RecordIndex,
+  indicatorIds: string[],
+  months: { year: number; month: number }[],
+  unitId?: string,
+): number {
+  let total = 0;
+  for (const indicatorId of indicatorIds) {
+    total += recordsForIndex(index, indicatorId, months, unitId).length;
+  }
+  return total;
+}
+
+/**
  * 取某指標落在指定曆年月集合內的紀錄（可再限單位）。
  * 與舊寫法 `recordsInMonths(scopedRecords.filter(指標[, 單位]), months)`
  * 同一批紀錄；月份去重後依 months 順序串接。

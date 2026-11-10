@@ -127,7 +127,7 @@ const idHeader = lib.transposePersonOptionRows([
 const nameHeader = lib.transposePersonOptionRows([
   { personEmpNo: "", personName: "王小明", answers: new Map(), rate: 90, passing: true },
 ], []);
-assert("下探職編完整顯示且姓名中間字遮罩", idHeader.headers[0] === "A00123／王O明");
+assert("下探職編完整顯示且姓名中間字遮罩", idHeader.headers[0] === "A00123/王O明");
 assert("缺職編時以下探遮罩姓名顯示", nameHeader.headers[0] === "王O明");
 
 if (failures) {

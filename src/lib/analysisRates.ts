@@ -42,6 +42,8 @@ export interface AnalysisRecord {
   personEmpNo: string;
   /** 被審人員姓名（顯示時遮罩） */
   personName: string;
+  /** 病人床號（v1.40.2 L2 表頭下行；指標未要求床號或舊紀錄可能缺值） */
+  bedNo?: string;
 }
 
 export interface PassRate {
@@ -160,6 +162,8 @@ export function unitsForDrill(
 export interface PersonOptionRow {
   personEmpNo: string;
   personName: string;
+  /** 病人床號：該欄對應單筆紀錄的床號（每欄＝一筆紀錄；無則 ""） */
+  bedNo: string;
   year: number;
   month: number;
   /** 正確率％；滿分 0 時為 null */
@@ -187,6 +191,7 @@ export function personOptionRows(
     .map((r) => ({
       personEmpNo: r.personEmpNo,
       personName: r.personName,
+      bedNo: r.bedNo ?? "",
       year: r.year,
       month: r.month,
       rate: r.rate,
@@ -196,8 +201,10 @@ export function personOptionRows(
 }
 
 export interface TransposedPersonMatrix {
-  /** 每欄一人（順序＝ personOptionRows 的順序）：欄位標頭顯示文字（遮罩姓名，無姓名則職編） */
+  /** 每欄一人（順序＝ personOptionRows 的順序）：欄位標頭顯示文字（職編/遮罩姓名；無姓名只顯示職編，無職編只顯示遮罩姓名） */
   headers: string[];
+  /** 每欄對應紀錄的床號（與 headers 一一對應；無床號為 ""，表頭下行留空） */
+  bedNos: string[];
   /** 每列一題：題目文字＋每欄的作答（是／否／不適用；無作答為 "—"） */
   rows: { questionId: string; itemText: string; values: string[] }[];
   /** 最下方「正確率」列：每欄的得分（null 表無分數）與達閾值標示 */
@@ -207,7 +214,8 @@ export interface TransposedPersonMatrix {
 /**
  * 下探 L2 轉置（v1.27.1）：直向＝選項（題目，每列一題），橫向＝人員
  * （每欄一人，順序維持 personOptionRows 的順序），中間＝審查結果。
- * 職編完整顯示；姓名只顯示遮罩後版本，無職編時以遮罩姓名作標頭。
+ * 標頭為「職編/遮罩姓名」（半形斜線；v1.40.2），無姓名只顯示職編，
+ * 無職編只顯示遮罩姓名；每欄下行另附該筆紀錄的床號（bedNos，v1.40.2）。
  */
 export function transposePersonOptionRows(
   rows: PersonOptionRow[],
@@ -216,9 +224,10 @@ export function transposePersonOptionRows(
   return {
     headers: rows.map((r) => {
       const maskedName = maskName(r.personName);
-      if (r.personEmpNo && maskedName) return `${r.personEmpNo}／${maskedName}`;
+      if (r.personEmpNo && maskedName) return `${r.personEmpNo}/${maskedName}`;
       return r.personEmpNo || maskedName || "—";
     }),
+    bedNos: rows.map((r) => r.bedNo ?? ""),
     rows: questions.map((q) => ({
       questionId: q.id,
       itemText: q.itemText,
