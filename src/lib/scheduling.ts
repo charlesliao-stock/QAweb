@@ -437,10 +437,13 @@ export const UNCATEGORIZED_GROUP_ID = "__uncategorized__";
 /**
  * 人員儲存時是否應自動加入審查員名單（純函式）：roles 含任一審查員身分。
  * 移除角色時，同步移除自動加入的「未分類」審查員（手動指派的不動）。
- * v1.21：新舊審查員角色並認（審查員／品管組審查員／單位審查員）。
+ * v1.40.5：審查員身分改以角色詮釋資料判斷（傳入 roleMeta；未傳時以舊名稱推導）。
  */
-export function shouldAutoLinkReviewer(roles: string[]): boolean {
-  return isReviewerRole(roles);
+export function shouldAutoLinkReviewer(
+  roles: string[],
+  roleMeta?: import("./orgMeta").RoleMetaMap,
+): boolean {
+  return isReviewerRole(roles, roleMeta);
 }
 
 /**

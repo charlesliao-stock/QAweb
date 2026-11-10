@@ -9,6 +9,7 @@
  */
 import { splitOwners } from "./import";
 import { isGroupScopedRole, type Membership } from "./roleIdentity";
+import type { RoleMetaMap } from "./orgMeta";
 
 /* ================= 共用：標題列對照 ================= */
 
@@ -112,6 +113,8 @@ export function validateUserRows(
     groupByName: Map<string, string>;
     roleNames: Set<string>;
     roleGroupIdsByName?: Map<string, string[]>;
+    /** 角色詮釋資料（有值時群組範圍改以類別判斷；未傳時以名稱推導）。 */
+    roleMetaByName?: RoleMetaMap;
     titleNames: Set<string>;
     unitCodes: Set<string>;
   },
@@ -151,7 +154,7 @@ export function validateUserRows(
         if (!ctx.roleNames.has(n)) return true;
         const scopedGroups = ctx.roleGroupIdsByName?.get(n);
         if (!ctx.roleGroupIdsByName) return false;
-        if (!scopedGroups) return !isGroupScopedRole(n);
+        if (!scopedGroups) return !isGroupScopedRole(n, ctx.roleMetaByName);
         return !scopedGroups.includes("*") && !scopedGroups.includes(groupId);
       });
       if (unknown.length > 0) {

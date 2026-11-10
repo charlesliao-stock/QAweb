@@ -31,17 +31,26 @@ import { getCachedRefCollection } from "../lib/refCache";
 import { getDocsCacheFirst } from "../lib/cacheFirst";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
-import { SEED_GROUP_NAMES } from "../lib/seed";
 import { reviewerDocId, UNCATEGORIZED_GROUP_ID, shouldAutoLinkReviewer } from "../lib/scheduling";
 import { templateDocId } from "../lib/permissions";
 import {
   deriveGroupIds,
   deriveRoles,
   isReviewerRole,
-  isUnitLevelRole,
   parseMemberships,
   type Membership,
 } from "../lib/roleIdentity";
+import {
+  buildRoleMetaMap,
+  ROLE_CATEGORY_LABELS,
+  legacyTitleFlags,
+  ROLE_CATEGORY_OPTIONS,
+  ROLE_SCOPE_OPTIONS,
+  type RoleCategory,
+  type RoleMetaMap,
+  type RoleScope,
+  type TitleFlags,
+} from "../lib/orgMeta";
 import { wouldCreateUnitHistoryCycle } from "../lib/unitHistory";
 import {
   UNIT_TEMPLATE_HEADERS,
@@ -73,7 +82,7 @@ interface UnitRow {
   memberCount: number | null;
 }
 
-interface TitleRow {
+interface TitleRow extends TitleFlags {
   id: string;
   name: string;
   userCount: number | null;
@@ -95,12 +104,18 @@ interface UserRow {
 interface RoleRow {
   id: string;
   name: string;
+  /** 功能類別（審查員／召集人／執行幹事／單位主管／院級主管／一般） */
+  category: RoleCategory;
+  /** 適用範圍（group＝群組角色；unit＝單位角色） */
+  kind: RoleScope;
   memberCount: number | null;
 }
 
 interface OptionItem {
   id: string;
   name: string;
+  category?: RoleCategory;
+  kind?: RoleScope;
 }
 
 function SortHeader({
@@ -138,7 +153,8 @@ interface UnitForm {
   mergedFromUnitCodes: string[];
 }
 
-interface TitleForm {
+/** 職稱：名稱之外，勾選主管層級旗標供身分判斷（儀表板／結果範圍）使用。 */
+interface TitleForm extends TitleFlags {
   name: string;
 }
 
@@ -177,7 +193,14 @@ function emptyUnitForm(): UnitForm {
 }
 
 function emptyTitleForm(): TitleForm {
-  return { name: "" };
+  return {
+    name: "",
+    isUnitHead: false,
+    isDistrictHead: false,
+    isHospitalHead: false,
+    isOfficer: false,
+    isConvener: false,
+  };
 }
 
 function emptyUserForm(): UserForm {
@@ -633,6 +656,9 @@ export function GroupsPage({
   // ---- 角色（v1.39.0：一名一檔，只寫名稱；建立後請至權限管理設定權限） ----
   const [roleCreateOpen, setRoleCreateOpen] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
+  /** v1.40.5：新角色功能類別（預設一般）與適用範圍（預設群組角色） */
+  const [newRoleCategory, setNewRoleCategory] = useState<RoleCategory>("general");
+  const [newRoleKind, setNewRoleKind] = useState<RoleScope>("group");
   const [roleCreateError, setRoleCreateError] = useState("");
   const [roleCreateSaving, setRoleCreateSaving] = useState(false);
   /** 正在管理成員的角色 id（""＝未開啟） */
@@ -712,6 +738,8 @@ export function GroupsPage({
       roleOptions.map((r) => ({
         id: r.id,
         name: r.name,
+        category: r.category ?? "general",
+        kind: r.kind ?? "group",
         memberCount:
           users.length > 0
             ? users.filter(
@@ -816,12 +844,27 @@ export function GroupsPage({
       const snap = await getCachedRefCollection("roles", () =>
         getDocsCacheFirst(collection(getFirebaseDb(), "roles")),
       );
+      const meta = buildRoleMetaMap(
+        snap.docs.map((d) => {
+          const data = d.data() as Record<string, unknown>;
+          return {
+            name: typeof data.name === "string" ? data.name : d.id,
+            category: data.category,
+            kind: data.kind,
+            scope: data.scope,
+          };
+        }),
+      );
       setRoleOptions(
         snap.docs.map((d) => {
           const data = d.data();
+          const name = typeof data.name === "string" ? data.name : d.id;
+          const m = meta.get(name);
           return {
             id: d.id,
-            name: typeof data.name === "string" ? data.name : d.id,
+            name,
+            category: m?.category,
+            kind: m?.scope,
           };
         }),
       );
@@ -829,6 +872,12 @@ export function GroupsPage({
       setRoleOptions([]);
     }
   }, []);
+
+  /** 角色詮釋資料對照（名稱→類別／範圍），身分判斷不再比對名稱。 */
+  const roleMeta: RoleMetaMap = useMemo(
+    () => buildRoleMetaMap(roleOptions),
+    [roleOptions],
+  );
 
   /** 群組＋單位一起載入（單位需對應群組名稱、人數） */
   const loadMaster = useCallback(async () => {
@@ -919,6 +968,25 @@ export function GroupsPage({
           return {
             id: d.id,
             name: typeof data.name === "string" ? data.name : "",
+            // 職稱主管層級旗標（有欄位時以欄位為準；舊資料無欄位時以名稱推導）
+            ...legacyTitleFlags(
+              typeof data.name === "string" ? data.name : "",
+            ),
+            ...(typeof data.isUnitHead === "boolean"
+              ? { isUnitHead: data.isUnitHead }
+              : {}),
+            ...(typeof data.isDistrictHead === "boolean"
+              ? { isDistrictHead: data.isDistrictHead }
+              : {}),
+            ...(typeof data.isHospitalHead === "boolean"
+              ? { isHospitalHead: data.isHospitalHead }
+              : {}),
+            ...(typeof data.isOfficer === "boolean"
+              ? { isOfficer: data.isOfficer }
+              : {}),
+            ...(typeof data.isConvener === "boolean"
+              ? { isConvener: data.isConvener }
+              : {}),
           };
         })
         .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
@@ -1002,44 +1070,11 @@ export function GroupsPage({
     }
   }, [onAction]);
 
-  /**
-   * v1.37.0：只補種群組（SEED_GROUP_NAMES，不存在才建立）。
-   * 角色／職稱不再有預設、也不自動補種，由系統管理員自行建立。
-   */
-  const ensureSeeds = useCallback(async () => {
-    // 群組種子寫入含 groups 集合（rules 限幹事以上寫入），僅管理員執行
-    if (!isAdmin) return;
-    try {
-      const db = getFirebaseDb();
-      const me = user?.staffId ?? "";
-      const gSnap = await getCachedRefCollection("groups", () =>
-        getDocsCacheFirst(collection(db, "groups")),
-      );
-      const groupNames = new Set(
-        gSnap.docs.map((d) => String(d.data().name ?? "")),
-      );
-      const ops: Array<(b: WriteBatch) => void> = [];
-      for (const name of SEED_GROUP_NAMES) {
-        if (!groupNames.has(name)) {
-          ops.push((b) =>
-            b.set(doc(collection(db, "groups")), {
-              name,
-              ...auditFields(me, true),
-            }),
-          );
-        }
-      }
-      if (ops.length > 0) await commitInBatches(ops);
-    } catch {
-      // 種子建立失敗不阻擋清單載入（下次開頁再補）
-    }
-  }, [isAdmin, user]);
-
+  // v1.40.5：開頁不再自動補種固定名稱群組。群組／單位／角色／職稱
+  // 皆由系統管理員在本頁自行建立；各醫院名稱不同，不得寫死。
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      // v1.37.0：先補種群組（不存在才建立），再載入清單
-      await ensureSeeds();
       if (cancelled) return;
       loadMaster();
       loadRoles();
@@ -1051,7 +1086,7 @@ export function GroupsPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadMaster, loadRoles, loadTitles, isAdmin, ensureSeeds]);
+  }, [loadMaster, loadRoles, loadTitles, isAdmin]);
 
   useEffect(() => {
     // v1.27.2：掛載時已預載人員，切回頁籤不重拉（存檔後各 handler 會自行 loadUsers）
@@ -1309,7 +1344,14 @@ export function GroupsPage({
   function openTitleEdit(id: string) {
     const row = titles.find((t) => t.id === id);
     if (!row) return;
-    setTitleForm({ name: row.name });
+    setTitleForm({
+      name: row.name,
+      isUnitHead: row.isUnitHead,
+      isDistrictHead: row.isDistrictHead,
+      isHospitalHead: row.isHospitalHead,
+      isOfficer: row.isOfficer,
+      isConvener: row.isConvener,
+    });
     setTitleError("");
     setTitleView({ kind: "edit", id });
   }
@@ -1343,6 +1385,12 @@ export function GroupsPage({
         const batch = writeBatch(db);
         batch.set(titleRef, {
           name,
+          // v1.40.5：職稱建立即寫入主管層級旗標，身分判斷不再比對名稱
+          isUnitHead: titleForm.isUnitHead,
+          isDistrictHead: titleForm.isDistrictHead,
+          isHospitalHead: titleForm.isHospitalHead,
+          isOfficer: titleForm.isOfficer,
+          isConvener: titleForm.isConvener,
           ...auditFields(user.staffId, true),
         });
         batch.set(doc(collection(db, "auditLogs")), {
@@ -1361,7 +1409,15 @@ export function GroupsPage({
       } else if (view.kind === "edit") {
         const old = titles.find((title) => title.id === view.id);
         const oldName = old?.name ?? "";
-        if (oldName === name) {
+        const nameChanged = oldName !== name;
+        // v1.40.5：即使名稱不變，主管層級旗標變動也要能儲存
+        const flagsChanged =
+          old?.isUnitHead !== titleForm.isUnitHead ||
+          old?.isDistrictHead !== titleForm.isDistrictHead ||
+          old?.isHospitalHead !== titleForm.isHospitalHead ||
+          old?.isOfficer !== titleForm.isOfficer ||
+          old?.isConvener !== titleForm.isConvener;
+        if (!nameChanged && !flagsChanged) {
           setTitleView({ kind: "list" });
           return;
         }
@@ -1369,41 +1425,50 @@ export function GroupsPage({
         const templateRef = doc(db, "permissionTemplates", templateDocId("unit", oldName));
         const [templateSnap, newTemplateSnap] = await Promise.all([
           getDoc(templateRef),
-          getDoc(doc(db, "permissionTemplates", templateDocId("unit", name))),
+          nameChanged
+            ? getDoc(doc(db, "permissionTemplates", templateDocId("unit", name)))
+            : Promise.resolve(null),
         ]);
-        if (newTemplateSnap.exists()) {
+        if (newTemplateSnap?.exists()) {
           setTitleError(`新名稱「${name}」已有權限範本，請先處理該範本再更名`);
           return;
         }
-        const ops: Array<(b: WriteBatch) => void> = [];
-        users.forEach((u) => {
-          if (u.titleId === view.id || (!u.titleId && u.title === oldName)) {
-            ops.push((b) => {
-              b.update(doc(db, "users", u.staffId), {
-                title: name,
-                ...auditFields(user.staffId, false),
+        if (nameChanged) {
+          const ops: Array<(b: WriteBatch) => void> = [];
+          users.forEach((u) => {
+            if (u.titleId === view.id || (!u.titleId && u.title === oldName)) {
+              ops.push((b) => {
+                b.update(doc(db, "users", u.staffId), {
+                  title: name,
+                  ...auditFields(user.staffId, false),
+                });
+                b.set(doc(collection(db, "auditLogs")), {
+                  actor: user.staffId,
+                  actorName: user.name,
+                  action: "人員職稱異動",
+                  targetType: "user",
+                  targetId: u.staffId,
+                  detail: `職稱更名：職編 ${u.staffId} 職稱「${oldName}」→「${name}」`,
+                  before: { titleId: u.titleId, title: u.title },
+                  after: { titleId: u.titleId, title: name },
+                  createdAt: serverTimestamp(),
+                });
               });
-              b.set(doc(collection(db, "auditLogs")), {
-                actor: user.staffId,
-                actorName: user.name,
-                action: "人員職稱異動",
-                targetType: "user",
-                targetId: u.staffId,
-                detail: `職稱更名：職編 ${u.staffId} 職稱「${oldName}」→「${name}」`,
-                before: { titleId: u.titleId, title: u.title },
-                after: { titleId: u.titleId, title: name },
-                createdAt: serverTimestamp(),
-              });
-            });
-          }
-        });
-        await commitInBatches(ops);
+            }
+          });
+          await commitInBatches(ops);
+        }
         const batch = writeBatch(db);
         batch.update(doc(db, "titles", view.id), {
           name,
+          isUnitHead: titleForm.isUnitHead,
+          isDistrictHead: titleForm.isDistrictHead,
+          isHospitalHead: titleForm.isHospitalHead,
+          isOfficer: titleForm.isOfficer,
+          isConvener: titleForm.isConvener,
           ...auditFields(user.staffId, false),
         });
-        if (templateSnap.exists()) {
+        if (nameChanged && templateSnap.exists()) {
           batch.set(doc(db, "permissionTemplates", templateDocId("unit", name)), {
             ...templateSnap.data(),
             name,
@@ -1416,13 +1481,15 @@ export function GroupsPage({
           action: "職稱更名",
           targetType: "title",
           targetId: view.id,
-          detail: `職稱「${oldName}」更名為「${name}」`,
+          detail: nameChanged
+            ? `職稱「${oldName}」更名為「${name}」`
+            : `職稱「${name}」主管層級更新`,
           before: old ? { name: old.name } : null,
           after: { name },
           createdAt: serverTimestamp(),
         });
         await batch.commit();
-        onAction(`職稱已更名為 ${name}`);
+        onAction(nameChanged ? `職稱已更名為 ${name}` : `職稱「${name}」已更新`);
         await loadUsers();
       }
       setTitleView({ kind: "list" });
@@ -1620,7 +1687,7 @@ export function GroupsPage({
         ...userForm.otherRoles,
       ]),
     ];
-    const reviewerAccessExpiresAt = isReviewerRole(roles)
+    const reviewerAccessExpiresAt = isReviewerRole(roles, roleMeta)
       ? userForm.reviewerAccessExpiresAt.trim()
       : "";
     if (reviewerAccessExpiresAt && !/^\d{4}-\d{2}-\d{2}$/.test(reviewerAccessExpiresAt)) {
@@ -1739,7 +1806,7 @@ export function GroupsPage({
       const savedStaffId =
         view.kind === "edit" ? view.staffId : userForm.staffId.trim();
       try {
-        if (shouldAutoLinkReviewer(roles)) {
+        if (shouldAutoLinkReviewer(roles, roleMeta)) {
           const existing = await getDocs(
             query(
               collection(db, "reviewReviewers"),
@@ -1899,6 +1966,8 @@ export function GroupsPage({
     setRoleAddGroupId("");
     setRoleAddChecked([]);
     setRoleEditName(role?.name ?? "");
+    setRoleEditCategory(role?.category ?? "general");
+    setRoleEditKind(role?.kind ?? "group");
     setRoleEditError("");
   }
 
@@ -1930,7 +1999,7 @@ export function GroupsPage({
   async function handleRoleMembersAdd() {
     const role = roleRows.find((r) => r.id === managingRoleId);
     if (!role || roleAddChecked.length === 0) return;
-    const unitLevel = isUnitLevelRole(role.name);
+    const unitLevel = role.kind === "unit";
     const unitGroupOf = (unitCode: string) =>
       units.find((u) => u.code === unitCode)?.groupId ?? "";
     const targets = users.filter((u) => roleAddChecked.includes(u.staffId));
@@ -2045,6 +2114,9 @@ export function GroupsPage({
       batch.set(roleRef, {
         name,
         description: "",
+        // v1.40.5：角色建立即寫入功能類別與適用範圍，身分判斷不再比對名稱
+        category: newRoleCategory,
+        kind: newRoleKind,
         ...auditFields(user?.staffId ?? "", true),
       });
       batch.set(doc(collection(db, "auditLogs")), {
@@ -2055,11 +2127,13 @@ export function GroupsPage({
         targetId: roleRef.id,
         detail: `建立角色「${name}」`,
         before: null,
-        after: { name },
+        after: { name, category: newRoleCategory, kind: newRoleKind },
         createdAt: serverTimestamp(),
       });
       await batch.commit();
       setNewRoleName("");
+      setNewRoleCategory("general");
+      setNewRoleKind("group");
       setRoleCreateOpen(false);
       await loadRoles();
       onAction(`已新增角色「${name}」；請至權限管理設定權限`);
@@ -2070,8 +2144,12 @@ export function GroupsPage({
     }
   }
 
-  /** 既有角色更名（v1.39.0）：只改名稱；同步更新持有此角色的人員與權限範本。 */
+  /** 既有角色更名／改類別／改範圍（v1.39.0 更名；v1.40.5 加類別與範圍）：
+   * 只改名稱時同步更新持有此角色的人員與權限範本；改範圍時遷移範本
+   * group↔unitRole（範本文件 id 含類別）；更名後對應不斷（以文件 id 計）。 */
   const [roleEditName, setRoleEditName] = useState("");
+  const [roleEditCategory, setRoleEditCategory] = useState<RoleCategory>("general");
+  const [roleEditKind, setRoleEditKind] = useState<RoleScope>("group");
   const [roleEditError, setRoleEditError] = useState("");
   const [roleEditSaving, setRoleEditSaving] = useState(false);
   async function handleRoleRename() {
@@ -2082,11 +2160,14 @@ export function GroupsPage({
       setRoleEditError("請輸入角色名稱");
       return;
     }
-    if (name === role.name) {
+    const nameChanged = name !== role.name;
+    const kindChanged = roleEditKind !== role.kind;
+    const categoryChanged = roleEditCategory !== role.category;
+    if (!nameChanged && !kindChanged && !categoryChanged) {
       setRoleEditError("");
       return;
     }
-    if (roleRows.some((r) => r.id !== role.id && r.name === name)) {
+    if (nameChanged && roleRows.some((r) => r.id !== role.id && r.name === name)) {
       setRoleEditError(`角色「${name}」已存在`);
       return;
     }
@@ -2095,59 +2176,69 @@ export function GroupsPage({
     try {
       const db = getFirebaseDb();
       const oldName = role.name;
-      // 新名稱已有權限範本時擋下，避免覆蓋別的範本
-      const [groupTpl, unitRoleTpl] = await Promise.all([
-        getDoc(doc(db, "permissionTemplates", templateDocId("group", name))),
-        getDoc(doc(db, "permissionTemplates", templateDocId("unitRole", name))),
-      ]);
-      if (groupTpl.exists() || unitRoleTpl.exists()) {
-        setRoleEditError(`新名稱「${name}」已有權限範本，請先處理該範本再更名`);
-        return;
+      const oldCategory = role.kind === "unit" ? "unitRole" : "group";
+      const newCategory = roleEditKind === "unit" ? "unitRole" : "group";
+      if (nameChanged) {
+        // 新名稱已有權限範本時擋下，避免覆蓋別的範本
+        const [groupTpl, unitRoleTpl] = await Promise.all([
+          getDoc(doc(db, "permissionTemplates", templateDocId("group", name))),
+          getDoc(doc(db, "permissionTemplates", templateDocId("unitRole", name))),
+        ]);
+        if (groupTpl.exists() || unitRoleTpl.exists()) {
+          setRoleEditError(`新名稱「${name}」已有權限範本，請先處理該範本再更名`);
+          return;
+        }
       }
-      const targets = users.filter(
-        (u) =>
-          u.roles.includes(oldName) ||
-          u.memberships.some((m) => m.roles.includes(oldName)),
-      );
-      await commitInBatches(
-        targets.map((u) => (b: WriteBatch) => {
-          const roles = u.roles.map((r) => (r === oldName ? name : r));
-          const memberships = u.memberships.map((m) => ({
-            ...m,
-            roles: m.roles.map((r) => (r === oldName ? name : r)),
-          }));
-          b.update(doc(db, "users", u.staffId), {
-            roles,
-            memberships,
-            ...auditFields(user.staffId, false),
-          });
-          b.set(doc(collection(db, "auditLogs")), {
-            actor: user.staffId,
-            actorName: user.name,
-            action: "人員角色異動",
-            targetType: "user",
-            targetId: u.staffId,
-            detail: `角色更名：職編 ${u.staffId} 角色「${oldName}」→「${name}」`,
-            before: { roles: u.roles, memberships: u.memberships },
-            after: { roles, memberships },
-            createdAt: serverTimestamp(),
-          });
-        }),
-      );
+      if (nameChanged) {
+        const targets = users.filter(
+          (u) =>
+            u.roles.includes(oldName) ||
+            u.memberships.some((m) => m.roles.includes(oldName)),
+        );
+        await commitInBatches(
+          targets.map((u) => (b: WriteBatch) => {
+            const roles = u.roles.map((r) => (r === oldName ? name : r));
+            const memberships = u.memberships.map((m) => ({
+              ...m,
+              roles: m.roles.map((r) => (r === oldName ? name : r)),
+            }));
+            b.update(doc(db, "users", u.staffId), {
+              roles,
+              memberships,
+              ...auditFields(user.staffId, false),
+            });
+            b.set(doc(collection(db, "auditLogs")), {
+              actor: user.staffId,
+              actorName: user.name,
+              action: "人員角色異動",
+              targetType: "user",
+              targetId: u.staffId,
+              detail: `角色更名：職編 ${u.staffId} 角色「${oldName}」→「${name}」`,
+              before: { roles: u.roles, memberships: u.memberships },
+              after: { roles, memberships },
+              createdAt: serverTimestamp(),
+            });
+          }),
+        );
+      }
       const batch = writeBatch(db);
       batch.update(doc(db, "roles", role.id), {
         name,
+        category: roleEditCategory,
+        kind: roleEditKind,
         ...auditFields(user.staffId, false),
       });
-      for (const category of ["group", "unitRole"] as const) {
-        const oldRef = doc(db, "permissionTemplates", templateDocId(category, oldName));
+      // 權限範本遷移：舊（類別，舊名）→ 新（類別，新名）；類別或名稱其一變動皆遷移
+      {
+        const oldRef = doc(db, "permissionTemplates", templateDocId(oldCategory, oldName));
         const snap = await getDoc(oldRef);
         if (snap.exists()) {
-          batch.set(doc(db, "permissionTemplates", templateDocId(category, name)), {
+          batch.set(doc(db, "permissionTemplates", templateDocId(newCategory, name)), {
             ...snap.data(),
             name,
+            category: newCategory,
           });
-          batch.delete(oldRef);
+          if (oldCategory !== newCategory || oldName !== name) batch.delete(oldRef);
         }
       }
       batch.set(doc(collection(db, "auditLogs")), {
@@ -2156,15 +2247,15 @@ export function GroupsPage({
         action: "角色更名",
         targetType: "role",
         targetId: role.id,
-        detail: `角色「${oldName}」更名為「${name}」`,
-        before: { name: oldName },
-        after: { name },
+        detail: `角色「${oldName}」更新為「${name}」`,
+        before: { name: oldName, category: role.category, kind: role.kind },
+        after: { name, category: roleEditCategory, kind: roleEditKind },
         createdAt: serverTimestamp(),
       });
       await batch.commit();
       await loadRoles();
       await loadUsers();
-      onAction(`角色已更名為「${name}」`);
+      onAction(`角色已更新為「${name}」`);
     } catch (error) {
       setRoleEditError(`儲存失敗：${toErrorMessage(error)}`);
     } finally {
@@ -2587,6 +2678,7 @@ export function GroupsPage({
       existingStaffIds: new Set(users.map((u) => u.staffId)),
       groupByName: new Map(groups.map((g) => [g.name, g.id])),
       roleNames: new Set(roleOptions.map((r) => r.name)),
+      roleMetaByName: roleMeta,
       titleNames: new Set(titles.map((t) => t.name)),
       unitCodes: new Set(units.map((u) => u.code)),
     });
@@ -2763,10 +2855,13 @@ export function GroupsPage({
   const isUnitEditing = unitView.kind === "edit";
   const isTitleEditing = titleView.kind === "edit";
   const isUserEditing = userView.kind === "edit";
-  const reviewerRoleSelected = isReviewerRole([
-    ...deriveRoles(userForm.memberships.filter((membership) => membership.groupId)),
-    ...userForm.otherRoles,
-  ]);
+  const reviewerRoleSelected = isReviewerRole(
+    [
+      ...deriveRoles(userForm.memberships.filter((membership) => membership.groupId)),
+      ...userForm.otherRoles,
+    ],
+    roleMeta,
+  );
 
   const headingAction = (() => {
     const back = (reset: () => void) => (
@@ -3592,6 +3687,34 @@ export function GroupsPage({
                   }
                 />
               </div>
+              <div className="form-field">
+                <label className="field-label">主管層級（決定儀表板與結果範圍；不以名稱判斷）</label>
+                <div className="form-grid">
+                  {(
+                    [
+                      ["isUnitHead", "單位主管"],
+                      ["isDistrictHead", "轄區主管"],
+                      ["isHospitalHead", "院級主管"],
+                      ["isOfficer", "執行幹事"],
+                      ["isConvener", "召集人"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <label className="check-row" key={key}>
+                      <input
+                        type="checkbox"
+                        checked={titleForm[key]}
+                        onChange={(e) =>
+                          setTitleForm((prev) => ({
+                            ...prev,
+                            [key]: e.target.checked,
+                          }))
+                        }
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
             </div>
             <div className="form-actions">
               <button
@@ -3985,6 +4108,39 @@ export function GroupsPage({
                 onChange={(event) => setNewRoleName(event.target.value)}
               />
             </div>
+            <div className="form-field" style={{ maxWidth: 420 }}>
+              <label className="field-label">功能類別 *</label>
+              <select
+                className="text-input"
+                value={newRoleCategory}
+                onChange={(event) =>
+                  setNewRoleCategory(event.target.value as RoleCategory)
+                }
+              >
+                {ROLE_CATEGORY_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <p className="settings-note">功能類別決定此角色的身分（審查員／召集人／執行幹事等），不以名稱判斷。</p>
+            </div>
+            <div className="form-field" style={{ maxWidth: 420 }}>
+              <label className="field-label">適用範圍 *</label>
+              <select
+                className="text-input"
+                value={newRoleKind}
+                onChange={(event) =>
+                  setNewRoleKind(event.target.value as RoleScope)
+                }
+              >
+                {ROLE_SCOPE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="form-actions">
               <button className="button button-primary" disabled={roleCreateSaving} onClick={handleRoleCreate}>
                 {roleCreateSaving ? "建立中…" : "建立角色"}
@@ -4020,7 +4176,7 @@ export function GroupsPage({
               busy={roleBusy}
             />
             <div style={{ marginTop: 16 }}>
-              <SectionTitle title="角色名稱" note="角色以名稱唯一；改名會同步更新所有持有此角色的人員與權限範本。跨設定請到權限管理。" />
+              <SectionTitle title="角色設定" note="角色以名稱唯一；改名會同步更新所有持有此角色的人員與權限範本。改適用範圍時權限範本一併遷移。跨設定請到權限管理。" />
               {roleEditError && <div className="login-error">{roleEditError}</div>}
               <div className="form-field" style={{ maxWidth: 320 }}>
                 <label className="field-label">角色名稱 *</label>
@@ -4031,13 +4187,45 @@ export function GroupsPage({
                   onChange={(event) => setRoleEditName(event.target.value)}
                 />
               </div>
+              <div className="form-field" style={{ maxWidth: 320 }}>
+                <label className="field-label">功能類別 *</label>
+                <select
+                  className="text-input"
+                  value={roleEditCategory}
+                  onChange={(event) =>
+                    setRoleEditCategory(event.target.value as RoleCategory)
+                  }
+                >
+                  {ROLE_CATEGORY_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-field" style={{ maxWidth: 320 }}>
+                <label className="field-label">適用範圍 *</label>
+                <select
+                  className="text-input"
+                  value={roleEditKind}
+                  onChange={(event) =>
+                    setRoleEditKind(event.target.value as RoleScope)
+                  }
+                >
+                  {ROLE_SCOPE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div className="form-actions">
                 <button
                   className="button button-primary"
                   disabled={roleEditSaving}
                   onClick={handleRoleRename}
                 >
-                  {roleEditSaving ? "儲存中…" : "儲存名稱"}
+                  {roleEditSaving ? "儲存中…" : "儲存"}
                 </button>
               </div>
             </div>
@@ -4051,7 +4239,7 @@ export function GroupsPage({
               />
             </div>
             {/* v1.40.3：非單位級角色一律可指定群組加入，不再只對寫死名單顯示群組選單 */}
-            {!isUnitLevelRole(managingRole.name) && (
+            {managingRole.kind !== "unit" && (
                 <div className="form-field" style={{ maxWidth: 320 }}>
                   <label className="field-label">適用群組 *</label>
                   <div className="select-wrap">
@@ -4070,7 +4258,7 @@ export function GroupsPage({
                   </div>
                 </div>
               )}
-            {isUnitLevelRole(managingRole.name) && (
+            {managingRole.kind === "unit" && (
               <p className="settings-note">
                 單位級角色：加入時以各人所屬單位的群組計（無所屬單位群組者無法加入）。
               </p>
@@ -4164,6 +4352,8 @@ export function GroupsPage({
                 <thead>
                   <tr>
                       <SortHeader label="角色名稱" sortKey="role-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                      <th>功能類別</th>
+                      <th>適用範圍</th>
                       <SortHeader label="成員數" sortKey="role-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
                     <th>操作</th>
                   </tr>
@@ -4174,6 +4364,8 @@ export function GroupsPage({
                       <td>
                         <b>{row.name}</b>
                       </td>
+                      <td>{ROLE_CATEGORY_LABELS[row.category]}</td>
+                      <td>{row.kind === "unit" ? "單位角色" : "群組角色"}</td>
                       <td>
                         {row.memberCount === null
                           ? "—"

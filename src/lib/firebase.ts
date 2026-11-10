@@ -29,6 +29,13 @@ import {
   isReviewerRole,
 } from "./roleIdentity";
 import { activeRolesForReviewerExpiry } from "./reviewerValidity";
+import {
+  buildRoleMetaMap,
+  hasRoleCategory,
+  reviewerRoleNames,
+  type RoleMetaMap,
+  type TitleFlags,
+} from "./orgMeta";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY ?? "",
@@ -114,6 +121,10 @@ export type FirebaseProfile = {
   groupId: string;
   groupIds: string[];
   status: string;
+  /** 角色詮釋資料（有值時範圍改以類別判斷；未傳時以名稱推導，行為與舊版一致）。 */
+  roleMeta?: RoleMetaMap;
+  /** 職稱旗標（有值時單位／全院範圍亦看職稱；未傳時只看角色）。 */
+  titleFlags?: TitleFlags;
 };
 
 export type ReviewRecord = {
@@ -182,9 +193,11 @@ export function isFirebaseReviewerRoleWriteEnabled(): boolean {
 
 /**
  * 讀取某指標某年度的已送出審查紀錄（唯讀）。
- * 資料範圍依角色：全院（主任／副主任／督導／系統管理員）→ 不限；
- * 組別（召集人／執行幹事）→ 所屬組別單位；護理長 → 所屬單位；
+ * 資料範圍依身分：全院（院級主管／系統管理員）→ 不限；
+ * 組別（召集人／執行幹事類別）→ 所屬組別單位；單位主管 → 所屬單位；
  * 審查員／一般人員 → 本人送出的。
+ * v1.40.5：範圍改以角色類別＋職稱旗標判斷，不再比對角色／職稱名稱；
+ * 未傳入詮釋資料時以舊名稱推導，行為與舊版一致。
  */
 export async function readReviewRecords(
   indicatorId: string,
@@ -193,14 +206,21 @@ export async function readReviewRecords(
 ): Promise<ReviewRecord[]> {
   const db = getFirebaseDb();
   const roles = new Set(profile.roles);
-  const fullHospital = ["主任", "副主任", "督導", "系統管理員"].some((role) =>
-    roles.has(role),
-  );
+  const roleMeta = profile.roleMeta;
+  const fullHospital =
+    roles.has("系統管理員") ||
+    hasRoleCategory(profile.roles, "senior", roleMeta) ||
+    profile.titleFlags?.isHospitalHead === true ||
+    profile.titleFlags?.isDistrictHead === true;
   // v1.21：召集人／執行幹事新舊並認（組級＋單位級皆以所屬群組計範圍）
   const groupScope =
-    isConvenerRole(profile.roles) || isOfficerRole(profile.roles);
-  const unitScope = roles.has("護理長");
-  const ownScope = isReviewerRole(profile.roles) || roles.has("一般人員");
+    isConvenerRole(profile.roles, roleMeta) ||
+    isOfficerRole(profile.roles, roleMeta);
+  const unitScope =
+    hasRoleCategory(profile.roles, "unitHead", roleMeta) ||
+    profile.titleFlags?.isUnitHead === true;
+  const ownScope =
+    isReviewerRole(profile.roles, roleMeta) || roles.has("一般人員");
 
   // v1.28 階段 6（B6）：單一指標查詢改游標分頁，取代舊 limit(2000) 靜默截斷。
   // 維持單一 where（indicatorId 等號），年份仍在前端過濾：v1.14 測試明言
@@ -430,25 +450,31 @@ export async function readFirebaseGroupsForReviewerManagement(): Promise<
     .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
 }
 
-/** 授予審查員角色（users/{staffId}.roles arrayUnion "審查員"） */
+/**
+ * 授予審查員角色（users/{staffId}.roles arrayUnion 審查員類別角色）。
+ * v1.40.5：授予的角色改以 roles 集合中類別為審查員者為準（名稱由管理員設定，
+ * 不再寫死「審查員」）；找不到此類角色時才退回舊名稱（遷移相容）。
+ * 回傳實際授予的角色名稱。
+ */
 export async function grantReviewerRole(
   staffId: string,
   actor: { staffId: string; name: string },
-): Promise<void> {
+): Promise<string> {
   if (!isFirebaseReviewerRoleWriteEnabled())
     throw new Error("審查員角色寫入尚未啟用；需先完成 Firestore Rules 驗收。");
   const normalizedStaffId = staffId.trim();
   if (!normalizedStaffId) throw new Error("缺少人員職編，無法授予角色。");
   const db = getFirebaseDb();
+  const reviewerRoleName = await resolveReviewerRoleName(db);
   const userRef = doc(db, "users", normalizedStaffId);
   const userSnap = await getDoc(userRef);
   if (!userSnap.exists()) throw new Error("找不到該人員資料。");
   const before = userSnap.data();
   const beforeRoles = Array.isArray(before.roles) ? before.roles.map(String) : [];
-  const afterRoles = [...new Set([...beforeRoles, "審查員"])];
+  const afterRoles = [...new Set([...beforeRoles, reviewerRoleName])];
   const batch = writeBatch(db);
   batch.update(userRef, {
-    roles: arrayUnion("審查員"),
+    roles: arrayUnion(reviewerRoleName),
     reviewerAccessExpiresAt: null,
   });
   batch.set(doc(collection(db, "auditLogs")), {
@@ -457,7 +483,7 @@ export async function grantReviewerRole(
     action: "授予審查員角色",
     targetType: "user",
     targetId: normalizedStaffId,
-    detail: `授予職編 ${normalizedStaffId} 審查員角色，效期設為永久有效`,
+    detail: `授予職編 ${normalizedStaffId} ${reviewerRoleName}角色，效期設為永久有效`,
     before: {
       roles: beforeRoles,
       reviewerAccessExpiresAt: typeof before.reviewerAccessExpiresAt === "string"
@@ -468,4 +494,30 @@ export async function grantReviewerRole(
     createdAt: serverTimestamp(),
   });
   await batch.commit();
+  return reviewerRoleName;
+}
+
+/** 由 roles 集合找出審查員類別的角色名稱（名稱排序第一個）；無則退回舊名稱。 */
+async function resolveReviewerRoleName(db: Firestore): Promise<string> {
+  try {
+    const snap = await getDocs(collection(db, "roles"));
+    const meta = buildRoleMetaMap(
+      snap.docs.map((d) => {
+        const v = d.data() as Record<string, unknown>;
+        return {
+          name: typeof v.name === "string" ? v.name : d.id,
+          category: v.category,
+          kind: v.kind,
+          scope: v.scope,
+        };
+      }),
+    );
+    const names = reviewerRoleNames(meta).sort((a, b) =>
+      a.localeCompare(b, "zh-Hant"),
+    );
+    if (names.length > 0) return names[0];
+  } catch {
+    // 讀取失敗時退回舊名稱，不阻擋授予流程
+  }
+  return "審查員";
 }

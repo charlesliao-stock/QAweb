@@ -47,14 +47,22 @@ import {
   type IndicatorSchedule,
 } from "../lib/scheduling";
 import {
-  CONVENER_ROLES,
-  OFFICER_ROLES,
   groupsForRoles,
   isConvenerRole,
   isOfficerRole,
   isReviewerRole,
   parseMemberships,
 } from "../lib/roleIdentity";
+import { useOrgMeta } from "../lib/useOrgMeta";
+import {
+  convenerRoleNames,
+  hasRoleCategory,
+  hasRoleCategoryWithScope,
+  LEGACY_CONVENER_ROLE_NAMES,
+  LEGACY_OFFICER_ROLE_NAMES,
+  officerRoleNames,
+  titleFlagsOf,
+} from "../lib/orgMeta";
 import {
   auditRowMatches,
   computeIntervalProgress,
@@ -172,6 +180,8 @@ export function AuditPage({
 }) {
   const { user } = useAuth();
   const { can } = usePermissions();
+  // v1.40.5：身分改以角色詮釋資料＋職稱旗標判斷，不再比對名稱
+  const orgMeta = useOrgMeta();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ActiveRow[]>([]);
   const [dataRefreshKey, setDataRefreshKey] = useState(0);
@@ -297,17 +307,29 @@ export function AuditPage({
             )
           : [];
 
-        // ---- 角色範圍（多重身分取聯集；v1.21 新舊並認） ----
+        // ---- 角色範圍（多重身分取聯集；v1.40.5 改以類別／旗標判斷） ----
         const roles = user.roles ?? [];
         const title = user.title ?? "";
         const isAdmin = roles.includes("系統管理員");
-        const isSenior = title.includes("主任") || title.includes("督導");
-        const isReviewer = isReviewerRole(roles);
+        const flags = titleFlagsOf(
+          title,
+          user.titleId,
+          orgMeta.titleMeta,
+          orgMeta.titleMetaById,
+        );
+        const isSenior =
+          flags.isHospitalHead ||
+          flags.isDistrictHead ||
+          hasRoleCategory(roles, "senior", orgMeta.roleMeta);
+        const isReviewer = isReviewerRole(roles, orgMeta.roleMeta);
         const isHeadNurse =
-          title.includes("護理長") ||
-          title.includes("執行幹事") ||
-          roles.includes("單位執行幹事");
-        const isConvener = isConvenerRole(roles) || isOfficerRole(roles);
+          flags.isUnitHead ||
+          flags.isOfficer ||
+          hasRoleCategory(roles, "unitHead", orgMeta.roleMeta) ||
+          hasRoleCategoryWithScope(roles, "officer", "unit", orgMeta.roleMeta);
+        const isConvener =
+          isConvenerRole(roles, orgMeta.roleMeta) ||
+          isOfficerRole(roles, orgMeta.roleMeta);
         // 召集人／執行幹事的群組範圍：memberships 為主，舊 groupIds＋roles fallback；
         // 單位級角色以其單位所屬群組計
         const memberships = parseMemberships(meData.memberships, {
@@ -316,8 +338,15 @@ export function AuditPage({
         });
         const myConvenerGroupIds = groupsForRoles(
           memberships,
-          [...CONVENER_ROLES, ...OFFICER_ROLES],
+          // 角色主檔尚未載入時（空表）以舊名稱退路，載入後改以類別為準
+          orgMeta.roleMeta.size === 0
+            ? [...LEGACY_CONVENER_ROLE_NAMES, ...LEGACY_OFFICER_ROLE_NAMES]
+            : [
+                ...convenerRoleNames(orgMeta.roleMeta),
+                ...officerRoleNames(orgMeta.roleMeta),
+              ],
           user.unitCode ? unitGroup.get(user.unitCode) : undefined,
+          orgMeta.roleMeta,
         );
         setEditableGroupIds(myConvenerGroupIds);
 
@@ -506,7 +535,7 @@ export function AuditPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.staffId, dataRefreshKey]);
+  }, [user?.staffId, dataRefreshKey, orgMeta.roleMeta]);
 
   /* ---------- 檢視 modal：載入該指標題目（逐題明細分組＋指引用；v1.24） ---------- */
   useEffect(() => {

@@ -1,9 +1,11 @@
 /**
  * v1.14.0 測試：esbuild 打包純函式 lib 後跑斷言＋靜態檢查。
- * 涵蓋：access.ts（17 角色對照，v1.21 增 6 新角色）、scheduleStatus.ts（顯示狀態）、
- *       types.ts 清理（CapaCase 已刪、reviewers PageId、Role 擴充）、
+ * 涵蓋：scheduleStatus.ts（顯示狀態）、
+ *       types.ts 清理（CapaCase 已刪、reviewers PageId）、
  *       導覽接線（v1.21 審查員管理已刪除／季度分析／審查總覽入口）、
  *       firebase.ts 移植函式存在、版本號。
+ * v1.40.5：access.ts（名稱鍵控 ROLE_PAGES 死碼）已刪除，本測試不再覆蓋該檔；
+ *       Role 名稱聯集亦隨之移除（types.ts 不再匯出 Role）。
  * 執行：node scripts/test-v1.14.mjs
  */
 import { buildSync } from "esbuild";
@@ -17,7 +19,6 @@ if (!existsSync(cacheBase)) mkdirSync(cacheBase, { recursive: true });
 const dir = mkdtempSync(join(cacheBase, "run-"));
 void tmpdir;
 for (const [src, out] of [
-  ["src/lib/access.ts", "ac.mjs"],
   ["src/lib/scheduleStatus.ts", "ss.mjs"],
 ]) {
   buildSync({
@@ -30,7 +31,6 @@ for (const [src, out] of [
     logLevel: "silent",
   });
 }
-const ac = await import(pathToFileURL(join(dir, "ac.mjs")).href);
 const ss = await import(pathToFileURL(join(dir, "ss.mjs")).href);
 
 let pass = 0;
@@ -43,14 +43,9 @@ function src(name) {
   return readFileSync(join("src", name), "utf8");
 }
 
-/* ---- access.ts：17 角色對照（v1.21 增 6 新角色） ---- */
-t("ROLE_PAGES 有 17 個角色", Object.keys(ac.ROLE_PAGES).length === 17);
-t("管理員可進 admin", ac.canView("系統管理員", "admin") === true);
-t("一般人員不可進 admin", ac.canView("一般人員", "admin") === false);
-t("審查員可進 audit", ac.canView("審查員", "audit") === true);
-t("品管組審查員可進 audit", ac.canView("品管組審查員", "audit") === true);
-t("單位執行幹事可進 audit", ac.canView("單位執行幹事", "audit") === true);
-t("主任可進 groups", ac.canView("主任", "groups") === true);
+/* ---- access.ts 已刪除（v1.40.5）：名稱鍵控 ROLE_PAGES 死碼，無人引用 ---- */
+t("lib/access.ts 已刪除", !existsSync(join("src", "lib", "access.ts")));
+t("types.ts 無 Role 名稱聯集", !src("types.ts").includes("export type Role"));
 
 /* ---- scheduleStatus.ts ---- */
 t(
@@ -79,8 +74,9 @@ t("進度 1/2 → 50", ss.getScheduleTaskProgress({ done: 1, total: 2 }) === 50)
 const types = src("types.ts");
 t("CapaCase 已刪除", !types.includes("CapaCase"));
 t("PageId 有 reviewers", types.includes('"reviewers"'));
-t("Role 有主任", types.includes('"主任"'));
-t("Role 有執行幹事", types.includes('"執行幹事"'));
+// v1.40.5：Role 名稱聯集已刪除（身分改走 roles 集合的 category／kind 欄位）
+t("Role 名稱聯集已刪除", !types.includes("export type Role"));
+t("types.ts 無舊角色名稱", !types.includes('"單位審查員"'));
 t("舊 Indicator 介面保留（QuarterResults 用）", types.includes("interface Indicator"));
 t("舊 ScheduleTask 介面保留（scheduleStatus 用）", types.includes("interface ScheduleTask"));
 
@@ -133,7 +129,6 @@ t("version.ts 版號 1.28.0", src("version.ts").includes('VERSION = "1.28.0"'));
 /* ---- 3 檔存在（v1.25.0：QuarterResults 已隨舊結果分析畫面移除） ---- */
 for (const f of [
   "features/ReviewerManagement.tsx",
-  "lib/access.ts",
   "lib/scheduleStatus.ts",
 ]) {
   t(`${f} 存在`, existsSync(join("src", f)));

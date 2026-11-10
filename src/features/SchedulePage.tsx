@@ -43,6 +43,8 @@ import { buildTaskIndex } from "../lib/taskIndex";
 import { usePermissions } from "../lib/usePermissions";
 import { useAuth } from "../lib/auth";
 import { isReviewerAccessActive } from "../lib/reviewerValidity";
+import { useOrgMeta } from "../lib/useOrgMeta";
+import { hasRoleCategory, titleFlagsOf } from "../lib/orgMeta";
 import { maskName } from "../lib/mask";
 import {
   academicYearOf,
@@ -277,7 +279,11 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     () => ({ id: user?.staffId ?? "", name: user?.name ?? "" }),
     [user],
   );
-  const isHeadNurse = (user?.title ?? "").includes("護理長");
+  // v1.40.5：單位主管改以職稱旗標／角色類別判斷，不再比對職稱名稱
+  const orgMeta = useOrgMeta();
+  const isHeadNurse =
+    titleFlagsOf(user?.title ?? "", user?.titleId, orgMeta.titleMeta, orgMeta.titleMetaById).isUnitHead ||
+    hasRoleCategory(user?.roles ?? [], "unitHead", orgMeta.roleMeta);
   const myUnitCode = user?.unitCode ?? "";
 
   const [view, setView] = useState<View>({ kind: "list" });

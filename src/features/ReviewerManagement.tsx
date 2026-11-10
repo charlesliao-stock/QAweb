@@ -10,6 +10,8 @@ import {
   type FirebaseProfile,
   type FirebaseUserRow,
 } from "../lib/firebase";
+import { useOrgMeta } from "../lib/useOrgMeta";
+import { isReviewerRole } from "../lib/roleIdentity";
 
 type SortKey = "staffId" | "name" | "groups" | "unitCode" | "status";
 type SortState = { key: SortKey; direction: "asc" | "desc" };
@@ -44,6 +46,8 @@ export function ReviewerManagement({
   const [savingId, setSavingId] = useState("");
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
+  // v1.40.5：審查員名單改以角色類別判斷，不再比對「審查員」名稱
+  const orgMeta = useOrgMeta();
   const isSystemAdmin = profile?.roles.includes("系統管理員") ?? false;
   const canWriteRoles = isFirebaseReviewerRoleWriteEnabled();
 
@@ -111,7 +115,7 @@ export function ReviewerManagement({
           .toLocaleLowerCase()
           .includes(query),
       )
-      .filter((person) => person.roles.includes("審查員"))
+      .filter((person) => isReviewerRole(person.roles, orgMeta.roleMeta))
       .sort((a, b) => {
         const left =
           sort.key === "groups" ? groupLabel(a, groupNames) : a[sort.key];
@@ -123,12 +127,12 @@ export function ReviewerManagement({
         });
         return sort.direction === "asc" ? compared : -compared;
       });
-  }, [people, groupFilter, search, sort, groupNames]);
+  }, [people, groupFilter, search, sort, groupNames, orgMeta.roleMeta]);
 
   const candidates = useMemo(() => {
     const query = candidateSearch.trim().toLocaleLowerCase();
     return people
-      .filter((person) => !person.roles.includes("審查員"))
+      .filter((person) => !isReviewerRole(person.roles, orgMeta.roleMeta))
       .filter((person) => person.status !== "停用")
       .filter((person) =>
         groupFilter ? person.groupIds.includes(groupFilter) : true,
@@ -139,7 +143,7 @@ export function ReviewerManagement({
           .includes(query),
       )
       .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
-  }, [people, groupFilter, candidateSearch, groupNames]);
+  }, [people, groupFilter, candidateSearch, groupNames, orgMeta.roleMeta]);
 
   const toggleSort = (key: SortKey) => {
     setSort((current) =>
@@ -160,18 +164,18 @@ export function ReviewerManagement({
     setSavingId(person.staffId);
     setActionError("");
     try {
-      await grantReviewerRole(person.staffId, {
+      const grantedRole = await grantReviewerRole(person.staffId, {
         staffId: profile?.staffId ?? "",
         name: profile?.name ?? "",
       });
       setPeople((current) =>
         current.map((item) =>
           item.staffId === person.staffId
-            ? { ...item, roles: [...new Set([...item.roles, "審查員"])] }
+            ? { ...item, roles: [...new Set([...item.roles, grantedRole])] }
             : item,
         ),
       );
-      onAction(`已授予 ${person.name} 審查員角色`);
+      onAction(`已授予 ${person.name} ${grantedRole}角色`);
     } catch (cause) {
       setActionError(
         cause instanceof Error
@@ -315,7 +319,7 @@ export function ReviewerManagement({
               {!loading && !error && visiblePeople.length === 0 && (
                 <tr>
                   <td colSpan={5} className="reviewer-empty">
-                    {people.some((person) => person.roles.includes("審查員"))
+                    {people.some((person) => isReviewerRole(person.roles, orgMeta.roleMeta))
                       ? "沒有符合組別或搜尋條件的審查員。"
                       : "目前尚未授予任何人審查員角色。"}
                   </td>

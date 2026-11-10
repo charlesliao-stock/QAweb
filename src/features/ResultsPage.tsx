@@ -39,6 +39,8 @@ import {
   type AuditQuestion,
 } from "../lib/indicators";
 import { isReviewerRole } from "../lib/roleIdentity";
+import { useOrgMeta } from "../lib/useOrgMeta";
+import { hasRoleCategory, titleFlagsOf } from "../lib/orgMeta";
 import { maskName } from "../lib/mask";
 import { computeOptionSetScore } from "../lib/reviewRecords";
 import { logAudit } from "../lib/audit";
@@ -413,22 +415,22 @@ export function ResultsPage({
   // 單位分析矩陣下方展開面板（曲線圖／選項明細）
   const [unitPanel, setUnitPanel] = useState<UnitPanel | null>(null);
 
-  // 資料範圍（沿用舊頁規則）
+  // 資料範圍（沿用舊頁規則；v1.40.5 改以職稱旗標／角色類別判斷，不再比對名稱）
+  const orgMeta = useOrgMeta();
   const isNurseLeader = !!user && (
-    ((user.title ?? "").includes("護理長") && !(user.title ?? "").includes("副")) ||
-    (user.roles ?? []).includes("護理長") ||
-    (user.roles ?? []).includes("單位護理長")
+    titleFlagsOf(user.title ?? "", user.titleId, orgMeta.titleMeta, orgMeta.titleMetaById).isUnitHead ||
+    hasRoleCategory(user.roles ?? [], "unitHead", orgMeta.roleMeta)
   );
   const scope = useMemo(() => {
     const roles = user?.roles ?? [];
     if (roles.includes("系統管理員")) return { kind: "admin" as const };
     if (user && isNurseLeader)
       return { kind: "staff" as const, unitCode: user.unitCode };
-    if (user && isReviewerRole(roles))
+    if (user && isReviewerRole(roles, orgMeta.roleMeta))
       return { kind: "reviewer" as const, staffId: user.staffId };
     if (user) return { kind: "staff" as const, unitCode: user.unitCode };
     return { kind: "admin" as const };
-  }, [user, isNurseLeader]);
+  }, [user, isNurseLeader, orgMeta.roleMeta]);
 
   const visibleUnitCodes = useMemo(() => {
     if (scope.kind !== "staff") return new Set<string>();

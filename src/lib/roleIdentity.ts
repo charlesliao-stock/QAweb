@@ -1,15 +1,33 @@
 /**
- * 角色身分新舊並認（v1.21.0）。
+ * 角色身分新舊並認（v1.21.0；v1.40.5 改吃 orgMeta 詮釋資料）。
  *
- * 舊角色：審查員／召集人／執行幹事（另有「各組召集人」「執行幹事」等
- * 集合型命名）；新角色：品管組召集人／品管組執行幹事／品管組審查員／
- * 單位召集人／單位執行幹事／單位審查員。
- * 權限判斷一律以本檔的集合為準，不再用 `roles.includes("審查員")`
- * 之類的精確比對。
- *
- * 本檔零依賴、不碰 Firestore，可在 node 直接單元測試。
+ * 身分判斷改以角色文件上的 `category`／`kind` 欄位為準（見 lib/orgMeta.ts）；
+ * 本檔的函式保留舊簽名，僅傳名稱字串時以名稱推導（legacy，行為與舊版一致，
+ * 供既有測試與尚未載入角色主檔的純函式使用）。正式流程請傳入 roleMeta
+ *（由 roles 集合建立），新醫院自訂名稱時才不會被名稱卡住。
  */
 
+import {
+  hasRoleCategoryWithScope,
+  hasSchedulePermissionMeta,
+  isConvenerRoleMeta,
+  isGroupConvenerRoleMeta,
+  isGroupOfficerRoleMeta,
+  isGroupScopedRoleMeta,
+  isOfficerRoleMeta,
+  isReviewerRoleMeta,
+  isUnitLevelRoleMeta,
+  legacyRoleCategory,
+  legacyRoleScope,
+  type RoleMetaMap,
+} from "./orgMeta";
+
+export type { RoleCategory, RoleMeta, RoleMetaMap, RoleScope } from "./orgMeta";
+
+/**
+ * 舊名稱對照（僅遷移相容；見 orgMeta.ts LEGACY_*）。
+ * 保留匯出供既有引用；新程式請用 orgMeta 的類別判斷，不要直接比對這些名單。
+ */
 export const REVIEWER_ROLES = ["審查員", "品管組審查員", "單位審查員"];
 export const CONVENER_ROLES = [
   "召集人",
@@ -29,49 +47,78 @@ export const GROUP_SCOPED_ROLES = [
   ...new Set([...CONVENER_ROLES, ...OFFICER_ROLES, ...REVIEWER_ROLES]),
 ];
 
+export { legacyRoleCategory, legacyRoleScope };
+
 /** 是否為群組範圍角色（人員表單中走 memberships 配對列） */
-export function isGroupScopedRole(role: string): boolean {
-  return GROUP_SCOPED_ROLES.includes(role);
+export function isGroupScopedRole(
+  role: string,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return isGroupScopedRoleMeta(role, roleMeta);
 }
 
-function hasAny(roles: string[] | undefined, names: string[]): boolean {
-  if (!roles) return false;
-  return roles.some((r) => names.includes(r));
+/** 審查員身分：類別為審查員（無詮釋資料時以舊名稱推導）。 */
+export function isReviewerRole(
+  roles: string[] | undefined,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return isReviewerRoleMeta(roles, roleMeta);
 }
 
-/** 審查員身分：舊「審查員」或新品管組／單位審查員任一 */
-export function isReviewerRole(roles: string[] | undefined): boolean {
-  return hasAny(roles, REVIEWER_ROLES);
+/** 召集人身分：類別為召集人（無詮釋資料時以舊名稱推導）。 */
+export function isConvenerRole(
+  roles: string[] | undefined,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return isConvenerRoleMeta(roles, roleMeta);
 }
 
-/** 召集人身分：舊「召集人」或新品管組／單位召集人任一 */
-export function isConvenerRole(roles: string[] | undefined): boolean {
-  return hasAny(roles, CONVENER_ROLES);
-}
-
-/** 執行幹事身分：舊「執行幹事」或新品管組／單位執行幹事任一 */
-export function isOfficerRole(roles: string[] | undefined): boolean {
-  return hasAny(roles, OFFICER_ROLES);
+/** 執行幹事身分：類別為執行幹事（無詮釋資料時以舊名稱推導）。 */
+export function isOfficerRole(
+  roles: string[] | undefined,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return isOfficerRoleMeta(roles, roleMeta);
 }
 
 /** 組級召集人（排程權限用） */
-export function isGroupConvenerRole(roles: string[] | undefined): boolean {
-  return hasAny(roles, GROUP_CONVENER_ROLES);
+export function isGroupConvenerRole(
+  roles: string[] | undefined,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return isGroupConvenerRoleMeta(roles, roleMeta);
 }
 
 /** 組級執行幹事（排程權限用） */
-export function isGroupOfficerRole(roles: string[] | undefined): boolean {
-  return hasAny(roles, GROUP_OFFICER_ROLES);
+export function isGroupOfficerRole(
+  roles: string[] | undefined,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return isGroupOfficerRoleMeta(roles, roleMeta);
 }
 
 /** 是否有排程權限：組級召集人或組級執行幹事 */
-export function hasSchedulePermission(roles: string[] | undefined): boolean {
-  return isGroupConvenerRole(roles) || isGroupOfficerRole(roles);
+export function hasSchedulePermission(
+  roles: string[] | undefined,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return hasSchedulePermissionMeta(roles, roleMeta);
 }
 
 /** 是否為單位級角色 */
-export function isUnitLevelRole(role: string): boolean {
-  return UNIT_LEVEL_ROLES.includes(role);
+export function isUnitLevelRole(
+  role: string,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return isUnitLevelRoleMeta(role, roleMeta);
+}
+
+/** 單位級執行幹事（AuditPage 自審範圍用）。 */
+export function hasUnitOfficerRole(
+  roles: string[] | undefined,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return hasRoleCategoryWithScope(roles, "officer", "unit", roleMeta);
 }
 
 /* ================= 人員多群組模型（v1.21.0） ================= */
@@ -138,11 +185,13 @@ export function parseMemberships(
  * 該人員擔任指定角色的群組範圍：
  * - 組級／舊角色：memberships 中持有該角色的群組；
  * - 單位級角色：以其單位所屬群組計（unitGroupId 須由呼叫端傳入）。
+ * 單位級與否改以角色詮釋資料判斷（傳入 roleMeta；未傳時以名稱推導）。
  */
 export function groupsForRoles(
   memberships: Membership[],
   roleNames: string[],
   unitGroupId?: string,
+  roleMeta?: RoleMetaMap,
 ): string[] {
   const out: string[] = [];
   const push = (g: string) => {
@@ -151,7 +200,7 @@ export function groupsForRoles(
   for (const m of memberships) {
     for (const r of m.roles) {
       if (!roleNames.includes(r)) continue;
-      if (isUnitLevelRole(r)) {
+      if (isUnitLevelRole(r, roleMeta)) {
         // 單位級角色以其單位所屬群組計；單位未知時退回該筆 membership 的群組
         push(unitGroupId ?? m.groupId);
       } else {

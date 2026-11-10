@@ -14,12 +14,16 @@ import {
   updatePassword,
   type User as FirebaseUser,
 } from "firebase/auth";
-import { doc, getDoc, updateDoc } from "./db";
+import { collection, doc, getDoc, getDocs, updateDoc } from "./db";
 import { getFirebaseAuth, getFirebaseDb } from "./firebase";
 import { isDemoMode, setDemoMode } from "./demoMode";
 import { clearRefCache } from "./refCache";
 import { activeRolesForReviewerExpiry, isReviewerAccessActive } from "./reviewerValidity";
 import { parseMemberships, type Membership } from "./roleIdentity";
+import { buildRoleMetaMap, type RoleMetaMap } from "./orgMeta";
+
+/** 登入時載入的角色詮釋資料快取（效期計時器共用，避免每 30 秒重讀）。 */
+let cachedRoleMeta: RoleMetaMap | undefined;
 
 /** 登入用 email 合成規則：職編即帳號，phase 1 不寄信故用內部網域 */
 export function staffEmail(staffId: string): string {
@@ -117,7 +121,27 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
   const reviewerAccessExpiresAt = typeof raw.reviewerAccessExpiresAt === "string"
     ? raw.reviewerAccessExpiresAt
     : "";
-  const roles = activeRolesForReviewerExpiry(storedRoles, reviewerAccessExpiresAt);
+  // v1.40.5：效期清理改以角色類別判斷（載入 roles 集合建詮釋資料；
+  // 讀取失敗時退回舊名稱推導，不阻擋登入）
+  let roleMeta;
+  try {
+    const roleSnap = await getDocs(collection(db, "roles"));
+    roleMeta = buildRoleMetaMap(
+      roleSnap.docs.map((d) => {
+        const v = d.data() as Record<string, unknown>;
+        return {
+          name: typeof v.name === "string" ? v.name : d.id,
+          category: v.category,
+          kind: v.kind,
+          scope: v.scope,
+        };
+      }),
+    );
+  } catch {
+    roleMeta = undefined;
+  }
+  cachedRoleMeta = roleMeta;
+  const roles = activeRolesForReviewerExpiry(storedRoles, reviewerAccessExpiresAt, new Date(), roleMeta);
   const districtGroupIds = Array.isArray(raw.districtGroupIds)
     ? raw.districtGroupIds.map(String)
     : [];
@@ -183,7 +207,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       window.clearInterval(timer);
       setUser((current) => {
         if (!current) return current;
-        const roles = activeRolesForReviewerExpiry(current.roles, expiry);
+        const roles = activeRolesForReviewerExpiry(current.roles, expiry, new Date(), cachedRoleMeta);
         return roles.length === current.roles.length ? current : { ...current, roles };
       });
     }, 30_000);

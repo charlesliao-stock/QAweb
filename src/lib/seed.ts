@@ -121,18 +121,6 @@ export const SEED_TITLES: SeedTitleDef[] = [
   { name: "護理師", level: "單位" },
 ];
 
-/** 七個系統角色名稱（批次上傳人員時驗證用） */
-export const SYSTEM_ROLE_NAMES: string[] = SEED_ROLES.map((r) => r.name);
-
-/** v1.21：五個群組名稱（群組管理種子；不存在才建立） */
-export const SEED_GROUP_NAMES: string[] = [
-  "單位",
-  "加護組",
-  "病房組",
-  "腫瘤組",
-  "護品組",
-];
-
 export interface SystemParams {
   /** RAG 黃燈區間：閾值以下幾個百分點為「接近閾值」 */
   ragYellowBand: number;

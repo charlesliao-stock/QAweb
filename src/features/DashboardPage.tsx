@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Download } from "lucide-react";
 import { PageHeading } from "../components/ui";
 import { useAuth } from "../lib/auth";
+import { useOrgMeta } from "../lib/useOrgMeta";
 import { getFirebaseDb } from "../lib/firebase";
 import { doc } from "../lib/db";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
@@ -76,14 +77,23 @@ export function DashboardPage({
     })();
   }, []);
 
+  const orgMeta = useOrgMeta();
   const variants = useMemo(
     () =>
-      getDashboardVariants({
-        roles: user?.roles ?? [],
-        title: user?.title ?? "",
-        isAdmin: (user?.roles ?? []).includes("系統管理員"),
-      }),
-    [user],
+      getDashboardVariants(
+        {
+          roles: user?.roles ?? [],
+          title: user?.title ?? "",
+          titleId: user?.titleId,
+          isAdmin: (user?.roles ?? []).includes("系統管理員"),
+        },
+        {
+          roleMeta: orgMeta.roleMeta,
+          titleMeta: orgMeta.titleMeta,
+          titleMetaById: orgMeta.titleMetaById,
+        },
+      ),
+    [user, orgMeta.roleMeta, orgMeta.titleMeta, orgMeta.titleMetaById],
   );
   const active: DashboardVariant = vtab ?? variants[0] ?? "nurse";
 

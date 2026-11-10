@@ -96,8 +96,10 @@ check("角色成員管理非單位級角色一律要求選群組", () => {
     throw new Error("未要求選擇適用群組");
 });
 check("角色成員管理群組選單對非單位級角色皆顯示", () => {
-  if (!groupsSrc.includes("{!isUnitLevelRole(managingRole.name) && ("))
-    throw new Error("群組選單仍以 isGroupScopedRole 決定顯示");
+  if (!groupsSrc.includes("{managingRole.kind !== \"unit\" && ("))
+    throw new Error("群組選單未以角色 kind 決定顯示");
+  if (groupsSrc.includes("isUnitLevelRole(managingRole.name)"))
+    throw new Error("群組選單仍以名稱決定顯示");
 });
 
 // --- 6. 匯入更新保留全域角色改為 membership 依據 ---

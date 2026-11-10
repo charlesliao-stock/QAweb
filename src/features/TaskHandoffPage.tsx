@@ -4,7 +4,13 @@ import { collection, doc, getDoc, getDocs, query, serverTimestamp, where, writeB
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
-import { GROUP_CONVENER_ROLES, GROUP_OFFICER_ROLES, groupsForRoles, parseMemberships } from "../lib/roleIdentity";
+import { groupsForRoles, parseMemberships } from "../lib/roleIdentity";
+import { useOrgMeta } from "../lib/useOrgMeta";
+import {
+  LEGACY_GROUP_CONVENER_ROLE_NAMES,
+  LEGACY_GROUP_OFFICER_ROLE_NAMES,
+  scheduleScopeRoleNames,
+} from "../lib/orgMeta";
 import {
   filterHandoffTasks,
   isHandoffEligible,
@@ -47,6 +53,8 @@ function toErrorMessage(error: unknown): string {
 
 export function TaskHandoffPage({ onAction }: { onAction: (message: string) => void }) {
   const { user } = useAuth();
+  // v1.40.5：管理範圍改以角色類別＋範圍判斷，不再比對角色名稱
+  const orgMeta = useOrgMeta();
   const [groups, setGroups] = useState<OptionRow[]>([]);
   const [units, setUnits] = useState<OptionRow[]>([]);
   const [managerGroupIds, setManagerGroupIds] = useState<string[]>([]);
@@ -97,7 +105,17 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
         groupIds: Array.isArray(me.groupIds) ? me.groupIds.map(String) : [],
       });
       setManagerGroupIds(
-        admin ? [] : groupsForRoles(memberships, [...GROUP_CONVENER_ROLES, ...GROUP_OFFICER_ROLES]),
+        admin
+          ? []
+          : groupsForRoles(
+              memberships,
+              // 角色主檔尚未載入時（空表）以舊名稱退路，載入後改以類別＋範圍為準
+              orgMeta.roleMeta.size === 0
+                ? [...LEGACY_GROUP_CONVENER_ROLE_NAMES, ...LEGACY_GROUP_OFFICER_ROLE_NAMES]
+                : scheduleScopeRoleNames(orgMeta.roleMeta),
+              undefined,
+              orgMeta.roleMeta,
+            ),
       );
       setGroups(groupSnap.docs.map((d) => ({ id: d.id, name: String(d.data().name ?? d.id) })));
       setUnits(unitSnap.docs.map((d) => ({ id: d.id, name: String(d.data().name ?? d.id), groupId: String(d.data().groupId ?? "") })));
@@ -106,7 +124,7 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
     } finally {
       setRefLoading(false);
     }
-  }, [user, onAction]);
+  }, [user, onAction, orgMeta.roleMeta]);
 
   useEffect(() => { void loadReference(); }, [loadReference]);
 
