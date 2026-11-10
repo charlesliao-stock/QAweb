@@ -30,6 +30,18 @@ export function staffEmail(staffId: string): string {
   return `${staffId.trim()}@nurseboard.internal`;
 }
 
+/**
+ * 帳號與初始密碼統一約定（v1.40.6）：帳號＝職編、初始密碼＝職編，
+ * 首次登入強制更改密碼（users 文件 mustChangePassword，預設 true）。
+ * 注意：MVP 無 Cloud Functions，帳號開通目前仍由管理員在 Firebase Console
+ * 手動建立（email＝職編@nurseboard.internal）；建立時初始密碼請填本函式
+ * 回傳值（即該員職編）。日後若在站內新增開通／重設流程，一律用本函式
+ * 決定初始密碼，不得再另設預設值。展示帳號 demo／demo 不適用本約定。
+ */
+export function defaultInitialPassword(staffId: string): string {
+  return staffId.trim();
+}
+
 export interface StaffProfile {
   staffId: string;
   name: string;

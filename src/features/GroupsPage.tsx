@@ -1753,7 +1753,7 @@ export function GroupsPage({
         }
         await batch.commit();
         onAction(
-          `已新增人員 ${staffId}。請再到 Firebase Console → Authentication 新增使用者，email 格式為 ${staffId}@nurseboard.internal`,
+          `已新增人員 ${staffId}。請再到 Firebase Console → Authentication 新增使用者，email 為 ${staffId}@nurseboard.internal，初始密碼請設為職編 ${staffId}（首次登入須更改）`,
         );
       } else if (view.kind === "edit") {
         const userRef = doc(db, "users", view.staffId);
@@ -3071,7 +3071,7 @@ export function GroupsPage({
             header={USER_HEADER}
             validateRows={validateUserRows}
             importRows={importUserRows}
-            postImportNote="提醒：匯入的人員仍需到 Firebase Console → Authentication 手動建立登入帳號（email 格式為「職編@nurseboard.internal」）。"
+            postImportNote="提醒：匯入的人員仍需到 Firebase Console → Authentication 手動建立登入帳號（email 格式為「職編@nurseboard.internal」，初始密碼請設為該員職編，首次登入須更改）。"
             onDone={loadUsers}
             onAction={onAction}
           />
@@ -3962,6 +3962,7 @@ export function GroupsPage({
                   />
                   <span>啟用（建議保持開啟）</span>
                 </label>
+                <p className="settings-note">帳號與初始密碼統一為職編：登入帳號為「職編@nurseboard.internal」，在 Firebase Console 建立使用者時初始密碼請設為該員職編；首次登入須更改密碼。</p>
               </div>
             )}
           </div>

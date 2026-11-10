@@ -249,6 +249,9 @@ function LoginScreen() {
             </div>
             <div className="login-version">{VERSION_LABEL}</div>
             <div className="login-demo-hint">
+              新帳號首次登入：密碼預設為職編，登入後須立即更改
+            </div>
+            <div className="login-demo-hint">
               展示帳號：demo／demo（展示模式，操作不會寫入資料庫）
             </div>
           </>
