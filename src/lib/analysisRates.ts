@@ -13,7 +13,9 @@
  *   受審＝兩筆審查。
  * - 矩陣格格式：正確率＋（正確數／審查數），例 75%(3/4)。
  * - 分組／逐題明細（v1.44.0）：人次模式與主格同口徑（分組達標人次／總人次，
- *   每人先算分組 rate 再判達標）；單位模式維持彙總作答率判定。
+ *   每人先算分組 rate 再判達標）；單位模式 v1.49.0 起亦與主格同口徑（推翻
+ *   v1.44.0 決策 2B 的彙總作答率判定）：每人先算分組 rate 再判達標，再算
+ *   每單位達標人次／該單位總人次 ≥ 閾值該單位才達標。
  */
 import type { AuditQuestion } from "./indicators";
 import { mergeNoteParts } from "./import";
@@ -305,10 +307,16 @@ export function personScoringBreakdownRows(
 }
 
 /**
- * 單位模式分組／逐題計分（2B 口徑，維持現行判定不改）：每單位期間先把
- * 該分組全部作答彙總成作答率 是／（是＋否），再以 ≥ 指標閾值判該單位
- * 期間達標；分子＝達標單位期間數，分母＝有該分組有效作答的單位期間數
- * （全不適用不計入分母）。閾值維持現行指標閾值，總列不動。
+ * 單位模式分組／逐題計分（v1.49.0，與主格同口徑；推翻 v1.44.0 決策 2B
+ * 「單位模式維持彙總作答率判定」）：每人先算該分組 rate＝該組是題數／
+ * 該組（是＋否）題數，再判 ≥ 閾值；每單位期間再算該分組達標人次／該單位
+ * 該分組有適用題的人次，≥ 閾值該單位該分組才達標。分子＝達標單位期間數，
+ * 分母＝有該分組有效作答的單位期間數。某人該分組全部不適用＝不計入該單位
+ * 的分母（B 法；全不適用者未就該分組受審）；某單位該分組
+ * 完全無有效作答＝該單位不計入該分組的分母。閾值逐筆優先用排程快照
+ * thresholdAtSchedule，無快照（匯入紀錄）用指標閾值；單位層判定用指標
+ * 閾值（與主格 unitPassRate 一致）；閾值 ≤0 視為不達標。總列不動。
+ * 無分組時逐題列用同一口徑：該題答「是」者為達標人次。
  */
 export function unitScoringBreakdownRows(
   records: AnalysisRecord[],
@@ -326,6 +334,19 @@ export function unitScoringBreakdownRows(
     rate: total.rate,
     isTotal: true,
   }];
+  const thresholdOf = (record: AnalysisRecord): number =>
+    typeof record.thresholdAtSchedule === "number" ? record.thresholdAtSchedule : threshold;
+  /** 單筆紀錄在指定題組內的（是，否）；excluded（不適用／空值）不列入。 */
+  const sectionCounts = (record: AnalysisRecord, ids: Set<string>) => {
+    let yes = 0;
+    let no = 0;
+    for (const answer of record.answers) {
+      if (!ids.has(answer.questionId) || answer.excluded) continue;
+      if (answer.optionLabel === "是") yes += 1;
+      else if (answer.optionLabel === "否") no += 1;
+    }
+    return { yes, no };
+  };
   const totals = new Map(
     sections.map((section) => [section.key, { ...section, pass: 0, valid: 0 }]),
   );
@@ -338,20 +359,22 @@ export function unitScoringBreakdownRows(
     }
     for (const section of sections) {
       for (const unitRecords of byUnit.values()) {
-        let yes = 0;
-        let no = 0;
-        for (const record of unitRecords) {
-          for (const answer of record.answers) {
-            if (!section.ids.has(answer.questionId) || answer.excluded) continue;
-            if (answer.optionLabel === "是") yes += 1;
-            else if (answer.optionLabel === "否") no += 1;
-          }
-        }
-        const valid = yes + no;
-        if (valid === 0) continue;
+        // B 法：單位分母只計該分組有適用題的人次；全不適用者不計入分母。
+        // 該單位期間至少一筆有該分組有效作答才計入分母。
+        const applicable = unitRecords.filter((record) => {
+          const { yes, no } = sectionCounts(record, section.ids);
+          return yes + no > 0;
+        });
+        if (applicable.length === 0) continue;
         const row = totals.get(section.key)!;
         row.valid += 1;
-        if (threshold > 0 && (yes / valid) * 100 >= threshold) row.pass += 1;
+        let pass = 0;
+        for (const record of applicable) {
+          const { yes, no } = sectionCounts(record, section.ids);
+          const rate = yes + no > 0 ? round1((yes / (yes + no)) * 100) : null;
+          if (isPassing(rate, thresholdOf(record))) pass += 1;
+        }
+        if (isUnitPassing(round1((pass / applicable.length) * 100), threshold)) row.pass += 1;
       }
     }
   }
