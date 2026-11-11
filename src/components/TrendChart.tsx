@@ -3,8 +3,11 @@
  * v1.13.0：x 座標依點數動態分布、y 軸為 0–100 線性、支援可選 x 軸標籤。
  * v1.27.0：hover 顯示期間＋正確率＋（正確數／審查數）；紅色虛線閾值線；
  * 點可點選（下探）；修正拉伸（preserveAspectRatio="meet"，保持 3:1 長寬比）。
+ * v1.50.0：只有一個資料點時只畫一個點、放圖中央（x=300），不畫折線與面積；
+ * hover 提示框改跟滑鼠（onMouseMove 取滑鼠在容器內的座標定位）；圖例列右側
+ * 的查詢結果（.chart-current）移除。
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 export function TrendChart({
   values = [],
@@ -12,7 +15,6 @@ export function TrendChart({
   tooltips = [],
   threshold = null,
   legend = "整體達標率",
-  currentLabel = "本月",
   onPointClick,
 }: {
   values?: number[];
@@ -23,11 +25,12 @@ export function TrendChart({
   /** 閾值（紅色虛線水平線；null 表示不畫） */
   threshold?: number | null;
   legend?: string;
-  currentLabel?: string;
   /** 點選某點（下探用）；未提供時點不可點 */
   onPointClick?: (index: number) => void;
 }) {
   const [hover, setHover] = useState<number | null>(null);
+  const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   if (values.length === 0) {
     return (
       <div className="trend-chart-wrap">
@@ -36,21 +39,33 @@ export function TrendChart({
     );
   }
   const n = values.length;
+  const single = n === 1;
   const x0 = 42;
   const x1 = 567;
   const step = n > 1 ? (x1 - x0) / (n - 1) : 0;
   const clamp = (v: number) => Math.max(0, Math.min(100, v));
-  const xOf = (i: number) => x0 + i * step;
+  /** 單點時放圖中央（x=300），不畫折線與面積。 */
+  const xOf = (i: number) => (single ? 300 : x0 + i * step);
   const yOf = (v: number) => 170 - clamp(v) * 1.35;
   const pts = values.map((v, i) => ({ x: xOf(i), y: yOf(v) }));
   const line = pts.map((p) => `${p.x},${p.y}`).join(" ");
-  const latest = values[n - 1] ?? 0;
   /** Y 軸刻度（0／25／50／75／100，對齊 yOf 映射） */
   const yTicks = [100, 75, 50, 25, 0].map((v) => ({ v, y: yOf(v) }));
   const tipText = (i: number) =>
     tooltips[i] ??
     (labels[i] ? `${labels[i]}：${values[i]}%` : `${values[i]}%`);
   const thY = threshold != null ? yOf(threshold) : null;
+  /** 提示框跟滑鼠：取滑鼠在容器內的座標，水平夾在容器內避免溢出。 */
+  const handleMouseMove = (event: React.MouseEvent) => {
+    const rect = wrapRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    setTipPos({
+      x: Math.max(70, Math.min(x, Math.max(70, rect.width - 70))),
+      y,
+    });
+  };
   return (
     <div className="trend-chart-wrap">
       <div className="chart-legend">
@@ -58,11 +73,8 @@ export function TrendChart({
           <i className="legend-line" />
           {legend}
         </span>
-        <span className="chart-current">
-          {currentLabel} <b>{latest}%</b>
-        </span>
       </div>
-      <div className="chart-svg-wrap">
+      <div className="chart-svg-wrap" ref={wrapRef}>
         <svg
           className="trend-chart"
           viewBox="0 0 600 200"
@@ -108,11 +120,13 @@ export function TrendChart({
               </text>
             </g>
           )}
-          <path
-            d={`M${x0},170 L${line.replaceAll(" ", " L")} L${x1},170 L${x0},170 Z`}
-            fill="url(#areaFill)"
-          />
-          <polyline points={line} className="chart-line" />
+          {!single && (
+            <path
+              d={`M${x0},170 L${line.replaceAll(" ", " L")} L${x1},170 L${x0},170 Z`}
+              fill="url(#areaFill)"
+            />
+          )}
+          {!single && <polyline points={line} className="chart-line" />}
           {pts.map((p, index) => (
             <g key={index}>
               {/* 加大命中區（hover／點選好點） */}
@@ -123,7 +137,11 @@ export function TrendChart({
                 fill="transparent"
                 style={{ cursor: onPointClick ? "pointer" : "default" }}
                 onMouseEnter={() => setHover(index)}
-                onMouseLeave={() => setHover(null)}
+                onMouseMove={handleMouseMove}
+                onMouseLeave={() => {
+                  setHover(null);
+                  setTipPos(null);
+                }}
                 onClick={() => {
                   setHover(index);
                   onPointClick?.(index);
@@ -158,12 +176,12 @@ export function TrendChart({
               ),
           )}
         </svg>
-        {hover != null && (
+        {hover != null && tipPos != null && (
           <div
             className="chart-tip"
             style={{
-              left: `${(pts[hover].x / 600) * 100}%`,
-              top: `${(pts[hover].y / 200) * 100}%`,
+              left: `${tipPos.x}px`,
+              top: `${tipPos.y}px`,
             }}
           >
             {tipText(hover)}

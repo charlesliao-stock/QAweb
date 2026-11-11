@@ -18,7 +18,7 @@ import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
 import { useAuth } from "../lib/auth";
 import { isReviewerAccessActive } from "../lib/reviewerValidity";
-import { maskName } from "../lib/mask";
+import { staffLabel } from "../lib/mask";
 import {
   indicatorCodeOf,
   normalizeQuestions,
@@ -1492,7 +1492,7 @@ export function ReviewExecutePage({
       {!editingDraftId && drafts.length > 0 && (
         <section className="panel">
           <SectionTitle title={`暫存紀錄（${drafts.length}）`} note="暫存不列入正式結果與分析；可繼續編輯、送出或刪除。" />
-          <div className="table-scroll"><table className="data-table"><thead><tr><th>件次</th><th>審查日期</th><th>受審人員</th><th>已作答</th><th>狀態</th><th>操作</th></tr></thead><tbody>{drafts.map((draft) => <tr key={draft.id}><td>第 {draft.caseSeq ?? "—"} 件</td><td>{draft.reviewDate || "—"}</td><td>{draft.reviewedPersonEmpNo ? `${draft.reviewedPersonEmpNo}／${maskName(draft.reviewedPersonName || draft.reviewedPersonEmpNo)}` : "尚未選人"}</td><td>{draft.answers.length}/{questions.length}</td><td><span className="status-pill warning">暫存未送出</span></td><td><button type="button" className="text-button" onClick={() => { prefillRecord(draft, questions); setEditingId(null); setEditingDraftId(draft.id); }}>繼續編輯</button>{" "}<button type="button" className="text-button" onClick={() => void handleDeleteDraft(draft)}>刪除</button></td></tr>)}</tbody></table></div>
+          <div className="table-scroll"><table className="data-table"><thead><tr><th>件次</th><th>審查日期</th><th>受審人員</th><th>已作答</th><th>狀態</th><th>操作</th></tr></thead><tbody>{drafts.map((draft) => <tr key={draft.id}><td>第 {draft.caseSeq ?? "—"} 件</td><td>{draft.reviewDate || "—"}</td><td>{draft.reviewedPersonEmpNo ? staffLabel(draft.reviewedPersonEmpNo, draft.reviewedPersonName) : "尚未選人"}</td><td>{draft.answers.length}/{questions.length}</td><td><span className="status-pill warning">暫存未送出</span></td><td><button type="button" className="text-button" onClick={() => { prefillRecord(draft, questions); setEditingId(null); setEditingDraftId(draft.id); }}>繼續編輯</button>{" "}<button type="button" className="text-button" onClick={() => void handleDeleteDraft(draft)}>刪除</button></td></tr>)}</tbody></table></div>
         </section>
       )}
 
@@ -1526,12 +1526,12 @@ export function ReviewExecutePage({
                       <td>{r.reviewDate || "—"}</td>
                       <td>
                         {r.reviewerEmpNo
-                          ? `${r.reviewerEmpNo}／${maskName(r.reviewerName || r.reviewerEmpNo)}`
+                          ? staffLabel(r.reviewerEmpNo, r.reviewerName)
                           : "—"}
                       </td>
                       <td>
                         {r.reviewedPersonEmpNo
-                          ? `${r.reviewedPersonEmpNo}／${maskName(r.reviewedPersonName || r.reviewedPersonEmpNo)}`
+                          ? staffLabel(r.reviewedPersonEmpNo, r.reviewedPersonName)
                           : "—"}
                       </td>
                       <td>{r.bedNo || "—"}</td>
@@ -1665,7 +1665,7 @@ export function ReviewExecutePage({
                 {reviewerEmpNo ? (
                   <p style={{ margin: "12px 0" }}>
                     <b>
-                      {reviewerEmpNo}／{maskName(reviewerName || reviewerEmpNo)}
+                      {staffLabel(reviewerEmpNo, reviewerName)}
                     </b>{" "}
                     <button
                       className="text-button"
@@ -1702,7 +1702,7 @@ export function ReviewExecutePage({
                               className="text-button"
                               onClick={() => selectReviewer(u)}
                             >
-                              {u.staffId}／{maskName(u.name)}
+                              {staffLabel(u.staffId, u.name)}
                               {u.status && u.status !== "在職" && (
                                 <span className="muted-text">
                                   （{u.status}）
@@ -1724,7 +1724,7 @@ export function ReviewExecutePage({
                   {personEmpNo ? (
                     <p style={{ margin: "12px 0" }}>
                       <b>
-                        {personEmpNo}／{maskName(personName || personEmpNo)}
+                        {staffLabel(personEmpNo, personName)}
                       </b>{" "}
                       <button
                         className="text-button"
@@ -1763,7 +1763,7 @@ export function ReviewExecutePage({
                                 className="text-button"
                                 onClick={() => selectPerson(u)}
                               >
-                                {u.staffId}／{maskName(u.name)}
+                                {staffLabel(u.staffId, u.name)}
                                 {u.status && u.status !== "在職" && (
                                   <span className="muted-text">
                                     （{u.status}）

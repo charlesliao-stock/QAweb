@@ -11,3 +11,13 @@ export function maskName(name: string): string {
   if (chars.length === 2) return `${chars[0]}O`;
   return `${chars[0]}${"O".repeat(chars.length - 2)}${chars[chars.length - 1]}`;
 }
+
+/**
+ * 人員顯示統一格式（v1.50.0）：「職編/遮罩姓名」（半形斜線）。
+ * 姓名缺值或與職編相同（舊資料以職編代姓名）時只顯示職編，兩者皆無顯示 —。
+ */
+export function staffLabel(empNo: string, name: string): string {
+  const masked = name && name !== empNo ? maskName(name) : "";
+  if (empNo && masked) return `${empNo}/${masked}`;
+  return empNo || masked || "—";
+}

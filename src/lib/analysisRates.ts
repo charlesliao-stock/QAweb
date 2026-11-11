@@ -487,6 +487,131 @@ export function transposePersonOptionRows(
   };
 }
 
+/**
+ * 下探分組／逐題篩選（v1.50.0）：把分組明細列的 key（group-…／question-…／
+ * historical-…）解析為題目 id 清單與種類。總列（indicator-total）回 null
+ *（不篩選）。歷史題目以紀錄中的作答補齊 id（不在現行指標題目內者）。
+ */
+export interface DrillSection {
+  ids: string[];
+  kind: "group" | "question";
+}
+
+export function resolveDrillSection(
+  questions: AuditQuestion[],
+  key: string,
+  records?: AnalysisRecord[],
+): DrillSection | null {
+  if (key === "indicator-total") return null;
+  const sections = scoringSections(questions);
+  const found = sections.find((s) => s.key === key);
+  if (found) {
+    return {
+      ids: [...found.ids],
+      kind: questions.some((q) => Boolean(q.groupId)) ? "group" : "question",
+    };
+  }
+  if (key === "historical-questions" && records) {
+    const knownIds = new Set(questions.map((q) => q.id));
+    const ids = new Set<string>();
+    for (const r of records) {
+      for (const a of r.answers) {
+        if (a.questionId && !knownIds.has(a.questionId)) ids.add(a.questionId);
+      }
+    }
+    return { ids: [...ids], kind: "group" };
+  }
+  if (key.startsWith("historical-")) {
+    const qid = key.slice("historical-".length).split("\u0000")[0];
+    if (qid) return { ids: [qid], kind: "question" };
+  }
+  return null;
+}
+
+/** 單筆紀錄在指定題組內的（是，否）；excluded（不適用／空值）不列入。 */
+function sectionCountsOf(record: AnalysisRecord, ids: Set<string>) {
+  let yes = 0;
+  let no = 0;
+  for (const answer of record.answers) {
+    if (!ids.has(answer.questionId) || answer.excluded) continue;
+    if (answer.optionLabel === "是") yes += 1;
+    else if (answer.optionLabel === "否") no += 1;
+  }
+  return { yes, no };
+}
+
+/**
+ * 下探 L1 的分組／逐題正確率（v1.50.0）：人次口徑，與主格 passRateOf 同口徑。
+ * 分組：每人先算該組 rate 再判 ≥ 閾值（全不適用＝不達標）；逐題：該題答「是」
+ * 者為達標人次。閾值逐筆優先用排程快照 thresholdAtSchedule。
+ */
+export function sectionPassRateOf(
+  records: AnalysisRecord[],
+  ids: string[],
+  kind: "group" | "question",
+  threshold: number,
+): PassRate {
+  const idSet = new Set(ids);
+  let pass = 0;
+  for (const record of records) {
+    const th =
+      typeof record.thresholdAtSchedule === "number"
+        ? record.thresholdAtSchedule
+        : threshold;
+    if (kind === "question") {
+      const hit = record.answers.some(
+        (a) => idSet.has(a.questionId) && !a.excluded && a.optionLabel === "是",
+      );
+      if (hit) pass += 1;
+      continue;
+    }
+    const { yes, no } = sectionCountsOf(record, idSet);
+    const rate = yes + no > 0 ? round1((yes / (yes + no)) * 100) : null;
+    if (isPassing(rate, th)) pass += 1;
+  }
+  return {
+    pass,
+    total: records.length,
+    rate: records.length > 0 ? round1((pass / records.length) * 100) : null,
+  };
+}
+
+/** 原因詞庫下探（v1.50.0）：勾選指定原因的紀錄與作答（每筆紀錄每題一則）。 */
+export interface CauseRecordEntry {
+  record: AnalysisRecord;
+  questionId: string;
+  itemText: string;
+  optionLabel: string;
+}
+
+export function causeRecordEntries(
+  records: AnalysisRecord[],
+  cause: string,
+): CauseRecordEntry[] {
+  const target = cause.trim();
+  if (!target) return [];
+  const entries: CauseRecordEntry[] = [];
+  for (const record of records) {
+    for (const answer of record.answers) {
+      if ((answer.commonErrors ?? []).some((w) => w.trim() === target)) {
+        entries.push({
+          record,
+          questionId: answer.questionId,
+          itemText: answer.itemText,
+          optionLabel: answer.optionLabel,
+        });
+      }
+    }
+  }
+  entries.sort(
+    (a, b) =>
+      a.record.personEmpNo.localeCompare(b.record.personEmpNo, "zh-Hant") ||
+      a.record.year - b.record.year ||
+      a.record.month - b.record.month,
+  );
+  return entries;
+}
+
 /** 單筆補充說明（v1.41.1）：某筆紀錄某題的備註。 */
 export interface RecordNoteEntry {
   personEmpNo: string;

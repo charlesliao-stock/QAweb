@@ -1177,14 +1177,6 @@ button:disabled {
   background: #258a7f;
   border-radius: 2px;
 }
-.chart-current {
-  color: #94a1a2;
-}
-.chart-current b {
-  margin-left: 5px;
-  color: #33877c;
-  font-size: var(--font-small);
-}
 .trend-chart {
   display: block;
   width: 100%;
@@ -5010,6 +5002,39 @@ button:disabled {
 .score-breakdown-row strong {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+/* v1.50.0：可點選下探的數字（摘要卡／分組明細列／選項明細／錯題排行／原因件數） */
+.summary-cell.clickable {
+  cursor: pointer;
+}
+.summary-cell.clickable:hover {
+  border-color: #9dc9bd;
+  background: #f2faf7;
+}
+:root[data-mode="dark"] .summary-cell.clickable:hover {
+  background: #22302e;
+}
+.score-breakdown-row.clickable {
+  cursor: pointer;
+}
+.score-breakdown-row.clickable:hover {
+  background: #eef6f4;
+}
+.score-breakdown-row.clickable:hover span:first-child,
+.score-breakdown-row.clickable:hover strong {
+  text-decoration: underline;
+}
+:root[data-mode="dark"] .score-breakdown-row.clickable:hover {
+  background: #22302e;
+}
+.data-table tbody tr.clickable {
+  cursor: pointer;
+}
+.data-table tbody tr.clickable:hover td {
+  background: #eef6f4;
+}
+:root[data-mode="dark"] .data-table tbody tr.clickable:hover td {
+  background: #22302e;
 }
 :root[data-mode="dark"] .analysis-matrix th.ind-col,
 :root[data-mode="dark"] .analysis-matrix td.ind-col {

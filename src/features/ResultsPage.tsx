@@ -6,7 +6,7 @@
  * 達閾值＝紀錄 rate ≥ 指標閾值（逐筆優先用排程快照 thresholdAtSchedule，
  * 匯入紀錄無快照才用現行指標閾值）；人次率＝合併計算，單位彙總率＝各單位率平均。
  * 分組／逐題明細只在指標「啟用分組計分」開啟時顯示；人次模式分子分母與主格
- * 同口徑（分組達標人次／總人次），單位模式維持彙總作答率判定；一律讀原始
+ * 同口徑（分組達標人次／總人次），單位模式 v1.49.0 起亦與主格同口徑；一律讀原始
  * reviewRecords 即時算，不讀 reviewSummaries。
  * 權限：can("resultQuery")；資料範圍：管理員全部、審查員只看負責單位、
  * 一般人員只看自己單位（沿用舊頁規則）。
@@ -45,7 +45,7 @@ import {
 import { isReviewerRole } from "../lib/roleIdentity";
 import { useOrgMeta } from "../lib/useOrgMeta";
 import { hasRoleCategory, titleFlagsOf } from "../lib/orgMeta";
-import { maskName } from "../lib/mask";
+import { staffLabel } from "../lib/mask";
 import { computeOptionSetScore } from "../lib/reviewRecords";
 import { logAudit } from "../lib/audit";
 import {
@@ -69,6 +69,7 @@ import {
 } from "../lib/analysisPeriod";
 import {
   formatPassRate,
+  causeRecordEntries,
   collectConsolidatedRecordNotes,
   optionDetailRows,
   questionErrorRows,
@@ -76,6 +77,8 @@ import {
   personScoringBreakdownRows,
   personOptionRows,
   recordsInMonths,
+  resolveDrillSection,
+  sectionPassRateOf,
   transposePersonOptionRows,
   unitPassRate,
   unitPeriodPassRate,
@@ -86,6 +89,7 @@ import {
   type PassRate,
   type QuestionErrorRow,
 } from "../lib/analysisRates";
+import { canOpenDrill } from "../lib/drillScope";
 import {
   getCachedYears,
   invalidateCachedYears,
@@ -150,12 +154,22 @@ interface ChartModalData {
   tips: string[];
   /** 閾值（紅色虛線）；null 表示不畫 */
   threshold: number | null;
+  /** v1.50.0：曲線圖上的點可點下探，須帶回指標／單元／期間欄／單位 */
+  indicatorId: string;
+  mode: UnitMode;
+  cols: AnalysisPeriodColumn[];
+  unitId?: string;
 }
 
 interface DocModalData {
   title: string;
   subtitle: string;
   rows: OptionDetailRow[];
+  /** v1.50.0：選項明細列可點下探，須帶回指標／單位 */
+  indicatorId: string;
+  unitId?: string;
+  /** 下探單元（組別／單位分析當時的單元） */
+  mode: UnitMode;
 }
 
 /** 下探狀態：L1 單位矩陣（l2UnitId 為 null）；L2 人員各選項結果（l2UnitId 有值） */
@@ -166,6 +180,14 @@ interface DrillState {
   /** 單位分析限定該單位；組別／指標分析為 undefined（全部單位） */
   scopeUnitId?: string;
   l2UnitId: string | null;
+  /** v1.50.0：直接開 L2 人員層級（全部單位），不經 L1 單位列表 */
+  l2All?: boolean;
+  /** v1.50.0：分組／逐題篩選（section key：group-…／question-…／historical-…），只顯示該分組／該題的個人結果 */
+  sectionKey?: string;
+  /** v1.50.0：單題篩選（選項明細／錯題排行用） */
+  questionId?: string;
+  /** v1.50.0：只顯示答此選項的人員（與 questionId 併用） */
+  optionLabel?: string;
 }
 
 /** 矩陣下方展開面板（僅單位分析）：曲線圖／選項明細 */
@@ -367,6 +389,8 @@ export function ResultsPage({
   // Modal
   const [chartModal, setChartModal] = useState<ChartModalData | null>(null);
   const [docModal, setDocModal] = useState<DocModalData | null>(null);
+  // v1.50.0：原因詞庫件數下探（勾選該原因的審查紀錄，跨指標）
+  const [causeDrill, setCauseDrill] = useState<string | null>(null);
   // 下探（L1 單位矩陣／L2 人員各選項結果）
   const [drill, setDrill] = useState<DrillState | null>(null);
   // 單位分析矩陣下方展開面板（曲線圖／選項明細）
@@ -984,7 +1008,7 @@ export function ResultsPage({
   ) {
     const ind = indOf.get(indicatorId);
     if (!ind) return;
-    const { values, labels, tips } = chartSeries(indicatorId, unitId, mode);
+    const { values, labels, tips, cols } = chartSeries(indicatorId, unitId, mode);
     setChartModal({
       title: `${ind.code}・${ind.name} 達閾值率曲線`,
       subtitle: `${periodDesc}・${scopeLabel}・${
@@ -994,26 +1018,59 @@ export function ResultsPage({
       labels,
       tips,
       threshold: ind.threshold > 0 ? ind.threshold : null,
+      indicatorId,
+      mode,
+      cols,
+      unitId,
     });
   }
 
-  /** 下探 L1：開啟單位矩陣（只有點選的那一個期間欄） */
+  /**
+   * 下探 L1：開啟單位矩陣（只有點選的那一個期間欄）。
+   * v1.50.0：護理長不再一律不可下探——本人單位範圍（scopedRecords 已限本人
+   * 單位）可下探；指定到其他單位時才擋下（見 lib/drillScope）。
+   */
   function openDrill(
     indicatorId: string,
     col: AnalysisPeriodColumn,
     mode: UnitMode,
     scopeUnitId?: string,
+    extra?: {
+      sectionKey?: string;
+      questionId?: string;
+      optionLabel?: string;
+      l2All?: boolean;
+    },
   ) {
-    if (isNurseLeader) return;
-    const cell = cellValue(indicatorId, col, scopeUnitId, mode);
-    if (cell.rate == null) return;
-    setDrill({ indicatorId, column: col, mode, scopeUnitId, l2UnitId: null });
+    if (!canOpenDrill({ isNurseLeader, scopeUnitId, visibleUnitCodes })) return;
+    if (!extra?.l2All) {
+      const cell = cellValue(indicatorId, col, scopeUnitId, mode);
+      if (cell.rate == null) return;
+    }
+    setDrill({
+      indicatorId,
+      column: col,
+      mode,
+      scopeUnitId,
+      l2UnitId: null,
+      l2All: extra?.l2All ?? false,
+      sectionKey: extra?.sectionKey,
+      questionId: extra?.questionId,
+      optionLabel: extra?.optionLabel,
+    });
   }
+
+  /** v1.50.0：摘要卡／分組列下探用的全期間欄（全部已查期間欄合併）。 */
+  const allPeriodColumn = useMemo(
+    () => ({ key: "__all__", label: periodDesc, months: allMonths }),
+    [periodDesc, allMonths],
+  );
 
   function openDoc(
     indicatorId: string,
     unitId: string | undefined,
     scopeLabel: string,
+    mode: UnitMode,
   ) {
     const ind = indOf.get(indicatorId);
     if (!ind) return;
@@ -1023,6 +1080,9 @@ export function ResultsPage({
       title: `${ind.code}・${ind.name} 各選項得分狀況`,
       subtitle: `${periodDesc}・${scopeLabel}・共 ${recs.length} 人次`,
       rows: optionDetailRows(recs, ind.questions),
+      indicatorId,
+      unitId,
+      mode,
     });
   }
 
@@ -1319,8 +1379,8 @@ export function ResultsPage({
 
       {tab !== "import" && tab !== "manage" && applied && !loading && causeCountRows.length > 0 && (
         <section className="panel results-cause-summary">
-          <SectionTitle title="原因詞庫件數" note="依目前使用者可見資料及已查詢期間統計；只計入題目原因詞庫中已勾選的項目。" />
-          <div className="table-scroll"><table className="data-table"><thead><tr><th>原因詞庫項目</th><th>勾選件數</th></tr></thead><tbody>{causeCountRows.map((row) => <tr key={row.cause}><td>{row.cause}</td><td>{row.count}</td></tr>)}</tbody></table></div>
+          <SectionTitle title="原因詞庫件數" note="依目前使用者可見資料及已查詢期間統計；只計入題目原因詞庫中已勾選的項目。點選列下探到勾選該原因的個人審查結果。" />
+          <div className="table-scroll"><table className="data-table"><thead><tr><th>原因詞庫項目</th><th>勾選件數</th></tr></thead><tbody>{causeCountRows.map((row) => <tr key={row.cause} className="clickable" title="點選下探到勾選該原因的個人審查結果" onClick={() => setCauseDrill(row.cause)}><td>{row.cause}</td><td>{row.count}</td></tr>)}</tbody></table></div>
         </section>
       )}
 
@@ -1355,10 +1415,13 @@ export function ResultsPage({
                   cellValue(id, col, undefined, groupUnit)
                 }
                 onCell={(id, col) => openDrill(id, col, groupUnit)}
+                onDetailCell={(id, detailKey, col) =>
+                  openDrill(id, col, groupUnit, undefined, { sectionKey: detailKey })
+                }
                 onChart={(id) =>
                   openChart(id, undefined, groupUnit, "全部單位")
                 }
-                onDoc={(id) => openDoc(id, undefined, "全部單位")}
+                onDoc={(id) => openDoc(id, undefined, "全部單位", groupUnit)}
               />
             </section>
           )}
@@ -1397,6 +1460,9 @@ export function ResultsPage({
                 }
                 onCell={(id, col) =>
                   openDrill(id, col, unitUnit, selUnit)
+                }
+                onDetailCell={(id, detailKey, col) =>
+                  openDrill(id, col, unitUnit, selUnit, { sectionKey: detailKey })
                 }
                 onChart={(id) =>
                   setUnitPanel((p) =>
@@ -1440,7 +1506,9 @@ export function ResultsPage({
                               ind.threshold > 0 ? ind.threshold : null
                             }
                             legend="達閾值率"
-                            currentLabel={s.labels[s.labels.length - 1]}
+                            onPointClick={(i) =>
+                              openDrill(ind.id, s.cols[i], unitUnit, selUnit)
+                            }
                           />
                         )}
                       </UnitBelowPanel>
@@ -1461,6 +1529,12 @@ export function ResultsPage({
                     >
                       <OptionDetailTable
                         rows={optionDetailRows(recs, ind.questions)}
+                        onQuestionClick={(questionId) =>
+                          openDrill(ind.id, allPeriodColumn, unitUnit, selUnit, {
+                            questionId,
+                            l2All: true,
+                          })
+                        }
                       />
                     </UnitBelowPanel>
                   );
@@ -1491,6 +1565,11 @@ export function ResultsPage({
                   label={isNurseLeader ? "本單位受審" : "受審單位數"}
                   value={String(indSummary.unitCount)}
                   note={isNurseLeader ? "僅顯示本人所屬單位；不列其他單位" : "所選期間內有紀錄的單位"}
+                  onClick={
+                    indRecs.length > 0
+                      ? () => openDrill(selIndicator, allPeriodColumn, indUnit)
+                      : undefined
+                  }
                 />
                 {isNurseLeader ? (
                   <>
@@ -1498,16 +1577,31 @@ export function ResultsPage({
                       label="本單位受審人次"
                       value={String(indSummary.ownTotal)}
                       note="所選期間內本單位總人次數"
+                      onClick={
+                        indRecs.length > 0
+                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, undefined, { l2All: true })
+                          : undefined
+                      }
                     />
                     <SummaryCell
                       label="單位正確率"
                       value={formatPassRate(indSummary.unitPr, true)}
                       note="達閾值單位數／審查單位數（unit-period 計）"
+                      onClick={
+                        indSummary.unitPr.rate != null
+                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit)
+                          : undefined
+                      }
                     />
                     <SummaryCell
                       label="本單位人員正確率"
                       value={formatPassRate(indSummary.ownPersonPr, true)}
                       note="本單位達閾值人次／本單位總人次"
+                      onClick={
+                        indSummary.ownPersonPr.rate != null
+                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, undefined, { l2All: true })
+                          : undefined
+                      }
                     />
                     <SummaryCell
                       label="全院人員正確率"
@@ -1521,16 +1615,31 @@ export function ResultsPage({
                       label="受審總人次"
                       value={String(indSummary.total)}
                       note="所選期間內總人次數"
+                      onClick={
+                        indRecs.length > 0
+                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, undefined, { l2All: true })
+                          : undefined
+                      }
                     />
                     <SummaryCell
                       label="單位正確率"
                       value={formatPassRate(indSummary.unitPr, true)}
                       note="達閾值單位數／審查單位數（unit-period 計）"
+                      onClick={
+                        indSummary.unitPr.rate != null
+                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit)
+                          : undefined
+                      }
                     />
                     <SummaryCell
                       label="人員正確率"
                       value={formatPassRate(indSummary.personPr, true)}
                       note="達閾值人次／總人次"
+                      onClick={
+                        indSummary.personPr.rate != null
+                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, undefined, { l2All: true })
+                          : undefined
+                      }
                     />
                   </>
                 )}
@@ -1543,17 +1652,43 @@ export function ResultsPage({
               {indSummary.scoringRows.length > 0 && (
                 <section className="panel score-breakdown-panel" aria-label="指標計分明細">
                   <div className="score-breakdown">
-                    {indSummary.scoringRows.map((row) => (
-                      <div
-                        key={row.key}
-                        className={`score-breakdown-row${row.isTotal ? " score-breakdown-total" : " score-breakdown-detail"}`}
-                      >
-                        <span>{row.isTotal ? indSel.name : row.label}</span>
-                        <strong>
-                          {formatPassRate({ pass: row.yes, total: row.valid, rate: row.rate })}
-                        </strong>
-                      </div>
-                    ))}
+                    {indSummary.scoringRows.map((row) => {
+                      const clickable = row.rate != null;
+                      return (
+                        <div
+                          key={row.key}
+                          className={`score-breakdown-row${row.isTotal ? " score-breakdown-total" : " score-breakdown-detail"}${clickable ? " clickable" : ""}`}
+                          title={clickable ? "點選下探到個人審查結果" : undefined}
+                          onClick={
+                            clickable
+                              ? () =>
+                                  openDrill(selIndicator, allPeriodColumn, indUnit, undefined, {
+                                    sectionKey: row.isTotal ? undefined : row.key,
+                                  })
+                              : undefined
+                          }
+                          role={clickable ? "button" : undefined}
+                          tabIndex={clickable ? 0 : undefined}
+                          onKeyDown={
+                            clickable
+                              ? (e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    openDrill(selIndicator, allPeriodColumn, indUnit, undefined, {
+                                      sectionKey: row.isTotal ? undefined : row.key,
+                                    });
+                                  }
+                                }
+                              : undefined
+                          }
+                        >
+                          <span>{row.isTotal ? indSel.name : row.label}</span>
+                          <strong>
+                            {formatPassRate({ pass: row.yes, total: row.valid, rate: row.rate })}
+                          </strong>
+                        </div>
+                      );
+                    })}
                   </div>
                 </section>
               )}
@@ -1571,10 +1706,7 @@ export function ResultsPage({
                     tooltips={indSummary.chartTips}
                     threshold={indSel.threshold > 0 ? indSel.threshold : null}
                     legend="正確率"
-                    currentLabel={
-                      indSummary.chartLabels[indSummary.chartLabels.length - 1]
-                    }
-                    onPointClick={isNurseLeader ? undefined : (i) =>
+                    onPointClick={(i) =>
                       openDrill(selIndicator, indSummary.chartCols[i], indUnit)
                     }
                   />
@@ -1585,14 +1717,33 @@ export function ResultsPage({
                   title="指標選項審查明細"
                   note={`${indSel.code}・${indSel.name}・${periodDesc}・共 ${indSummary.total} 人次`}
                 />
-                <OptionDetailTable rows={indSummary.optionRows} />
+                <OptionDetailTable
+                  rows={indSummary.optionRows}
+                  onQuestionClick={(questionId) =>
+                    openDrill(selIndicator, allPeriodColumn, indUnit, undefined, {
+                      questionId,
+                      l2All: true,
+                    })
+                  }
+                />
               </section>
               <section className="panel">
                 <SectionTitle
                   title="指標錯誤分析・題目排行"
                   note={`${indSel.code}・${indSel.name}・${periodDesc}・${errorUnit === "all" ? "全部單位" : `單位 ${errorUnit}`}；「否」為錯誤，「不適用」不列入錯誤率分母`}
                 />
-                <QuestionErrorTable rows={errorAnalysisRows} />
+                <QuestionErrorTable
+                  rows={errorAnalysisRows}
+                  onQuestionClick={(questionId) =>
+                    openDrill(
+                      selIndicator,
+                      allPeriodColumn,
+                      indUnit,
+                      errorUnit === "all" ? undefined : errorUnit,
+                      { questionId, optionLabel: "否", l2All: true },
+                    )
+                  }
+                />
               </section>
               {indNotes.length > 0 && (
                 <section className="panel">
@@ -1679,9 +1830,11 @@ export function ResultsPage({
                 tooltips={chartModal.tips}
                 threshold={chartModal.threshold}
                 legend="達閾值率"
-                currentLabel={
-                  chartModal.labels[chartModal.labels.length - 1]
-                }
+                onPointClick={(i) => {
+                  const cm = chartModal;
+                  setChartModal(null);
+                  openDrill(cm.indicatorId, cm.cols[i], cm.mode, cm.unitId);
+                }}
               />
             )}
           </div>
@@ -1713,7 +1866,17 @@ export function ResultsPage({
                 <X size={16} />
               </button>
             </div>
-            <OptionDetailTable rows={docModal.rows} />
+            <OptionDetailTable
+              rows={docModal.rows}
+              onQuestionClick={(questionId) => {
+                const dm = docModal;
+                setDocModal(null);
+                openDrill(dm.indicatorId, allPeriodColumn, dm.mode, dm.unitId, {
+                  questionId,
+                  l2All: true,
+                });
+              }}
+            />
           </div>
         </div>
       )}
@@ -1722,9 +1885,28 @@ export function ResultsPage({
         <DrillModal
           drill={drill}
           onClose={() => setDrill(null)}
-          onBackToL1={() => setDrill({ ...drill, l2UnitId: null })}
+          onBackToL1={() =>
+            setDrill({
+              ...drill,
+              l2UnitId: null,
+              l2All: false,
+              sectionKey: undefined,
+              questionId: undefined,
+              optionLabel: undefined,
+            })
+          }
           onSelectUnit={(unitId) => setDrill({ ...drill, l2UnitId: unitId })}
           recordIndex={recordIndex}
+          indOf={indOf}
+          unitNameOf={unitNameOf}
+        />
+      )}
+
+      {causeDrill && (
+        <CauseDrillModal
+          cause={causeDrill}
+          onClose={() => setCauseDrill(null)}
+          records={recordsInMonths(scopedRecords, allMonths)}
           indOf={indOf}
           unitNameOf={unitNameOf}
         />
@@ -1742,6 +1924,8 @@ interface ManagedResult {
   rate: number | null;
   reviewerEmpNo: string;
   reviewerName: string;
+  /** 受審人員職編（v1.50.0：被審人員顯示職編/遮罩姓名） */
+  reviewedPersonEmpNo: string;
   reviewedPersonName: string;
   submittedAt: unknown;
   /** 逐題作答快照（v1.41.1：明細展開顯示常見錯誤與補充說明） */
@@ -1752,13 +1936,6 @@ interface ManagedResult {
     commonErrors: string[];
     note: string;
   }[];
-}
-
-/** 顯示「職編/遮罩姓名」（半形斜線；v1.40.2）。姓名缺值或與職編相同（舊資料以職編代姓名）時只顯示職編，兩者皆無顯示 —。 */
-function staffLabel(empNo: string, name: string): string {
-  const masked = name && name !== empNo ? maskName(name) : "";
-  if (empNo && masked) return `${empNo}/${masked}`;
-  return empNo || masked || "—";
 }
 
 function ReviewResultManager({
@@ -1857,6 +2034,7 @@ function ReviewResultManager({
             rate: typeof value.rate === "number" ? value.rate : null,
             reviewerEmpNo: String(value.reviewerEmpNo ?? value.reviewerId ?? ""),
             reviewerName: String(value.reviewerName ?? value.reviewerId ?? ""),
+            reviewedPersonEmpNo: String(value.reviewedPersonEmpNo ?? ""),
             reviewedPersonName: String(value.reviewedPersonName ?? ""),
             submittedAt: value.submittedAt,
             answers: Array.isArray(value.answers)
@@ -2121,7 +2299,7 @@ function ReviewResultManager({
                         <td>{unitName(row.unitId)}</td>
                         <td>{indicatorName(row.indicatorId)}</td>
                         <td>{staffLabel(row.reviewerEmpNo, row.reviewerName)}</td>
-                        <td>{row.reviewedPersonName || "—"}</td>
+                        <td>{staffLabel(row.reviewedPersonEmpNo, row.reviewedPersonName)}</td>
                         <td>{row.rate == null ? "—" : `${row.rate}%`}</td>
                         <td>{formatSubmittedAt(row.submittedAt)}</td>
                         <td>
@@ -2212,6 +2390,7 @@ function RateMatrix({
   columns,
   cellOf,
   onCell,
+  onDetailCell,
   onChart,
   onDoc,
 }: {
@@ -2223,6 +2402,8 @@ function RateMatrix({
   columns: AnalysisPeriodColumn[];
   cellOf: (rowId: string, col: AnalysisPeriodColumn) => CellValue;
   onCell?: (rowId: string, col: AnalysisPeriodColumn) => void;
+  /** v1.50.0：分組／逐題明細格可點下探（帶分組 key，只顯示該分組的個人結果） */
+  onDetailCell?: (rowId: string, detailKey: string, col: AnalysisPeriodColumn) => void;
   onChart: (rowId: string) => void;
   onDoc: (rowId: string) => void;
 }) {
@@ -2301,11 +2482,34 @@ function RateMatrix({
                 <td className="ind-col">
                   <div className="analysis-matrix-subrow">{detail.label}</div>
                 </td>
-                {columns.map((column) => (
-                  <td key={column.key} className="rate-cell">
-                    {formatPassRate(detail.cells[column.key] ?? { pass: 0, total: 0, rate: null })}
-                  </td>
-                ))}
+                {columns.map((column) => {
+                  const detailCell = detail.cells[column.key] ?? { pass: 0, total: 0, rate: null };
+                  const detailClickable = detailCell.rate != null && onDetailCell != null;
+                  return (
+                    <td
+                      key={column.key}
+                      className={`rate-cell${detailClickable ? " clickable" : ""}`}
+                      title={detailClickable ? `${formatPassRate(detailCell)}（點選下探到個人審查結果）` : formatPassRate(detailCell)}
+                      onClick={
+                        detailClickable ? () => onDetailCell(row.id, detail.key, column) : undefined
+                      }
+                      role={detailClickable ? "button" : undefined}
+                      tabIndex={detailClickable ? 0 : undefined}
+                      onKeyDown={
+                        detailClickable
+                          ? (e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                onDetailCell(row.id, detail.key, column);
+                              }
+                            }
+                          : undefined
+                      }
+                    >
+                      {formatPassRate(detailCell)}
+                    </td>
+                  );
+                })}
               </tr>
             )),
           ])}
@@ -2351,6 +2555,81 @@ function UnitBelowPanel({
 
 /* ================= 下探：L1 單位矩陣 → L2 人員各選項結果 ================= */
 
+/** 原因詞庫下探彈窗（v1.50.0）：勾選指定原因詞庫項目的個人審查結果。 */
+function CauseDrillModal({
+  cause,
+  onClose,
+  records,
+  indOf,
+  unitNameOf,
+}: {
+  cause: string;
+  onClose: () => void;
+  records: AnalysisRecord[];
+  indOf: Map<string, IndicatorOpt>;
+  unitNameOf: Map<string, string>;
+}) {
+  const entries = useMemo(() => causeRecordEntries(records, cause), [records, cause]);
+  return (
+    <div className="reviewer-modal-backdrop" onClick={onClose}>
+      <div
+        className="reviewer-modal wide panel"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`原因：${cause}`}
+      >
+        <div className="reviewer-modal-head">
+          <div>
+            <h2>原因：{cause}</h2>
+            <p>勾選該原因的個人審查結果（共 {entries.length} 筆作答）</p>
+          </div>
+          <button
+            className="button button-ghost"
+            onClick={onClose}
+            aria-label="關閉"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        {entries.length === 0 ? (
+          <EmptyState title="無資料" description="所選期間尚無勾選該原因的審查紀錄。" />
+        ) : (
+          <div className="analysis-table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>指標</th>
+                  <th>單位</th>
+                  <th>年月</th>
+                  <th>被審人員</th>
+                  <th>題目</th>
+                  <th>作答</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((entry, i) => {
+                  const ind = indOf.get(entry.record.indicatorId);
+                  return (
+                    <tr key={`${entry.record.personEmpNo}-${entry.record.year}-${entry.record.month}-${entry.questionId}-${i}`}>
+                      <td>{ind ? `${ind.code}・${ind.name}` : entry.record.indicatorId}</td>
+                      <td>{entry.record.unitId}・{unitNameOf.get(entry.record.unitId) ?? ""}</td>
+                      <td>{entry.record.year}/{String(entry.record.month).padStart(2, "0")}</td>
+                      <td>{staffLabel(entry.record.personEmpNo, entry.record.personName)}</td>
+                      <td>{entry.itemText}</td>
+                      <td>{entry.optionLabel}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DrillModal({
   drill,
   onClose,
@@ -2371,6 +2650,77 @@ function DrillModal({
   const ind = indOf.get(drill.indicatorId);
   const th = ind?.threshold ?? 0;
   const col = drill.column;
+  // v1.50.0：分組／逐題／選項篩選——只顯示該分組／該題的個人結果
+  const section = useMemo(() => {
+    if (!drill.sectionKey || !ind) return null;
+    const scopeRecs = recordsForIndex(
+      recordIndex,
+      drill.indicatorId,
+      col.months,
+      drill.scopeUnitId,
+    );
+    return resolveDrillSection(ind.questions, drill.sectionKey, scopeRecs);
+  }, [recordIndex, drill.indicatorId, drill.sectionKey, drill.scopeUnitId, col, ind]);
+  const filterIds = useMemo(() => {
+    if (section) return section.ids;
+    if (drill.questionId) return [drill.questionId];
+    return null;
+  }, [section, drill.questionId]);
+  const filterKind = section?.kind ?? (drill.questionId ? "question" : null);
+  const filterLabel = useMemo(() => {
+    if (!ind) return "";
+    if (drill.optionLabel && drill.questionId) {
+      const q = ind.questions.find((x) => x.id === drill.questionId);
+      return `${q ? q.itemText : "題目"}・答「${drill.optionLabel}」的人員`;
+    }
+    if (section) {
+      if (section.kind === "group") {
+        const gq = ind.questions.find((q) => section.ids.includes(q.id));
+        return gq?.groupId ? gq.groupName || "未命名分組" : "未分組項目";
+      }
+      const q = ind.questions.find((x) => x.id === section.ids[0]);
+      return q?.itemText ?? "歷史題目";
+    }
+    if (drill.questionId) {
+      const q = ind.questions.find((x) => x.id === drill.questionId);
+      return q?.itemText ?? "題目";
+    }
+    return "";
+  }, [ind, section, drill.optionLabel, drill.questionId]);
+  // L2 顯示的題目：篩選時只列該分組／該題；歷史題目以作答中的題目文字補齊
+  const l2Questions = useMemo(() => {
+    if (!ind) return [] as AuditQuestion[];
+    if (!filterIds) return ind.questions;
+    const known = new Map(ind.questions.map((q) => [q.id, q]));
+    const scopeRecs = recordsForIndex(
+      recordIndex,
+      drill.indicatorId,
+      col.months,
+      drill.scopeUnitId,
+    );
+    const list: AuditQuestion[] = [];
+    for (const id of filterIds) {
+      const q = known.get(id);
+      if (q) {
+        list.push(q);
+        continue;
+      }
+      const ans = scopeRecs
+        .flatMap((r) => r.answers)
+        .find((a) => a.questionId === id);
+      list.push({
+        id,
+        itemText: ans?.itemText ?? "歷史題目",
+        optionSet: "yes-no-na",
+        guidance: "",
+        commonErrors: [],
+        groupId: null,
+        groupName: "",
+        order: list.length,
+      });
+    }
+    return list;
+  }, [ind, filterIds, recordIndex, drill.indicatorId, drill.scopeUnitId, col]);
   // L1 列：分母單元的單位（該指標該期間欄內有審查紀錄的單位）
   const l1Units = useMemo(() => {
     // A3：查表取該指標該期間欄的紀錄（可再限單位）。
@@ -2391,42 +2741,54 @@ function DrillModal({
         col.months,
         unitId,
       );
-      const pr = passRateOf(recs, th);
+      // 篩選時 L1 格顯示該分組／該題的人次正確率，否則為整體正確率
+      const pr =
+        filterIds && filterKind
+          ? sectionPassRateOf(recs, filterIds, filterKind, th)
+          : passRateOf(recs, th);
       map.set(unitId, {
         ...pr,
         title: pr.total === 0 ? "無資料" : `達閾值 ${pr.pass}／${pr.total} 人次`,
       });
     }
     return map;
-  }, [recordIndex, drill.indicatorId, l1Units, col, th]);
-  // L2 列：該單位該期間被審人員在各選項的審查結果
+  }, [recordIndex, drill.indicatorId, l1Units, col, th, filterIds, filterKind]);
+  // L2 列：該單位該期間被審人員在各選項的審查結果（l2All 時為全部單位）
+  const l2Active = drill.l2UnitId != null || drill.l2All === true;
   const l2Rows = useMemo(() => {
-    if (!drill.l2UnitId) return [];
+    if (!l2Active) return [];
     const recs = recordsForIndex(
       recordIndex,
       drill.indicatorId,
       col.months,
-      drill.l2UnitId,
+      drill.l2UnitId ?? drill.scopeUnitId,
     );
-    return personOptionRows(recs, th);
-  }, [recordIndex, drill.indicatorId, drill.l2UnitId, col, th]);
+    const rows = personOptionRows(recs, th);
+    // 選項篩選：只顯示答此選項的人員
+    if (drill.optionLabel && drill.questionId) {
+      return rows.filter(
+        (row) => row.answers.get(drill.questionId as string) === drill.optionLabel,
+      );
+    }
+    return rows;
+  }, [recordIndex, drill.indicatorId, drill.l2UnitId, drill.scopeUnitId, col, th, l2Active, drill.optionLabel, drill.questionId]);
   // L2 轉置（v1.27.1）：直向＝題目、橫向＝人員（職編/遮罩姓名，v1.40.2），中間＝審查結果
   const l2Matrix = useMemo(
     () =>
       ind
-        ? transposePersonOptionRows(l2Rows, ind.questions)
+        ? transposePersonOptionRows(l2Rows, l2Questions)
         : { headers: [] as string[], bedNos: [] as string[], rows: [], rates: [] },
-    [l2Rows, ind],
+    [l2Rows, ind, l2Questions],
   );
 
   // L2 補充說明（v1.43.0）：每欄＝一筆紀錄，每筆彙整為一則（單則為備註
   // 原文、多則每則附題號），顯示於矩陣下方。
   const l2NoteGroups = useMemo(() => {
-    if (!drill.l2UnitId || !ind) return [];
+    if ((!drill.l2UnitId && !drill.l2All) || !ind) return [];
     return l2Rows
       .map((row, i) => {
         const text = mergeNoteParts(
-          ind.questions.map((q, qi) => ({
+          l2Questions.map((q, qi) => ({
             questionNo: qi + 1,
             note: row.notes.get(q.id) ?? "",
           })),
@@ -2441,10 +2803,15 @@ function DrillModal({
         };
       })
       .filter((g): g is NonNullable<typeof g> => g != null);
-  }, [l2Rows, ind, drill.l2UnitId, l2Matrix]);
+  }, [l2Rows, ind, drill.l2UnitId, drill.l2All, l2Matrix, l2Questions]);
 
   if (!ind) return null;
   const title = `${ind.code}・${ind.name}`;
+  const l2UnitLabel = drill.l2UnitId
+    ? `${drill.l2UnitId}・${unitNameOf.get(drill.l2UnitId) ?? ""}`
+    : drill.scopeUnitId
+      ? `${drill.scopeUnitId}・${unitNameOf.get(drill.scopeUnitId) ?? ""}`
+      : "全部單位";
   return (
     <div
       className="reviewer-modal-backdrop"
@@ -2461,9 +2828,9 @@ function DrillModal({
           <div>
             <h2>{title}</h2>
             <p>
-              {drill.l2UnitId
-                ? `${col.label}・${drill.l2UnitId}・${unitNameOf.get(drill.l2UnitId) ?? ""}・被審人員各選項結果`
-                : `${col.label}・各單位審查結果（點選格子看被審人員）`}
+              {l2Active
+                ? `${col.label}・${l2UnitLabel}・被審人員各選項結果${filterLabel ? `・${filterLabel}` : ""}`
+                : `${col.label}・各單位審查結果（點選格子看被審人員）${filterLabel ? `・${filterLabel}` : ""}`}
             </p>
           </div>
           <button
@@ -2474,7 +2841,7 @@ function DrillModal({
             <X size={16} />
           </button>
         </div>
-        {drill.l2UnitId == null ? (
+        {!l2Active ? (
           <div className="analysis-table-wrap">
             <table className="data-table analysis-matrix">
               <thead>
@@ -2619,7 +2986,14 @@ function DrillModal({
 
 /* ================= 各選項得分狀況表（文件圖示／指標選項明細共用） ================= */
 
-function OptionDetailTable({ rows }: { rows: OptionDetailRow[] }) {
+function OptionDetailTable({
+  rows,
+  onQuestionClick,
+}: {
+  rows: OptionDetailRow[];
+  /** v1.50.0：題目列可點下探到該題的個人審查結果 */
+  onQuestionClick?: (questionId: string) => void;
+}) {
   if (rows.length === 0) {
     return <EmptyState title="無題目" description="該指標尚無審核表題目。" />;
   }
@@ -2647,18 +3021,26 @@ function OptionDetailTable({ rows }: { rows: OptionDetailRow[] }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
-              <tr key={`${r.indicatorVersion ?? ""}-${r.questionId}-${i}`}>
-                {hasVersions && <td>{r.indicatorVersion}</td>}
-                <td>
-                  {i + 1}. {r.itemText}
-                </td>
-                <td>{cell(r.yes, r.yesRate)}</td>
-                <td>{cell(r.no, r.noRate)}</td>
-                <td>{cell(r.na, r.naRate)}</td>
-                <td>{fmtRate(r.scoreRate)}</td>
-              </tr>
-            ))}
+            {rows.map((r, i) => {
+              const clickable = r.total > 0 && onQuestionClick != null;
+              return (
+                <tr
+                  key={`${r.indicatorVersion ?? ""}-${r.questionId}-${i}`}
+                  className={clickable ? "clickable" : undefined}
+                  title={clickable ? "點選下探到該題的個人審查結果" : undefined}
+                  onClick={clickable ? () => onQuestionClick(r.questionId) : undefined}
+                >
+                  {hasVersions && <td>{r.indicatorVersion}</td>}
+                  <td>
+                    {i + 1}. {r.itemText}
+                  </td>
+                  <td>{cell(r.yes, r.yesRate)}</td>
+                  <td>{cell(r.no, r.noRate)}</td>
+                  <td>{cell(r.na, r.naRate)}</td>
+                  <td>{fmtRate(r.scoreRate)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -2666,7 +3048,14 @@ function OptionDetailTable({ rows }: { rows: OptionDetailRow[] }) {
   );
 }
 
-function QuestionErrorTable({ rows }: { rows: QuestionErrorRow[] }) {
+function QuestionErrorTable({
+  rows,
+  onQuestionClick,
+}: {
+  rows: QuestionErrorRow[];
+  /** v1.50.0：錯題列可點下探到該題答「否」的個人審查結果 */
+  onQuestionClick?: (questionId: string) => void;
+}) {
   if (rows.length === 0) {
     return <EmptyState title="尚無錯題資料" description="所選期間與單位沒有可分析的題目作答。" />;
   }
@@ -2674,19 +3063,27 @@ function QuestionErrorTable({ rows }: { rows: QuestionErrorRow[] }) {
   return (
     <>
       <p className="settings-note">
-        所選期間共計 {errorTotal} 次「否」作答；排行依錯題次數由多至少。不同版本分列，舊資料未保存版本時標示「版本未記錄」。
+        所選期間共計 {errorTotal} 次「否」作答；排行依錯題次數由多至少。不同版本分列，舊資料未保存版本時標示「版本未記錄」。點選列下探到該題答「否」的個人審查結果。
       </p>
       <div className="analysis-table-wrap">
         <table className="data-table">
           <thead><tr><th>排名</th><th>版本</th><th>題目</th><th>錯題數（否）</th><th>有效作答數</th><th>錯誤率</th><th>不適用數</th></tr></thead>
-          <tbody>{rows.map((row, index) => (
-            <tr key={`${row.indicatorVersion}-${row.questionId}-${row.itemText}`}>
-              <td>{index + 1}</td><td>{row.indicatorVersion}</td><td>{row.itemText}</td>
-              <td>{row.no}</td><td>{row.validCount}</td>
-              <td>{row.errorRate == null ? "—" : `${row.errorRate.toFixed(1)}%`}</td>
-              <td>{row.notApplicable}</td>
-            </tr>
-          ))}</tbody>
+          <tbody>{rows.map((row, index) => {
+            const clickable = row.no > 0 && onQuestionClick != null;
+            return (
+              <tr
+                key={`${row.indicatorVersion}-${row.questionId}-${row.itemText}`}
+                className={clickable ? "clickable" : undefined}
+                title={clickable ? "點選下探到該題答「否」的個人審查結果" : undefined}
+                onClick={clickable ? () => onQuestionClick(row.questionId) : undefined}
+              >
+                <td>{index + 1}</td><td>{row.indicatorVersion}</td><td>{row.itemText}</td>
+                <td>{row.no}</td><td>{row.validCount}</td>
+                <td>{row.errorRate == null ? "—" : `${row.errorRate.toFixed(1)}%`}</td>
+                <td>{row.notApplicable}</td>
+              </tr>
+            );
+          })}</tbody>
         </table>
       </div>
     </>
@@ -3235,8 +3632,8 @@ function ResultImportPanel({
                       <td>{r.lineNo}</td>
                       <td>{r.unitCode || "—"}</td>
                       <td>{r.monthRaw || "—"}</td>
-                      <td>{r.reviewerId || "—"}</td>
-                      <td>{r.personEmpNo || "—"}</td>
+                      <td>{staffLabel(r.reviewerId, staffMap.get(r.reviewerId) ?? "")}</td>
+                      <td>{staffLabel(r.personEmpNo, staffMap.get(r.personEmpNo) ?? "")}</td>
                       <td>{r.auditItem || "—"}</td>
                       <td>{status}</td>
                       <td>{reasons || "—"}</td>

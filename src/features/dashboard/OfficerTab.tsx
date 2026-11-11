@@ -11,6 +11,8 @@ import {
   DEFAULT_DASHBOARD_SECTIONS,
   type DashboardSections,
 } from "../../lib/dashboardSections";
+import { staffLabel } from "../../lib/mask";
+import { useStaffNameMap } from "../../lib/useStaffNames";
 import { todayStr } from "../../lib/scheduling";
 import type { DashboardData } from "./useDashboardData";
 
@@ -30,6 +32,8 @@ export function OfficerTab({
   const curYear = now.getFullYear();
   const curMonth = now.getMonth() + 1;
   const [busyId, setBusyId] = useState("");
+  /** v1.50.0：審查員顯示職編/遮罩姓名（users 走共用快取） */
+  const staffNames = useStaffNameMap();
 
   const lags = useMemo(
     () =>
@@ -108,7 +112,7 @@ export function OfficerTab({
                       {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                     </td>
                     <td>{t.unitId}</td>
-                    <td>{t.reviewerId}</td>
+                    <td>{staffLabel(t.reviewerId, staffNames.get(t.reviewerId) ?? "")}</td>
                     <td>{taskProgressLabel(t)}</td>
                     <td>{t.deadline}</td>
                   </tr>
@@ -196,8 +200,7 @@ export function OfficerTab({
                     </td>
                     <td>{u.unitId}</td>
                     <td>
-                      {u.requestedBy}
-                      {u.requestedByName ? `／${u.requestedByName}` : ""}
+                      {staffLabel(u.requestedBy, u.requestedByName ?? "")}
                     </td>
                     <td style={{ maxWidth: 240 }}>{u.reason}</td>
                     <td>

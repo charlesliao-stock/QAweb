@@ -39,7 +39,7 @@ import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
 import { getDocsCacheFirst } from "../lib/cacheFirst";
 import { useAuth } from "../lib/auth";
-import { maskName } from "../lib/mask";
+import { staffLabel } from "../lib/mask";
 import { logAudit } from "../lib/audit";
 import {
   TEN_STEP_TITLES,
@@ -324,7 +324,7 @@ function OwnerMultiSelect({
   function ownerLabel(staffId: string): string {
     const s = staffMap.get(staffId);
     return s && s.name !== staffId
-      ? `${maskName(s.name)}（${staffId}）`
+      ? staffLabel(staffId, s.name)
       : staffId;
   }
 
@@ -364,7 +364,7 @@ function OwnerMultiSelect({
                     setSearch("");
                   }}
                 >
-                  {maskName(s.name)}（{s.staffId}）
+                  {staffLabel(s.staffId, s.name)}
                   {s.unitCode ? `・${s.unitCode}` : ""}
                 </button>
               </li>
@@ -971,11 +971,11 @@ export function IndicatorsPage({
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  /** 清單負責人欄顯示：姓名（職編） */
+  /** 清單負責人欄顯示：職編/遮罩姓名（v1.50.0） */
   function ownerLabel(staffId: string): string {
     const s = staffMap.get(staffId);
     return s && s.name !== staffId
-      ? `${maskName(s.name)}（${staffId}）`
+      ? staffLabel(staffId, s.name)
       : staffId;
   }
 

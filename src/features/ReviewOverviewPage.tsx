@@ -16,7 +16,7 @@ import { collection, doc, getDoc, getDocs, getDocsFromServer, query, where } fro
 import { EmptyState, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
-import { maskName } from "../lib/mask";
+import { staffLabel } from "../lib/mask";
 import {
   MONTH_LABELS,
   type IndicatorYearSchedule,
@@ -319,7 +319,7 @@ export function ReviewOverviewPage({
       const rnm = new Map<string, string>();
       usnap.docs.forEach((d) => {
         const n = (d.data() as Record<string, unknown>).name;
-        rnm.set(d.id, maskName(typeof n === "string" ? n : d.id));
+        rnm.set(d.id, typeof n === "string" ? n : d.id);
       });
       setReviewerNames(rnm);
     } catch {
@@ -510,8 +510,7 @@ export function ReviewOverviewPage({
                               <tr>
                                 <td>{MONTH_LABELS[t.month - 1] ?? `${t.month}月`}</td>
                                 <td>
-                                  {reviewerNames.get(t.reviewerId) ??
-                                    t.reviewerId}
+                                  {staffLabel(t.reviewerId, reviewerNames.get(t.reviewerId) ?? "")}
                                 </td>
                                 <td>
                                   {progressLabel(completedCases, t.caseCount)}
@@ -577,7 +576,7 @@ export function ReviewOverviewPage({
                                                 <td>{r.reviewDate || "—"}</td>
                                                 <td>
                                                   {r.reviewerEmpNo
-                                                    ? `${r.reviewerEmpNo}／${maskName(r.reviewerName || r.reviewerEmpNo)}`
+                                                    ? staffLabel(r.reviewerEmpNo, r.reviewerName)
                                                     : "—"}
                                                 </td>
                                                 <td>

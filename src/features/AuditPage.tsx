@@ -50,7 +50,7 @@ import { fetchAllPaged } from "../lib/pagedQuery";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import { usePermissions } from "../lib/usePermissions";
-import { maskName } from "../lib/mask";
+import { staffLabel } from "../lib/mask";
 import {
   normalizeAssignmentItem,
   parseIndicatorSchedule,
@@ -110,6 +110,8 @@ interface RecordRow {
   reviewDate: string;
   reviewerEmpNo: string;
   reviewerName: string;
+  /** 受審人員職編（v1.50.0：檢視彈窗顯示職編/遮罩姓名） */
+  reviewedPersonEmpNo: string;
   reviewedPersonName: string;
   /** 審核項目（v1.48.0）：無值為 ""，顯示為「—」 */
   auditItem: string;
@@ -482,6 +484,10 @@ export function AuditPage({
                 typeof v.reviewerEmpNo === "string" ? v.reviewerEmpNo : "",
               reviewerName:
                 typeof v.reviewerName === "string" ? v.reviewerName : "",
+              reviewedPersonEmpNo:
+                typeof v.reviewedPersonEmpNo === "string"
+                  ? v.reviewedPersonEmpNo
+                  : "",
               reviewedPersonName:
                 typeof v.reviewedPersonName === "string"
                   ? v.reviewedPersonName
@@ -1179,8 +1185,8 @@ export function AuditPage({
                       <tr key={record.id}>
                         <td data-label="年月">{record.year}年{record.month}月</td>
                         <td data-label="審查日期">{record.reviewDate || "—"}</td>
-                        <td data-label="審查人員">{maskName(record.reviewerName) || "—"}</td>
-                        <td data-label="受審人員">{maskName(record.reviewedPersonName) || "—"}</td>
+                        <td data-label="審查人員">{staffLabel(record.reviewerEmpNo, record.reviewerName)}</td>
+                        <td data-label="受審人員">{staffLabel(record.reviewedPersonEmpNo, record.reviewedPersonName)}</td>
                         <td data-label="審核項目">{record.auditItem || "—"}</td>
                         <td data-label="正確率">{record.rate == null ? "—" : `${record.rate}%`}</td>
                         <td data-label="個人結果">

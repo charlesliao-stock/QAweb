@@ -37,7 +37,7 @@ import { getDocCacheFirst } from "../lib/cacheFirst";
 import { isDemoMode } from "../lib/demoMode";
 import { useAuth } from "../lib/auth";
 import { applyTheme } from "../lib/uiPrefs";
-import { maskName } from "../lib/mask";
+import { staffLabel } from "../lib/mask";
 import { filterAuditRows } from "../lib/audit";
 import {
   DEFAULT_SYSTEM_PARAMS,
@@ -1162,10 +1162,7 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
               id: d.id,
               timeText: createdAt ? createdAt.toLocaleString("zh-Hant") : "—",
               dateKey: `${y}-${m}-${day}`,
-              actorLabel:
-                actorName && actorName !== actor
-                  ? `${maskName(actorName)}（${actor}）`
-                  : actor || "—",
+              actorLabel: staffLabel(actor, actorName),
               action: typeof data.action === "string" ? data.action : "",
               target: targetId,
               detail: typeof data.detail === "string" ? data.detail : "",

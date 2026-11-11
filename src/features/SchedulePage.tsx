@@ -45,7 +45,7 @@ import { useAuth } from "../lib/auth";
 import { isReviewerAccessActive } from "../lib/reviewerValidity";
 import { useOrgMeta } from "../lib/useOrgMeta";
 import { hasRoleCategory, titleFlagsOf } from "../lib/orgMeta";
-import { maskName } from "../lib/mask";
+import { staffLabel } from "../lib/mask";
 import {
   academicYearOf,
   categoryLabel,
@@ -1953,7 +1953,7 @@ function AddAuditDialog({
       [...reviewerMeta.entries()]
         .map(([id, m]) => ({
           id,
-          label: `${maskName(m.name)}（${id}）`,
+          label: staffLabel(id, m.name),
           sub: m.groupId ? (groupMap.get(m.groupId) ?? m.groupId) : "分工表",
           groupId: m.groupId,
         }))
@@ -1973,7 +1973,7 @@ function AddAuditDialog({
   );
 
   const reviewerNameOf = useCallback(
-    (id: string) => maskName(reviewerMeta.get(id)?.name ?? id),
+    (id: string) => staffLabel(id, reviewerMeta.get(id)?.name ?? ""),
     [reviewerMeta],
   );
   const unitNameOf = useCallback(
@@ -2388,8 +2388,7 @@ function SelfAuditDialog({
                   onChange={() => toggleReviewer(u.id)}
                 />
                 <span>
-                  {maskName(usersMap.get(u.id) ?? u.id)}
-                  <span className="muted-text">（{u.id}）</span>
+                  {staffLabel(u.id, usersMap.get(u.id) ?? "")}
                 </span>
               </label>
             ))}
@@ -2645,7 +2644,7 @@ function ScheduleDetailModal({
           <p>
             {tempReviewers.map(([id, name]) => (
               <span key={id} className="chip" style={{ marginRight: 6 }}>
-                {maskName(name)}（{id}）
+                {staffLabel(id, name)}
               </span>
             ))}
           </p>
@@ -2663,8 +2662,7 @@ function ScheduleDetailModal({
               {assignment.items.map((it) => (
                 <tr key={it.reviewerId}>
                   <td data-label="審查員">
-                    <b>{maskName(usersMap.get(it.reviewerId) ?? it.reviewerId)}</b>
-                    <div className="muted-text">{it.reviewerId}</div>
+                    <b>{staffLabel(it.reviewerId, usersMap.get(it.reviewerId) ?? "")}</b>
                   </td>
                   <td data-label="負責單位">
                     {it.units
@@ -2732,7 +2730,7 @@ function AssignmentEditor({
       for (const r of arr) {
         out.push({
           id: r.personId,
-          label: `${maskName(r.name)}（${r.personId}）`,
+          label: staffLabel(r.personId, r.name),
           sub: groupMap.get(gid) ?? gid,
           groupId: gid,
         });
@@ -2756,9 +2754,9 @@ function AssignmentEditor({
     (id: string) => {
       for (const arr of reviewersByGroup.values()) {
         const r = arr.find((x) => x.personId === id);
-        if (r) return maskName(r.name);
+        if (r) return staffLabel(id, r.name);
       }
-      return maskName(usersMap.get(id) ?? id);
+      return staffLabel(id, usersMap.get(id) ?? "");
     },
     [reviewersByGroup, usersMap],
   );

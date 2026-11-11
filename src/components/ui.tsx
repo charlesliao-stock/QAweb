@@ -144,13 +144,32 @@ export function SummaryCell({
   label,
   value,
   note,
+  onClick,
 }: {
   label: string;
   value: string;
   note: string;
+  /** v1.50.0：提供時可點選下探到個人審查結果 */
+  onClick?: () => void;
 }) {
   return (
-    <div className="summary-cell">
+    <div
+      className={`summary-cell${onClick ? " clickable" : ""}`}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
+      title={onClick ? "點選下探到個人審查結果" : undefined}
+    >
       <span>{label}</span>
       <strong>{value}</strong>
       <small>{note}</small>

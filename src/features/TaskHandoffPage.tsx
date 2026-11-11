@@ -6,6 +6,8 @@ import { useAuth } from "../lib/auth";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { groupsForRoles, parseMemberships } from "../lib/roleIdentity";
 import { useOrgMeta } from "../lib/useOrgMeta";
+import { staffLabel } from "../lib/mask";
+import { useStaffNameMap } from "../lib/useStaffNames";
 import {
   LEGACY_GROUP_CONVENER_ROLE_NAMES,
   LEGACY_GROUP_OFFICER_ROLE_NAMES,
@@ -55,6 +57,8 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
   const { user } = useAuth();
   // v1.40.5：管理範圍改以角色類別＋範圍判斷，不再比對角色名稱
   const orgMeta = useOrgMeta();
+  /** v1.50.0：原審查員顯示職編/遮罩姓名（users 走共用快取） */
+  const staffNames = useStaffNameMap();
   const [groups, setGroups] = useState<OptionRow[]>([]);
   const [units, setUnits] = useState<OptionRow[]>([]);
   const [managerGroupIds, setManagerGroupIds] = useState<string[]>([]);
@@ -323,7 +327,7 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
                 <button type="button" className="button button-outline" onClick={toggleAll}>{tasks.length > 0 && tasks.every((t) => selectedTasks.includes(t.id)) ? "取消全選" : "全選查詢結果"}</button>
                 <span className="settings-note">已勾選 {selected.length}／{tasks.length} 筆</span>
               </div>
-              <div className="table-scroll"><table className="data-table"><thead><tr><th>選取</th><th>原審查員</th><th>群組／單位</th><th>指標</th><th>審查期間</th><th>期限</th><th>狀態</th></tr></thead><tbody>{tasks.map((t) => <tr key={t.id}><td><input type="checkbox" checked={selectedTasks.includes(t.id)} onChange={() => toggleTask(t.id)} aria-label={`選取任務 ${t.id}`} /></td><td>{t.reviewerId}</td><td>{t.groupName}／{t.unitName}</td><td>{t.indicatorName}</td><td>{t.year} 年 {t.month} 月</td><td>{t.deadline || "—"}</td><td>{t.status === "locked" ? "逾期鎖定" : "未完成"}</td></tr>)}</tbody></table></div>
+              <div className="table-scroll"><table className="data-table"><thead><tr><th>選取</th><th>原審查員</th><th>群組／單位</th><th>指標</th><th>審查期間</th><th>期限</th><th>狀態</th></tr></thead><tbody>{tasks.map((t) => <tr key={t.id}><td><input type="checkbox" checked={selectedTasks.includes(t.id)} onChange={() => toggleTask(t.id)} aria-label={`選取任務 ${t.id}`} /></td><td>{staffLabel(t.reviewerId, staffNames.get(t.reviewerId) ?? "")}</td><td>{t.groupName}／{t.unitName}</td><td>{t.indicatorName}</td><td>{t.year} 年 {t.month} 月</td><td>{t.deadline || "—"}</td><td>{t.status === "locked" ? "逾期鎖定" : "未完成"}</td></tr>)}</tbody></table></div>
             </>
           )}
         </div>
