@@ -7,6 +7,8 @@ import {
   useState,
 } from "react";
 import {
+  Ban,
+  Check,
   ChevronDown,
   ChevronUp,
   Download,
@@ -18,6 +20,7 @@ import {
 } from "lucide-react";
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -136,6 +139,8 @@ interface IndicatorRow {
   basicThreshold: number | null;
   status: IndicatorStatus;
   version: string;
+  /** 是否具備啟用條件（v1.45.0：基本資料完成＋審核表至少一題；供清單列 [啟用] 按鈕顯示判定） */
+  canEnable: boolean;
 }
 
 interface VersionRow {
@@ -887,21 +892,40 @@ export function IndicatorsPage({
       );
       const list: IndicatorRow[] = snap.docs.map((d) => {
         const data = d.data();
+        const groupId = typeof data.groupId === "string" ? data.groupId : "";
+        const code =
+          parseIndicatorDocId(d.id)?.code ??
+          (typeof data.code === "string" ? data.code : d.id);
+        const name = typeof data.name === "string" ? data.name : "";
+        const basicThreshold =
+          typeof data.basicThreshold === "number"
+            ? data.basicThreshold
+            : null;
+        const owners: string[] = Array.isArray(data.owners)
+          ? data.owners.map(String)
+          : [];
         return {
           id: d.id,
-          code:
-            parseIndicatorDocId(d.id)?.code ??
-            (typeof data.code === "string" ? data.code : d.id),
-          name: typeof data.name === "string" ? data.name : "",
-          groupId: typeof data.groupId === "string" ? data.groupId : "",
-          owners: Array.isArray(data.owners) ? data.owners.map(String) : [],
+          code,
+          name,
+          groupId,
+          owners,
           mainThreshold: primaryThreshold(data),
-          basicThreshold:
-            typeof data.basicThreshold === "number"
-              ? data.basicThreshold
-              : null,
+          basicThreshold,
           status: STATUSES.includes(data.status) ? data.status : "草稿",
           version: typeof data.version === "string" ? data.version : "v1.0",
+          // v1.45.0：清單列 [啟用] 按鈕只在具備啟用條件時顯示；清單已讀回整份文件，不另讀取
+          canEnable: meetsEnableConditions(
+            {
+              groupId,
+              code,
+              name,
+              basicThreshold: basicThreshold ?? "",
+              owners,
+            },
+            normalizeQuestions(data.questions).questions,
+            false,
+          ),
         };
       });
       list.sort((a, b) => a.code.localeCompare(b.code, "zh-Hant"));
@@ -969,6 +993,36 @@ export function IndicatorsPage({
         ),
       );
       return !snap.empty;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * v1.45.0：該指標是否尚在排程中。
+   * 新集合 indicatorSchedules（一列＝指標＋類別＋週期；排程頁的「刪除排程」即刪此文件）
+   * 或舊集合 indicatorYearSchedules（審查總覽頁仍直接讀舊集合）任一有文件即視為排程中。
+   * 查詢失敗回 false（視為未排程，不擋）。
+   */
+  async function checkScheduled(docId: string): Promise<boolean> {
+    try {
+      const db = getFirebaseDb();
+      const snap = await getDocs(
+        query(
+          collection(db, "indicatorSchedules"),
+          where("indicatorId", "==", docId),
+          limit(1),
+        ),
+      );
+      if (!snap.empty) return true;
+      const legacy = await getDocs(
+        query(
+          collection(db, "indicatorYearSchedules"),
+          where("indicatorId", "==", docId),
+          limit(1),
+        ),
+      );
+      return !legacy.empty;
     } catch {
       return false;
     }
@@ -1466,11 +1520,59 @@ export function IndicatorsPage({
     }
   }
 
+  /** v1.45.0：清單列 [啟用]。點擊時重驗啟用條件（防資料已變），符合才寫入。 */
+  async function handleEnable(docId: string) {
+    if (!user) return;
+    try {
+      const snap = await getDoc(doc(getFirebaseDb(), "indicators", docId));
+      if (!snap.exists()) {
+        onAction("找不到該指標");
+        return;
+      }
+      const data = snap.data();
+      const eligible = meetsEnableConditions(
+        {
+          groupId: typeof data.groupId === "string" ? data.groupId : "",
+          code: indicatorCodeOf(snap.id),
+          name: typeof data.name === "string" ? data.name : "",
+          basicThreshold:
+            typeof data.basicThreshold === "number"
+              ? data.basicThreshold
+              : "",
+          owners: Array.isArray(data.owners) ? data.owners.map(String) : [],
+        },
+        normalizeQuestions(data.questions).questions,
+        false,
+      );
+      if (!eligible) {
+        onAction("此指標尚未完成基本資料與審核表，無法啟用");
+        return;
+      }
+      await updateDoc(doc(getFirebaseDb(), "indicators", docId), {
+        status: "啟用",
+        updatedAt: serverTimestamp(),
+        updatedBy: user.staffId,
+      });
+      onAction(`指標 ${indicatorCodeOf(docId)} 已啟用`);
+      logAudit(getFirebaseDb(), {
+        actor: user.staffId,
+        actorName: user.name,
+        action: "啟用指標",
+        targetType: "indicator",
+        targetId: docId,
+      });
+      await loadList();
+    } catch (error) {
+      onAction(`啟用失敗：${toErrorMessage(error)}`);
+    }
+  }
+
   async function handleDeactivate(docId: string) {
     if (!user) return;
-    const locked = await checkReviewData(docId);
-    if (locked) {
-      onAction("此指標已有審查資料，無法停用");
+    // v1.45.0：停用不再被審查資料擋（有資料但未列排程者可停用）；改擋「排程中」
+    const scheduled = await checkScheduled(docId);
+    if (scheduled) {
+      onAction("此指標尚在排程中，請先停止排程才能停用");
       return;
     }
     const code = indicatorCodeOf(docId);
@@ -1495,6 +1597,44 @@ export function IndicatorsPage({
       await loadList();
     } catch (error) {
       onAction(`停用失敗：${toErrorMessage(error)}`);
+    }
+  }
+
+  /** v1.45.0：清單列 [刪除]。已有已審紀錄（reviewRecords）者擋下；無紀錄者確認後刪主檔＋版本子集合。 */
+  async function handleDelete(docId: string) {
+    if (!user) return;
+    const code = indicatorCodeOf(docId);
+    const hasData = await checkReviewData(docId);
+    if (hasData) {
+      onAction("此指標已有審查資料，無法刪除");
+      return;
+    }
+    const ok = window.confirm(
+      `確定刪除指標 ${code}？（將一併刪除版本紀錄，此操作無法復原）`,
+    );
+    if (!ok) return;
+    try {
+      const db = getFirebaseDb();
+      // Firestore 無級聯刪除：先刪 versions 子集合各文件，再刪主檔
+      const vsnap = await getDocs(
+        collection(db, "indicators", docId, "versions"),
+      );
+      for (const v of vsnap.docs) {
+        await deleteDoc(doc(db, "indicators", docId, "versions", v.id));
+      }
+      await deleteDoc(doc(db, "indicators", docId));
+      logAudit(db, {
+        actor: user.staffId,
+        actorName: user.name,
+        action: "刪除指標",
+        targetType: "indicator",
+        targetId: docId,
+        detail: code,
+      });
+      onAction(`指標 ${code} 已刪除`);
+      await loadList();
+    } catch (error) {
+      onAction(`刪除失敗：${toErrorMessage(error)}`);
     }
   }
 
@@ -1676,12 +1816,31 @@ export function IndicatorsPage({
                           >
                             <Pencil size={13} /> 編輯
                           </button>{" "}
-                          {row.status !== "停用" && (
+                          {/* v1.45.0：操作列按狀態只顯示適用按鈕。
+                              草稿／送審／核准／退回／停用：[啟用]（僅具備啟用條件時）＋[刪除]；
+                              啟用：[停用]；啟用中不顯示 [啟用] 與 [刪除]（須先停用才能刪）。 */}
+                          {row.status !== "啟用" && row.canEnable && (
+                            <button
+                              className="text-button"
+                              onClick={() => handleEnable(row.id)}
+                            >
+                              <Check size={13} /> 啟用
+                            </button>
+                          )}{" "}
+                          {row.status === "啟用" && (
                             <button
                               className="text-button"
                               onClick={() => handleDeactivate(row.id)}
                             >
-                              <Trash2 size={13} /> 停用
+                              <Ban size={13} /> 停用
+                            </button>
+                          )}{" "}
+                          {row.status !== "啟用" && (
+                            <button
+                              className="text-button"
+                              onClick={() => handleDelete(row.id)}
+                            >
+                              <Trash2 size={13} /> 刪除
                             </button>
                           )}
                         </td>
