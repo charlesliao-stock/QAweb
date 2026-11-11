@@ -12,6 +12,13 @@
  * （進度改以審查紀錄計算，不依賴任務表）。
  * v1.20：只顯示包含本月區間的指標（今天不在任何區間內就不列）；
  * 表頭篩選列移除，改為清單上方篩選區（組別／指標／關鍵字）。
+ * v1.46.0：清單上方篩選區改為組別／指標／進度／關鍵字；進度篩選器
+ * （進行中／已結束／待完成，預設進行中）以今天精確到日判斷：
+ * 進行中＝今天在區間內，或區間已結束、未過補資料日（空窗期）；
+ * 已結束＝今天已過最後區間的補資料日（區間結束月下個月第
+ * supplementDeadlineDay 日）；待完成＝今天在第一區間開始之前。
+ * 一列一排程，顯示現階段區間；進行中 100% 的列顯示、但不給審查按鈕；
+ * 已結束保留檢視（含檢視彈窗內的修改）；待完成無任何操作按鈕。
  */
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -33,8 +40,12 @@ import {
   where,
 } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
-import { getCachedRefCollection } from "../lib/refCache";
-import { getDocsCacheFirst } from "../lib/cacheFirst";
+import {
+  getCachedRef,
+  getCachedRefCollection,
+  SYSTEM_CONFIG_KEY,
+} from "../lib/refCache";
+import { getDocCacheFirst, getDocsCacheFirst } from "../lib/cacheFirst";
 import { fetchAllPaged } from "../lib/pagedQuery";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { useAuth } from "../lib/auth";
@@ -65,12 +76,13 @@ import {
 } from "../lib/orgMeta";
 import {
   auditRowMatches,
+  classifyScheduleProgress,
   computeIntervalProgress,
-  containingInterval,
   intervalDisplay,
   isProgressComplete,
   recordYearMonth,
   ymKey,
+  type AuditProgressState,
   type IntervalProgress,
   type ReviewInterval,
 } from "../lib/reviewActive";
@@ -116,6 +128,10 @@ interface ActiveRow {
   indicatorName: string;
   groupId: string;
   groupName: string;
+  /** v1.46.0：進度三態（進行中／已結束／待完成） */
+  state: AuditProgressState;
+  /** 進度是否已達 100%（進行中 100% 的列顯示、但不給審查按鈕） */
+  complete: boolean;
   interval: ReviewInterval;
   intervalLabel: string;
   progress: IntervalProgress;
@@ -190,8 +206,11 @@ export function AuditPage({
   const [sortKey, setSortKey] = useState<SortKey>("group");
   const [sortDir, setSortDir] = useState<1 | -1>(1);
   // v1.20：清單上方篩選區（組別／指標／關鍵字）；表頭篩選列移除
+  // v1.46.0：篩選區依序為組別／指標／進度／關鍵字；進度預設進行中
   const [selGroup, setSelGroup] = useState("");
   const [selIndicator, setSelIndicator] = useState("");
+  const [selProgress, setSelProgress] =
+    useState<AuditProgressState>("active");
   const [keyword, setKeyword] = useState("");
   const [viewRow, setViewRow] = useState<ActiveRow | null>(null);
   const [selectedUnitFilter, setSelectedUnitFilter] = useState("");
@@ -228,21 +247,30 @@ export function AuditPage({
         const db = getFirebaseDb();
         const staffId = user.staffId;
         const today = new Date();
-        const [iSnap, gSnap, uSnap, sSnap, aSnap, meSnap] = await Promise.all([
-          getCachedRefCollection("indicators", () =>
-            getDocsCacheFirst(query(collection(db, "indicators"), limit(500))),
-          ),
-          getCachedRefCollection("groups", () =>
-            getDocsCacheFirst(query(collection(db, "groups"), limit(200))),
-          ),
-          getCachedRefCollection("units", () =>
-            getDocsCacheFirst(query(collection(db, "units"), limit(2000))),
-          ),
-          getDocs(query(collection(db, "indicatorSchedules"), limit(500))),
-          getDocs(query(collection(db, "indicatorAssignments"), limit(500))),
-          getDoc(doc(db, "users", staffId)),
-        ]);
+        const [iSnap, gSnap, uSnap, sSnap, aSnap, meSnap, sysSnap] =
+          await Promise.all([
+            getCachedRefCollection("indicators", () =>
+              getDocsCacheFirst(query(collection(db, "indicators"), limit(500))),
+            ),
+            getCachedRefCollection("groups", () =>
+              getDocsCacheFirst(query(collection(db, "groups"), limit(200))),
+            ),
+            getCachedRefCollection("units", () =>
+              getDocsCacheFirst(query(collection(db, "units"), limit(2000))),
+            ),
+            getDocs(query(collection(db, "indicatorSchedules"), limit(500))),
+            getDocs(query(collection(db, "indicatorAssignments"), limit(500))),
+            getDoc(doc(db, "users", staffId)),
+            // v1.46.0：補資料日取系統參數現值（讀不到用預設 10）
+            getCachedRef(SYSTEM_CONFIG_KEY, () =>
+              getDocCacheFirst(doc(db, "systemParams", "config")),
+            ),
+          ]);
         if (cancelled) return;
+        let deadlineDay = 10;
+        const sysData = sysSnap.data() as Record<string, unknown> | undefined;
+        const dd = sysData?.supplementDeadlineDay;
+        if (typeof dd === "number" && dd >= 1 && dd <= 31) deadlineDay = dd;
 
         const indicators = new Map<string, IndicatorLite>();
         iSnap.docs.forEach((d) => {
@@ -384,27 +412,48 @@ export function AuditPage({
             visible = true;
           }
           if (!visible) continue;
-          // v1.20：只顯示包含本月區間的指標（今天不在任何區間內就不列）
-          const iv = containingInterval(schedLike(s), today);
-          if (!iv) continue;
           cands.push({ sched: s, assigned: [...new Set(assigned)] });
         }
         if (cancelled) return;
 
+        // v1.46.0：進度三態＋現階段區間（精確到日；空窗期仍算進行中）。
+        // 一列一排程：進行中顯示包含今天（或空窗期對應）的區間；
+        // 待完成顯示下一個未開始的區間；已結束顯示最後一個區間。
+        const classified: {
+          sched: IndicatorSchedule;
+          assigned: string[];
+          state: AuditProgressState;
+          interval: ReviewInterval;
+        }[] = [];
+        for (const c of cands) {
+          const cls = classifyScheduleProgress(
+            schedLike(c.sched),
+            today,
+            deadlineDay,
+          );
+          if (!cls) continue;
+          classified.push({ ...c, state: cls.state, interval: cls.interval });
+        }
+        if (cancelled) return;
+
         // ---- 審查紀錄（v1.28 階段 6 B6）：單一查詢＋游標分頁，前端按指標分組 ----
-        // 年份下限＝去年：今天所在的審核區間最多橫跨兩個曆年（學年度 8 月制），
-        // 區間起訖必落在去年／今年／明年；用 >= 取代任務書建議的 year == 當年——
-        // 當年等號會漏掉學年度區間在去年的月份（例如 2027-03 看 115 學年度
-        // 2026-08..2027-07，2026 年紀錄會被漏掉、進度算少）。前端仍以區間
-        // 月份鍵過濾，伺服器端年份只是預篩、不影響正確性。
+        // 年份下限（v1.46.0 放寬）：已結束要回看更早區間，舊「去年」下限會讓
+        // 舊區間進度顯示為 0。改以各列顯示區間的最早年份為準，至少去年、
+        // 最多往前三年（讀取量上限約 4 年份紀錄；前端仍以區間月份鍵過濾，
+        // 伺服器端年份只是預篩、不影響正確性）。
         // 單一範圍 where ＋ 同欄位 orderBy（分頁 helper 內加），不需複合索引；
         // 分頁循序拉完，修掉舊 limit(2000) 靜默截斷。
+        let minYear = today.getFullYear() - 1;
+        for (const c of classified) {
+          minYear = Math.min(minYear, c.interval.start.year);
+        }
+        minYear = Math.max(minYear, today.getFullYear() - 3);
         const recordsByIndicator = new Map<string, RecordRow[]>();
         let recordsTruncated = false;
         try {
           const { docs, truncated } = await fetchAllPaged(
             collection(db, "reviewRecords"),
-            [where("year", ">=", today.getFullYear() - 1)],
+            [where("year", ">=", minYear)],
           );
           recordsTruncated = truncated;
           docs.forEach((d) => {
@@ -453,11 +502,9 @@ export function AuditPage({
         if (!cancelled) setRecordsTruncated(recordsTruncated);
 
         const out: ActiveRow[] = [];
-        for (const { sched: s, assigned } of cands) {
+        for (const { sched: s, assigned, state, interval: iv } of classified) {
           const ind = indicators.get(s.indicatorId);
           if (!ind) continue;
-          const iv = containingInterval(schedLike(s), today);
-          if (!iv) continue;
           const keys = new Set(iv.allMonths.map(ymKey));
           const periodicCategory =
             s.category === "year" || s.category === "academic"
@@ -494,7 +541,7 @@ export function AuditPage({
             records: inRecords,
             intervalMonthKeys: keys,
           });
-          if (isProgressComplete(progress)) continue; // 已達 100%
+          // v1.46.0：進行中 100% 的列照樣顯示（審查按鈕另外藏起），不再整列跳過
           // v1.23：區間內每個月皆為審查月（不再只有起始月）
           const monthOptions: MonthOption[] = iv.reviewMonths.map(
             ({ year, month }) => ({
@@ -509,6 +556,8 @@ export function AuditPage({
             indicatorName: ind.name,
             groupId: ind.groupId,
             groupName: groupName.get(ind.groupId) ?? "未分類",
+            state,
+            complete: isProgressComplete(progress),
             interval: iv,
             intervalLabel: intervalDisplay(iv, s.category),
             progress,
@@ -638,12 +687,14 @@ export function AuditPage({
   }, [rows, selGroup]);
 
   const filtered = useMemo(() => {
-    const list = rows.filter((r) =>
-      auditRowMatches(r, {
-        groupId: selGroup,
-        indicatorId: selIndicator,
-        keyword,
-      }),
+    const list = rows.filter(
+      (r) =>
+        r.state === selProgress &&
+        auditRowMatches(r, {
+          groupId: selGroup,
+          indicatorId: selIndicator,
+          keyword,
+        }),
     );
     const dir = sortDir;
     const val = (r: ActiveRow): number | string => {
@@ -672,7 +723,33 @@ export function AuditPage({
           a.indicatorName.localeCompare(b.indicatorName, "zh-Hant");
       return c * dir;
     });
-  }, [rows, selGroup, selIndicator, keyword, sortKey, sortDir]);
+  }, [rows, selGroup, selIndicator, selProgress, keyword, sortKey, sortDir]);
+
+  // v1.46.0：標題與空狀態依進度篩選器調整
+  const progressTitle =
+    selProgress === "active"
+      ? "進行中的審查排程"
+      : selProgress === "ended"
+        ? "已結束的審查排程"
+        : "待完成的審查排程";
+  const progressNote =
+    selProgress === "active"
+      ? "依您的身分列出進行中的審查排程（含區間已結束、仍在補資料期限內的區間）；點標題可排序"
+      : selProgress === "ended"
+        ? "依您的身分列出已結束的審查排程（已過排程區間及補資料日期）；檢視可查看結果，符合權限者可修改紀錄"
+        : "依您的身分列出已排程但尚未開始的審查排程；點標題可排序";
+  const progressEmptyTitle =
+    selProgress === "active"
+      ? "目前沒有進行中的審查排程"
+      : selProgress === "ended"
+        ? "目前沒有已結束的審查排程"
+        : "目前沒有待完成的審查排程";
+  const progressEmptyDesc =
+    selProgress === "active"
+      ? "可能尚無排程、排程皆已結束，或您的身分沒有被指派審查項目。"
+      : selProgress === "ended"
+        ? "可能尚無已結束的排程，或您的身分沒有被指派審查項目。"
+        : "可能尚無尚未開始的排程，或您的身分沒有被指派審查項目。";
 
   const viewUnitSummaries = useMemo(() => {
     if (!viewRow) return [];
@@ -834,13 +911,10 @@ export function AuditPage({
         </p>
       )}
       <section className="panel">
-        <SectionTitle
-          title="進行中的審查排程"
-          note="依您的身分列出有排程且尚未結束的指標（只顯示包含本月區間者）；點標題可排序"
-        />
+        <SectionTitle title={progressTitle} note={progressNote} />
         <div className="filter-bar">
           <div className="form-field" style={{ maxWidth: 200 }}>
-            <label className="field-label">組別篩選</label>
+            <label className="field-label">組別</label>
             <div className="select-wrap">
               <select
                 value={selGroup}
@@ -867,7 +941,7 @@ export function AuditPage({
             </div>
           </div>
           <div className="form-field" style={{ maxWidth: 280 }}>
-            <label className="field-label">指標篩選</label>
+            <label className="field-label">指標</label>
             <div className="select-wrap">
               <select
                 value={selIndicator}
@@ -883,8 +957,24 @@ export function AuditPage({
               <ChevronDown size={15} />
             </div>
           </div>
+          <div className="form-field" style={{ maxWidth: 200 }}>
+            <label className="field-label">進度</label>
+            <div className="select-wrap">
+              <select
+                value={selProgress}
+                onChange={(e) =>
+                  setSelProgress(e.target.value as AuditProgressState)
+                }
+              >
+                <option value="active">進行中</option>
+                <option value="ended">已結束</option>
+                <option value="pending">待完成</option>
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
           <div className="form-field" style={{ maxWidth: 260 }}>
-            <label className="field-label">指標關鍵字</label>
+            <label className="field-label">關鍵字</label>
             <input
               className="text-input"
               placeholder="指標名稱或編號"
@@ -899,8 +989,8 @@ export function AuditPage({
           </p>
         ) : rows.length === 0 ? (
           <EmptyState
-            title="目前沒有進行中的審查排程"
-            description="可能尚無排程、排程皆已結束，或您的身分沒有被指派審查項目。"
+            title={progressEmptyTitle}
+            description={progressEmptyDesc}
           />
         ) : filtered.length === 0 ? (
           <p className="muted-text">沒有符合篩選條件的指標。</p>
@@ -946,22 +1036,28 @@ export function AuditPage({
                       />
                     </td>
                     <td>
-                      <div className="row-actions">
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() => setViewRow(r)}
-                        >
-                          <Eye size={14} /> 檢視
-                        </button>
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() => openExec(r)}
-                        >
-                          <ClipboardCheck size={14} /> 審查
-                        </button>
-                      </div>
+                      {r.state === "pending" ? (
+                        <span className="muted-text">—</span>
+                      ) : (
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => setViewRow(r)}
+                          >
+                            <Eye size={14} /> 檢視
+                          </button>
+                          {r.state === "active" && !r.complete && (
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => openExec(r)}
+                            >
+                              <ClipboardCheck size={14} /> 審查
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

@@ -8,6 +8,10 @@
  * - 「現階段」＝今天所在的區間；今天早於第一區間則用第一區間；
  *   今天晚於最後區間結束月 → null（已結束）。
  * - 進度改以審查紀錄（reviewRecords）計算，不依賴任務表。
+ * - v1.46.0：進度三態（進行中／已結束／待完成）以今天精確到日判斷：
+ *   進行中＝今天在區間內，或區間已結束、但未過補資料日（空窗期仍算進行中）；
+ *   已結束＝今天已過最後區間的補資料日；待完成＝今天在第一區間開始之前。
+ *   補資料日＝區間結束月的下個月第 deadlineDay 日（沿用 deadlineFor 寫法）。
  *
  * 本檔零依賴、不碰 DOM、不碰 Firestore，可在 node 直接單元測試。
  */
@@ -183,6 +187,81 @@ export function containingInterval(
     if (cmpYM(iv.start, t) <= 0 && cmpYM(t, iv.end) <= 0) return iv;
   }
   return null;
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** 本地日期轉 YYYY-MM-DD（字串比對即日期先後） */
+function ymdStr(year: number, month: number, day: number): string {
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}
+
+function lastDayOfMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
+}
+
+/**
+ * 補資料日＝區間結束月的下個月第 deadlineDay 日（沿用 deadlineFor 寫法：
+ * 12 月→隔年 1 月；day 超過該月天數時取該月最後一日）。
+ */
+export function supplementDeadlineFor(
+  end: CalendarYM,
+  deadlineDay: number,
+): string {
+  let y = end.year;
+  let m = end.month + 1;
+  if (m > 12) {
+    m = 1;
+    y += 1;
+  }
+  const d = Math.min(
+    Math.max(deadlineDay, 1),
+    lastDayOfMonth(y, m),
+  );
+  return ymdStr(y, m, d);
+}
+
+/** 品管審查進度三態（v1.46.0） */
+export type AuditProgressState = "active" | "ended" | "pending";
+
+export interface ScheduleProgress {
+  state: AuditProgressState;
+  interval: ReviewInterval;
+}
+
+/**
+ * 排程的進度狀態與「現階段」區間（純函式，精確到日）：
+ * - 進行中：今天在某區間內，或區間已結束、但今天未過該區間補資料日（空窗期）；
+ *   顯示該區間。
+ * - 待完成：今天在第一個未開始區間之前；顯示下一個未開始的區間。
+ * - 已結束：今天已過最後一個區間的補資料日；顯示最後一個區間。
+ * 無任何區間 → null。
+ */
+export function classifyScheduleProgress(
+  sched: ScheduleLike,
+  today: Date = new Date(),
+  deadlineDay = 10,
+): ScheduleProgress | null {
+  const ivs = scheduleIntervals(sched, today);
+  if (ivs.length === 0) return null;
+  const t = ymdStr(today.getFullYear(), today.getMonth() + 1, today.getDate());
+  let lastEnded: ReviewInterval | null = null;
+  for (const iv of ivs) {
+    const startStr = ymdStr(iv.start.year, iv.start.month, 1);
+    if (t < startStr) return { state: "pending", interval: iv };
+    const endStr = ymdStr(
+      iv.end.year,
+      iv.end.month,
+      lastDayOfMonth(iv.end.year, iv.end.month),
+    );
+    if (t <= endStr) return { state: "active", interval: iv };
+    if (t <= supplementDeadlineFor(iv.end, deadlineDay))
+      return { state: "active", interval: iv };
+    lastEnded = iv;
+  }
+  return lastEnded ? { state: "ended", interval: lastEnded } : null;
 }
 
 /** 品管審查清單篩選（v1.20）：組別／指標／關鍵字三者疊加 */
