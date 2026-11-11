@@ -187,6 +187,126 @@ export function parseMemberships(
  * - 單位級角色：以其單位所屬群組計（unitGroupId 須由呼叫端傳入）。
  * 單位級與否改以角色詮釋資料判斷（傳入 roleMeta；未傳時以名稱推導）。
  */
+/* ================= 群組＋角色分工表式列表（v1.52.0） ================= */
+
+/**
+ * 加入群組＋角色：同群組已存在時角色取聯集合併進既有列，不產生第二列；
+ * 否則在尾端新增一列。回傳新陣列，不動原陣列。
+ */
+export function mergeMembership(
+  memberships: Membership[],
+  groupId: string,
+  roles: string[],
+): Membership[] {
+  const clean = [...new Set(roles.filter(Boolean))];
+  const idx = memberships.findIndex((m) => m.groupId === groupId);
+  if (idx === -1) return [...memberships, { groupId, roles: clean }];
+  return memberships.map((m, i) =>
+    i === idx
+      ? { ...m, roles: [...new Set([...m.roles, ...clean])] }
+      : m,
+  );
+}
+
+/**
+ * 編輯群組＋角色（加入區帶回原列改完按[更新]）：
+ * - 新角色為空 → 刪列（Q6：沒有角色就取消群組）；
+ * - 群組不變 → 原地更新角色；
+ * - 群組改成另一已存在的群組 → 兩列角色取聯集、刪掉原列（Q5）；
+ * - 群組改成新群組 → 原列改群組＋角色。
+ * 原列不存在時回傳原陣列。
+ */
+export function applyMembershipEdit(
+  memberships: Membership[],
+  editingGroupId: string,
+  newGroupId: string,
+  newRoles: string[],
+): Membership[] {
+  const idx = memberships.findIndex((m) => m.groupId === editingGroupId);
+  if (idx === -1) return memberships;
+  const clean = [...new Set(newRoles.filter(Boolean))];
+  if (clean.length === 0) return memberships.filter((_, i) => i !== idx);
+  if (newGroupId === editingGroupId) {
+    return memberships.map((m, i) =>
+      i === idx ? { groupId: newGroupId, roles: clean } : m,
+    );
+  }
+  const target = memberships.findIndex((m) => m.groupId === newGroupId);
+  if (target === -1) {
+    return memberships.map((m, i) =>
+      i === idx ? { groupId: newGroupId, roles: clean } : m,
+    );
+  }
+  return memberships
+    .filter((_, i) => i !== idx)
+    .map((m) =>
+      m.groupId === newGroupId
+        ? { ...m, roles: [...new Set([...m.roles, ...clean])] }
+        : m,
+    );
+}
+
+/** 依群組移除一列（直接刪，不確認；只改表單 state，儲存才生效）。 */
+export function removeMembership(
+  memberships: Membership[],
+  groupId: string,
+): Membership[] {
+  return memberships.filter((m) => m.groupId !== groupId);
+}
+
+/** 非群組角色＝聯集中未出現在任何 membership 者（全院適用）。 */
+export function otherRolesOf(
+  roles: string[],
+  memberships: Membership[],
+): string[] {
+  return roles.filter(
+    (r) => !memberships.some((m) => m.roles.includes(r)),
+  );
+}
+
+/** 人員列表角色欄：按群組分組的一段（群組名＋該群組角色）。 */
+export interface GroupedRoleSegment {
+  label: string;
+  roles: string[];
+}
+
+/**
+ * 人員列表角色欄分段：每段＝一個群組（無角色的 membership 不列）；
+ * 非群組角色附於末段「其他」。無 membership 時只剩「其他」段（維持現行聯集顯示）。
+ */
+export function groupedRolesSegments(
+  memberships: Membership[],
+  groupNameOf: (groupId: string) => string,
+  roles: string[],
+): GroupedRoleSegment[] {
+  const segments: GroupedRoleSegment[] = [];
+  for (const m of memberships) {
+    if (m.roles.length === 0) continue;
+    segments.push({ label: groupNameOf(m.groupId), roles: [...m.roles] });
+  }
+  const others = otherRolesOf(roles, memberships);
+  if (others.length > 0) {
+    // 無 membership 時只剩其他角色，label 留空＝維持現行聯集顯示（不加「其他：」）
+    segments.push({ label: segments.length === 0 ? "" : "其他", roles: others });
+  }
+  return segments;
+}
+
+/**
+ * 人員列表角色欄分組顯示字串，例如
+ * 「病房組：品管組審查員、召集人；加護組：品管組審查員」。
+ * 亦作為 `user-role` 排序鍵。
+ */
+export function groupedRolesLabel(
+  memberships: Membership[],
+  groupNameOf: (groupId: string) => string,
+  roles: string[],
+): string {
+  return groupedRolesSegments(memberships, groupNameOf, roles)
+    .map((s) => (s.label ? `${s.label}：${s.roles.join("、")}` : s.roles.join("、")))
+    .join("；");
+}
+
 export function groupsForRoles(
   memberships: Membership[],
   roleNames: string[],

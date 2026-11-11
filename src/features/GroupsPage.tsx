@@ -34,10 +34,15 @@ import { maskName } from "../lib/mask";
 import { syncReviewerDoc, backfillReviewerDocs } from "../lib/reviewerSync";
 import { templateDocId } from "../lib/permissions";
 import {
+  applyMembershipEdit,
   deriveGroupIds,
   deriveRoles,
+  groupedRolesLabel,
+  groupedRolesSegments,
   isReviewerRole,
+  mergeMembership,
   parseMemberships,
+  removeMembership,
   type Membership,
 } from "../lib/roleIdentity";
 import {
@@ -650,6 +655,15 @@ export function GroupsPage({
   >({ kind: "list" });
   const [userForm, setUserForm] = useState<UserForm>(emptyUserForm());
   const [userError, setUserError] = useState("");
+  /** 群組＋角色加入區（v1.52.0 分工表式）：群組下拉＋角色勾選＋加入／更新 */
+  const [membershipAddGroupId, setMembershipAddGroupId] = useState("");
+  const [membershipAddRoles, setMembershipAddRoles] = useState<string[]>([]);
+  /** 正在編輯的列（群組 id）；null＝加入模式 */
+  const [membershipEditingGroupId, setMembershipEditingGroupId] = useState<string | null>(null);
+  const [membershipError, setMembershipError] = useState("");
+
+  const groupNameOf = (groupId: string): string =>
+    groups.find((g) => g.id === groupId)?.name ?? groupId;
   const [userSaving, setUserSaving] = useState(false);
   // v1.51.0：一次性補建審查員名單（管理員手動觸發）
   const [backfilling, setBackfilling] = useState(false);
@@ -728,7 +742,7 @@ export function GroupsPage({
           : key === "user-title"
             ? row.title
             : key === "user-role"
-              ? row.roles.join("、")
+              ? groupedRolesLabel(row.memberships, groupNameOf, row.roles)
               : key === "user-status"
                 ? row.status
                 : row.staffId,
@@ -1556,6 +1570,7 @@ export function GroupsPage({
   function openUserCreate() {
     setUserForm(emptyUserForm());
     setUserError("");
+    resetMembershipAddArea();
     setUserView({ kind: "create" });
   }
 
@@ -1575,10 +1590,14 @@ export function GroupsPage({
       email: "",
       phone: "",
       // v1.21：群組角色走 memberships 配對列；非群組角色另列勾選
-      memberships: row.memberships.map((m) => ({
-        groupId: m.groupId,
-        roles: [...m.roles],
-      })),
+      // v1.52.0：無角色的列不載入表單（列表不呈現；儲存後跟著消失，
+      // 群組歸屬可依單位設定。見 VERIFICATION_1.52.0.md 的 Q6 檢查）
+      memberships: row.memberships
+        .filter((m) => m.roles.length > 0)
+        .map((m) => ({
+          groupId: m.groupId,
+          roles: [...m.roles],
+        })),
       // v1.40.3：全域角色＝聯集中未出現在任何 membership 者；角色分區不再看寫死名稱清單
       otherRoles: row.roles.filter((r) =>
         !row.memberships.some((membership) => membership.roles.includes(r)),
@@ -1588,6 +1607,7 @@ export function GroupsPage({
       reviewerAccessExpiresAt: row.reviewerAccessExpiresAt,
     });
     setUserError("");
+    resetMembershipAddArea();
     void (async () => {
       try {
         const snap = await getDoc(doc(getFirebaseDb(), "users", staffId));
@@ -1613,44 +1633,68 @@ export function GroupsPage({
     setUserView({ kind: "edit", staffId });
   }
 
-  /** 群組＋角色配對列（v1.21）：新增一列 */
-  function addMembershipRow() {
-    setUserForm((prev) => ({
-      ...prev,
-      memberships: [...prev.memberships, { groupId: "", roles: [] }],
-    }));
+  /** 群組＋角色加入區（v1.52.0 分工表式）：清空加入區、回到加入模式 */
+  function resetMembershipAddArea() {
+    setMembershipAddGroupId("");
+    setMembershipAddRoles([]);
+    setMembershipEditingGroupId(null);
+    setMembershipError("");
   }
 
-  function updateMembershipRow(index: number, patch: Partial<Membership>) {
-    setUserForm((prev) => ({
-      ...prev,
-      memberships: prev.memberships.map((m, i) =>
-        i === index ? { ...m, ...patch } : m,
-      ),
-    }));
+  function toggleMembershipAddRole(roleName: string) {
+    setMembershipAddRoles((prev) =>
+      prev.includes(roleName)
+        ? prev.filter((r) => r !== roleName)
+        : [...prev, roleName],
+    );
   }
 
-  function removeMembershipRow(index: number) {
-    setUserForm((prev) => ({
-      ...prev,
-      memberships: prev.memberships.filter((_, i) => i !== index),
-    }));
+  /** 點[編輯]：該列群組＋角色帶回上方加入區改 */
+  function startMembershipEdit(groupId: string) {
+    const row = userForm.memberships.find((m) => m.groupId === groupId);
+    if (!row) return;
+    setMembershipAddGroupId(row.groupId);
+    setMembershipAddRoles([...row.roles]);
+    setMembershipEditingGroupId(groupId);
+    setMembershipError("");
   }
 
-  function toggleMembershipRole(index: number, roleName: string) {
+  function cancelMembershipEdit() {
+    resetMembershipAddArea();
+  }
+
+  /** [加入]／[更新]：加入時同群組合併、零勾選擋下；編輯到零角色刪列 */
+  function handleMembershipAddOrUpdate() {
+    if (!membershipAddGroupId) {
+      setMembershipError("請先選擇群組");
+      return;
+    }
+    if (membershipEditingGroupId === null && membershipAddRoles.length === 0) {
+      setMembershipError("請至少勾選一個角色");
+      return;
+    }
     setUserForm((prev) => ({
       ...prev,
-      memberships: prev.memberships.map((m, i) =>
-        i === index
-          ? {
-              ...m,
-              roles: m.roles.includes(roleName)
-                ? m.roles.filter((r) => r !== roleName)
-                : [...m.roles, roleName],
-            }
-          : m,
-      ),
+      memberships:
+        membershipEditingGroupId === null
+          ? mergeMembership(prev.memberships, membershipAddGroupId, membershipAddRoles)
+          : applyMembershipEdit(
+              prev.memberships,
+              membershipEditingGroupId,
+              membershipAddGroupId,
+              membershipAddRoles,
+            ),
     }));
+    resetMembershipAddArea();
+  }
+
+  /** 點[刪除]：直接刪列，無確認；只改表單 state，儲存才生效 */
+  function removeMembershipByGroup(groupId: string) {
+    setUserForm((prev) => ({
+      ...prev,
+      memberships: removeMembership(prev.memberships, groupId),
+    }));
+    if (membershipEditingGroupId === groupId) resetMembershipAddArea();
   }
 
   function toggleOtherRole(roleName: string) {
@@ -1803,6 +1847,7 @@ export function GroupsPage({
         onAction(`人員 ${view.staffId} 已更新`);
       }
       setUserView({ kind: "list" });
+      resetMembershipAddArea();
       await loadUsers();
       // 審查員連動（v1.12.0；v1.51.0 改由 reviewerSync 統一處理）
       const savedStaffId =
@@ -3850,17 +3895,22 @@ export function GroupsPage({
                       <td>{row.unitCode || "—"}</td>
                       <td>{row.title || "—"}</td>
                       <td>
-                        {row.roles.length > 0
-                          ? row.roles.map((r) => (
-                              <span
-                                key={r}
-                                className="status-pill muted"
-                                style={{ marginRight: 4 }}
-                              >
-                                {r}
-                              </span>
-                            ))
-                          : "—"}
+                        {(() => {
+                          // v1.52.0：角色欄按群組分組顯示，例如「病房組：品管組審查員、召集人」
+                          const segments = groupedRolesSegments(
+                            row.memberships,
+                            groupNameOf,
+                            row.roles,
+                          );
+                          return segments.length > 0
+                            ? segments.map((s) => (
+                                <div key={s.label || "other"}>
+                                  {s.label ? <b>{s.label}：</b> : null}
+                                  {s.roles.join("、")}
+                                </div>
+                              ))
+                            : "—";
+                        })()}
                       </td>
                       <td>
                         <span
@@ -4042,58 +4092,129 @@ export function GroupsPage({
 
           <SectionTitle
             title="群組＋角色"
-            note="先選群組再選該群組角色；每個群組的角色與權限各自隔離。"
+            note="上方加入、下方列表；每個群組的角色與權限各自隔離，加入後即顯示於列表，按「儲存修改」才生效。"
           />
-          {userForm.memberships.map((m, i) => (
-            <div
-              key={i}
-              className="panel"
-              style={{ padding: 12, marginBottom: 8 }}
-            >
-              <div className="form-field">
-                <label className="field-label">群組</label>
-                <div className="select-wrap">
-                  <select
-                    value={m.groupId}
-                    onChange={(e) => updateMembershipRow(i, { groupId: e.target.value })}
-                  >
-                    <option value="">請選擇群組</option>
-                    {groups.map((g) => (
-                      <option key={g.id} value={g.id}>
-                        {g.name}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
-              </div>
-              <div className="form-grid">
-                {/* v1.40.3：群組＋角色配對列出角色分類的全部角色，不再只列寫死名單 */}
-                {roleOptions.map((r) => (
-                    <label className="check-row" key={r.id}>
-                      <input
-                        type="checkbox"
-                        checked={m.roles.includes(r.name)}
-                        onChange={() => toggleMembershipRole(i, r.name)}
-                      />
-                      <span>{r.name}</span>
-                    </label>
+          {/* v1.52.0：分工表式——上方加入區＋下方角色列表（每群組一列，可編輯／刪除） */}
+          <div className="panel" style={{ padding: 12, marginBottom: 8 }}>
+            <div className="form-field">
+              <label className="field-label">群組</label>
+              <div className="select-wrap">
+                <select
+                  value={membershipAddGroupId}
+                  onChange={(e) => {
+                    // v1.51.0：切換群組不得清空已勾角色（加入區群組與角色為獨立 state）
+                    setMembershipAddGroupId(e.target.value);
+                    setMembershipError("");
+                  }}
+                >
+                  <option value="">請選擇群組</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
                   ))}
+                </select>
+                <ChevronDown size={15} />
               </div>
-              <button
-                className="text-button"
-                onClick={() => removeMembershipRow(i)}
-              >
-                <Trash2 size={13} /> 刪除此配對
-              </button>
             </div>
-          ))}
-          <button
-            className="button button-outline button-sm"
-            onClick={addMembershipRow}
-          >
-            <Plus size={14} /> 新增群組＋角色配對
-          </button>
+            <div className="form-grid">
+              {/* v1.40.3：列出角色分類的全部角色，不分分類平鋪勾選 */}
+              {roleOptions.map((r) => (
+                <label className="check-row" key={r.id}>
+                  <input
+                    type="checkbox"
+                    checked={membershipAddRoles.includes(r.name)}
+                    onChange={() => toggleMembershipAddRole(r.name)}
+                  />
+                  <span>{r.name}</span>
+                </label>
+              ))}
+            </div>
+            {membershipEditingGroupId !== null && (
+              <p className="settings-note">
+                正在編輯：{groupNameOf(membershipEditingGroupId)}
+                （按「更新」寫回原列；角色全取消會刪除該群組）
+              </p>
+            )}
+            {membershipError && <div className="login-error">{membershipError}</div>}
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button
+                className="button button-primary button-sm"
+                onClick={handleMembershipAddOrUpdate}
+              >
+                {membershipEditingGroupId === null ? (
+                  <>
+                    <Plus size={14} /> 加入
+                  </>
+                ) : (
+                  "更新"
+                )}
+              </button>
+              {membershipEditingGroupId !== null && (
+                <button
+                  className="button button-outline button-sm"
+                  onClick={cancelMembershipEdit}
+                >
+                  取消編輯
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="panel" style={{ padding: 12 }}>
+            <p className="settings-note" style={{ marginTop: 0 }}>
+              {userForm.memberships.length} 個群組・
+              {userForm.memberships.reduce((n, m) => n + m.roles.length, 0)} 個角色
+            </p>
+            {userForm.memberships.length === 0 ? (
+              <p className="settings-note">尚無群組＋角色，請由上方加入。</p>
+            ) : (
+              <div className="table-scroll">
+                <table className="permission-table">
+                  <thead>
+                    <tr>
+                      <th>群組</th>
+                      <th>角色</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {userForm.memberships.map((m) => (
+                      <tr key={m.groupId}>
+                        <td>
+                          <b>{groupNameOf(m.groupId)}</b>
+                        </td>
+                        <td>
+                          {m.roles.map((r) => (
+                            <span
+                              key={r}
+                              className="status-pill muted"
+                              style={{ marginRight: 4 }}
+                            >
+                              {r}
+                            </span>
+                          ))}
+                        </td>
+                        <td>
+                          <button
+                            className="text-button"
+                            onClick={() => startMembershipEdit(m.groupId)}
+                          >
+                            <Pencil size={13} /> 編輯
+                          </button>{" "}
+                          <button
+                            className="text-button"
+                            onClick={() => removeMembershipByGroup(m.groupId)}
+                          >
+                            <Trash2 size={13} /> 刪除
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
 
           <SectionTitle title="其他角色" note="不指定群組的角色（全院適用）；仍須與適用單位職稱權限交集才生效。" />
           {roleOptions.length === 0 ? (
@@ -4155,7 +4276,10 @@ export function GroupsPage({
             </button>
             <button
               className="button button-outline"
-              onClick={() => setUserView({ kind: "list" })}
+              onClick={() => {
+                resetMembershipAddArea();
+                setUserView({ kind: "list" });
+              }}
             >
               取消
             </button>
