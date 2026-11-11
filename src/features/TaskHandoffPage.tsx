@@ -6,7 +6,7 @@ import { useAuth } from "../lib/auth";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { groupsForRoles, parseMemberships } from "../lib/roleIdentity";
 import { useOrgMeta } from "../lib/useOrgMeta";
-import { staffLabel } from "../lib/mask";
+import { displayUnitCode, staffLabel } from "../lib/mask";
 import { useStaffNameMap } from "../lib/useStaffNames";
 import {
   LEGACY_GROUP_CONVENER_ROLE_NAMES,
@@ -176,7 +176,7 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
           deadline: String(v.deadline ?? ""),
           groupId: ind.groupId,
           indicatorName: ind.name,
-          unitName: unit?.name ?? unitId,
+          unitName: unit?.name ?? displayUnitCode(unitId),
           groupName: groupName.get(ind.groupId) ?? ind.groupId,
         }];
       });
@@ -234,7 +234,7 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
   }
 
   function unitNameOf(unitCode: string): string {
-    return units.find((u) => u.id === unitCode)?.name ?? unitCode;
+    return units.find((u) => u.id === unitCode)?.name ?? displayUnitCode(unitCode);
   }
 
   function handleCancel() {

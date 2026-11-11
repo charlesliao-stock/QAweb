@@ -182,11 +182,14 @@ export async function buildTasksFromSchedule(
       const hasPeriodicQuota = Boolean(
         quotaInterval && sched.caseCount != null && periodicCategory,
       );
+      // v1.51.0：不限單位任務的配額組 unitId 段固定為 "NA"（全區間共用 N 件）；
+      // 任務／紀錄本身的 unitId 仍存 ""，絕對不要把 "NA" 當單位代碼存入任務。
+      const quotaUnitId = task.unitId === "" ? "NA" : task.unitId;
       const quotaGroupId =
         quotaInterval && sched.caseCount != null && periodicCategory
           ? periodicQuotaGroupId({
               indicatorId: sched.indicatorId,
-              unitId: task.unitId,
+              unitId: quotaUnitId,
               category: periodicCategory,
               period: sched.period,
               start: quotaInterval.start,
@@ -227,7 +230,7 @@ export async function buildTasksFromSchedule(
       ) {
         quotaGroups.set(quotaGroupId, {
           indicatorId: sched.indicatorId,
-          unitId: task.unitId,
+          unitId: quotaUnitId,
           category: periodicCategory,
           period: sched.period,
           startYear: quotaInterval.start.year,

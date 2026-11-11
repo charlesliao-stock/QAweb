@@ -763,6 +763,17 @@ export function ResultsPage({
     [units, scopedUnitCodes],
   );
 
+  /** v1.51.0：不限單位選項值（紀錄／任務的 unitId 為 ""，顯示為 NA） */
+  const NA_UNIT = "NA";
+  const selUnitCode = selUnit === NA_UNIT ? "" : selUnit;
+  const errorUnitCode = errorUnit === NA_UNIT ? "" : errorUnit;
+  const hasNaUnit = useMemo(
+    () =>
+      scopedRecords.some((r) => r.unitId === "") ||
+      tasks.some((t) => t.unitId === ""),
+    [scopedRecords, tasks],
+  );
+
   const scopedGroups = useMemo(() => {
     if (scope.kind === "admin") return groups;
     const gids = new Set(scopedUnits.map((u) => u.groupId).filter(Boolean));
@@ -780,9 +791,15 @@ export function ResultsPage({
       setSelGroup2(scopedGroups[0].id);
   }, [scopedGroups, selGroup2]);
   useEffect(() => {
-    if (scopedUnits.length > 0 && !scopedUnits.some((u) => u.code === selUnit))
+    if (
+      scopedUnits.length > 0 &&
+      selUnit !== NA_UNIT &&
+      !scopedUnits.some((u) => u.code === selUnit)
+    )
       setSelUnit(scopedUnits[0].code);
-  }, [scopedUnits, selUnit]);
+    else if (selUnit === NA_UNIT && !hasNaUnit)
+      setSelUnit(scopedUnits[0]?.code ?? "");
+  }, [scopedUnits, selUnit, hasNaUnit]);
 
   const indOf = useMemo(
     () => new Map(indicators.map((i) => [i.id, i])),
@@ -816,7 +833,7 @@ export function ResultsPage({
   // 單位分析：該單位在所選期間審查過的指標（依編號排序，再經組別／指標過濾）
   const unitIndicatorsBase = useMemo(() => {
     const periodRecs = recordsInMonths(
-      scopedRecords.filter((r) => r.unitId === selUnit),
+      scopedRecords.filter((r) => r.unitId === selUnitCode),
       allMonths,
     );
     const ids = [...new Set(periodRecs.map((r) => r.indicatorId))];
@@ -824,7 +841,7 @@ export function ResultsPage({
       .map((id) => indOf.get(id))
       .filter((i): i is IndicatorOpt => i != null)
       .sort((a, b) => a.code.localeCompare(b.code, "zh-Hant"));
-  }, [scopedRecords, selUnit, allMonths, indOf]);
+  }, [scopedRecords, selUnitCode, allMonths, indOf]);
   const unitIndicators = useMemo(
     () =>
       unitIndicatorsBase.filter(
@@ -868,7 +885,7 @@ export function ResultsPage({
             recordIndex,
             unitIndicators.map((ind) => ind.id),
             col.months,
-            selUnit,
+            selUnitCode,
           ) > 0
         );
       }
@@ -895,7 +912,7 @@ export function ResultsPage({
     groupIndicators,
     unitIndicators,
     selIndicator,
-    selUnit,
+    selUnitCode,
   ]);
 
   // 期間說明文字（modal 副標共用；顯示已生效的查詢條件）
@@ -1140,7 +1157,7 @@ export function ResultsPage({
   const errorAnalysisRows = questionErrorRows(
     errorUnit === "all"
       ? indRecs
-      : indRecs.filter((record) => record.unitId === errorUnit),
+      : indRecs.filter((record) => record.unitId === errorUnitCode),
   );
 
   /**
@@ -1152,9 +1169,9 @@ export function ResultsPage({
     const source =
       errorUnit === "all"
         ? indRecs
-        : indRecs.filter((record) => record.unitId === errorUnit);
+        : indRecs.filter((record) => record.unitId === errorUnitCode);
     return collectConsolidatedRecordNotes(source, indSel.questions);
-  }, [indRecs, indSel, errorUnit]);
+  }, [indRecs, indSel, errorUnit, errorUnitCode]);
   return (
     <div className="results-page">
       <PageHeading page="results" />
@@ -1211,6 +1228,9 @@ export function ResultsPage({
                     value: unit.code,
                     label: `${unit.code}・${unit.name}`,
                   })),
+                  ...(hasNaUnit
+                    ? [{ value: "NA", label: "NA（不限單位）" }]
+                    : []),
                 ]}
               />
             </>
@@ -1233,10 +1253,15 @@ export function ResultsPage({
                 label="單位"
                 value={selUnit}
                 onChange={setSelUnit}
-                options={scopedUnits.map((unit) => ({
-                  value: unit.code,
-                  label: `${unit.code}・${unit.name}`,
-                }))}
+                options={[
+                  ...scopedUnits.map((unit) => ({
+                    value: unit.code,
+                    label: `${unit.code}・${unit.name}`,
+                  })),
+                  ...(hasNaUnit
+                    ? [{ value: "NA", label: "NA（不限單位）" }]
+                    : []),
+                ]}
               />
               <SelectField
                 label="單元"
@@ -1452,17 +1477,17 @@ export function ResultsPage({
                 rows={unitIndicators.map((i) => ({
                   id: i.id,
                   label: `${i.code}・${i.name}`,
-                  details: matrixScoringDetails(i, visibleColumns, selUnit, unitUnit),
+                  details: matrixScoringDetails(i, visibleColumns, selUnitCode, unitUnit),
                 }))}
                 columns={visibleColumns}
                 cellOf={(id, col) =>
-                  cellValue(id, col, selUnit, unitUnit)
+                  cellValue(id, col, selUnitCode, unitUnit)
                 }
                 onCell={(id, col) =>
-                  openDrill(id, col, unitUnit, selUnit)
+                  openDrill(id, col, unitUnit, selUnitCode)
                 }
                 onDetailCell={(id, detailKey, col) =>
-                  openDrill(id, col, unitUnit, selUnit, { sectionKey: detailKey })
+                  openDrill(id, col, unitUnit, selUnitCode, { sectionKey: detailKey })
                 }
                 onChart={(id) =>
                   setUnitPanel((p) =>
@@ -1486,7 +1511,7 @@ export function ResultsPage({
                   if (unitPanel.kind === "chart") {
                     const s = chartSeries(
                       ind.id,
-                      selUnit,
+                      selUnitCode,
                       unitUnit,
                     );
                     return (
@@ -1507,7 +1532,7 @@ export function ResultsPage({
                             }
                             legend="達閾值率"
                             onPointClick={(i) =>
-                              openDrill(ind.id, s.cols[i], unitUnit, selUnit)
+                              openDrill(ind.id, s.cols[i], unitUnit, selUnitCode)
                             }
                           />
                         )}
@@ -1519,7 +1544,7 @@ export function ResultsPage({
                     recordIndex,
                     ind.id,
                     allMonths,
-                    selUnit,
+                    selUnitCode,
                   );
                   return (
                     <UnitBelowPanel
@@ -1530,7 +1555,7 @@ export function ResultsPage({
                       <OptionDetailTable
                         rows={optionDetailRows(recs, ind.questions)}
                         onQuestionClick={(questionId) =>
-                          openDrill(ind.id, allPeriodColumn, unitUnit, selUnit, {
+                          openDrill(ind.id, allPeriodColumn, unitUnit, selUnitCode, {
                             questionId,
                             l2All: true,
                           })
@@ -1978,7 +2003,7 @@ function ReviewResultManager({
   }, [unitId, groupId, indicatorId, start, end]);
 
   const unitName = (id: string) =>
-    units.find((unit) => unit.code === id)?.name ?? id;
+    units.find((unit) => unit.code === id)?.name ?? (id === "" ? "NA" : id);
   const indicatorName = (id: string) =>
     indicators.find((indicator) => indicator.id === id)?.name ?? id;
 
@@ -2613,7 +2638,7 @@ function CauseDrillModal({
                   return (
                     <tr key={`${entry.record.personEmpNo}-${entry.record.year}-${entry.record.month}-${entry.questionId}-${i}`}>
                       <td>{ind ? `${ind.code}・${ind.name}` : entry.record.indicatorId}</td>
-                      <td>{entry.record.unitId}・{unitNameOf.get(entry.record.unitId) ?? ""}</td>
+                      <td>{entry.record.unitId === "" ? "NA" : `${entry.record.unitId}・${unitNameOf.get(entry.record.unitId) ?? ""}`}</td>
                       <td>{entry.record.year}/{String(entry.record.month).padStart(2, "0")}</td>
                       <td>{staffLabel(entry.record.personEmpNo, entry.record.personName)}</td>
                       <td>{entry.itemText}</td>
@@ -2862,7 +2887,7 @@ function DrillModal({
                     return (
                       <tr key={unitId}>
                         <td className="ind-col">
-                          {unitId}・{unitNameOf.get(unitId) ?? ""}
+                          {unitId === "" ? "NA" : `${unitId}・${unitNameOf.get(unitId) ?? ""}`}
                         </td>
                         <td
                           className={`rate-cell${clickable ? " clickable" : ""}`}

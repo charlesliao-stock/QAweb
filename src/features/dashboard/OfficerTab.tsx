@@ -11,7 +11,7 @@ import {
   DEFAULT_DASHBOARD_SECTIONS,
   type DashboardSections,
 } from "../../lib/dashboardSections";
-import { staffLabel } from "../../lib/mask";
+import { displayUnitCode, staffLabel } from "../../lib/mask";
 import { useStaffNameMap } from "../../lib/useStaffNames";
 import { todayStr } from "../../lib/scheduling";
 import type { DashboardData } from "./useDashboardData";
@@ -111,7 +111,7 @@ export function OfficerTab({
                     <td>
                       {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                     </td>
-                    <td>{t.unitId}</td>
+                    <td>{displayUnitCode(t.unitId)}</td>
                     <td>{staffLabel(t.reviewerId, staffNames.get(t.reviewerId) ?? "")}</td>
                     <td>{taskProgressLabel(t)}</td>
                     <td>{t.deadline}</td>
@@ -153,7 +153,7 @@ export function OfficerTab({
                     <td>
                       {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                     </td>
-                    <td>{t.unitId}</td>
+                    <td>{displayUnitCode(t.unitId)}</td>
                     {/* v1.28 階段 2：補紀錄超過上限者進度未知，顯示「—」而非錯誤的 0 */}
                     <td>
                       {taskProgressLabel(t)}
@@ -198,7 +198,7 @@ export function OfficerTab({
                     <td>
                       {data.indicatorMap.get(u.indicatorId) ?? u.indicatorId}
                     </td>
-                    <td>{u.unitId}</td>
+                    <td>{displayUnitCode(u.unitId)}</td>
                     <td>
                       {staffLabel(u.requestedBy, u.requestedByName ?? "")}
                     </td>

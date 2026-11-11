@@ -431,7 +431,9 @@ export function useDashboardData(): DashboardData {
               if (String(data.source ?? "") !== "import") return;
               const hit = pair.tasks.some(
                 (t) =>
-                  t.unitId === String(data.unitId ?? "") &&
+                  // v1.51.0：不限單位任務（unitId ""）按指標＋年月歸屬匯入，不分單位
+                  (t.unitId === "" ||
+                    t.unitId === String(data.unitId ?? "")) &&
                   t.year === Number(data.year ?? 0) &&
                   t.month === Number(data.month ?? 0),
               );

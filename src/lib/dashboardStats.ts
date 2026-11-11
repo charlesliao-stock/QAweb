@@ -167,6 +167,8 @@ export function countRecordsByTask(
  * 按任務計數（含匯入紀錄，v1.47.0）：匯入紀錄 taskId 為空，改按
  * 「指標＋單位＋年月」身分鍵歸屬到對應任務。正式紀錄仍只按 taskId 計，
  * 避免同一指標同單位同月的另一任務紀錄被重複算入。
+ * v1.51.0：不限單位任務（unitId ""）按「指標＋年月」歸屬匯入，不分單位
+ *（匯入紀錄帶真實單位，身分鍵對不上 NA 任務，故另建 NA 鍵對照）。
  */
 export function countRecordsByTaskWithImports(
   records: Pick<
@@ -177,18 +179,38 @@ export function countRecordsByTaskWithImports(
 ): Map<string, number> {
   const counts = countRecordsByTask(records);
   const tasksByKey = new Map<string, string[]>();
+  const naTasksByKey = new Map<string, string[]>();
   for (const task of tasks) {
     const key = `${task.indicatorId}||${task.unitId}||${task.year}||${task.month}`;
     const list = tasksByKey.get(key) ?? [];
     list.push(task.id);
     tasksByKey.set(key, list);
+    if (task.unitId === "") {
+      const naKey = `${task.indicatorId}||${task.year}||${task.month}`;
+      const naList = naTasksByKey.get(naKey) ?? [];
+      naList.push(task.id);
+      naTasksByKey.set(naKey, naList);
+    }
   }
   for (const record of records) {
     if (record.source !== "import") continue;
     const key = `${record.indicatorId}||${record.unitId}||${record.year}||${record.month}`;
     const ids = tasksByKey.get(key);
-    if (!ids) continue;
-    for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
+    const counted = new Set<string>();
+    if (ids) {
+      for (const id of ids) {
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+        counted.add(id);
+      }
+    }
+    const naKey = `${record.indicatorId}||${record.year}||${record.month}`;
+    const naIds = naTasksByKey.get(naKey);
+    if (naIds) {
+      for (const id of naIds) {
+        if (counted.has(id)) continue;
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+    }
   }
   return counts;
 }

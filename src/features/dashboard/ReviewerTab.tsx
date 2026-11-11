@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import { CircleAlert, Lock } from "lucide-react";
 import { SectionTitle } from "../../components/ui";
 import { isOverdue, todayStr } from "../../lib/scheduling";
+import { displayUnitCode } from "../../lib/mask";
 import { requiredCases } from "../../lib/reviewProgress";
 import {
   daysBetween,
@@ -163,7 +164,7 @@ export function ReviewerTab({
                         <td>
                           {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                         </td>
-                        <td>{t.unitId}</td>
+                        <td>{displayUnitCode(t.unitId)}</td>
                         <td>{taskProgressLabel(t)}</td>
                         <td
                           style={
@@ -219,7 +220,7 @@ export function ReviewerTab({
                       {statusPill(t)}
                     </div>
                     <div className="task-card-meta">
-                      <span>審查單位：{t.unitId}</span>
+                      <span>審查單位：{displayUnitCode(t.unitId)}</span>
                       <span>
                         完成/應審：{taskProgressLabel(t)}
                       </span>
@@ -271,7 +272,7 @@ export function ReviewerTab({
                         <td>
                           {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                         </td>
-                        <td>{t.unitId}</td>
+                        <td>{displayUnitCode(t.unitId)}</td>
                         <td>{taskProgressLabel(t)}</td>
                         <td>
                           <button
@@ -295,7 +296,7 @@ export function ReviewerTab({
               {dueSoon.map((t) => (
                 <li key={t.id}>
                   {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}／
-                  {t.unitId}：{t.deadline} 截止
+                  {displayUnitCode(t.unitId)}：{t.deadline} 截止
                   <span className="status-pill warning" style={{ marginLeft: 8 }}>
                     剩餘 {daysBetween(today, t.deadline)} 天
                   </span>
@@ -332,7 +333,7 @@ export function ReviewerTab({
                     <td>
                       {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                     </td>
-                    <td>{t.unitId}</td>
+                    <td>{displayUnitCode(t.unitId)}</td>
                     <td>{t.caseCount ?? "未設定"}</td>
                     <td>{t.deadline}</td>
                   </tr>

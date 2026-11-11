@@ -535,7 +535,8 @@ export function AuditPage({
                   record.quotaGroupId ===
                     periodicQuotaGroupId({
                       indicatorId: s.indicatorId,
-                      unitId: record.unitId,
+                      // v1.51.0：不限單位紀錄 unitId 為 ""，配額組 key 的 unitId 段為 "NA"
+                      unitId: record.unitId === "" ? "NA" : record.unitId,
                       category: periodicCategory,
                       period: s.period,
                       start: iv.start,
@@ -544,7 +545,8 @@ export function AuditPage({
             : intervalRecords;
           const reviewMonthCount = iv.reviewMonths.length;
           const progress = computeIntervalProgress({
-            unitCount: s.unitIds.length,
+            // v1.51.0：不限單位視為一個虛擬單位（總人次＝件數、總單位＝1）
+            unitCount: s.unlimitedUnits ? 1 : s.unitIds.length,
             caseCount: s.caseCount,
             reviewMonthCount,
             category: s.category,
@@ -794,7 +796,11 @@ export function AuditPage({
   const viewRecords = useMemo(
     () =>
       viewRow?.records.filter(
-        (record) => !selectedUnitFilter || record.unitId === selectedUnitFilter,
+        (record) =>
+          !selectedUnitFilter ||
+          (selectedUnitFilter === "__na__"
+            ? record.unitId === ""
+            : record.unitId === selectedUnitFilter),
       ) ?? [],
     [viewRow, selectedUnitFilter],
   );
@@ -842,7 +848,9 @@ export function AuditPage({
   }
 
   async function confirmExec() {
-    if (!execRow || !execUnit || !execMonth) return;
+    // v1.51.0：不限單位排程 execUnit 為 ""（不用選單位），只檢查月份
+    if (!execRow || !execMonth) return;
+    if (!execRow.sched.unlimitedUnits && !execUnit) return;
     const [y, m] = execMonth.split("-").map(Number);
     if (!y || !m) return;
     setExecBusy(true);
@@ -876,7 +884,9 @@ export function AuditPage({
       const taskId = mine[0] ?? others[0];
       if (!taskId) {
         onAction(
-          "找不到該單位該月份的審查任務，請先到「品管審查排程」產生排程",
+          execRow.sched.unlimitedUnits
+            ? "找不到該月份的審查任務（不限單位），請先到「品管審查排程」產生排程"
+            : "找不到該單位該月份的審查任務，請先到「品管審查排程」產生排程",
         );
         return;
       }
@@ -1116,7 +1126,7 @@ export function AuditPage({
                   <tbody>
                     {viewUnitSummaries.map((summary) => (
                       <tr key={summary.unitId}>
-                        <td data-label="排程單位">{viewRow.unitNameOf(summary.unitId)}</td>
+                        <td data-label="排程單位">{summary.unitId === "" ? "NA" : viewRow.unitNameOf(summary.unitId)}</td>
                         <td data-label="已審／應審件數">{summary.count}／{summary.planned ?? "—"} 件</td>
                         <td data-label="平均正確率">{summary.average == null ? "—" : `${summary.average}%`}</td>
                         <td data-label="操作">
@@ -1124,7 +1134,8 @@ export function AuditPage({
                             type="button"
                             className="text-button"
                             onClick={() => {
-                              setSelectedUnitFilter(summary.unitId);
+                              // v1.51.0：NA 單位用 "__na__" 哨兵（"" 同時是「不過濾」）
+                              setSelectedUnitFilter(summary.unitId === "" ? "__na__" : summary.unitId);
                               setDetailListOpen(true);
                             }}
                           >
@@ -1158,7 +1169,7 @@ export function AuditPage({
             <div className="reviewer-modal-head">
               <div>
                 <h2>審查明細</h2>
-                <p>{viewRow.unitNameOf(selectedUnitFilter)}・{viewRecords.length} 筆</p>
+                <p>{selectedUnitFilter === "__na__" ? "NA" : viewRow.unitNameOf(selectedUnitFilter)}・{viewRecords.length} 筆</p>
               </div>
               <button type="button" className="button button-ghost" onClick={() => setDetailListOpen(false)} aria-label="關閉審查明細">
                 <X size={16} />
@@ -1341,25 +1352,33 @@ export function AuditPage({
             <div className="form-field">
               <label className="field-label">
                 受審單位
-                {execRow.assignedUnitIds.length > 0
-                  ? "（您的被指派單位）"
-                  : "（本排程受審單位）"}
+                {execRow.sched.unlimitedUnits
+                  ? "（不限單位）"
+                  : execRow.assignedUnitIds.length > 0
+                    ? "（您的被指派單位）"
+                    : "（本排程受審單位）"}
               </label>
-              <div className="select-wrap">
-                <select
-                  value={execUnit}
-                  onChange={(e) => setExecUnit(e.target.value)}
-                >
-                  {(execRow.assignedUnitIds.length > 0
-                    ? execRow.assignedUnitIds
-                    : execRow.sched.unitIds
-                  ).map((c) => (
-                    <option key={c} value={c}>
-                      {execRow.unitNameOf(c)}（{c}）
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {execRow.sched.unlimitedUnits ? (
+                <p>
+                  <b>NA（不限單位）</b>
+                </p>
+              ) : (
+                <div className="select-wrap">
+                  <select
+                    value={execUnit}
+                    onChange={(e) => setExecUnit(e.target.value)}
+                  >
+                    {(execRow.assignedUnitIds.length > 0
+                      ? execRow.assignedUnitIds
+                      : execRow.sched.unitIds
+                    ).map((c) => (
+                      <option key={c} value={c}>
+                        {execRow.unitNameOf(c)}（{c}）
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
             <div className="form-field">
               <label className="field-label">審查月份</label>
@@ -1380,7 +1399,11 @@ export function AuditPage({
               <button
                 type="button"
                 className="button button-primary"
-                disabled={execBusy || !execUnit || !execMonth}
+                disabled={
+                  execBusy ||
+                  (!execRow.sched.unlimitedUnits && !execUnit) ||
+                  !execMonth
+                }
                 onClick={confirmExec}
               >
                 {execBusy ? "開啟中…" : "開始審查"}

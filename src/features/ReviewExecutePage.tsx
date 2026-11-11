@@ -247,7 +247,7 @@ export function ReviewExecutePage({
   const [showSugg, setShowSugg] = useState(false);
   const [usersList, setUsersList] = useState<PersonOption[]>([]);
 
-  /** 受審人員（v1.15.0：必填，同單位在職人員搜尋） */
+  /** 受審人員（v1.15.0：必填，同單位在職人員搜尋；v1.51.0：不限單位任務改全院搜尋） */
   const [personEmpNo, setPersonEmpNo] = useState("");
   const [personName, setPersonName] = useState("");
   const [personQuery, setPersonQuery] = useState("");
@@ -469,10 +469,13 @@ export function ReviewExecutePage({
       let count = 0;
       let draftCount = 0;
       const occupiedSlots = new Set<number>();
+      // v1.51.0：不限單位任務（unitId ""）不按單位過濾——匯入紀錄帶真實單位，
+      // 仍應計入 NA 配額（與進度一致）；正式紀錄以 quotaGroupId 歸屬。
+      const skipUnitFilter = quotaTask.unitId === "";
       snapshots.forEach((snapshot) => {
         snapshot.docs.forEach((record) => {
           const data = record.data() as Record<string, unknown>;
-          if (String(data.unitId ?? "") !== quotaTask.unitId) return;
+          if (!skipUnitFilter && String(data.unitId ?? "") !== quotaTask.unitId) return;
           const month = Number(data.month ?? 0);
           const key = `${Number(data.year ?? 0)}-${month}`;
           if (!monthKeys.has(key)) return;
@@ -497,7 +500,8 @@ export function ReviewExecutePage({
         snapshot.docs.forEach((draft) => {
           const data = draft.data() as Record<string, unknown>;
           if (
-            String(data.unitId ?? "") !== quotaTask.unitId ||
+            (!skipUnitFilter &&
+              String(data.unitId ?? "") !== quotaTask.unitId) ||
             String(data.quotaGroupId ?? "") !== quotaTask.quotaGroupId
           ) return;
           const month = Number(data.month ?? 0);
@@ -1646,7 +1650,7 @@ export function ReviewExecutePage({
               <div className="form-field">
                 <label className="field-label">受審單位</label>
                 <p>
-                  <b>{task.unitId}</b>
+                  <b>{task.unitId === "" ? "NA（不限單位）" : task.unitId}</b>
                   <span className="muted-text">（已鎖定）</span>
                 </p>
               </div>
@@ -1745,7 +1749,11 @@ export function ReviewExecutePage({
                       <input
                         type="text"
                         className="text-input"
-                        placeholder={`輸入職編或姓名搜尋（${task.unitId}同單位）`}
+                        placeholder={
+                          task.unitId === ""
+                            ? "輸入職編或姓名搜尋（全院）"
+                            : `輸入職編或姓名搜尋（${task.unitId}同單位）`
+                        }
                         value={personQuery}
                         onChange={(e) => {
                           setPersonQuery(e.target.value);

@@ -21,3 +21,11 @@ export function staffLabel(empNo: string, name: string): string {
   if (empNo && masked) return `${empNo}/${masked}`;
   return empNo || masked || "—";
 }
+
+/**
+ * 單位代碼顯示（v1.51.0）：不限單位的任務／紀錄 unitId 為空字串，顯示為 NA；
+ * 真實單位代碼照原樣顯示。絕對不要把 "NA" 當單位代碼存進資料庫。
+ */
+export function displayUnitCode(code: string): string {
+  return code === "" ? "NA" : code;
+}

@@ -137,12 +137,14 @@ export function autoSelectMonths(
 /**
  * 排程／單位設定是否完成（v1.18）：受審單位≥1、月份≥1、審查件數>0。
  * 「已排」燈號與「產生排程」啟用條件共用此判定。
+ * v1.51.0：不限單位（unlimitedUnits）時單位條件即滿足。
  */
 export function scheduleSetupComplete(
   s: {
     unitIds?: unknown;
     months?: unknown;
     caseCount?: unknown;
+    unlimitedUnits?: unknown;
   } | null,
 ): boolean {
   if (!s) return false;
@@ -150,7 +152,7 @@ export function scheduleSetupComplete(
   const months = Array.isArray(s.months) ? s.months : [];
   const cc = s.caseCount;
   return (
-    units.length > 0 &&
+    (s.unlimitedUnits === true || units.length > 0) &&
     months.length > 0 &&
     typeof cc === "number" &&
     Number.isInteger(cc) &&
@@ -290,6 +292,11 @@ export interface AssignmentItem {
   /** 審查員職編 */
   reviewerId: string;
   units: AssignedUnit[];
+  /**
+   * 不限單位（v1.51.0）：此審查員不固定單位，units 為空；
+   * 任務產生時每月份生一筆 unitId: "" 的任務。未設＝有單位。
+   */
+  unlimitedUnits?: boolean;
 }
 
 /**
@@ -320,7 +327,10 @@ export function normalizeAssignmentItem(raw: unknown): AssignmentItem | null {
       .filter((u): u is string => typeof u === "string")
       .map((unitId) => ({ unitId, caseCount: null as number | null }));
   }
-  return { reviewerId, units };
+  // v1.51.0：不限單位旗標（只在 true 時寫入，避免舊文件被改寫形狀）
+  return r.unlimitedUnits === true
+    ? { reviewerId, units, unlimitedUnits: true as const }
+    : { reviewerId, units };
 }
 
 /** 單位／審查員設定（每支指標一份，不分年度） */
@@ -475,12 +485,15 @@ export function findDuplicateUnits(
   return dup;
 }
 
-/** 展開任務筆數預估：月份數 × 所有 (審查員, 單位) 配對數 */
+/** 展開任務筆數預估：月份數 × 所有 (審查員, 單位) 配對數；不限單位項目計 1（v1.51.0） */
 export function estimateTaskCount(
   months: number[],
   items: AssignmentItem[],
 ): number {
-  const pairs = items.reduce((n, it) => n + it.units.length, 0);
+  const pairs = items.reduce(
+    (n, it) => n + (it.unlimitedUnits === true ? 1 : it.units.length),
+    0,
+  );
   return months.length * pairs;
 }
 
@@ -513,6 +526,20 @@ export function buildReviewTasks(
   const tasks: Omit<ReviewTask, "createdAt" | "completedAt">[] = [];
   for (const month of input.months) {
     for (const it of input.items) {
+      // v1.51.0：不限單位項目每月份生一筆 unitId: "" 的任務（不固定單位）
+      if (it.unlimitedUnits === true) {
+        tasks.push({
+          indicatorId: input.indicatorId,
+          year: input.year,
+          month,
+          unitId: "",
+          reviewerId: it.reviewerId,
+          caseCount: input.caseCount ?? null,
+          deadline: deadlineFor(input.year, month, input.deadlineDay),
+          status: "pending",
+        });
+        continue;
+      }
       for (const u of it.units) {
         tasks.push({
           indicatorId: input.indicatorId,
@@ -568,6 +595,11 @@ export interface IndicatorSchedule {
   caseCount: number | null;
   /** 受審單位 id 清單（各組複選／全選） */
   unitIds: string[];
+  /**
+   * 不限單位（v1.51.0）：不固定單位、沒有單位限制；unitIds 為空，
+   * 任務／紀錄的 unitId 存 ""、顯示為 NA。舊排程無此欄＝false。
+   */
+  unlimitedUnits: boolean;
   notes: string;
   /** 自審（護理長為自己單位審查） */
   selfReview: boolean;
@@ -634,6 +666,7 @@ export function parseIndicatorSchedule(raw: unknown): IndicatorSchedule | null {
         : null,
     caseCount: parseCaseCount(d.caseCount),
     unitIds,
+    unlimitedUnits: d.unlimitedUnits === true,
     notes: typeof d.notes === "string" ? d.notes : "",
     selfReview: d.selfReview === true,
     updatedBy: typeof d.updatedBy === "string" ? d.updatedBy : "",
@@ -666,6 +699,7 @@ export function legacyYearScheduleToIndicatorSchedule(
     refYear: null,
     caseCount: parseCaseCount(d.caseCount),
     unitIds: [],
+    unlimitedUnits: false,
     notes: typeof d.notes === "string" ? d.notes : "",
     selfReview: false,
     updatedBy: "",
@@ -779,6 +813,7 @@ export async function saveSchedule(
           : null,
       caseCount: parseCaseCount(sched.caseCount),
       unitIds: sched.unitIds.filter((u) => typeof u === "string"),
+      unlimitedUnits: sched.unlimitedUnits === true,
       notes: sched.notes ?? "",
       selfReview: sched.selfReview === true,
       updatedBy: actor.id,
@@ -818,6 +853,7 @@ export async function deleteSchedule(
       refYear: null,
       caseCount: null,
       unitIds: [],
+      unlimitedUnits: false,
       notes: "",
       selfReview: false,
       updatedBy: actor.id,
@@ -968,6 +1004,10 @@ export async function createTempSchedule(
     input.items && input.items.length > 0
       ? input.items.map((it) => ({
           reviewerId: it.reviewerId,
+          // v1.51.0：不限單位旗標透傳（units 為空）；NA 加審必須走 items 分支
+          ...(it.unlimitedUnits === true
+            ? { unlimitedUnits: true as const }
+            : {}),
           units: it.units
             .filter((u) => typeof u.unitId === "string" && u.unitId)
             .map((u) => ({
@@ -999,6 +1039,7 @@ export async function createTempSchedule(
         : null,
     caseCount: parseCaseCount(input.caseCount),
     unitIds: allUnitIds.length > 0 ? allUnitIds : unitIds,
+    unlimitedUnits: items.some((it) => it.unlimitedUnits === true),
     notes: input.notes ?? "",
     selfReview: input.selfReview === true,
     updatedBy: input.actor.id,
@@ -1018,7 +1059,7 @@ export async function createTempSchedule(
     input.actor,
     sched.selfReview ? "自審排程" : "加審",
     sched,
-    `${input.indicatorId}・${sched.unitIds.length} 單位・${items.length} 位審查員・${taskCount} 筆任務`,
+    `${input.indicatorId}・${sched.unlimitedUnits ? "不限單位" : `${sched.unitIds.length} 單位`}・${items.length} 位審查員・${taskCount} 筆任務`,
   );
   return {
     scheduleId: scheduleDocId(sched.indicatorId, sched.category, sched.period),

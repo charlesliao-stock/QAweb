@@ -54,6 +54,8 @@ export function columnRecordCount(
  * 取某指標落在指定曆年月集合內的紀錄（可再限單位）。
  * 與舊寫法 `recordsInMonths(scopedRecords.filter(指標[, 單位]), months)`
  * 同一批紀錄；月份去重後依 months 順序串接。
+ * v1.51.0：unitId 為 "" 時限縮為不限單位（unitId === ""）的紀錄；
+ * 只有 undefined 才是不限單位（全部）。
  */
 export function recordsForIndex(
   index: RecordIndex,
@@ -71,7 +73,7 @@ export function recordsForIndex(
     seen.add(key);
     const bucket = byMonth.get(key);
     if (!bucket) continue;
-    if (unitId) {
+    if (unitId !== undefined) {
       for (const r of bucket) if (r.unitId === unitId) out.push(r);
     } else {
       out.push(...bucket);

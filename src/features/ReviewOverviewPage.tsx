@@ -444,7 +444,7 @@ export function ReviewOverviewPage({
                   flexWrap: "wrap",
                 }}
               >
-                <b style={{ fontSize: 16 }}>單位 {u}</b>
+                <b style={{ fontSize: 16 }}>單位 {u === "" ? "NA" : u}</b>
                 <span className="muted-text">
                   全年 {sum.done}/{sum.req} 件
                 </span>

@@ -191,6 +191,8 @@ export function schedulePillState(
 /**
  * 分工表合併（v1.18）：把選中的審查員 × 選中的單位併入既有分工表；
  * 已存在者保留其每單位件數（透傳），新單位件數為 null。
+ * v1.51.0：既有不限單位項目併入新單位時旗標取消（改為指定單位）；
+ * 新單位為空且既有項目為不限單位時保留旗標。
  * 純函式，可單元測試。
  */
 export function mergeItemsWithUnits(
@@ -198,9 +200,12 @@ export function mergeItemsWithUnits(
   reviewerIds: string[],
   unitIds: string[],
 ): AssignmentItem[] {
-  const next = prev.map((it) => ({
+  const next: AssignmentItem[] = prev.map((it) => ({
     reviewerId: it.reviewerId,
     units: it.units.map((u) => ({ ...u })),
+    ...(it.unlimitedUnits === true
+      ? { unlimitedUnits: true as const }
+      : {}),
   }));
   for (const rid of reviewerIds) {
     const existing = next.find((it) => it.reviewerId === rid);
@@ -214,8 +219,44 @@ export function mergeItemsWithUnits(
       }))
       .sort((a, b) => a.unitId.localeCompare(b.unitId, "zh-Hant"));
     const idx = next.findIndex((it) => it.reviewerId === rid);
-    if (idx >= 0) next[idx] = { reviewerId: rid, units: merged };
-    else next.push({ reviewerId: rid, units: merged });
+    // 併入單位後即為指定單位項目，旗標取消；單位為空才保留原旗標
+    const item: AssignmentItem =
+      merged.length > 0
+        ? { reviewerId: rid, units: merged }
+        : existing?.unlimitedUnits === true
+          ? { reviewerId: rid, units: [], unlimitedUnits: true as const }
+          : { reviewerId: rid, units: [] };
+    if (idx >= 0) next[idx] = item;
+    else next.push(item);
+  }
+  return next.sort((a, b) => a.reviewerId.localeCompare(b.reviewerId, "zh-Hant"));
+}
+
+/**
+ * 分工表合併（不限單位，v1.51.0）：把選中的審查員以不限單位項目併入分工表
+ *（units 為空、unlimitedUnits 為 true）；已存在者保留原單位設定以外的欄位，
+ * 其餘項目不動。純函式，可單元測試。
+ */
+export function mergeItemsUnlimited(
+  prev: AssignmentItem[],
+  reviewerIds: string[],
+): AssignmentItem[] {
+  const next: AssignmentItem[] = prev.map((it) => ({
+    reviewerId: it.reviewerId,
+    units: it.units.map((u) => ({ ...u })),
+    ...(it.unlimitedUnits === true
+      ? { unlimitedUnits: true as const }
+      : {}),
+  }));
+  for (const rid of reviewerIds) {
+    const idx = next.findIndex((it) => it.reviewerId === rid);
+    const item: AssignmentItem = {
+      reviewerId: rid,
+      units: [],
+      unlimitedUnits: true as const,
+    };
+    if (idx >= 0) next[idx] = item;
+    else next.push(item);
   }
   return next.sort((a, b) => a.reviewerId.localeCompare(b.reviewerId, "zh-Hant"));
 }
@@ -615,7 +656,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     const { pending, done } = taskCountsFor(row);
     if (pending + done > 0) {
       const ok = window.confirm(
-        `${sched.periodLabel}已有 ${pending} 筆未執行、${done} 筆已完成任務。重新產生會刪除未執行任務並建立新任務；週期排程將按每單位、每區間 N 件計算，區間月份合併且同單位審查員共用 N。既有已完成任務與結果不回溯修改。確定嗎？`,
+        `${sched.periodLabel}已有 ${pending} 筆未執行、${done} 筆已完成任務。重新產生會刪除未執行任務並建立新任務；${sched.unlimitedUnits ? "週期排程將按每區間 N 件計算，區間月份合併且區間內各審查員共用 N。" : "週期排程將按每單位、每區間 N 件計算，區間月份合併且同單位審查員共用 N。"}既有已完成任務與結果不回溯修改。確定嗎？`,
       );
       if (!ok) return;
     }
@@ -887,10 +928,14 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                           )}
                           {schedDone && sched && (
                             <div className="muted-text">
-                              {sched.months.length} 個月・{sched.unitIds.length}{" "}
-                              單位
+                              {sched.months.length} 個月・
+                              {sched.unlimitedUnits
+                                ? "不限單位"
+                                : `${sched.unitIds.length} 單位`}
                               {sched.caseCount != null &&
-                                `・${sched.caseCount} 件/每單位每區間`}
+                                (sched.unlimitedUnits
+                                  ? `・${sched.caseCount} 件/每區間`
+                                  : `・${sched.caseCount} 件/每單位每區間`)}
                             </div>
                           )}
                         </td>
@@ -925,6 +970,9 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                                 0,
                               )}{" "}
                               單位
+                              {asg.items.some(
+                                (it) => it.unlimitedUnits === true,
+                              ) && "（含不限單位）"}
                             </div>
                           )}
                         </td>
@@ -1133,7 +1181,6 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
           {view.kind === "assignment" && (
             <AssignmentEditor
               indicatorId={indicator.id}
-              indicatorGroupId={indicator.groupId}
               reviewersByGroup={reviewersByGroup}
               units={units}
               groupMap={groupMap}
@@ -1525,6 +1572,8 @@ function ScheduleEditor({
     useState<1 | 2 | 3>(DEFAULT_INTERVAL_MONTHS);
   const caseCount = useCaseCountInput();
   const [unitIds, setUnitIds] = useState<string[]>([]);
+  // v1.51.0：不限單位（不固定單位、沒有單位限制；勾選時單位清單忽略）
+  const [unlimited, setUnlimited] = useState(false);
   const [notes, setNotes] = useState("");
   const [exists, setExists] = useState(false);
   const [prev, setPrev] = useState<IndicatorSchedule | null>(null);
@@ -1567,6 +1616,7 @@ function ScheduleEditor({
           s?.caseCount != null ? String(s.caseCount) : "3",
         );
         setUnitIds(s?.unitIds ?? []);
+        setUnlimited(s?.unlimitedUnits === true);
         setNotes(s?.notes ?? "");
         setPrev(pv);
       } catch (error) {
@@ -1596,6 +1646,7 @@ function ScheduleEditor({
       prev.caseCount != null ? String(prev.caseCount) : "3",
     );
     setUnitIds([...prev.unitIds]);
+    setUnlimited(prev.unlimitedUnits === true);
     setNotes(prev.notes);
     onAction(`已帶入前一期（${prev.periodLabel}）設定，請確認後儲存`);
   }
@@ -1605,8 +1656,8 @@ function ScheduleEditor({
       onAction("請至少選擇一個審查月份");
       return;
     }
-    if (unitIds.length === 0) {
-      onAction("請至少選擇一個受審單位");
+    if (unitIds.length === 0 && !unlimited) {
+      onAction("請勾選不限單位或至少選擇一個受審單位");
       return;
     }
     // v1.18：審查件數改為必填
@@ -1631,7 +1682,8 @@ function ScheduleEditor({
           intervalMonths: interval,
           refYear: null,
           caseCount: parseCaseCount(cc),
-          unitIds: [...unitIds],
+          unitIds: unlimited ? [] : [...unitIds],
+          unlimitedUnits: unlimited,
           notes: notes.trim(),
           selfReview: false,
           updatedBy: actor.id,
@@ -1725,14 +1777,26 @@ function ScheduleEditor({
             <div className="form-field">
               <label className="field-label">
                 受審單位（可複選）
-                {unitIds.length > 0 && `：已選 ${unitIds.length} 個`}
+                {!unlimited && unitIds.length > 0 && `：已選 ${unitIds.length} 個`}
+              </label>
+              <label className="check-row" style={{ marginBottom: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={unlimited}
+                  disabled={!canEdit}
+                  onChange={(e) => setUnlimited(e.target.checked)}
+                />
+                <b>不限單位</b>
+                <span className="muted-text">
+                  （不固定單位、沒有單位限制；單位顯示為 NA，審查時不用選單位）
+                </span>
               </label>
               <UnitTreePicker
                 units={units}
                 groupMap={groupMap}
                 selected={unitIds}
                 onChange={setUnitIds}
-                disabled={!canEdit}
+                disabled={!canEdit || unlimited}
                 unitNameOf={unitNameOf}
               />
             </div>
@@ -1778,9 +1842,11 @@ function ScheduleEditor({
               </div>
               <div className="form-field" style={{ maxWidth: 200 }}>
                 <label className="field-label">
-                  每單位每審查區間件數 *
+                  {unlimited ? "每審查區間件數 *" : "每單位每審查區間件數 *"}
                   <span className="muted-text">
-                    （區間內各月份合計；同單位多位審查員共用）
+                    {unlimited
+                      ? "（區間內各月份合計；區間內所有審查員共用）"
+                      : "（區間內各月份合計；同單位多位審查員共用）"}
                   </span>
                 </label>
                 <span className="case-count-field">
@@ -1923,8 +1989,14 @@ function AddAuditDialog({
   const [selUnits, setSelUnits] = useState<string[]>(
     () => row.schedule?.unitIds ?? [],
   );
+  // v1.51.0：不限單位（NA 排程的加審預設為不限單位模式）
+  const [unlimited, setUnlimited] = useState(
+    () => row.schedule?.unlimitedUnits === true,
+  );
   const [selReviewers, setSelReviewers] = useState<string[]>(() =>
-    defaultAddAuditReviewers(assignment, row.schedule?.unitIds ?? []),
+    row.schedule?.unlimitedUnits === true
+      ? (assignment?.items ?? []).map((it) => it.reviewerId)
+      : defaultAddAuditReviewers(assignment, row.schedule?.unitIds ?? []),
   );
   const [items, setItems] = useState<AssignmentItem[]>([]);
   const [saving, setSaving] = useState(false);
@@ -1992,6 +2064,11 @@ function AddAuditDialog({
       onAction("請先選擇審核員");
       return;
     }
+    if (unlimited) {
+      setItems((prev) => mergeItemsUnlimited(prev, selReviewers));
+      setSelReviewers([]);
+      return;
+    }
     if (selUnits.length === 0) {
       onAction("請至少勾選一個單位");
       return;
@@ -2008,16 +2085,23 @@ function AddAuditDialog({
   function removeUnit(reviewerId: string, unitId: string) {
     setItems((prev) =>
       prev
-        .map((it) =>
-          it.reviewerId === reviewerId
+        .map((it) => {
+          // v1.51.0：不限單位項目沒有單位列，守旗標不刪項目
+          if (it.reviewerId === reviewerId && it.unlimitedUnits === true)
+            return it;
+          return it.reviewerId === reviewerId
             ? { ...it, units: it.units.filter((u) => u.unitId !== unitId) }
-            : it,
-        )
-        .filter((it) => it.units.length > 0),
+            : it;
+        })
+        .filter((it) => it.unlimitedUnits === true || it.units.length > 0),
     );
   }
 
-  const pairCount = items.reduce((n, it) => n + it.units.length, 0);
+  // v1.51.0：不限單位項目每位審查員計 1 組配對（每月份一筆任務）
+  const pairCount = items.reduce(
+    (n, it) => n + (it.unlimitedUnits === true ? 1 : it.units.length),
+    0,
+  );
   const previewTasks = months.length * pairCount;
 
   async function handleConfirm() {
@@ -2101,12 +2185,25 @@ function AddAuditDialog({
         </span>
       </div>
 
+      <label className="check-row" style={{ marginBottom: 8 }}>
+        <input
+          type="checkbox"
+          checked={unlimited}
+          onChange={(e) => setUnlimited(e.target.checked)}
+        />
+        <b>不限單位</b>
+        <span className="muted-text">
+          （不固定單位；單位顯示為 NA，審查時不用選單位）
+        </span>
+      </label>
+
       <OptionMultiPicker
         title="選擇受審單位"
         options={unitOptions}
         groupMap={groupMap}
         selected={selUnits}
         onToggle={(id) => setSelUnits((prev) => toggleId(prev, id))}
+        disabled={unlimited}
         searchPlaceholder="搜尋單位名稱或代碼"
       />
 
@@ -2114,7 +2211,6 @@ function AddAuditDialog({
         title="選擇審核員"
         options={reviewerOptions}
         groupMap={groupMap}
-        defaultGroupId={row.groupId}
         selected={selReviewers}
         onToggle={(id) => setSelReviewers((prev) => toggleId(prev, id))}
         searchPlaceholder="搜尋姓名或職編"
@@ -2123,7 +2219,9 @@ function AddAuditDialog({
       <div className="form-actions">
         <button
           className="button button-outline"
-          disabled={selReviewers.length === 0 || selUnits.length === 0}
+          disabled={
+            selReviewers.length === 0 || (!unlimited && selUnits.length === 0)
+          }
           onClick={applyToTable}
         >
           <Plus size={15} /> 加入分工表
@@ -2135,7 +2233,7 @@ function AddAuditDialog({
         note={
           items.length === 0
             ? "尚無分工資料"
-            : `${items.length} 位審核員・${pairCount} 單位指派`
+            : `${items.length} 位審核員・${pairCount} 組指派${items.some((it) => it.unlimitedUnits === true) ? "（含不限單位）" : ""}`
         }
       />
       {items.length === 0 ? (
@@ -2158,28 +2256,32 @@ function AddAuditDialog({
                     <div className="muted-text">{it.reviewerId}</div>
                   </td>
                   <td>
-                    {it.units.map((u) => (
-                      <div key={u.unitId} className="assign-unit-row">
-                        <span>
-                          {unitNameOf(u.unitId)}
-                          <span className="muted-text">（{u.unitId}）</span>
-                          {duplicates.has(u.unitId) && (
-                            <CircleAlert
-                              size={13}
-                              className="dup-warn"
-                              aria-label="重複指派"
-                            />
-                          )}
-                        </span>
-                        <button
-                          className="text-button"
-                          onClick={() => removeUnit(it.reviewerId, u.unitId)}
-                          aria-label={`移除${u.unitId}`}
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    ))}
+                    {it.unlimitedUnits === true ? (
+                      <span>不限單位</span>
+                    ) : (
+                      it.units.map((u) => (
+                        <div key={u.unitId} className="assign-unit-row">
+                          <span>
+                            {unitNameOf(u.unitId)}
+                            <span className="muted-text">（{u.unitId}）</span>
+                            {duplicates.has(u.unitId) && (
+                              <CircleAlert
+                                size={13}
+                                className="dup-warn"
+                                aria-label="重複指派"
+                              />
+                            )}
+                          </span>
+                          <button
+                            className="text-button"
+                            onClick={() => removeUnit(it.reviewerId, u.unitId)}
+                            aria-label={`移除${u.unitId}`}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      ))
+                    )}
                   </td>
                   <td>
                     <button
@@ -2201,7 +2303,12 @@ function AddAuditDialog({
         <p>
           <b>{previewTasks}</b> 筆任務
           <span className="muted-text">
-            （{months.length} 個月 × {pairCount} 組審核員-單位配對）
+            （{months.length} 個月 × {pairCount}{" "}
+            組審核員{unlimited ? "" : "-單位"}配對
+            {items.some((it) => it.unlimitedUnits === true)
+              ? "；不限單位項目每位審查員每月一筆任務"
+              : ""}
+            ）
           </span>
         </p>
       </div>
@@ -2596,13 +2703,15 @@ function ScheduleDetailModal({
             <tr>
               <td style={{ whiteSpace: "nowrap" }}><b>受審單位</b></td>
               <td data-label="受審單位">
-                {sched.unitIds.length === 0
-                  ? "—"
-                  : sched.unitIds
-                      .map(
-                        (c) => `${unitNameOf(c)}（${c}）`,
-                      )
-                      .join("、")}
+                {sched.unlimitedUnits
+                  ? "不限單位"
+                  : sched.unitIds.length === 0
+                    ? "—"
+                    : sched.unitIds
+                        .map(
+                          (c) => `${unitNameOf(c)}（${c}）`,
+                        )
+                        .join("、")}
               </td>
             </tr>
             <tr>
@@ -2611,7 +2720,9 @@ function ScheduleDetailModal({
                 {sched.caseCount != null
                   ? sched.category === "temp"
                     ? `${sched.caseCount} 件/輪`
-                    : `${sched.caseCount} 件/每單位每區間（跨月份、同單位審查員共用）`
+                    : sched.unlimitedUnits
+                      ? `${sched.caseCount} 件/每區間（跨月份、區間內審查員共用）`
+                      : `${sched.caseCount} 件/每單位每區間（跨月份、同單位審查員共用）`
                   : "—"}
               </td>
             </tr>
@@ -2665,9 +2776,11 @@ function ScheduleDetailModal({
                     <b>{staffLabel(it.reviewerId, usersMap.get(it.reviewerId) ?? "")}</b>
                   </td>
                   <td data-label="負責單位">
-                    {it.units
-                      .map((u) => `${unitNameOf(u.unitId)}（${u.unitId}）`)
-                      .join("、")}
+                    {it.unlimitedUnits === true
+                      ? "不限單位"
+                      : it.units
+                          .map((u) => `${unitNameOf(u.unitId)}（${u.unitId}）`)
+                          .join("、")}
                   </td>
                 </tr>
               ))}
@@ -2690,7 +2803,6 @@ function ScheduleDetailModal({
 
 function AssignmentEditor({
   indicatorId,
-  indicatorGroupId,
   reviewersByGroup,
   units,
   groupMap,
@@ -2701,7 +2813,6 @@ function AssignmentEditor({
   onSaved,
 }: {
   indicatorId: string;
-  indicatorGroupId: string;
   reviewersByGroup: Map<string, ReviewerLite[]>;
   units: UnitLite[];
   groupMap: Map<string, string>;
@@ -2716,11 +2827,16 @@ function AssignmentEditor({
       ? initial.items.map((it) => ({
           reviewerId: it.reviewerId,
           units: it.units.map((u) => ({ ...u })),
+          ...(it.unlimitedUnits === true
+            ? { unlimitedUnits: true as const }
+            : {}),
         }))
       : [],
   );
   const [selReviewers, setSelReviewers] = useState<string[]>([]);
   const [selUnits, setSelUnits] = useState<string[]>([]);
+  // v1.51.0：不限單位模式（此審查員不固定單位）
+  const [unlimited, setUnlimited] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // 審查員候選：全部組別的審查員主檔（組別下拉篩選）
@@ -2770,18 +2886,29 @@ function AssignmentEditor({
   function removeUnit(reviewerId: string, unitId: string) {
     setItems((prev) =>
       prev
-        .map((it) =>
-          it.reviewerId === reviewerId
+        .map((it) => {
+          // v1.51.0：不限單位項目沒有單位列，守旗標不刪項目
+          if (it.reviewerId === reviewerId && it.unlimitedUnits === true)
+            return it;
+          return it.reviewerId === reviewerId
             ? { ...it, units: it.units.filter((u) => u.unitId !== unitId) }
-            : it,
-        )
-        .filter((it) => it.units.length > 0),
+            : it;
+        })
+        .filter((it) => it.unlimitedUnits === true || it.units.length > 0),
     );
   }
 
   function applyToTable() {
     if (selReviewers.length === 0) {
       onAction("請先選擇審查員");
+      return;
+    }
+    if (unlimited) {
+      setItems((prev) => mergeItemsUnlimited(prev, selReviewers));
+      onAction(
+        `已加入分工表：${selReviewers.length} 位審查員（不限單位）`,
+      );
+      setSelReviewers([]);
       return;
     }
     if (selUnits.length === 0) {
@@ -2841,34 +2968,47 @@ function AssignmentEditor({
         />
         {reviewerOptions.length === 0 ? (
           <p className="settings-note">
-            尚未設定審查員，請先到「群組與人員」→「審查員」頁籤新增。
+            尚未設定審查員，請先到「群組與人員」→「人員」頁籤為人員設定審查員角色。
           </p>
         ) : (
           <OptionMultiPicker
             title="1. 選擇審查員"
             options={reviewerOptions}
             groupMap={groupMap}
-            defaultGroupId={indicatorGroupId}
             selected={selReviewers}
             onToggle={(id) => setSelReviewers((prev) => toggleId(prev, id))}
             disabled={!canEdit}
             searchPlaceholder="搜尋姓名或職編"
           />
         )}
+        <label className="check-row" style={{ marginBottom: 8 }}>
+          <input
+            type="checkbox"
+            checked={unlimited}
+            disabled={!canEdit}
+            onChange={(e) => setUnlimited(e.target.checked)}
+          />
+          <b>不限單位</b>
+          <span className="muted-text">
+            （勾選後不選負責單位；單位顯示為 NA，審查時不用選單位）
+          </span>
+        </label>
         <OptionMultiPicker
           title="2. 選擇負責單位"
           options={unitOptions}
           groupMap={groupMap}
           selected={selUnits}
           onToggle={(id) => setSelUnits((prev) => toggleId(prev, id))}
-          disabled={!canEdit}
+          disabled={!canEdit || unlimited}
           searchPlaceholder="搜尋單位名稱或代碼"
         />
         {canEdit && (
           <div className="form-actions">
             <button
               className="button button-outline"
-              disabled={selReviewers.length === 0 || selUnits.length === 0}
+              disabled={
+                selReviewers.length === 0 || (!unlimited && selUnits.length === 0)
+              }
               onClick={applyToTable}
             >
               <Plus size={15} /> 加入分工表
@@ -2883,7 +3023,7 @@ function AssignmentEditor({
           note={
             items.length === 0
               ? "尚無分工資料"
-              : `${items.length} 位審查員・${items.reduce((n, it) => n + it.units.length, 0)} 單位指派`
+              : `${items.length} 位審查員・${items.reduce((n, it) => n + it.units.length, 0)} 單位指派${items.some((it) => it.unlimitedUnits === true) ? "（含不限單位）" : ""}`
           }
         />
         {items.length === 0 ? (
@@ -2906,29 +3046,33 @@ function AssignmentEditor({
                       <div className="muted-text">{it.reviewerId}</div>
                     </td>
                     <td>
-                      {it.units.map((u) => (
-                        <div key={u.unitId} className="assign-unit-row">
-                          <span>
-                            {u.unitId}
-                            {duplicates.has(u.unitId) && (
-                              <CircleAlert
-                                size={13}
-                                className="dup-warn"
-                                aria-label="重複指派"
-                              />
+                      {it.unlimitedUnits === true ? (
+                        <span>不限單位</span>
+                      ) : (
+                        it.units.map((u) => (
+                          <div key={u.unitId} className="assign-unit-row">
+                            <span>
+                              {u.unitId}
+                              {duplicates.has(u.unitId) && (
+                                <CircleAlert
+                                  size={13}
+                                  className="dup-warn"
+                                  aria-label="重複指派"
+                                />
+                              )}
+                            </span>
+                            {canEdit && (
+                              <button
+                                className="text-button"
+                                onClick={() => removeUnit(it.reviewerId, u.unitId)}
+                                aria-label={`移除${u.unitId}`}
+                              >
+                                <Trash2 size={13} />
+                              </button>
                             )}
-                          </span>
-                          {canEdit && (
-                            <button
-                              className="text-button"
-                              onClick={() => removeUnit(it.reviewerId, u.unitId)}
-                              aria-label={`移除${u.unitId}`}
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          )}
-                        </div>
-                      ))}
+                          </div>
+                        ))
+                      )}
                     </td>
                     {canEdit && (
                       <td>

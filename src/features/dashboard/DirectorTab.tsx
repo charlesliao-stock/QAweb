@@ -10,6 +10,7 @@ import {
   type DashboardSections,
 } from "../../lib/dashboardSections";
 import { avgRateOf } from "../../lib/resultAnalysis";
+import { displayUnitCode } from "../../lib/mask";
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
 
@@ -302,7 +303,7 @@ export function DirectorTab({
             <ol style={{ margin: 0, paddingLeft: 22 }}>
               {riskyUnits.map((r) => (
                 <li key={r.unitId} style={{ marginBottom: 6 }}>
-                  <b style={{ color: "#b3372f" }}>{r.unitId}</b>
+                  <b style={{ color: "#b3372f" }}>{displayUnitCode(r.unitId)}</b>
                   <span className="muted-text">（平均 {r.avg}%）</span>
                 </li>
               ))}

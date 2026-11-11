@@ -29,6 +29,7 @@ import {
   isReviewerRole,
 } from "./roleIdentity";
 import { activeRolesForReviewerExpiry } from "./reviewerValidity";
+import { syncReviewerDoc } from "./reviewerSync";
 import {
   buildRoleMetaMap,
   hasRoleCategory,
@@ -494,24 +495,36 @@ export async function grantReviewerRole(
     createdAt: serverTimestamp(),
   });
   await batch.commit();
+  // v1.51.0：授予審查員角色後同步審查員名單（同一寫入開關已在函式入口檢查）
+  try {
+    const roleMeta = await loadRoleMetaMap(db);
+    await syncReviewerDoc(db, normalizedStaffId, afterRoles, roleMeta);
+  } catch {
+    // 連動失敗不阻擋授予流程；名單可由管理員以「補建審查員名單」補建
+  }
   return reviewerRoleName;
+}
+
+/** 讀取 roles 集合建角色 meta 表（授予流程與審查員名單連動共用）。 */
+async function loadRoleMetaMap(db: Firestore): Promise<RoleMetaMap> {
+  const snap = await getDocs(collection(db, "roles"));
+  return buildRoleMetaMap(
+    snap.docs.map((d) => {
+      const v = d.data() as Record<string, unknown>;
+      return {
+        name: typeof v.name === "string" ? v.name : d.id,
+        category: v.category,
+        kind: v.kind,
+        scope: v.scope,
+      };
+    }),
+  );
 }
 
 /** 由 roles 集合找出審查員類別的角色名稱（名稱排序第一個）；無則退回舊名稱。 */
 async function resolveReviewerRoleName(db: Firestore): Promise<string> {
   try {
-    const snap = await getDocs(collection(db, "roles"));
-    const meta = buildRoleMetaMap(
-      snap.docs.map((d) => {
-        const v = d.data() as Record<string, unknown>;
-        return {
-          name: typeof v.name === "string" ? v.name : d.id,
-          category: v.category,
-          kind: v.kind,
-          scope: v.scope,
-        };
-      }),
-    );
+    const meta = await loadRoleMetaMap(db);
     const names = reviewerRoleNames(meta).sort((a, b) =>
       a.localeCompare(b, "zh-Hant"),
     );

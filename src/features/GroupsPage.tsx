@@ -31,7 +31,7 @@ import { getCachedRefCollection } from "../lib/refCache";
 import { getDocsCacheFirst } from "../lib/cacheFirst";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
-import { reviewerDocId, UNCATEGORIZED_GROUP_ID, shouldAutoLinkReviewer } from "../lib/scheduling";
+import { syncReviewerDoc, backfillReviewerDocs } from "../lib/reviewerSync";
 import { templateDocId } from "../lib/permissions";
 import {
   deriveGroupIds,
@@ -651,6 +651,8 @@ export function GroupsPage({
   const [userForm, setUserForm] = useState<UserForm>(emptyUserForm());
   const [userError, setUserError] = useState("");
   const [userSaving, setUserSaving] = useState(false);
+  // v1.51.0：一次性補建審查員名單（管理員手動觸發）
+  const [backfilling, setBackfilling] = useState(false);
   const [roleOptions, setRoleOptions] = useState<OptionItem[]>([]);
 
   // ---- 角色（v1.39.0：一名一檔，只寫名稱；建立後請至權限管理設定權限） ----
@@ -1802,42 +1804,13 @@ export function GroupsPage({
       }
       setUserView({ kind: "list" });
       await loadUsers();
-      // 審查員連動（v1.12.0）：roles 含任一審查員身分 → 自動加入審查員名單（未分類）
+      // 審查員連動（v1.12.0；v1.51.0 改由 reviewerSync 統一處理）
       const savedStaffId =
         view.kind === "edit" ? view.staffId : userForm.staffId.trim();
       try {
-        if (shouldAutoLinkReviewer(roles, roleMeta)) {
-          const existing = await getDocs(
-            query(
-              collection(db, "reviewReviewers"),
-              where("personId", "==", savedStaffId),
-              limit(1),
-            ),
-          );
-          if (existing.empty) {
-            await setDoc(
-              doc(
-                db,
-                "reviewReviewers",
-                reviewerDocId(UNCATEGORIZED_GROUP_ID, savedStaffId),
-              ),
-              {
-                groupId: UNCATEGORIZED_GROUP_ID,
-                personId: savedStaffId,
-                createdAt: serverTimestamp(),
-              },
-            );
-            onAction(`已將 ${savedStaffId} 自動加入審查員名單（未分類）`);
-          }
-        } else {
-          // 移除角色時，同步移除自動加入的「未分類」審查員（手動指派的不動）
-          await deleteDoc(
-            doc(
-              db,
-              "reviewReviewers",
-              reviewerDocId(UNCATEGORIZED_GROUP_ID, savedStaffId),
-            ),
-          );
+        const result = await syncReviewerDoc(db, savedStaffId, roles, roleMeta);
+        if (result === "linked") {
+          onAction(`已將 ${savedStaffId} 自動加入審查員名單（未分類）`);
         }
       } catch {
         onAction("審查員名單連動失敗，請聯絡系統管理員手動調整");
@@ -1846,6 +1819,26 @@ export function GroupsPage({
       setUserError(`儲存失敗：${toErrorMessage(error)}`);
     } finally {
       setUserSaving(false);
+    }
+  }
+
+  /** v1.51.0：一次性補建審查員名單（管理員手動觸發；具審查員角色且效期有效、但無名單文件者補建未分類文件） */
+  async function handleBackfillReviewers() {
+    if (!user) return;
+    setBackfilling(true);
+    try {
+      const db = getFirebaseDb();
+      const n = await backfillReviewerDocs(db, roleMeta);
+      onAction(
+        n > 0
+          ? `已補建 ${n} 位審查員名單`
+          : "審查員名單已是最新，無需補建",
+      );
+      await loadUsers();
+    } catch (error) {
+      onAction(`補建審查員名單失敗：${toErrorMessage(error)}`);
+    } finally {
+      setBackfilling(false);
     }
   }
 
@@ -1989,6 +1982,20 @@ export function GroupsPage({
       onAction(`已將 ${targets.length} 位人員移出角色「${role.name}」`);
       setRoleMemberChecked([]);
       await loadUsers();
+      // v1.51.0：移出成員後同步審查員名單（不再具審查員身分者移除未分類文件）
+      try {
+        const db = getFirebaseDb();
+        for (const u of targets) {
+          await syncReviewerDoc(
+            db,
+            u.staffId,
+            u.roles.filter((r) => r !== role.name),
+            roleMeta,
+          );
+        }
+      } catch {
+        onAction("審查員名單連動失敗，請聯絡系統管理員手動調整");
+      }
     } catch (error) {
       onAction(`移除失敗：${toErrorMessage(error)}`);
     } finally {
@@ -2004,6 +2011,7 @@ export function GroupsPage({
       units.find((u) => u.code === unitCode)?.groupId ?? "";
     const targets = users.filter((u) => roleAddChecked.includes(u.staffId));
     const noUnit: string[] = [];
+    const added: UserRow[] = [];
     const ops: Array<(b: WriteBatch) => void> = [];
     for (const u of targets) {
       let gid = "";
@@ -2022,6 +2030,7 @@ export function GroupsPage({
         }
       }
       ops.push(addRoleToUser(u, role.name, gid));
+      added.push(u);
     }
     if (noUnit.length > 0) {
       onAction(
@@ -2036,6 +2045,25 @@ export function GroupsPage({
       setRoleAddChecked([]);
       setRoleAddSearch("");
       await loadUsers();
+      // v1.51.0：加入成員後同步審查員名單
+      try {
+        const db = getFirebaseDb();
+        let linked = 0;
+        for (const u of added) {
+          const result = await syncReviewerDoc(
+            db,
+            u.staffId,
+            [...new Set([...u.roles, role.name])],
+            roleMeta,
+          );
+          if (result === "linked") linked += 1;
+        }
+        if (linked > 0) {
+          onAction(`已將 ${linked} 位自動加入審查員名單（未分類）`);
+        }
+      } catch {
+        onAction("審查員名單連動失敗，請聯絡系統管理員手動調整");
+      }
     } catch (error) {
       onAction(`加入失敗：${toErrorMessage(error)}`);
     } finally {
@@ -2087,6 +2115,19 @@ export function GroupsPage({
       setManagingRoleId("");
       await loadRoles();
       await loadUsers();
+      // v1.51.0：刪除角色後同步審查員名單
+      try {
+        for (const u of targets) {
+          await syncReviewerDoc(
+            db,
+            u.staffId,
+            u.roles.filter((r) => r !== row.name),
+            roleMeta,
+          );
+        }
+      } catch {
+        onAction("審查員名單連動失敗，請聯絡系統管理員手動調整");
+      }
     } catch (error) {
       onAction(`刪除失敗：${toErrorMessage(error)}`);
     } finally {
@@ -2741,6 +2782,8 @@ export function GroupsPage({
     const results = validateUserImportData(data);
     let created = 0;
     let updated = 0;
+    // v1.51.0：批次匯入後同步審查員名單（收集每人匯入後的最終角色）
+    const finalRoles: { staffId: string; roles: string[] }[] = [];
     const ops = results
       .filter((r) => r.ok && r.values)
       .map((r) => {
@@ -2781,6 +2824,7 @@ export function GroupsPage({
           }
           const nextRoles = patch.roles ?? existing?.roles ?? [];
           const nextMemberships = patch.memberships ?? existing?.memberships ?? [];
+          finalRoles.push({ staffId: v.staffId, roles: nextRoles });
           const before = existing ? {
             name: existing.name, unitCode: existing.unitCode, titleId: existing.titleId,
             title: existing.title, roles: existing.roles, memberships: existing.memberships,
@@ -2808,6 +2852,13 @@ export function GroupsPage({
             });
           };
         }
+        finalRoles.push({
+          staffId: v.staffId,
+          roles:
+            v.memberships && v.memberships.length > 0
+              ? deriveRoles(v.memberships)
+              : ["一般人員"],
+        });
         return (b: WriteBatch) => {
           b.set(ref, {
             name: v.name ?? "",
@@ -2846,6 +2897,20 @@ export function GroupsPage({
         };
       });
     await commitInBatches(ops);
+    // v1.51.0：批次匯入後同步審查員名單
+    try {
+      const db = getFirebaseDb();
+      let linked = 0;
+      for (const { staffId, roles } of finalRoles) {
+        const result = await syncReviewerDoc(db, staffId, roles, roleMeta);
+        if (result === "linked") linked += 1;
+      }
+      if (linked > 0) {
+        onAction(`已將 ${linked} 位匯入人員自動加入審查員名單（未分類）`);
+      }
+    } catch {
+      onAction("審查員名單連動失敗，請聯絡系統管理員手動調整");
+    }
     return `人員匯入完成：新增 ${created} 筆、更新 ${updated} 筆`;
   }
 
@@ -2994,6 +3059,14 @@ export function GroupsPage({
             value={userSearch}
             onChange={(e) => setUserSearch(e.target.value)}
           />
+          <button
+            className="button button-outline button-sm"
+            disabled={backfilling}
+            onClick={handleBackfillReviewers}
+            title="為現有具審查員角色但不在審查員名單內的人員補建名單文件（未分類）"
+          >
+            {backfilling ? "補建中…" : "補建審查員名單"}
+          </button>
         </div>
       )}
       {tab === "units" && unitView.kind === "list" && (
@@ -3982,7 +4055,7 @@ export function GroupsPage({
                 <div className="select-wrap">
                   <select
                     value={m.groupId}
-                    onChange={(e) => updateMembershipRow(i, { groupId: e.target.value, roles: [] })}
+                    onChange={(e) => updateMembershipRow(i, { groupId: e.target.value })}
                   >
                     <option value="">請選擇群組</option>
                     {groups.map((g) => (
