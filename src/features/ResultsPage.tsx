@@ -117,6 +117,8 @@ interface IndicatorOpt {
   threshold: number;
   /** 指標設定頁「啟用分組計分」開關；關閉時結果分析不顯示任何分組／逐題明細列 */
   groupScoring: boolean;
+  /** 指標設定的審核項目清單（v1.48.0）：非空時匯入範本多一欄「審核項目」 */
+  auditItems: string[];
   questions: AuditQuestion[];
 }
 
@@ -447,6 +449,9 @@ export function ResultsPage({
             version: typeof data.version === "string" ? data.version : "v1.0",
             threshold: effectiveThreshold(data),
             groupScoring: data.groupScoring === true,
+            auditItems: Array.isArray(data.auditItems)
+              ? data.auditItems.map(String).map((x) => x.trim()).filter(Boolean)
+              : [],
             questions: normalizeQuestions(data.questions).questions,
           });
         });
@@ -2700,9 +2705,11 @@ interface ImportPreviewRow {
   monthRaw: string;
   reviewerId: string;
   personEmpNo: string;
+  /** 審核項目（v1.48.0）：該列的值，無此欄為 "" */
+  auditItem: string;
   errors: string[];
   softErrors: string[];
-  /** 該列將覆寫既有同一身分紀錄（指標＋單位＋年＋月＋受審人職編） */
+  /** 該列將覆寫既有同一身分紀錄（指標＋單位＋年＋月＋受審人職編＋審核項目） */
   willOverwrite: boolean;
   /** 軟錯誤列是否仍要匯入（預設不勾） */
   forceImport: boolean;
@@ -2717,6 +2724,8 @@ interface ImportPreviewRow {
  * 計入審核進度（unitId／year／month 參與進度計算）。
  * v1.47.0：選檔後先顯示預覽／錯誤清單，按「確認匯入」才寫入；去重鍵
  * 改為身分鍵（指標＋單位＋年＋月＋受審人職編），重複即覆寫。
+ * v1.48.0：指標有設審核項目時，範本與檔案多一欄「審核項目」（床號之後、
+ * 第 7 欄），必填且須為清單內的值；去重身分鍵納入審核項目。
  */
 function ResultImportPanel({
   indicators,
@@ -2816,6 +2825,7 @@ function ResultImportPanel({
       resultTemplateRows(
         selInd.code,
         selInd.questions.map((q) => q.itemText),
+        selInd.auditItems,
       ),
       "審查結果",
       `${selInd.code}_審查結果範本`,
@@ -2833,9 +2843,13 @@ function ResultImportPanel({
     setBusy(true);
     try {
       const sheet = await readSheetFile(file);
-      const { headerErrors, data } = parseResultSheet(sheet, {
-        questionTitles: selInd.questions.map((q) => q.itemText),
-      });
+      const { headerErrors, hasAuditItemColumn, data } = parseResultSheet(
+        sheet,
+        {
+          questionTitles: selInd.questions.map((q) => q.itemText),
+          auditItems: selInd.auditItems,
+        },
+      );
       if (headerErrors.length > 0) {
         setErrors(headerErrors);
         onAction("審查結果匯入失敗：標題列不符，請下載範本對照");
@@ -2851,13 +2865,16 @@ function ResultImportPanel({
         unitHas: (c) => unitCodes.has(c),
         staffHas: (id) => staffMap.has(id),
         staffLoaded,
+        auditItems: selInd.auditItems,
+        hasAuditItemColumn,
       });
       if (fileErrors.length > 0) {
         setErrors(fileErrors);
         onAction("審查結果匯入中止：預檢不符（指標代號或題數）");
         return;
       }
-      // 覆寫預查：身分鍵（指標＋單位＋年＋月＋受審人職編）已存在即覆寫；
+      // 覆寫預查：身分鍵（指標＋單位＋年＋月＋受審人職編＋審核項目，
+      // v1.48.0 納入審核項目；空值時與 v1.47.0 相同）已存在即覆寫；
       // 同一檔案內重複身分者，後者亦覆寫前者。
       const db = getFirebaseDb();
       const seenIds = new Set<string>();
@@ -2871,6 +2888,7 @@ function ResultImportPanel({
               year: r.values.year,
               month: r.values.month,
               personEmpNo: r.values.personEmpNo,
+              auditItem: r.values.auditItem,
             });
             if (seenIds.has(docId)) {
               willOverwrite = true;
@@ -2890,6 +2908,7 @@ function ResultImportPanel({
             monthRaw: r.monthRaw,
             reviewerId: r.reviewerId,
             personEmpNo: r.personEmpNo,
+            auditItem: r.auditItem,
             errors: r.errors,
             softErrors: r.softErrors,
             willOverwrite,
@@ -2941,6 +2960,7 @@ function ResultImportPanel({
       const db = getFirebaseDb();
       // v1.47.0 去重：身分鍵（指標＋單位＋年＋月＋受審人職編）決定文件 ID，
       // 同一身分再匯即覆寫，不重複建檔；每 500 筆分段提交（batch 上限）。
+      // v1.48.0：身分鍵納入審核項目（空值時與 v1.47.0 相同）。
       const today = new Date().toISOString().slice(0, 10);
       let batch = writeBatch(db);
       let pending = 0;
@@ -2979,6 +2999,7 @@ function ResultImportPanel({
             year: v.year,
             month: v.month,
             personEmpNo: v.personEmpNo,
+            auditItem: v.auditItem,
           }),
         );
         batch.set(ref, {
@@ -2999,6 +3020,8 @@ function ResultImportPanel({
             ? (staffMap.get(v.personEmpNo) ?? v.personEmpNo)
             : "",
           bedNo: v.bedNo,
+          // v1.48.0：審核項目有值才寫、無值不寫欄位（維持 auditItem? 選填語義）
+          ...(v.auditItem ? { auditItem: v.auditItem } : {}),
           answers,
           totalScore,
           maxScore,
@@ -3046,7 +3069,7 @@ function ResultImportPanel({
     <section className="panel">
       <SectionTitle
         title="匯入品管審查結果"
-        note="先選組別與指標（只列啟用），再選 Excel／CSV 檔匯入。預檢不符（指標代號或題數）即整檔中止；選檔後先顯示預覽／錯誤清單，按「確認匯入」才寫入。匯入的紀錄計入審核進度，不自動建立審查任務。同一指標、單位、月份、受審人員重複匯入以後者覆蓋前者，不會重複建檔。"
+        note="先選組別與指標（只列啟用），再選 Excel／CSV 檔匯入。預檢不符（指標代號或題數）即整檔中止；選檔後先顯示預覽／錯誤清單，按「確認匯入」才寫入。匯入的紀錄計入審核進度，不自動建立審查任務。指標有設審核項目時，範本多一欄「審核項目」（必填，須為指標清單內的值）。同一指標、單位、月份、受審人員、審核項目重複匯入以後者覆蓋前者，不會重複建檔。"
       />
       <div className="form-stack">
         <div className="form-field">
@@ -3190,6 +3213,7 @@ function ResultImportPanel({
                   <th>審查月份</th>
                   <th>審查員</th>
                   <th>受審人員</th>
+                  <th>審核項目</th>
                   <th>狀態</th>
                   <th>原因</th>
                   <th>仍要匯入</th>
@@ -3213,6 +3237,7 @@ function ResultImportPanel({
                       <td>{r.monthRaw || "—"}</td>
                       <td>{r.reviewerId || "—"}</td>
                       <td>{r.personEmpNo || "—"}</td>
+                      <td>{r.auditItem || "—"}</td>
                       <td>{status}</td>
                       <td>{reasons || "—"}</td>
                       <td>

@@ -462,6 +462,8 @@ const RESULT_HEADER_MAP: Record<string, string> = {
   受審人員職編: "personEmpNo",
   受審人員: "personEmpNo",
   床號: "bedNo",
+  /** v1.48.0：審核項目欄（第 7 欄，僅指標有設 auditItems 時出現） */
+  審核項目: "auditItem",
 };
 
 export interface ResultImportRowInput {
@@ -472,6 +474,8 @@ export interface ResultImportRowInput {
   reviewerId: string;
   personEmpNo: string;
   bedNo: string;
+  /** 審核項目（v1.48.0）：第 7 欄；無此欄的檔案為 "" */
+  auditItem: string;
   /** 每題一欄（與題目順序對應；未填＝未答） */
   answers: string[];
   /** 備註（與 answers 對應；v1.43.0 已彙整至最後一題：僅最後一題可能有
@@ -492,6 +496,8 @@ export interface ResultImportRowResult {
   monthRaw: string;
   reviewerId: string;
   personEmpNo: string;
+  /** 審核項目（v1.48.0，trim 後；無此欄為 ""） */
+  auditItem: string;
   values: {
     code: string;
     unitCode: string;
@@ -500,6 +506,8 @@ export interface ResultImportRowResult {
     reviewerId: string;
     personEmpNo: string;
     bedNo: string;
+    /** 審核項目（v1.48.0）：指標無 auditItems 時為 ""（不寫入） */
+    auditItem: string;
     answers: string[];
     notes: string[];
   } | null;
@@ -775,6 +783,10 @@ export function importRecordDocId(input: ImportIdentityInput): string {
  * 匯入紀錄身分鍵文件 ID（v1.47.0）：指標＋單位＋年＋月＋受審人職編
  * （不含審查員、床號、答案、備註）。同一身分再匯＝同一文件 ID＝覆寫，
  * 改答案重匯不再新增重複筆。舊內容雜湊 ID 的文件不自動清理、不合併。
+ * v1.48.0：納入審核項目（指標＋單位＋年＋月＋受審人職編＋審核項目），
+ * 同一人同月不同審核項目為不同筆、並存不覆寫。相容要求：審核項目為空
+ * （指標無此欄或該筆無值）時 canon 與 v1.47.0 完全相同（v:1、無 a 欄），
+ * 文件 ID 與 v1.47.0 一致，既有紀錄重匯仍覆寫同一筆、不新增重複。
  */
 export function importIdentityDocId(input: {
   indicatorId: string;
@@ -782,14 +794,29 @@ export function importIdentityDocId(input: {
   year: number;
   month: number;
   personEmpNo: string;
+  /** 審核項目（v1.48.0，選填）：空值時不納入鍵（與 v1.47.0 相同） */
+  auditItem?: string;
 }): string {
+  const item = (input.auditItem ?? "").trim();
+  if (!item) {
+    const canon = {
+      v: 1,
+      ind: input.indicatorId.trim(),
+      unit: input.unitCode.trim(),
+      y: input.year,
+      m: input.month,
+      p: input.personEmpNo.trim(),
+    };
+    return `import_${sha1Hex(JSON.stringify(canon)).slice(0, 24)}`;
+  }
   const canon = {
-    v: 1,
+    v: 2,
     ind: input.indicatorId.trim(),
     unit: input.unitCode.trim(),
     y: input.year,
     m: input.month,
     p: input.personEmpNo.trim(),
+    a: item,
   };
   return `import_${sha1Hex(JSON.stringify(canon)).slice(0, 24)}`;
 }
@@ -802,17 +829,25 @@ export function importIdentityDocId(input: {
  * 合併進最後一題答案的 note（單則不加題號、多則每則附題號）。
  * opts.questionTitles 傳入時以題目文字精確配對；未傳時以標題後綴
  * 「備註」判斷。無備註欄的檔案照常解析，notes 全為 ""。
- * 回傳 headerErrors（標題列不符＝整檔中止）與資料列。
+ * v1.48.0：指標有設 auditItems 時（opts.auditItems 非空），第 7 欄為
+ * 「審核項目」欄（範本位置，床號之後、題目欄之前），答案欄自第 8 欄
+ * 起；無此欄的舊檔案仍可解析，auditItem 視為 ""（驗證時逐列報錯）。
+ * 回傳 hasAuditItemColumn 供驗證訊息（總欄數-6／-7）使用。
  */
 export function parseResultSheet(
   rows: string[][],
-  opts?: { questionTitles?: string[] },
+  opts?: { questionTitles?: string[]; auditItems?: string[] },
 ): {
   headerErrors: string[];
+  hasAuditItemColumn: boolean;
   data: ResultImportRowInput[];
 } {
   if (rows.length === 0)
-    return { headerErrors: ["檔案為空，請使用範本格式"], data: [] };
+    return {
+      headerErrors: ["檔案為空，請使用範本格式"],
+      hasAuditItemColumn: false,
+      data: [],
+    };
   const headerRow = rows[0];
   const { col } = mapHeaders(headerRow, RESULT_HEADER_MAP);
   const required = ["code", "unitCode", "monthRaw"];
@@ -825,10 +860,16 @@ export function parseResultSheet(
           .map((k) => labels[required.indexOf(k)])
           .join("、")}（請下載範本對照標題列）`,
       ],
+      hasAuditItemColumn: false,
       data: [],
     };
   }
-  // 題目欄／備註欄配對（第 7 欄起）。
+  // v1.48.0：審核項目欄只在指標有設 auditItems 且標題正在範本位置
+  // （第 7 欄，index 6）時認列；答案欄起始位置隨之條件式。
+  const hasAuditItems = (opts?.auditItems ?? []).length > 0;
+  const hasAuditCol = hasAuditItems && col.auditItem === 6;
+  const answerStart = hasAuditCol ? 7 : 6;
+  // 題目欄／備註欄配對（答案欄自 answerStart 起）。
   const titles = opts?.questionTitles;
   // 單一備註欄（v1.43.0 新格式）：標題恰為「備註」，位於最後一題之後。
   // 題目本身就叫「備註」時不誤判（此時不視為單一備註欄）。
@@ -836,7 +877,7 @@ export function parseResultSheet(
     !!titles && titles.some((t) => headerKey(t) === "備註");
   let singleNoteCol = -1;
   if (!isTitleNamedNote) {
-    for (let j = 6; j < headerRow.length; j++) {
+    for (let j = answerStart; j < headerRow.length; j++) {
       if (headerKey(headerRow[j] ?? "") === "備註") {
         singleNoteCol = j;
         break;
@@ -856,12 +897,13 @@ export function parseResultSheet(
   const paired =
     !!titles &&
     titles.length > 0 &&
-    headerRow.length > 7 &&
-    headerKey(headerRow[7] ?? "") === headerKey(`${titles[0]}備註`);
+    headerRow.length > answerStart + 1 &&
+    headerKey(headerRow[answerStart + 1] ?? "") ===
+      headerKey(`${titles[0]}備註`);
   if (paired && titles) {
     // 成對版面（舊格式）：每題結果欄＋備註欄交錯
     for (let i = 0; i < titles.length; i++) {
-      const aCol = 6 + 2 * i;
+      const aCol = answerStart + 2 * i;
       if (aCol >= headerRow.length) break;
       answerCols.push(aCol);
       const nCol = aCol + 1;
@@ -873,7 +915,7 @@ export function parseResultSheet(
       );
     }
     // 成對版面之後的額外欄位：非備註標題者視為多餘題目欄（題數檢核會擋）
-    for (let j = 6 + 2 * titles.length; j < headerRow.length; j++) {
+    for (let j = answerStart + 2 * titles.length; j < headerRow.length; j++) {
       if (j === singleNoteCol) continue;
       if (!isNoteHeader(j)) {
         answerCols.push(j);
@@ -882,7 +924,7 @@ export function parseResultSheet(
     }
   } else {
     // 單欄版面（新格式或舊範本）或未傳題目：逐欄判斷
-    for (let j = 6; j < headerRow.length; j++) {
+    for (let j = answerStart; j < headerRow.length; j++) {
       if (j === singleNoteCol) continue;
       if (
         isNoteHeader(j) &&
@@ -925,11 +967,12 @@ export function parseResultSheet(
       reviewerId: get("reviewerId"),
       personEmpNo: get("personEmpNo"),
       bedNo: get("bedNo"),
+      auditItem: hasAuditCol ? (r[6] ?? "").trim() : "",
       answers,
       notes,
     });
   }
-  return { headerErrors: [], data };
+  return { headerErrors: [], hasAuditItemColumn: hasAuditCol, data };
 }
 
 /**
@@ -940,6 +983,7 @@ export function parseResultSheet(
  *   各題答案須為 是／否／不適用（「正確」＝是、「不正確」＝否；未填＝未答）；
  *   任一不符該列跳過。驗證通過的列，values.answers 已正規化為 是／否／不適用，
  *   values.notes 為已彙整的備註（僅最後一題有值，其餘為 ""）。
+ *   v1.48.0：指標有審核項目時，該欄未填或不在清單內皆為硬錯誤。
  */
 export function validateResultSheet(
   data: ResultImportRowInput[],
@@ -949,6 +993,10 @@ export function validateResultSheet(
     unitHas: (code: string) => boolean;
     staffHas: (id: string) => boolean;
     staffLoaded: boolean;
+    /** 該指標的審核項目清單（v1.48.0）：非空時逐列驗證審核項目欄 */
+    auditItems: string[];
+    /** 檔案是否有審核項目欄（v1.48.0，parseResultSheet 回傳；題數訊息用） */
+    hasAuditItemColumn: boolean;
   },
 ): { fileErrors: string[]; rows: ResultImportRowResult[] } {
   const fileErrors: string[] = [];
@@ -963,7 +1011,7 @@ export function validateResultSheet(
   const badCount = data.filter((r) => r.answers.length !== ctx.questionCount);
   if (badCount.length > 0) {
     fileErrors.push(
-      `題數須為 ${ctx.questionCount} 題（總欄數-6；第 ${badCount
+      `題數須為 ${ctx.questionCount} 題（總欄數-${ctx.hasAuditItemColumn ? 7 : 6}；第 ${badCount
         .map((r) => r.lineNo)
         .join("、")} 列欄數不符），已中止全部匯入`,
     );
@@ -980,6 +1028,7 @@ export function validateResultSheet(
         monthRaw: r.monthRaw,
         reviewerId: r.reviewerId.trim(),
         personEmpNo: r.personEmpNo.trim(),
+        auditItem: r.auditItem.trim(),
         values: null,
       })),
     };
@@ -1027,6 +1076,15 @@ export function validateResultSheet(
       errors.push(
         `答案須為 是／否／不適用（正確＝是、不正確＝否）：${badAnswers.join("、")}`,
       );
+    // v1.48.0：指標有審核項目時，該欄必填、且須為清單內的值（比照執行頁
+    // 下拉單選）；指標無審核項目時忽略此欄（values.auditItem 為 ""）。
+    const auditItem = r.auditItem.trim();
+    const auditList = ctx.auditItems.map((x) => x.trim()).filter(Boolean);
+    if (auditList.length > 0) {
+      if (!auditItem) errors.push("審核項目未填");
+      else if (!auditList.includes(auditItem))
+        errors.push(`審核項目「${auditItem}」不在指標審核項目清單內`);
+    }
     // v1.47.0：已填答案數（不含備註欄）須等於題數；空白答案算未填，
     // 不適用須填「不適用」才算有填。非法答案已另報錯時不重複報數。
     const filledCount = normalizedAnswers.filter(
@@ -1046,6 +1104,7 @@ export function validateResultSheet(
         monthRaw: r.monthRaw,
         reviewerId,
         personEmpNo,
+        auditItem,
         values: null,
       };
     return {
@@ -1057,6 +1116,7 @@ export function validateResultSheet(
       monthRaw: r.monthRaw,
       reviewerId,
       personEmpNo,
+      auditItem,
       values: {
         code: ctx.code,
         unitCode,
@@ -1065,6 +1125,7 @@ export function validateResultSheet(
         reviewerId,
         personEmpNo: r.personEmpNo.trim(),
         bedNo: r.bedNo.trim(),
+        auditItem: auditList.length > 0 ? auditItem : "",
         answers: normalizedAnswers.map((a) => a ?? ""),
         notes: r.notes.map((n) => n.trim()),
       },
@@ -1077,13 +1138,23 @@ export function validateResultSheet(
  * 結果匯入範本（v1.43.0）：前 6 欄固定＋每題結果欄，最後一題後再加一個
  * 「備註」欄（所有指標一律如此）；備註欄未填可留空。舊格式檔案（每題
  * 各有「{題目}備註」欄、或無備註欄）仍可匯入，見 parseResultSheet。
+ * v1.48.0：指標有設 auditItems 時，床號之後（第 7 欄）多一欄「審核項目」，
+ * 範例值取清單第一項；無審核項目的指標範本完全不變。
  */
 export function resultTemplateRows(
   code: string,
   questions: string[],
+  auditItems?: string[],
 ): string[][] {
+  const items = (auditItems ?? []).map((x) => x.trim()).filter(Boolean);
+  const hasAudit = items.length > 0;
   return [
-    [...RESULT_FIXED_HEADERS, ...questions, "備註"],
+    [
+      ...RESULT_FIXED_HEADERS,
+      ...(hasAudit ? ["審核項目"] : []),
+      ...questions,
+      "備註",
+    ],
     [
       code,
       "9A",
@@ -1091,6 +1162,7 @@ export function resultTemplateRows(
       "A12345",
       "B67890",
       "9A-01",
+      ...(hasAudit ? [items[0]] : []),
       ...questions.map(() => "是"),
       "",
     ],

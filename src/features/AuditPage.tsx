@@ -111,6 +111,8 @@ interface RecordRow {
   reviewerEmpNo: string;
   reviewerName: string;
   reviewedPersonName: string;
+  /** 審核項目（v1.48.0）：無值為 ""，顯示為「—」 */
+  auditItem: string;
   rate: number | null;
   quotaGroupId: string;
   source: string;
@@ -484,6 +486,8 @@ export function AuditPage({
                 typeof v.reviewedPersonName === "string"
                   ? v.reviewedPersonName
                   : "",
+              auditItem:
+                typeof v.auditItem === "string" ? v.auditItem : "",
               rate,
               quotaGroupId:
                 typeof v.quotaGroupId === "string" ? v.quotaGroupId : "",
@@ -1165,6 +1169,7 @@ export function AuditPage({
                       <th>審查日期</th>
                       <th>審查人員</th>
                       <th>受審人員</th>
+                      <th>審核項目</th>
                       <th>正確率</th>
                       <th>個人結果</th>
                     </tr>
@@ -1176,6 +1181,7 @@ export function AuditPage({
                         <td data-label="審查日期">{record.reviewDate || "—"}</td>
                         <td data-label="審查人員">{maskName(record.reviewerName) || "—"}</td>
                         <td data-label="受審人員">{maskName(record.reviewedPersonName) || "—"}</td>
+                        <td data-label="審核項目">{record.auditItem || "—"}</td>
                         <td data-label="正確率">{record.rate == null ? "—" : `${record.rate}%`}</td>
                         <td data-label="個人結果">
                           <div className="review-record-actions">
