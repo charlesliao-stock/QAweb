@@ -25,6 +25,7 @@ import {
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   getDocsFromServer,
   query,
@@ -49,12 +50,13 @@ import { computeOptionSetScore } from "../lib/reviewRecords";
 import { logAudit } from "../lib/audit";
 import {
   filterImportIndicators,
+  importIdentityDocId,
   importIndicatorEmptyHint,
-  importRecordDocId,
   mergeNoteParts,
   parseResultSheet,
   resultTemplateRows,
   validateResultSheet,
+  type ResultImportRowResult,
 } from "../lib/import";
 import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
 import { EmptyState, PageHeading, SectionTitle, SummaryCell } from "../components/ui";
@@ -2689,11 +2691,32 @@ function QuestionErrorTable({ rows }: { rows: QuestionErrorRow[] }) {
 /* ================= 品管審查結果匯入（v1.21.0 邏輯原樣搬入頁籤） ================= */
 
 /**
+ * 匯入預覽列（v1.47.0）：選檔後先預覽、不直接寫入；硬錯誤列不能匯入，
+ * 軟錯誤列由匯入者逐列勾選「仍要匯入」才寫入。
+ */
+interface ImportPreviewRow {
+  lineNo: number;
+  unitCode: string;
+  monthRaw: string;
+  reviewerId: string;
+  personEmpNo: string;
+  errors: string[];
+  softErrors: string[];
+  /** 該列將覆寫既有同一身分紀錄（指標＋單位＋年＋月＋受審人職編） */
+  willOverwrite: boolean;
+  /** 軟錯誤列是否仍要匯入（預設不勾） */
+  forceImport: boolean;
+  values: NonNullable<ResultImportRowResult["values"]> | null;
+}
+
+/**
  * 各指標審查結果匯入：選組別→選指標（只列啟用）→選檔匯入。
  * 範本依所選指標審查表題目即時產生（前 6 欄固定＋每題一欄）。
  * 預檢：指標代號與題數不符即整檔中止；逐列未填忽略、非法值該列跳過。
  * 每列寫一筆 reviewRecord（source="import"，不自動建 reviewTasks），
  * 計入審核進度（unitId／year／month 參與進度計算）。
+ * v1.47.0：選檔後先顯示預覽／錯誤清單，按「確認匯入」才寫入；去重鍵
+ * 改為身分鍵（指標＋單位＋年＋月＋受審人職編），重複即覆寫。
  */
 function ResultImportPanel({
   indicators,
@@ -2718,6 +2741,8 @@ function ResultImportPanel({
   const [summary, setSummary] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  /** 匯入預覽（v1.47.0）：選檔後先預覽，按「確認匯入」才寫入 */
+  const [preview, setPreview] = useState<ImportPreviewRow[] | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -2774,12 +2799,14 @@ function ResultImportPanel({
     setSelIndicatorId("");
     setSummary(null);
     setErrors([]);
+    setPreview(null);
   }
 
   function handleIndicatorChange(id: string) {
     setSelIndicatorId(id);
     setSummary(null);
     setErrors([]);
+    setPreview(null);
   }
 
   function downloadCurrentTemplate() {
@@ -2797,10 +2824,12 @@ function ResultImportPanel({
     });
   }
 
+  /** v1.47.0 預覽階段：選檔後先驗證、顯示預覽／錯誤清單，不直接寫入。 */
   async function handleImport(file: File) {
     if (!selInd || !user) return;
     setSummary(null);
     setErrors([]);
+    setPreview(null);
     setBusy(true);
     try {
       const sheet = await readSheetFile(file);
@@ -2828,104 +2857,185 @@ function ResultImportPanel({
         onAction("審查結果匯入中止：預檢不符（指標代號或題數）");
         return;
       }
-      const ok = rows.filter((r) => r.ok && r.values);
-      const bad = rows.filter((r) => !r.ok);
-      if (ok.length > 0) {
-        const db = getFirebaseDb();
-        // v1.42.0 去重：同一內容重複匯入以同一文件 ID 覆寫更新，不重複建檔；
-        // 每 500 筆分段提交（Firestore batch 上限）。
-        const today = new Date().toISOString().slice(0, 10);
-        let batch = writeBatch(db);
-        let pending = 0;
-        const flush = async () => {
-          if (pending > 0) {
-            await batch.commit();
-            batch = writeBatch(db);
-            pending = 0;
-          }
-        };
-        for (const r of ok) {
-          const v = r.values!;
-          const answers = selInd.questions.map((q, i) => {
-            const label = v.answers[i] ?? "";
-            const excluded = label === "不適用" || label === "";
-            const note = (v.notes[i] ?? "").trim();
-            return {
-              questionId: q.id,
-              itemText: q.itemText,
-              optionLabel: label,
-              score: label === "是" ? 1 : 0,
-              excluded,
-              ...(note ? { note } : {}),
-            };
-          });
-          const { totalScore, maxScore, rate } = computeOptionSetScore(
-            answers.map((a) => ({ score: a.score, excluded: a.excluded })),
-          );
-          const ref = doc(
-            collection(db, "reviewRecords"),
-            importRecordDocId({
+      // 覆寫預查：身分鍵（指標＋單位＋年＋月＋受審人職編）已存在即覆寫；
+      // 同一檔案內重複身分者，後者亦覆寫前者。
+      const db = getFirebaseDb();
+      const seenIds = new Set<string>();
+      const previewRows: ImportPreviewRow[] = await Promise.all(
+        rows.map(async (r) => {
+          let willOverwrite = false;
+          if (r.values) {
+            const docId = importIdentityDocId({
               indicatorId: selInd.id,
-              unitCode: v.unitCode,
-              year: v.year,
-              month: v.month,
-              reviewerId: v.reviewerId,
-              personEmpNo: v.personEmpNo,
-              bedNo: v.bedNo,
-              answers: v.answers,
-              notes: v.notes,
-            }),
-          );
-          batch.set(ref, {
-            taskId: "",
-            indicatorId: selInd.id,
-            unitId: v.unitCode,
-            reviewerId: v.reviewerId,
-            year: v.year,
-            month: v.month,
-            caseSeq: null,
-            reviewDate: today,
-            reviewerEmpNo: v.reviewerId,
-            reviewerName: v.reviewerId
-              ? (staffMap.get(v.reviewerId) ?? v.reviewerId)
-              : "",
-            reviewedPersonEmpNo: v.personEmpNo,
-            reviewedPersonName: v.personEmpNo
-              ? (staffMap.get(v.personEmpNo) ?? v.personEmpNo)
-              : "",
-            bedNo: v.bedNo,
-            answers,
-            totalScore,
-            maxScore,
-            rate,
-            submittedAt: serverTimestamp(),
-            submittedBy: user.staffId,
-            source: "import",
-          });
-          pending++;
-          if (pending >= 500) await flush();
-        }
-        await flush();
-        logAudit(db, {
-          actor: user.staffId,
-          actorName: user.name,
-          action: "匯入品管審查結果",
-          targetType: "indicator",
-          targetId: selInd.id,
-          detail: `${selInd.code}：匯入 ${ok.length} 筆、跳過 ${bad.length} 列`,
-        });
-      }
-      setErrors(
-        bad.map((r) => `第 ${r.lineNo} 列：${r.errors.join("；")}`),
+              unitCode: r.values.unitCode,
+              year: r.values.year,
+              month: r.values.month,
+              personEmpNo: r.values.personEmpNo,
+            });
+            if (seenIds.has(docId)) {
+              willOverwrite = true;
+            } else {
+              seenIds.add(docId);
+              try {
+                const snap = await getDoc(doc(db, "reviewRecords", docId));
+                willOverwrite = snap.exists();
+              } catch {
+                willOverwrite = false;
+              }
+            }
+          }
+          return {
+            lineNo: r.lineNo,
+            unitCode: r.unitCode,
+            monthRaw: r.monthRaw,
+            reviewerId: r.reviewerId,
+            personEmpNo: r.personEmpNo,
+            errors: r.errors,
+            softErrors: r.softErrors,
+            willOverwrite,
+            forceImport: false,
+            values: r.values,
+          };
+        }),
       );
-      const msg = `審查結果匯入：成功 ${ok.length} 筆、跳過 ${bad.length} 列`;
-      setSummary(msg);
-      onAction(msg);
-      if (ok.length > 0)
-        onDone([...new Set(ok.map((r) => r.values!.year))]);
+      setPreview(previewRows);
+      const writable = previewRows.filter(
+        (r) => r.values && r.errors.length === 0,
+      ).length;
+      const badCount = previewRows.filter(
+        (r) => r.errors.length > 0,
+      ).length;
+      const overwriteCount = previewRows.filter(
+        (r) => r.values && r.errors.length === 0 && r.willOverwrite,
+      ).length;
+      setSummary(
+        `預覽：共 ${previewRows.length} 列，可匯入 ${writable} 列、錯誤 ${badCount} 列` +
+          (overwriteCount > 0
+            ? `、其中 ${overwriteCount} 列將覆蓋既有資料`
+            : "") +
+          "。請確認後按「確認匯入」寫入；軟錯誤列須逐列勾選「仍要匯入」才會寫入。",
+      );
     } catch (error) {
       setErrors([
         `讀取檔案失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** v1.47.0 確認匯入：只寫入無硬錯誤的列；軟錯誤列須逐列勾選才寫入。 */
+  async function confirmImport() {
+    if (!selInd || !user || !preview) return;
+    const toWrite = preview.filter(
+      (r) =>
+        r.values &&
+        r.errors.length === 0 &&
+        (r.softErrors.length === 0 || r.forceImport),
+    );
+    if (toWrite.length === 0) return;
+    const skipped = preview.length - toWrite.length;
+    const hardErrorRows = preview.filter((r) => r.errors.length > 0);
+    setBusy(true);
+    try {
+      const db = getFirebaseDb();
+      // v1.47.0 去重：身分鍵（指標＋單位＋年＋月＋受審人職編）決定文件 ID，
+      // 同一身分再匯即覆寫，不重複建檔；每 500 筆分段提交（batch 上限）。
+      const today = new Date().toISOString().slice(0, 10);
+      let batch = writeBatch(db);
+      let pending = 0;
+      const flush = async () => {
+        if (pending > 0) {
+          await batch.commit();
+          batch = writeBatch(db);
+          pending = 0;
+        }
+      };
+      let overwritten = 0;
+      for (const r of toWrite) {
+        const v = r.values!;
+        if (r.willOverwrite) overwritten += 1;
+        const answers = selInd.questions.map((q, i) => {
+          const label = v.answers[i] ?? "";
+          const excluded = label === "不適用" || label === "";
+          const note = (v.notes[i] ?? "").trim();
+          return {
+            questionId: q.id,
+            itemText: q.itemText,
+            optionLabel: label,
+            score: label === "是" ? 1 : 0,
+            excluded,
+            ...(note ? { note } : {}),
+          };
+        });
+        const { totalScore, maxScore, rate } = computeOptionSetScore(
+          answers.map((a) => ({ score: a.score, excluded: a.excluded })),
+        );
+        const ref = doc(
+          collection(db, "reviewRecords"),
+          importIdentityDocId({
+            indicatorId: selInd.id,
+            unitCode: v.unitCode,
+            year: v.year,
+            month: v.month,
+            personEmpNo: v.personEmpNo,
+          }),
+        );
+        batch.set(ref, {
+          taskId: "",
+          indicatorId: selInd.id,
+          unitId: v.unitCode,
+          reviewerId: v.reviewerId,
+          year: v.year,
+          month: v.month,
+          caseSeq: null,
+          reviewDate: today,
+          reviewerEmpNo: v.reviewerId,
+          reviewerName: v.reviewerId
+            ? (staffMap.get(v.reviewerId) ?? v.reviewerId)
+            : "",
+          reviewedPersonEmpNo: v.personEmpNo,
+          reviewedPersonName: v.personEmpNo
+            ? (staffMap.get(v.personEmpNo) ?? v.personEmpNo)
+            : "",
+          bedNo: v.bedNo,
+          answers,
+          totalScore,
+          maxScore,
+          rate,
+          submittedAt: serverTimestamp(),
+          submittedBy: user.staffId,
+          source: "import",
+        });
+        pending++;
+        if (pending >= 500) await flush();
+      }
+      await flush();
+      // 覆寫不留痕（v1.47.0 拍板）；稽核只記總數與覆寫筆數。
+      logAudit(db, {
+        actor: user.staffId,
+        actorName: user.name,
+        action: "匯入品管審查結果",
+        targetType: "indicator",
+        targetId: selInd.id,
+        detail: `${selInd.code}：匯入 ${toWrite.length} 筆（其中資料重複已覆蓋 ${overwritten} 筆）、跳過 ${skipped} 列`,
+      });
+      const msg =
+        `審查結果匯入：成功 ${toWrite.length} 筆` +
+        (overwritten > 0 ? `（其中資料重複已覆蓋 ${overwritten} 筆）` : "") +
+        `、跳過 ${skipped} 列`;
+      setPreview(null);
+      setErrors(
+        hardErrorRows.map(
+          (r) => `第 ${r.lineNo} 列：${r.errors.join("；")}`,
+        ),
+      );
+      setSummary(msg);
+      onAction(msg);
+      onDone([...new Set(toWrite.map((r) => r.values!.year))]);
+    } catch (error) {
+      setErrors([
+        `匯入失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
       ]);
     } finally {
       setBusy(false);
@@ -2936,7 +3046,7 @@ function ResultImportPanel({
     <section className="panel">
       <SectionTitle
         title="匯入品管審查結果"
-        note="先選組別與指標（只列啟用），再選 Excel／CSV 檔匯入。預檢不符（指標代號或題數）即整檔中止；逐列未填忽略、非法值該列跳過。匯入的紀錄計入審核進度，不自動建立審查任務。同一內容重複匯入會以同一筆覆寫更新，不會重複建檔。"
+        note="先選組別與指標（只列啟用），再選 Excel／CSV 檔匯入。預檢不符（指標代號或題數）即整檔中止；選檔後先顯示預覽／錯誤清單，按「確認匯入」才寫入。匯入的紀錄計入審核進度，不自動建立審查任務。同一指標、單位、月份、受審人員重複匯入以後者覆蓋前者，不會重複建檔。"
       />
       <div className="form-stack">
         <div className="form-field">
@@ -3005,6 +3115,137 @@ function ResultImportPanel({
           }}
         />
       </div>
+      {preview && (
+        <div style={{ marginTop: 12 }}>
+          <div className="batch-toolbar" style={{ marginBottom: 8 }}>
+            <button
+              className="button button-primary button-sm"
+              disabled={
+                busy ||
+                preview.filter(
+                  (r) =>
+                    r.values &&
+                    r.errors.length === 0 &&
+                    (r.softErrors.length === 0 || r.forceImport),
+                ).length === 0
+              }
+              onClick={() => void confirmImport()}
+            >
+              確認匯入（
+              {preview.filter(
+                (r) =>
+                  r.values &&
+                  r.errors.length === 0 &&
+                  (r.softErrors.length === 0 || r.forceImport),
+              ).length}{" "}
+              筆）
+            </button>
+            <button
+              className="button button-outline button-sm"
+              disabled={busy}
+              onClick={() => {
+                setPreview(null);
+                setSummary(null);
+              }}
+            >
+              取消
+            </button>
+            {preview.some(
+              (r) => r.softErrors.length > 0 && r.errors.length === 0,
+            ) && (
+              <label
+                style={{ display: "flex", alignItems: "center", gap: 4 }}
+              >
+                <input
+                  type="checkbox"
+                  checked={preview
+                    .filter(
+                      (r) =>
+                        r.softErrors.length > 0 && r.errors.length === 0,
+                    )
+                    .every((r) => r.forceImport)}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setPreview((prev) =>
+                      prev
+                        ? prev.map((r) =>
+                            r.softErrors.length > 0 && r.errors.length === 0
+                              ? { ...r, forceImport: checked }
+                              : r,
+                          )
+                        : prev,
+                    );
+                  }}
+                />
+                軟錯誤列全部仍要匯入
+              </label>
+            )}
+          </div>
+          <div style={{ maxHeight: 320, overflow: "auto" }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>列</th>
+                  <th>受審單位</th>
+                  <th>審查月份</th>
+                  <th>審查員</th>
+                  <th>受審人員</th>
+                  <th>狀態</th>
+                  <th>原因</th>
+                  <th>仍要匯入</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.map((r) => {
+                  const status =
+                    r.errors.length > 0
+                      ? "錯誤，不匯入"
+                      : r.willOverwrite
+                        ? "可匯入（將覆蓋既有資料）"
+                        : "可匯入";
+                  const reasons = [...r.errors, ...r.softErrors].join("；");
+                  const canForce =
+                    r.errors.length === 0 && r.softErrors.length > 0;
+                  return (
+                    <tr key={r.lineNo}>
+                      <td>{r.lineNo}</td>
+                      <td>{r.unitCode || "—"}</td>
+                      <td>{r.monthRaw || "—"}</td>
+                      <td>{r.reviewerId || "—"}</td>
+                      <td>{r.personEmpNo || "—"}</td>
+                      <td>{status}</td>
+                      <td>{reasons || "—"}</td>
+                      <td>
+                        {canForce ? (
+                          <input
+                            type="checkbox"
+                            aria-label={`第 ${r.lineNo} 列仍要匯入`}
+                            checked={r.forceImport}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setPreview((prev) =>
+                                prev
+                                  ? prev.map((x) =>
+                                      x.lineNo === r.lineNo
+                                        ? { ...x, forceImport: checked }
+                                        : x,
+                                    )
+                                  : prev,
+                              );
+                            }}
+                          />
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       {summary && (
         <p className="settings-note" role="status">
           {summary}

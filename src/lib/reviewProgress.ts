@@ -30,6 +30,51 @@ export function reviewIntervalIdentity(task: {
   return `${sy}-${String(sm).padStart(2, "0")}_${ey}-${String(em).padStart(2, "0")}`;
 }
 
+export type ReviewIntervalInput = {
+  year: number;
+  month: number;
+  scheduleStartYear?: number;
+  scheduleStartMonth?: number;
+  scheduleEndYear?: number;
+  scheduleEndMonth?: number;
+};
+
+/**
+ * 審查區間展開為月份鍵集合（"YYYY-M"）；無起訖快照時回退為單月。
+ * 匯入紀錄沒有區間快照欄位，只有單月——以月份鍵比對才能對上季／
+ * 半年／年任務的區間（v1.47.0）。
+ */
+export function intervalMonthKeys(input: ReviewIntervalInput): Set<string> {
+  const sy = input.scheduleStartYear ?? input.year;
+  const sm = input.scheduleStartMonth ?? input.month;
+  const ey = input.scheduleEndYear ?? input.year;
+  const em = input.scheduleEndMonth ?? input.month;
+  const keys = new Set<string>();
+  let cursor = sy * 12 + (sm - 1);
+  const end = ey * 12 + (em - 1);
+  if (end < cursor) {
+    keys.add(`${input.year}-${input.month}`);
+    return keys;
+  }
+  while (cursor <= end) {
+    keys.add(`${Math.floor(cursor / 12)}-${(cursor % 12) + 1}`);
+    cursor += 1;
+  }
+  return keys;
+}
+
+/** 兩審查區間是否共用任一月份（v1.47.0：取代區間身分字串相等比對）。 */
+export function intervalsOverlap(
+  a: ReviewIntervalInput,
+  b: ReviewIntervalInput,
+): boolean {
+  const keysB = intervalMonthKeys(b);
+  for (const key of intervalMonthKeys(a)) {
+    if (keysB.has(key)) return true;
+  }
+  return false;
+}
+
 /** 受審人員唯一鍵：同一指標、審查區間與職編只能占一個唯一名額。 */
 export function reviewUniqueDocId(
   indicatorId: string,

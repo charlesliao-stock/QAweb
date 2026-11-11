@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Check, Pencil } from "lucide-react";
 import {
   collection,
@@ -31,6 +31,8 @@ import {
   type ReviewAnswer,
 } from "../lib/reviewRecords";
 import {
+  intervalsOverlap,
+  intervalMonthKeys,
   isTaskComplete,
   nextAvailableQuotaSlot,
   nextCaseSeq,
@@ -250,6 +252,9 @@ export function ReviewExecutePage({
   const [personName, setPersonName] = useState("");
   const [personQuery, setPersonQuery] = useState("");
   const [showPersonSugg, setShowPersonSugg] = useState(false);
+  /** 受審人員重複警示（v1.47.0：選取時即時查該區間已有紀錄，僅警告） */
+  const [personDupWarn, setPersonDupWarn] = useState<string | null>(null);
+  const personDupSeq = useRef(0);
   /** 病人床號（v1.15.0：指標 requireBedNo 時必填） */
   const [bedNo, setBedNo] = useState("");
   /** questionId → 備註（v1.15.0：選填） */
@@ -301,7 +306,10 @@ export function ReviewExecutePage({
       getDocs(query(collection(db, "reviewRecords"), where("indicatorId", "==", task.indicatorId))),
       getDocs(query(collection(db, "reviewDrafts"), where("indicatorId", "==", task.indicatorId))),
     ]);
-    const intervalOf = (data: Record<string, unknown>) => reviewIntervalIdentity({
+    // v1.47.0：區間比對改為「紀錄月份落在任務區間內」（月份重疊），而非
+    // 區間身分字串相等——匯入紀錄無區間快照欄位，舊寫法讓季／半年／年
+    // 任務的匯入紀錄永遠對不上。
+    const intervalInputOf = (data: Record<string, unknown>) => ({
       year: Number(data.year ?? 0),
       month: Number(data.month ?? 0),
       scheduleStartYear: typeof data.scheduleStartYear === "number" ? data.scheduleStartYear : undefined,
@@ -312,13 +320,13 @@ export function ReviewExecutePage({
     for (const record of recordSnap.docs) {
       if (record.id === except.recordId) continue;
       const data = record.data() as Record<string, unknown>;
-      if (String(data.reviewedPersonEmpNo ?? "") === empNo.trim() && intervalOf(data) === intervalId)
+      if (String(data.reviewedPersonEmpNo ?? "") === empNo.trim() && intervalsOverlap(task, intervalInputOf(data)))
         throw new Error("此受審人員在同一指標、同一審查區間已有正式紀錄，不可重複審查");
     }
     for (const draft of draftSnap.docs) {
       if (draft.id === except.draftId) continue;
       const data = draft.data() as Record<string, unknown>;
-      if (String(data.reviewedPersonEmpNo ?? "") === empNo.trim() && intervalOf(data) === intervalId)
+      if (String(data.reviewedPersonEmpNo ?? "") === empNo.trim() && intervalsOverlap(task, intervalInputOf(data)))
         throw new Error("此受審人員在同一指標、同一審查區間已有暫存紀錄；請先開啟該暫存後提交或刪除");
     }
     const uniqueKey = reviewUniqueDocId(task.indicatorId, intervalId, empNo);
@@ -774,6 +782,83 @@ export function ReviewExecutePage({
     setPersonName(u.name);
     setPersonQuery("");
     setShowPersonSugg(false);
+    void checkPersonDuplicate(u.staffId);
+  }
+
+  /**
+   * 選取受審人員時即時警示（v1.47.0）：查該指標該區間是否已有該人紀錄
+   * （含匯入紀錄 source="import"，以月份落在區間內比對）；只警告、提前
+   * 告知，送出時 assertUniqueReviewee 仍擋下。正在編輯的紀錄本身除外。
+   */
+  async function checkPersonDuplicate(empNo: string) {
+    const seq = ++personDupSeq.current;
+    if (!task || !empNo.trim()) {
+      setPersonDupWarn(null);
+      return;
+    }
+    try {
+      const db = getFirebaseDb();
+      const snap = await getDocs(
+        query(
+          collection(db, "reviewRecords"),
+          where("indicatorId", "==", task.indicatorId),
+        ),
+      );
+      const taskKeys = intervalMonthKeys(task);
+      let hasImport = false;
+      let hasFormal = false;
+      for (const d of snap.docs) {
+        if (d.id === editingId) continue;
+        const data = d.data() as Record<string, unknown>;
+        if (String(data.reviewedPersonEmpNo ?? "") !== empNo.trim()) continue;
+        const keys = intervalMonthKeys({
+          year: Number(data.year ?? 0),
+          month: Number(data.month ?? 0),
+          scheduleStartYear:
+            typeof data.scheduleStartYear === "number"
+              ? data.scheduleStartYear
+              : undefined,
+          scheduleStartMonth:
+            typeof data.scheduleStartMonth === "number"
+              ? data.scheduleStartMonth
+              : undefined,
+          scheduleEndYear:
+            typeof data.scheduleEndYear === "number"
+              ? data.scheduleEndYear
+              : undefined,
+          scheduleEndMonth:
+            typeof data.scheduleEndMonth === "number"
+              ? data.scheduleEndMonth
+              : undefined,
+        });
+        let overlap = false;
+        for (const key of keys) {
+          if (taskKeys.has(key)) {
+            overlap = true;
+            break;
+          }
+        }
+        if (!overlap) continue;
+        if (String(data.source ?? "") === "import") hasImport = true;
+        else hasFormal = true;
+      }
+      if (seq !== personDupSeq.current) return;
+      if (hasImport && hasFormal)
+        setPersonDupWarn(
+          "提醒：此受審人員在本審查區間已有正式審查紀錄及匯入紀錄，同一區間同一指標一人只審一次，送出時將無法重複審查。",
+        );
+      else if (hasImport)
+        setPersonDupWarn(
+          "提醒：此受審人員在本審查區間已有匯入紀錄，同一區間同一指標一人只審一次，送出時將無法重複審查。",
+        );
+      else if (hasFormal)
+        setPersonDupWarn(
+          "提醒：此受審人員在本審查區間已有正式審查紀錄，同一區間同一指標一人只審一次，送出時將無法重複審查。",
+        );
+      else setPersonDupWarn(null);
+    } catch {
+      if (seq === personDupSeq.current) setPersonDupWarn(null);
+    }
   }
 
   /* ---------- 申請解鎖（v1.15.0） ---------- */
@@ -1648,6 +1733,8 @@ export function ReviewExecutePage({
                           setPersonName("");
                           setPersonQuery("");
                           setShowPersonSugg(true);
+                          setPersonDupWarn(null);
+                          personDupSeq.current += 1;
                         }}
                       >
                         更換
@@ -1688,6 +1775,15 @@ export function ReviewExecutePage({
                         </ul>
                       )}
                     </>
+                  )}
+                  {personDupWarn && (
+                    <div
+                      className="dup-note"
+                      role="alert"
+                      style={{ marginTop: 8 }}
+                    >
+                      {personDupWarn}
+                    </div>
                   )}
                 </div>
               )}

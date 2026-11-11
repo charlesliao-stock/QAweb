@@ -37,7 +37,7 @@ import type {
   DashTask,
 } from "../../lib/dashboardStats";
 import {
-  countRecordsByTask,
+  countRecordsByTaskWithImports,
   dashboardMonthWindow,
   mergeDashTasks,
   taskProgressCount,
@@ -380,14 +380,78 @@ export function useDashboardData(): DashboardData {
           }
           if (cancelled) return;
         }
+        // v1.47.0 匯入紀錄補查：匯入紀錄 taskId 為空，taskId in 補查不到；
+        // 改按（指標，年）查（沿用 reviewRecords 既有 indicatorId＋year
+        // 複合索引，與 loadPeriodicQuotaCounts 同形），再以單位＋月份
+        // 過濾出對應任務的匯入紀錄。本月任務的紀錄已由本月查詢拉齊，
+        // 此處只補非本月任務。
+        if (fetchIds.length > 0) {
+          const importFetchTasks = list.filter((t) =>
+            fetchIds.includes(t.id),
+          );
+          const pairMap = new Map<
+            string,
+            { indicatorId: string; year: number; tasks: DashTask[] }
+          >();
+          for (const t of importFetchTasks) {
+            const key = `${t.indicatorId}||${t.year}`;
+            const entry = pairMap.get(key) ?? {
+              indicatorId: t.indicatorId,
+              year: t.year,
+              tasks: [] as DashTask[],
+            };
+            entry.tasks.push(t);
+            pairMap.set(key, entry);
+          }
+          const pairs = [...pairMap.values()];
+          const IMPORT_PAIR_CAP = 30;
+          const cappedPairs = pairs.slice(0, IMPORT_PAIR_CAP);
+          for (const pair of pairs.slice(IMPORT_PAIR_CAP)) {
+            for (const t of pair.tasks) t.doneCountUnknown = true;
+          }
+          const importSnaps = await Promise.all(
+            cappedPairs.map(({ indicatorId, year }) =>
+              getDocs(
+                query(
+                  collection(db, "reviewRecords"),
+                  where("indicatorId", "==", indicatorId),
+                  where("year", "==", year),
+                ),
+              ).catch(() => null),
+            ),
+          );
+          importSnaps.forEach((snap, i) => {
+            const pair = cappedPairs[i];
+            if (!snap) {
+              for (const t of pair.tasks) t.doneCountUnknown = true;
+              return;
+            }
+            snap.docs.forEach((d) => {
+              const data = d.data() as Record<string, unknown>;
+              if (String(data.source ?? "") !== "import") return;
+              const hit = pair.tasks.some(
+                (t) =>
+                  t.unitId === String(data.unitId ?? "") &&
+                  t.year === Number(data.year ?? 0) &&
+                  t.month === Number(data.month ?? 0),
+              );
+              if (hit && !recMap.has(d.id)) {
+                const r = parseRecord(d.id, data);
+                recMap.set(r.id, r);
+              }
+            });
+          });
+          if (cancelled) return;
+        }
         // 超過上限者：完成進度未知（畫面顯示「—」，不顯示錯誤的 0）
         for (const id of needIds.slice(EXTRA_RECORD_TASK_CAP)) {
           const t = list.find((x) => x.id === id);
           if (t) t.doneCountUnknown = true;
         }
         const recs = [...recMap.values()];
-        // 逐件完成數（本月任務的紀錄即足夠；鎖定／逾期任務已另補）
-        const countMap = countRecordsByTask(recs);
+        // 逐件完成數（本月任務的紀錄即足夠；鎖定／逾期任務已另補；
+        // v1.47.0：含匯入紀錄，按指標＋單位＋年月歸屬）
+        const countMap = countRecordsByTaskWithImports(recs, list);
         for (const t of list) {
           t.doneCount = countMap.get(t.id) ?? 0;
         }

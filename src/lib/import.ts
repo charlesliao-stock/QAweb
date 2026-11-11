@@ -482,7 +482,16 @@ export interface ResultImportRowInput {
 export interface ResultImportRowResult {
   lineNo: number;
   ok: boolean;
+  /** 硬錯誤：該列不能匯入 */
   errors: string[];
+  /** 軟錯誤（v1.47.0）：受審人職編不在人員檔、或人員檔未載入無法驗證；
+   * 由匯入者逐列決定是否仍要匯入 */
+  softErrors: string[];
+  /** 原始欄位（預覽表顯示用；values 為 null 的錯誤列亦有） */
+  unitCode: string;
+  monthRaw: string;
+  reviewerId: string;
+  personEmpNo: string;
   values: {
     code: string;
     unitCode: string;
@@ -755,9 +764,34 @@ export function importRecordHash(input: ImportIdentityInput): string {
  * 同一內容重複匯入／重複同步即 upsert（batch.set 覆寫），不會重複建檔。
  * 邊界（誠實處理）：舊的隨機 ID 紀錄無法與新雜湊 ID 自動對上，重匯舊檔
  * 案時舊紀錄仍留著、只保證不再新增重複；不自動刪舊紀錄。
+ * v1.47.0：新匯入改用 importIdentityDocId（身分鍵）去重，本函式僅保留
+ * 供舊版內容雜湊 ID 對照，不再用於寫入。
  */
 export function importRecordDocId(input: ImportIdentityInput): string {
   return `import_${importRecordHash(input).slice(0, 24)}`;
+}
+
+/**
+ * 匯入紀錄身分鍵文件 ID（v1.47.0）：指標＋單位＋年＋月＋受審人職編
+ * （不含審查員、床號、答案、備註）。同一身分再匯＝同一文件 ID＝覆寫，
+ * 改答案重匯不再新增重複筆。舊內容雜湊 ID 的文件不自動清理、不合併。
+ */
+export function importIdentityDocId(input: {
+  indicatorId: string;
+  unitCode: string;
+  year: number;
+  month: number;
+  personEmpNo: string;
+}): string {
+  const canon = {
+    v: 1,
+    ind: input.indicatorId.trim(),
+    unit: input.unitCode.trim(),
+    y: input.year,
+    m: input.month,
+    p: input.personEmpNo.trim(),
+  };
+  return `import_${sha1Hex(JSON.stringify(canon)).slice(0, 24)}`;
 }
 
 /**
@@ -941,11 +975,17 @@ export function validateResultSheet(
         lineNo: r.lineNo,
         ok: false,
         errors: fileErrors,
+        softErrors: [],
+        unitCode: r.unitCode.trim(),
+        monthRaw: r.monthRaw,
+        reviewerId: r.reviewerId.trim(),
+        personEmpNo: r.personEmpNo.trim(),
         values: null,
       })),
     };
   const rows = data.map((r) => {
     const errors: string[] = [];
+    const softErrors: string[] = [];
     const unitCode = r.unitCode.trim();
     if (!unitCode) errors.push("受審單位未填");
     else if (!ctx.unitHas(unitCode)) errors.push(`受審單位 ${unitCode} 不存在`);
@@ -954,9 +994,29 @@ export function validateResultSheet(
       errors.push(
         `審查月份「${r.monthRaw || "（空白）"}」格式須為 YYYY-MM 或 YYYY/MM/DD（如 2026/11/05）`,
       );
+    // v1.47.0：審查員職編有填且不在人員檔＝硬錯誤；人員檔未載入時改軟
+    // 錯誤（不直接放行、也不擋死），由匯入者決定。
     const reviewerId = r.reviewerId.trim();
-    if (reviewerId && ctx.staffLoaded && !ctx.staffHas(reviewerId))
-      errors.push(`審查員職編 ${reviewerId} 不存在`);
+    if (reviewerId) {
+      if (ctx.staffLoaded) {
+        if (!ctx.staffHas(reviewerId))
+          errors.push(`審查員職編 ${reviewerId} 不存在`);
+      } else {
+        softErrors.push("人員檔未載入，無法驗證審查員職編");
+      }
+    }
+    // v1.47.0：受審人職編空白＝硬錯誤；有填但不在人員檔＝軟錯誤
+    // （非建檔人員可由匯入者逐列決定是否仍要匯入）；人員檔未載入時同為
+    // 軟錯誤，不直接放行。
+    const personEmpNo = r.personEmpNo.trim();
+    if (!personEmpNo) {
+      errors.push("受審人員職編未填");
+    } else if (ctx.staffLoaded) {
+      if (!ctx.staffHas(personEmpNo))
+        softErrors.push(`受審人員職編 ${personEmpNo} 不在人員檔（非建檔人員）`);
+    } else {
+      softErrors.push("人員檔未載入，無法驗證受審人員職編");
+    }
     const normalizedAnswers = r.answers.map((a) =>
       a === "" ? "" : normalizeResultAnswer(a),
     );
@@ -967,12 +1027,36 @@ export function validateResultSheet(
       errors.push(
         `答案須為 是／否／不適用（正確＝是、不正確＝否）：${badAnswers.join("、")}`,
       );
+    // v1.47.0：已填答案數（不含備註欄）須等於題數；空白答案算未填，
+    // 不適用須填「不適用」才算有填。非法答案已另報錯時不重複報數。
+    const filledCount = normalizedAnswers.filter(
+      (a) => a !== "" && a !== null,
+    ).length;
+    if (badAnswers.length === 0 && filledCount !== ctx.questionCount)
+      errors.push(
+        `已填答案 ${filledCount} 題，與題數 ${ctx.questionCount} 題不符（空白答案不計入，未作答請填「不適用」）`,
+      );
     if (errors.length > 0 || !ym)
-      return { lineNo: r.lineNo, ok: false, errors, values: null };
+      return {
+        lineNo: r.lineNo,
+        ok: false,
+        errors,
+        softErrors,
+        unitCode,
+        monthRaw: r.monthRaw,
+        reviewerId,
+        personEmpNo,
+        values: null,
+      };
     return {
       lineNo: r.lineNo,
       ok: true,
       errors: [],
+      softErrors,
+      unitCode,
+      monthRaw: r.monthRaw,
+      reviewerId,
+      personEmpNo,
       values: {
         code: ctx.code,
         unitCode,
