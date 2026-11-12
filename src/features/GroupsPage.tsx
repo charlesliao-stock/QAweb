@@ -56,6 +56,15 @@ import {
   type RoleScope,
   type TitleFlags,
 } from "../lib/orgMeta";
+import {
+  canDeleteLevel,
+  groupByLevel,
+  levelIdByName,
+  nextLevelOrder,
+  sortedLevels,
+  type OrgLevel,
+} from "../lib/orgLevels";
+import { migrateOrgLevels } from "../lib/levelMigration";
 import { wouldCreateUnitHistoryCycle } from "../lib/unitHistory";
 import {
   UNIT_TEMPLATE_HEADERS,
@@ -90,6 +99,8 @@ interface UnitRow {
 interface TitleRow extends TitleFlags {
   id: string;
   name: string;
+  /** v1.55.0：所屬層級 id（空＝未分層級） */
+  levelId: string;
   userCount: number | null;
 }
 
@@ -109,6 +120,8 @@ interface UserRow {
 interface RoleRow {
   id: string;
   name: string;
+  /** v1.55.0：所屬層級 id（空＝未分層級） */
+  levelId: string;
   /** 功能類別（審查員／召集人／執行幹事／單位主管／院級主管／一般） */
   category: RoleCategory;
   /** 適用範圍（group＝群組角色；unit＝單位角色） */
@@ -121,6 +134,8 @@ interface OptionItem {
   name: string;
   category?: RoleCategory;
   kind?: RoleScope;
+  /** v1.55.0：所屬層級 id（空＝未分層級） */
+  levelId?: string;
 }
 
 function SortHeader({
@@ -161,6 +176,8 @@ interface UnitForm {
 /** 職稱：名稱之外，勾選主管層級旗標供身分判斷（儀表板／結果範圍）使用。 */
 interface TitleForm extends TitleFlags {
   name: string;
+  /** v1.55.0：所屬層級 id（空＝未分層級） */
+  levelId: string;
 }
 
 interface UserForm {
@@ -200,6 +217,7 @@ function emptyUnitForm(): UnitForm {
 function emptyTitleForm(): TitleForm {
   return {
     name: "",
+    levelId: "",
     isUnitHead: false,
     isDistrictHead: false,
     isHospitalHead: false,
@@ -266,16 +284,20 @@ const UNIT_SAMPLE: string[][] = unitTemplateRows();
 const UNIT_HEADER = UNIT_TEMPLATE_HEADERS;
 
 const TITLE_SAMPLE: string[][] = [
-  ["職稱名稱"],
-  ["護理長"],
-  ["副護理長"],
-  ["督導"],
-  ["護理師"],
+  ["職稱名稱", "層級"],
+  ["護理長", "單位"],
+  ["副護理長", "單位"],
+  ["督導", "部級"],
+  ["護理師", "單位"],
 ];
-const TITLE_HEADER = ["職稱名稱"];
+const TITLE_HEADER = ["職稱名稱", "層級"];
 
-const ROLE_SAMPLE: string[][] = [["角色名稱"], ["召集人"], ["執行幹事"]];
-const ROLE_HEADER = ["角色名稱"];
+const ROLE_SAMPLE: string[][] = [
+  ["角色名稱", "層級"],
+  ["召集人", ""],
+  ["執行幹事", ""],
+];
+const ROLE_HEADER = ["角色名稱", "層級"];
 
 const USER_SAMPLE: string[][] = userTemplateRows();
 const USER_HEADER = USER_TEMPLATE_HEADERS;
@@ -651,6 +673,21 @@ export function GroupsPage({
   const [titleError, setTitleError] = useState("");
   const [titleSaving, setTitleSaving] = useState(false);
 
+  // ---- 層級（v1.55.0 方案 A：層級做成可管理資料） ----
+  const [titleLevels, setTitleLevels] = useState<OrgLevel[]>([]);
+  const [roleLevels, setRoleLevels] = useState<OrgLevel[]>([]);
+  const [levelsLoading, setLevelsLoading] = useState(true);
+  const [levelEdit, setLevelEdit] = useState<{
+    target: "title" | "role";
+    id: string;
+    name: string;
+  } | null>(null);
+  const [levelCreateTarget, setLevelCreateTarget] = useState<"title" | "role" | null>(null);
+  const [newLevelName, setNewLevelName] = useState("");
+  const [levelError, setLevelError] = useState("");
+  const [levelBusy, setLevelBusy] = useState(false);
+  const migrationRanRef = useRef(false);
+
   // ---- 人員 ----
   const [users, setUsers] = useState<UserRow[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -679,6 +716,8 @@ export function GroupsPage({
   /** v1.40.5：新角色功能類別（預設一般）與適用範圍（預設群組角色） */
   const [newRoleCategory, setNewRoleCategory] = useState<RoleCategory>("general");
   const [newRoleKind, setNewRoleKind] = useState<RoleScope>("group");
+  /** v1.55.0：新角色所屬層級（空＝未分層級） */
+  const [newRoleLevelId, setNewRoleLevelId] = useState("");
   const [roleCreateError, setRoleCreateError] = useState("");
   const [roleCreateSaving, setRoleCreateSaving] = useState(false);
   /** 正在管理成員的角色 id（""＝未開啟） */
@@ -760,6 +799,7 @@ export function GroupsPage({
         name: r.name,
         category: r.category ?? "general",
         kind: r.kind ?? "group",
+        levelId: r.levelId ?? "",
         memberCount:
           users.length > 0
             ? users.filter(
@@ -885,6 +925,8 @@ export function GroupsPage({
             name,
             category: m?.category,
             kind: m?.scope,
+            levelId:
+              typeof data.levelId === "string" ? data.levelId : "",
           };
         }),
       );
@@ -975,6 +1017,33 @@ export function GroupsPage({
     }
   }, [onAction]);
 
+  /** 層級清單（v1.55.0）：titleLevels／roleLevels 各讀一次 */
+  const loadLevels = useCallback(async () => {
+    setLevelsLoading(true);
+    try {
+      const db = getFirebaseDb();
+      const [tSnap, rSnap] = await Promise.all([
+        getDocsFromServer(collection(db, "titleLevels")),
+        getDocsFromServer(collection(db, "roleLevels")),
+      ]);
+      const read = (snap: { docs: Array<{ id: string; data: () => Record<string, unknown> }> }) =>
+        snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            name: typeof data.name === "string" ? data.name : "",
+            order: typeof data.order === "number" ? data.order : 0,
+          };
+        });
+      setTitleLevels(sortedLevels(read(tSnap)));
+      setRoleLevels(sortedLevels(read(rSnap)));
+    } catch (error) {
+      onAction(`讀取層級清單失敗：${toErrorMessage(error)}`);
+    } finally {
+      setLevelsLoading(false);
+    }
+  }, [onAction]);
+
   const loadTitles = useCallback(async () => {
     setTitlesLoading(true);
     try {
@@ -988,6 +1057,8 @@ export function GroupsPage({
           return {
             id: d.id,
             name: typeof data.name === "string" ? data.name : "",
+            levelId:
+              typeof data.levelId === "string" ? data.levelId : "",
             // 職稱主管層級旗標（有欄位時以欄位為準；舊資料無欄位時以名稱推導）
             ...legacyTitleFlags(
               typeof data.name === "string" ? data.name : "",
@@ -1099,6 +1170,42 @@ export function GroupsPage({
       loadMaster();
       loadRoles();
       loadTitles();
+      loadLevels();
+      // v1.55.0：一次性層級遷移（管理員開頁執行；旗標防重跑）
+      if (isAdmin && user?.staffId && !migrationRanRef.current) {
+        migrationRanRef.current = true;
+        (async () => {
+          try {
+            const res = await migrateOrgLevels(
+              getFirebaseDb(),
+              user.staffId,
+              user.name,
+            );
+            const parts: string[] = [];
+            if (res.levelsCreated.length > 0)
+              parts.push(`建立層級 ${res.levelsCreated.length} 個`);
+            if (res.titlesBackfilled > 0)
+              parts.push(`職稱回填 ${res.titlesBackfilled} 筆`);
+            if (res.rolesBackfilled > 0)
+              parts.push(`角色回填 ${res.rolesBackfilled} 筆`);
+            if (res.rolesCreated.length > 0)
+              parts.push(`新增角色 ${res.rolesCreated.length} 個`);
+            if (res.oldRole === "migrated")
+              parts.push(
+                `舊角色「品管執行幹事」已遷移 ${res.oldRoleHolders} 人後刪除`,
+              );
+            else if (res.oldRole === "deleted-empty")
+              parts.push("舊角色「品管執行幹事」已刪除");
+            if (parts.length > 0)
+              onAction(`層級遷移完成：${parts.join("、")}`);
+            await loadLevels();
+            await loadTitles();
+            await loadRoles();
+          } catch (error) {
+            onAction(`層級遷移失敗：${toErrorMessage(error)}`);
+          }
+        })();
+      }
       // v1.12.0：掛載時即預載人員（修頁籤 badge 初始顯示 0 的問題）
       if (isAdmin) loadUsers();
     })();
@@ -1106,7 +1213,7 @@ export function GroupsPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadMaster, loadRoles, loadTitles, isAdmin]);
+  }, [loadMaster, loadRoles, loadTitles, loadLevels, isAdmin, user]);
 
   useEffect(() => {
     // v1.27.2：掛載時已預載人員，切回頁籤不重拉（存檔後各 handler 會自行 loadUsers）
@@ -1366,6 +1473,7 @@ export function GroupsPage({
     if (!row) return;
     setTitleForm({
       name: row.name,
+      levelId: row.levelId ?? "",
       isUnitHead: row.isUnitHead,
       isDistrictHead: row.isDistrictHead,
       isHospitalHead: row.isHospitalHead,
@@ -1405,6 +1513,7 @@ export function GroupsPage({
         const batch = writeBatch(db);
         batch.set(titleRef, {
           name,
+          levelId: titleForm.levelId,
           // v1.40.5：職稱建立即寫入主管層級旗標，身分判斷不再比對名稱
           isUnitHead: titleForm.isUnitHead,
           isDistrictHead: titleForm.isDistrictHead,
@@ -1437,7 +1546,9 @@ export function GroupsPage({
           old?.isHospitalHead !== titleForm.isHospitalHead ||
           old?.isOfficer !== titleForm.isOfficer ||
           old?.isConvener !== titleForm.isConvener;
-        if (!nameChanged && !flagsChanged) {
+        // v1.55.0：層級變動也要能儲存
+        const levelChanged = (old?.levelId ?? "") !== titleForm.levelId;
+        if (!nameChanged && !flagsChanged && !levelChanged) {
           setTitleView({ kind: "list" });
           return;
         }
@@ -1481,6 +1592,7 @@ export function GroupsPage({
         const batch = writeBatch(db);
         batch.update(doc(db, "titles", view.id), {
           name,
+          levelId: titleForm.levelId,
           isUnitHead: titleForm.isUnitHead,
           isDistrictHead: titleForm.isDistrictHead,
           isHospitalHead: titleForm.isHospitalHead,
@@ -1566,6 +1678,158 @@ export function GroupsPage({
       await loadTitles();
     } catch (error) {
       onAction(`刪除失敗：${toErrorMessage(error)}`);
+    }
+  }
+
+
+  // ================= 層級（v1.55.0） =================
+
+  async function handleLevelCreate() {
+    const target = levelCreateTarget;
+    if (!target || !user) return;
+    const name = newLevelName.trim();
+    if (!name) {
+      setLevelError("請輸入層級名稱");
+      return;
+    }
+    const levels = target === "title" ? titleLevels : roleLevels;
+    if (levels.some((l) => l.name === name)) {
+      setLevelError(`層級「${name}」已存在`);
+      return;
+    }
+    setLevelError("");
+    setLevelBusy(true);
+    try {
+      const db = getFirebaseDb();
+      const coll = target === "title" ? "titleLevels" : "roleLevels";
+      const ref = doc(collection(db, coll));
+      const batch = writeBatch(db);
+      batch.set(ref, {
+        name,
+        order: nextLevelOrder(levels),
+        ...auditFields(user.staffId, true),
+      });
+      batch.set(doc(collection(db, "auditLogs")), {
+        actor: user.staffId,
+        actorName: user.name,
+        action: "層級建立",
+        targetType: "level",
+        targetId: ref.id,
+        detail: `新增${target === "title" ? "職稱" : "角色"}層級「${name}」`,
+        before: null,
+        after: { name },
+        createdAt: serverTimestamp(),
+      });
+      await batch.commit();
+      setNewLevelName("");
+      setLevelCreateTarget(null);
+      await loadLevels();
+      onAction(`已新增層級「${name}」`);
+    } catch (error) {
+      setLevelError(`新增失敗：${toErrorMessage(error)}`);
+    } finally {
+      setLevelBusy(false);
+    }
+  }
+
+  /** 層級更名只改層級文件（項目以 levelId 參照，人員與權限不動） */
+  async function handleLevelRename() {
+    if (!levelEdit || !user) return;
+    const name = levelEdit.name.trim();
+    if (!name) {
+      setLevelError("請輸入層級名稱");
+      return;
+    }
+    const levels = levelEdit.target === "title" ? titleLevels : roleLevels;
+    if (levels.some((l) => l.name === name && l.id !== levelEdit.id)) {
+      setLevelError(`層級「${name}」已存在`);
+      return;
+    }
+    setLevelError("");
+    setLevelBusy(true);
+    try {
+      const db = getFirebaseDb();
+      const coll = levelEdit.target === "title" ? "titleLevels" : "roleLevels";
+      await updateDoc(doc(db, coll, levelEdit.id), {
+        name,
+        ...auditFields(user.staffId, false),
+      });
+      setLevelEdit(null);
+      await loadLevels();
+      onAction(`層級已更名為「${name}」`);
+    } catch (error) {
+      setLevelError(`更名失敗：${toErrorMessage(error)}`);
+    } finally {
+      setLevelBusy(false);
+    }
+  }
+
+  /** 層級刪除：底下還有項目就擋下 */
+  async function handleLevelDelete(target: "title" | "role", level: OrgLevel) {
+    if (!user) return;
+    const items = target === "title" ? titles : roleRows;
+    if (!canDeleteLevel(items, level.id)) {
+      onAction(
+        `層級「${level.name}」底下還有項目，請先移出或刪除項目再刪除層級`,
+      );
+      return;
+    }
+    const ok = window.confirm(
+      `確定刪除層級「${level.name}」？此動作無法復原。`,
+    );
+    if (!ok) return;
+    try {
+      const db = getFirebaseDb();
+      const coll = target === "title" ? "titleLevels" : "roleLevels";
+      const batch = writeBatch(db);
+      batch.delete(doc(db, coll, level.id));
+      batch.set(doc(collection(db, "auditLogs")), {
+        actor: user.staffId,
+        actorName: user.name,
+        action: "層級刪除",
+        targetType: "level",
+        targetId: level.id,
+        detail: `刪除${target === "title" ? "職稱" : "角色"}層級「${level.name}」`,
+        before: { name: level.name },
+        after: null,
+        createdAt: serverTimestamp(),
+      });
+      await batch.commit();
+      onAction(`層級「${level.name}」已刪除`);
+      await loadLevels();
+    } catch (error) {
+      onAction(`刪除失敗：${toErrorMessage(error)}`);
+    }
+  }
+
+  /** 層級排序：與相鄰層級交換 order */
+  async function handleLevelMove(
+    target: "title" | "role",
+    levelId: string,
+    dir: 1 | -1,
+  ) {
+    if (!user) return;
+    const levels = target === "title" ? titleLevels : roleLevels;
+    const sorted = sortedLevels(levels);
+    const idx = sorted.findIndex((l) => l.id === levelId);
+    const swapIdx = idx + dir;
+    if (idx < 0 || swapIdx < 0 || swapIdx >= sorted.length) return;
+    try {
+      const db = getFirebaseDb();
+      const coll = target === "title" ? "titleLevels" : "roleLevels";
+      const batch = writeBatch(db);
+      batch.update(doc(db, coll, sorted[idx].id), {
+        order: sorted[swapIdx].order,
+        ...auditFields(user.staffId, false),
+      });
+      batch.update(doc(db, coll, sorted[swapIdx].id), {
+        order: sorted[idx].order,
+        ...auditFields(user.staffId, false),
+      });
+      await batch.commit();
+      await loadLevels();
+    } catch (error) {
+      onAction(`排序失敗：${toErrorMessage(error)}`);
     }
   }
 
@@ -1724,13 +1988,10 @@ export function GroupsPage({
       setUserError("請先登入");
       return;
     }
+    // v1.55.0：新帳號預設為一般使用者，職稱可留白、之後再賦予。
     const selectedTitle = userForm.titleId
       ? titles.find((title) => title.id === userForm.titleId)
       : undefined;
-    if (!userForm.titleId || !selectedTitle) {
-      setUserError("請選擇職稱");
-      return;
-    }
     const roles = [
       ...new Set([
         ...deriveRoles(userForm.memberships.filter((m) => m.groupId)),
@@ -2010,6 +2271,7 @@ export function GroupsPage({
     setRoleEditName(role?.name ?? "");
     setRoleEditCategory(role?.category ?? "general");
     setRoleEditKind(role?.kind ?? "group");
+    setRoleEditLevelId(role?.levelId ?? "");
     setRoleEditError("");
   }
 
@@ -2207,6 +2469,7 @@ export function GroupsPage({
         // v1.40.5：角色建立即寫入功能類別與適用範圍，身分判斷不再比對名稱
         category: newRoleCategory,
         kind: newRoleKind,
+        levelId: newRoleLevelId,
         ...auditFields(user?.staffId ?? "", true),
       });
       batch.set(doc(collection(db, "auditLogs")), {
@@ -2217,13 +2480,19 @@ export function GroupsPage({
         targetId: roleRef.id,
         detail: `建立角色「${name}」`,
         before: null,
-        after: { name, category: newRoleCategory, kind: newRoleKind },
+        after: {
+          name,
+          category: newRoleCategory,
+          kind: newRoleKind,
+          levelId: newRoleLevelId,
+        },
         createdAt: serverTimestamp(),
       });
       await batch.commit();
       setNewRoleName("");
       setNewRoleCategory("general");
       setNewRoleKind("group");
+      setNewRoleLevelId("");
       setRoleCreateOpen(false);
       await loadRoles();
       onAction(`已新增角色「${name}」；請至權限管理設定權限`);
@@ -2240,6 +2509,7 @@ export function GroupsPage({
   const [roleEditName, setRoleEditName] = useState("");
   const [roleEditCategory, setRoleEditCategory] = useState<RoleCategory>("general");
   const [roleEditKind, setRoleEditKind] = useState<RoleScope>("group");
+  const [roleEditLevelId, setRoleEditLevelId] = useState("");
   const [roleEditError, setRoleEditError] = useState("");
   const [roleEditSaving, setRoleEditSaving] = useState(false);
   async function handleRoleRename() {
@@ -2253,7 +2523,8 @@ export function GroupsPage({
     const nameChanged = name !== role.name;
     const kindChanged = roleEditKind !== role.kind;
     const categoryChanged = roleEditCategory !== role.category;
-    if (!nameChanged && !kindChanged && !categoryChanged) {
+    const levelChanged = (role.levelId ?? "") !== roleEditLevelId;
+    if (!nameChanged && !kindChanged && !categoryChanged && !levelChanged) {
       setRoleEditError("");
       return;
     }
@@ -2316,6 +2587,7 @@ export function GroupsPage({
         name,
         category: roleEditCategory,
         kind: roleEditKind,
+        levelId: roleEditLevelId,
         ...auditFields(user.staffId, false),
       });
       // 權限範本遷移：舊（類別，舊名）→ 新（類別，新名）；類別或名稱其一變動皆遷移
@@ -2338,8 +2610,18 @@ export function GroupsPage({
         targetType: "role",
         targetId: role.id,
         detail: `角色「${oldName}」更新為「${name}」`,
-        before: { name: oldName, category: role.category, kind: role.kind },
-        after: { name, category: roleEditCategory, kind: roleEditKind },
+        before: {
+          name: oldName,
+          category: role.category,
+          kind: role.kind,
+          levelId: role.levelId ?? "",
+        },
+        after: {
+          name,
+          category: roleEditCategory,
+          kind: roleEditKind,
+          levelId: roleEditLevelId,
+        },
         createdAt: serverTimestamp(),
       });
       await batch.commit();
@@ -2619,6 +2901,11 @@ export function GroupsPage({
         if (!name) error = "角色名稱不可空白";
         else if (roleRows.some((role) => role.name === name) || seen.has(name))
           error = `角色「${name}」已存在`;
+        else {
+          const levelName = (row[1] ?? "").trim();
+          if (levelName && !levelIdByName(roleLevels, levelName))
+            error = `層級「${levelName}」不存在，請先建立層級`;
+        }
         seen.add(name);
         return { index: i + 1, values: row, ok: !error, error };
       }),
@@ -2630,11 +2917,13 @@ export function GroupsPage({
     await commitInBatches(
       rows.map((row) => {
         const name = row.values[0].trim();
+        const levelId = levelIdByName(roleLevels, (row.values[1] ?? "").trim());
         const roleRef = doc(collection(getFirebaseDb(), "roles"));
         return (batch: WriteBatch) => {
           batch.set(roleRef, {
             name,
             description: "",
+            levelId,
             ...auditFields(me, true),
           });
           batch.set(doc(collection(getFirebaseDb(), "auditLogs")), {
@@ -2730,6 +3019,9 @@ export function GroupsPage({
         if (!name) return { index, values: r, ok: false, error: "職稱名稱不可空白" };
         if (existing.has(name) || seen.has(name))
           return { index, values: r, ok: false, error: `職稱「${name}」已存在` };
+        const levelName = (r[1] ?? "").trim();
+        if (levelName && !levelIdByName(titleLevels, levelName))
+          return { index, values: r, ok: false, error: `層級「${levelName}」不存在，請先建立層級` };
         seen.add(name);
         return { index, values: r, ok: true, error: "" };
       }),
@@ -2741,10 +3033,12 @@ export function GroupsPage({
     await commitInBatches(
       rows.map((r) => {
         const name = r.values[0].trim();
+        const levelId = levelIdByName(titleLevels, (r.values[1] ?? "").trim());
         const titleRef = doc(collection(getFirebaseDb(), "titles"));
         return (b: WriteBatch) => {
           b.set(titleRef, {
             name,
+            levelId,
             ...auditFields(me, true),
           });
           b.set(doc(collection(getFirebaseDb(), "auditLogs")), {
@@ -2776,18 +3070,9 @@ export function GroupsPage({
       if (!result.ok || !result.values) return result;
       const existing = users.find((item) => item.staffId === result.values?.staffId);
       const titleName = result.values.title ?? existing?.title ?? "";
-      if (!titleName) {
-        // v1.36.0：人員新增須填職稱；更新時未填則沿用既有職稱。
-        if (result.action === "create") {
-          return {
-            ...result,
-            ok: false,
-            errors: [...result.errors, "請填寫職稱（人員新增須填職稱）"],
-            values: null,
-          };
-        }
-        return result;
-      }
+      // v1.55.0：新帳號預設為一般使用者，職稱可留白、之後再賦予；
+      // 更新時未填則沿用既有職稱。（舊 v1.36.0 擋下已移除。）
+      if (!titleName) return result;
       // v1.39.0：職稱一名一檔，只認名稱存在與否，不再比對適用單位
       if (titles.some((title) => title.name === titleName)) return result;
       return {
@@ -2961,6 +3246,269 @@ export function GroupsPage({
       onAction("審查員名單連動失敗，請聯絡系統管理員手動調整");
     }
     return `人員匯入完成：新增 ${created} 筆、更新 ${updated} 筆`;
+  }
+
+
+  // ---- v1.55.0：職稱／角色按層級分組 ----
+  const sortedTitleRows = sortedRows(
+    titles,
+    sortState.key,
+    (row, key) => (key === "title-count" ? (row.userCount ?? -1) : row.name),
+  );
+  const titleSections = groupByLevel(sortedTitleRows, titleLevels);
+  const titleFormSections = groupByLevel(titles, titleLevels);
+  const sortedRoleRows = sortedRows(
+    roleRows,
+    sortState.key,
+    (row, key) => (key === "role-count" ? (row.memberCount ?? -1) : row.name),
+  );
+  const roleSections = groupByLevel(sortedRoleRows, roleLevels);
+  const roleFormSections = groupByLevel(roleOptions, roleLevels);
+
+  /** 層級區段標題（層級名＋人數小計＋更名／排序／刪除；未分層級不顯示操作） */
+  function renderLevelHead(
+    target: "title" | "role",
+    level: OrgLevel | null,
+    memberCount: number,
+  ) {
+    const levels = target === "title" ? titleLevels : roleLevels;
+    const sorted = sortedLevels(levels);
+    const idx = level ? sorted.findIndex((l) => l.id === level.id) : -1;
+    const isEditing =
+      levelEdit?.target === target && levelEdit?.id === level?.id;
+    const canEdit = target === "title" ? canManageMaster : isAdmin;
+    return (
+      <div className="level-section-head">
+        {isEditing ? (
+          <>
+            <input
+              className="text-input"
+              style={{ maxWidth: 200 }}
+              value={levelEdit.name}
+              onChange={(e) =>
+                setLevelEdit((prev) =>
+                  prev ? { ...prev, name: e.target.value } : prev,
+                )
+              }
+            />
+            <button
+              className="button button-primary button-sm"
+              disabled={levelBusy}
+              onClick={handleLevelRename}
+            >
+              儲存
+            </button>
+            <button
+              className="button button-outline button-sm"
+              onClick={() => setLevelEdit(null)}
+            >
+              取消
+            </button>
+          </>
+        ) : (
+          <>
+            <b>{level ? level.name : "未分層級"}</b>
+            <span className="settings-note">{memberCount} 人</span>
+            {level && canEdit && (
+              <>
+                <button
+                  className="text-button"
+                  onClick={() =>
+                    setLevelEdit({ target, id: level.id, name: level.name })
+                  }
+                >
+                  <Pencil size={13} /> 更名
+                </button>
+                <button
+                  className="text-button"
+                  disabled={idx <= 0}
+                  onClick={() => handleLevelMove(target, level.id, -1)}
+                >
+                  上移
+                </button>
+                <button
+                  className="text-button"
+                  disabled={idx < 0 || idx >= sorted.length - 1}
+                  onClick={() => handleLevelMove(target, level.id, 1)}
+                >
+                  下移
+                </button>
+                <button
+                  className="text-button"
+                  onClick={() => handleLevelDelete(target, level)}
+                >
+                  <Trash2 size={13} /> 刪除
+                </button>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  /** 新增層級（區段上方的小按鈕＋展開表單） */
+  function renderLevelCreate(target: "title" | "role") {
+    const canEdit = target === "title" ? canManageMaster : isAdmin;
+    if (!canEdit) return null;
+    if (levelCreateTarget !== target) {
+      return (
+        <div className="panel-inset">
+          <button
+            className="button button-outline button-sm"
+            onClick={() => {
+              setLevelCreateTarget(target);
+              setNewLevelName("");
+              setLevelError("");
+            }}
+          >
+            <Plus size={14} /> 新增層級
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className="panel-inset">
+        <div className="form-field" style={{ maxWidth: 320 }}>
+          <label className="field-label">新層級名稱</label>
+          <input
+            className="text-input"
+            value={newLevelName}
+            placeholder="例如 部級"
+            onChange={(e) => setNewLevelName(e.target.value)}
+          />
+        </div>
+        {levelError && <div className="login-error">{levelError}</div>}
+        <div className="form-actions">
+          <button
+            className="button button-primary button-sm"
+            disabled={levelBusy}
+            onClick={handleLevelCreate}
+          >
+            建立層級
+          </button>
+          <button
+            className="button button-outline button-sm"
+            onClick={() => {
+              setLevelCreateTarget(null);
+              setLevelError("");
+            }}
+          >
+            取消
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function renderTitleTable(rows: TitleRow[]) {
+    return (
+      <div className="table-scroll">
+        <table className="permission-table">
+          <thead>
+            <tr>
+              <SortHeader label="職稱名稱" sortKey="title-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+              <SortHeader label="使用人數" sortKey="title-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+              {canManageMaster && <th>操作</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td>
+                  <b>{row.name}</b>
+                </td>
+                <td>
+                  {row.userCount === null ? "—" : `${row.userCount} 人`}
+                </td>
+                {canManageMaster && (
+                  <td>
+                    <button
+                      className="text-button"
+                      onClick={() => openTitleEdit(row.id)}
+                    >
+                      <Pencil size={13} /> 編輯
+                    </button>{" "}
+                    {isAdmin && (
+                      <button
+                        className="text-button"
+                        onClick={() => {
+                          setManagingTitleId(
+                            managingTitleId === row.id ? "" : row.id,
+                          );
+                          setTitleMemberChecked([]);
+                          setTitleAddSearch("");
+                        }}
+                      >
+                        成員管理
+                      </button>
+                    )}{" "}
+                    <button
+                      className="text-button"
+                      onClick={() => handleTitleDelete(row)}
+                    >
+                      <Trash2 size={13} /> 刪除
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  function renderRoleTable(rows: RoleRow[]) {
+    return (
+      <div className="table-scroll">
+        <table className="permission-table">
+          <thead>
+            <tr>
+              <SortHeader label="角色名稱" sortKey="role-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+              <th>功能類別</th>
+              <th>適用範圍</th>
+              <SortHeader label="成員數" sortKey="role-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td>
+                  <b>{row.name}</b>
+                </td>
+                <td>{ROLE_CATEGORY_LABELS[row.category]}</td>
+                <td>{row.kind === "unit" ? "單位角色" : "群組角色"}</td>
+                <td>
+                  {row.memberCount === null ? "—" : `${row.memberCount} 人`}
+                </td>
+                <td>
+                  {isAdmin ? (
+                    <>
+                      <button
+                        className="text-button"
+                        onClick={() => openRoleMembers(row.id)}
+                      >
+                        成員管理
+                      </button>{" "}
+                      <button
+                        className="text-button"
+                        onClick={() => handleRoleDelete(row)}
+                      >
+                        <Trash2 size={13} /> 刪除
+                      </button>
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
   }
 
   // ================= 版面 =================
@@ -3640,7 +4188,7 @@ export function GroupsPage({
         )
       ) : tab === "titles" ? (
         titleView.kind === "list" ? (
-          titlesLoading ? (
+          titlesLoading || levelsLoading ? (
             <section className="panel">
               <p className="settings-note">讀取中…</p>
             </section>
@@ -3651,61 +4199,17 @@ export function GroupsPage({
             />
           ) : (
             <section className="panel data-panel">
-              <div className="table-scroll">
-                <table className="permission-table">
-                  <thead>
-                    <tr>
-                      <SortHeader label="職稱名稱" sortKey="title-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      <SortHeader label="使用人數" sortKey="title-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      {canManageMaster && <th>操作</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedRows(titles, sortState.key, (row, key) => key === "title-count" ? (row.userCount ?? -1) : row.name).map((row) => (
-                      <tr key={row.id}>
-                        <td>
-                          <b>{row.name}</b>
-                        </td>
-                        <td>
-                          {row.userCount === null ? "—" : `${row.userCount} 人`}
-                        </td>
-                        {canManageMaster && (
-                          <td>
-                            <button
-                              className="text-button"
-                              onClick={() => openTitleEdit(row.id)}
-                            >
-                              <Pencil size={13} /> 編輯
-                            </button>{" "}
-                            {isAdmin && (
-                              <button
-                                className="text-button"
-                                onClick={() => {
-                                  setManagingTitleId(
-                                    managingTitleId === row.id
-                                      ? ""
-                                      : row.id,
-                                  );
-                                  setTitleMemberChecked([]);
-                                  setTitleAddSearch("");
-                                }}
-                              >
-                                成員管理
-                              </button>
-                            )}{" "}
-                            <button
-                              className="text-button"
-                              onClick={() => handleTitleDelete(row)}
-                            >
-                              <Trash2 size={13} /> 刪除
-                            </button>
-                          </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {renderLevelCreate("title")}
+              {titleSections.map((section) => (
+                <div className="level-section" key={section.level?.id ?? "ungrouped"}>
+                  {renderLevelHead(
+                    "title",
+                    section.level,
+                    section.items.reduce((n, r) => n + (r.userCount ?? 0), 0),
+                  )}
+                  {renderTitleTable(section.items)}
+                </div>
+              ))}
               {managingTitle && isAdmin && (
                 <div className="panel-inset divided">
                   <MemberChecklist
@@ -3814,6 +4318,25 @@ export function GroupsPage({
                     setTitleForm((prev) => ({ ...prev, name: e.target.value }))
                   }
                 />
+              </div>
+              <div className="form-field">
+                <label className="field-label">層級</label>
+                <div className="select-wrap">
+                  <select
+                    value={titleForm.levelId}
+                    onChange={(e) =>
+                      setTitleForm((prev) => ({ ...prev, levelId: e.target.value }))
+                    }
+                  >
+                    <option value="">— 未分層級 —</option>
+                    {titleLevels.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={15} />
+                </div>
               </div>
               <div className="form-field">
                 <label className="field-label">主管層級（決定儀表板與結果範圍；不以名稱判斷）</label>
@@ -4006,7 +4529,7 @@ export function GroupsPage({
               </div>
             </div>
             <div className="form-field">
-              <label className="field-label">職稱 *</label>
+              <label className="field-label">職稱</label>
               <div className="select-wrap">
                 <select
                   value={userForm.titleId}
@@ -4019,15 +4542,23 @@ export function GroupsPage({
                     }));
                   }}
                 >
-                  <option value="">— 請選擇職稱 —</option>
-                  {titles.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
+                  <option value="">— 未指定（一般使用者） —</option>
+                  {titleFormSections.map((section) => (
+                    <optgroup
+                      key={section.level?.id ?? "ungrouped"}
+                      label={section.level?.name ?? "未分層級"}
+                    >
+                      {section.items.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
                 <ChevronDown size={15} />
               </div>
+              <p className="settings-note">可留白：新帳號預設為一般使用者，職稱與角色之後再賦予。</p>
             </div>
             <div className="form-field">
               <label className="field-label">到職日</label>
@@ -4128,16 +4659,23 @@ export function GroupsPage({
               </div>
             </div>
             <div className="form-grid">
-              {/* v1.40.3：列出角色分類的全部角色，不分分類平鋪勾選 */}
-              {roleOptions.map((r) => (
-                <label className="check-row" key={r.id}>
-                  <input
-                    type="checkbox"
-                    checked={membershipAddRoles.includes(r.name)}
-                    onChange={() => toggleMembershipAddRole(r.name)}
-                  />
-                  <span>{r.name}</span>
-                </label>
+              {/* v1.55.0：角色勾選按層級分區顯示 */}
+              {roleFormSections.map((section) => (
+                <div key={section.level?.id ?? "ungrouped"} style={{ marginBottom: 8 }}>
+                  <p className="settings-note" style={{ margin: "4px 0" }}>
+                    {section.level?.name ?? "未分層級"}
+                  </p>
+                  {section.items.map((r) => (
+                    <label className="check-row" key={r.id}>
+                      <input
+                        type="checkbox"
+                        checked={membershipAddRoles.includes(r.name)}
+                        onChange={() => toggleMembershipAddRole(r.name)}
+                      />
+                      <span>{r.name}</span>
+                    </label>
+                  ))}
+                </div>
               ))}
             </div>
             {membershipEditingGroupId !== null && (
@@ -4233,17 +4771,24 @@ export function GroupsPage({
             </p>
           ) : (
             <div className="form-grid">
-              {/* v1.40.3：其他角色列出角色分類的全部角色，不再只列寫死名單以外的角色 */}
-              {roleOptions.map((r) => (
-                  <label className="check-row" key={r.id}>
-                    <input
-                      type="checkbox"
-                      checked={userForm.otherRoles.includes(r.name)}
-                      onChange={() => toggleOtherRole(r.name)}
-                    />
-                    <span>{r.name}</span>
-                  </label>
-                ))}
+              {/* v1.55.0：其他角色按層級分區顯示 */}
+              {roleFormSections.map((section) => (
+                <div key={section.level?.id ?? "ungrouped"} style={{ marginBottom: 8 }}>
+                  <p className="settings-note" style={{ margin: "4px 0" }}>
+                    {section.level?.name ?? "未分層級"}
+                  </p>
+                  {section.items.map((r) => (
+                    <label className="check-row" key={r.id}>
+                      <input
+                        type="checkbox"
+                        checked={userForm.otherRoles.includes(r.name)}
+                        onChange={() => toggleOtherRole(r.name)}
+                      />
+                      <span>{r.name}</span>
+                    </label>
+                  ))}
+                </div>
+              ))}
             </div>
           )}
 
@@ -4349,6 +4894,21 @@ export function GroupsPage({
                 ))}
               </select>
             </div>
+            <div className="form-field" style={{ maxWidth: 420 }}>
+              <label className="field-label">層級</label>
+              <select
+                className="text-input"
+                value={newRoleLevelId}
+                onChange={(event) => setNewRoleLevelId(event.target.value)}
+              >
+                <option value="">— 未分層級 —</option>
+                {roleLevels.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="form-actions">
               <button className="button button-primary" disabled={roleCreateSaving} onClick={handleRoleCreate}>
                 {roleCreateSaving ? "建立中…" : "建立角色"}
@@ -4424,6 +4984,21 @@ export function GroupsPage({
                   {ROLE_SCOPE_OPTIONS.map((opt) => (
                     <option key={opt.value} value={opt.value}>
                       {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-field" style={{ maxWidth: 320 }}>
+                <label className="field-label">層級</label>
+                <select
+                  className="text-input"
+                  value={roleEditLevelId}
+                  onChange={(event) => setRoleEditLevelId(event.target.value)}
+                >
+                  <option value="">— 未分層級 —</option>
+                  {roleLevels.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
                     </option>
                   ))}
                 </select>
@@ -4557,55 +5132,17 @@ export function GroupsPage({
           />
         ) : (
           <section className="panel data-panel">
-            <div className="table-scroll">
-              <table className="permission-table">
-                <thead>
-                  <tr>
-                      <SortHeader label="角色名稱" sortKey="role-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      <th>功能類別</th>
-                      <th>適用範圍</th>
-                      <SortHeader label="成員數" sortKey="role-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedRows(roleRows, sortState.key, (row, key) => key === "role-count" ? (row.memberCount ?? -1) : row.name).map((row) => (
-                    <tr key={row.id}>
-                      <td>
-                        <b>{row.name}</b>
-                      </td>
-                      <td>{ROLE_CATEGORY_LABELS[row.category]}</td>
-                      <td>{row.kind === "unit" ? "單位角色" : "群組角色"}</td>
-                      <td>
-                        {row.memberCount === null
-                          ? "—"
-                          : `${row.memberCount} 人`}
-                      </td>
-                      <td>
-                        {isAdmin ? (
-                          <>
-                            <button
-                              className="text-button"
-                              onClick={() => openRoleMembers(row.id)}
-                            >
-                              成員管理
-                            </button>{" "}
-                            <button
-                              className="text-button"
-                              onClick={() => handleRoleDelete(row)}
-                            >
-                              <Trash2 size={13} /> 刪除
-                            </button>
-                          </>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {renderLevelCreate("role")}
+            {roleSections.map((section) => (
+              <div className="level-section" key={section.level?.id ?? "ungrouped"}>
+                {renderLevelHead(
+                  "role",
+                  section.level,
+                  section.items.reduce((n, r) => n + (r.memberCount ?? 0), 0),
+                )}
+                {renderRoleTable(section.items)}
+              </div>
+            ))}
             <div className="panel-inset">
               <p className="settings-note">
                 角色以名稱唯一；可在此新增角色、管理成員或刪除角色。成員管理與刪除限系統管理員。角色權限請到「組織與設定 → 權限管理」設定（按名稱共用）。

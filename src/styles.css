@@ -1109,6 +1109,20 @@ button:disabled {
 .panel-inset.divided {
   border-top: 1px solid #edf0f1;
 }
+/* v1.55.0：職稱／角色層級區段標題（層級名＋人數小計＋更名／排序／刪除） */
+.level-section-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 14px 20px 8px;
+}
+.level-section-head b {
+  font-size: 15px;
+}
+.level-section + .level-section {
+  border-top: 1px solid #edf0f1;
+}
 /* 表單面板同樣需要邊界 */
 .panel.indicator-form {
   padding: 22px 26px;

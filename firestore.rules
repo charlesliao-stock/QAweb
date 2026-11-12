@@ -185,6 +185,15 @@ service cloud.firestore {
       allow read: if isAuthed();
       allow write: if isAdmin();
     }
+    // 層級（v1.55.0）：職稱層級寫入同 titles（幹事以上），角色層級寫入同 roles（管理員）
+    match /titleLevels/{id} {
+      allow read: if isAuthed();
+      allow write: if isGanShi();
+    }
+    match /roleLevels/{id} {
+      allow read: if isAuthed();
+      allow write: if isAdmin();
+    }
     // 權限範本（v1.38.0 新增 permissionTemplates，v1.39.4 補規則）：
     // 登入可讀（can() 需為所有登入者載入範本判斷權限），寫入限管理員（與 roles 同級）。
     // 注意：此集合先前在 rules 完全沒有放行，伺服器讀取一律被拒，權限頁因此全空。

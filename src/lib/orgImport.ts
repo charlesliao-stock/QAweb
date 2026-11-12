@@ -130,9 +130,8 @@ export function validateUserRows(
     const title = r.title.trim();
     if (title && !ctx.titleNames.has(title))
       errors.push(`職稱「${title}」不存在`);
-    const isCreate = !ctx.existingStaffIds.has(staffId);
-    // v1.36.0：人員新增須填職稱；更新時未填則沿用既有職稱。
-    if (isCreate && !title) errors.push("請填寫職稱（人員新增須填職稱）");
+    // v1.55.0：新帳號預設為一般使用者，職稱可留白、之後再賦予；
+    // 更新時未填則沿用既有職稱。（舊 v1.36.0 擋下已移除。）
     const memberships: Membership[] = [];
     for (const [gRaw, rolesRaw] of [
       [r.group1, r.roles1],
