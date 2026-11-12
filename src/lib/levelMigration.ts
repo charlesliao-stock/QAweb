@@ -24,6 +24,7 @@ import {
 } from "./db";
 import { templateDocId } from "./permissions";
 import { syncReviewerDoc } from "./reviewerSync";
+import { deriveStoredRoles } from "./roleIdentity";
 import {
   DEFAULT_ROLE_LEVELS,
   DEFAULT_TITLE_LEVELS,
@@ -187,9 +188,6 @@ export async function migrateOrgLevels(
     if (holders.length > 0) {
       for (const d of holders) {
         const data = d.data() as Record<string, unknown>;
-        const roles = (Array.isArray(data.roles) ? data.roles.map(String) : []).map(
-          (r: string) => (r === OLD_ROLE_NAME ? OLD_ROLE_REPLACEMENT : r),
-        );
         const memberships = (Array.isArray(data.memberships) ? data.memberships : []).map(
           (m: any) => ({
             ...m,
@@ -197,6 +195,13 @@ export async function migrateOrgLevels(
               (r: string) => (r === OLD_ROLE_NAME ? OLD_ROLE_REPLACEMENT : r),
             ),
           }),
+        );
+        // v1.58.0：roles 一律由更名後的分工表重算（僅保留系統管理員／一般人員例外）
+        const roles = deriveStoredRoles(
+          memberships,
+          (Array.isArray(data.roles) ? data.roles.map(String) : []).map(
+            (r: string) => (r === OLD_ROLE_NAME ? OLD_ROLE_REPLACEMENT : r),
+          ),
         );
         await updateDoc(doc(db, "users", d.id), {
           roles,

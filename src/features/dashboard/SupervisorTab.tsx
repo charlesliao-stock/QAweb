@@ -1,6 +1,8 @@
 /**
- * 督導儀表板頁籤（v1.15.0）：轄區＝負責群組下的單位。
+ * 督導儀表板頁籤（v1.15.0）：轄區＝負責單位。
  * 各單位進度＋品質燈號、連續下滑／未達標警訊。
+ * v1.58.0：轄區改由部級職稱的負責單位（titleUnitCodes，單位代碼）決定，
+ * 不再讀督導轄區群組。
  */
 import { useMemo } from "react";
 import { SectionTitle } from "../../components/ui";
@@ -24,12 +26,12 @@ function ymOf(year: number, month: number): string {
 
 export function SupervisorTab({
   data,
-  districtGroupIds,
+  titleUnitCodes,
   cycle = "year",
   sections = DEFAULT_DASHBOARD_SECTIONS,
 }: {
   data: DashboardData;
-  districtGroupIds: string[];
+  titleUnitCodes: string[];
   /** 統計週期（系統參數；預設曆年） */
   cycle?: StatsCycle;
   /** v1.28 階段 2：顯示設定旗標（預設只留轄區單位進度，3 個月趨勢關閉） */
@@ -40,8 +42,8 @@ export function SupervisorTab({
   const curMonth = now.getMonth() + 1;
 
   const districtUnits = useMemo(
-    () => data.units.filter((u) => districtGroupIds.includes(u.groupId)),
-    [data, districtGroupIds],
+    () => data.units.filter((u) => titleUnitCodes.includes(u.code)),
+    [data, titleUnitCodes],
   );
   const districtUnitIds = useMemo(
     () => new Set(districtUnits.map((u) => u.id)),
@@ -115,12 +117,12 @@ export function SupervisorTab({
     return declineAlerts(rows, yms, 90);
   }, [data, districtUnitIds, curYear, curMonth, cycle]);
 
-  if (districtGroupIds.length === 0) {
+  if (titleUnitCodes.length === 0) {
     return (
       <section className="panel">
         <SectionTitle title="督導轄區" />
         <p className="settings-note">
-          尚未設定負責群組，請聯絡系統管理員至「群組與人員」→ 人員編輯 → 督導轄區群組勾選。
+          尚未設定負責單位，請聯絡系統管理員至「群組與人員」→ 人員編輯 → 職稱 → 負責單位設定。
         </p>
       </section>
     );

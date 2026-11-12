@@ -42,6 +42,8 @@ export function ReviewerManagement({
     direction: "asc",
   });
   const [showAddDialog, setShowAddDialog] = useState(false);
+  /** v1.58.0：授予審查員時明確指定的群組（寫入該群組分工表，不再產生全域角色） */
+  const [grantGroupId, setGrantGroupId] = useState("");
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState("");
   const [error, setError] = useState("");
@@ -161,17 +163,30 @@ export function ReviewerManagement({
       setActionError("角色寫入目前關閉；需先完成 Firestore Rules 驗收。");
       return;
     }
+    // v1.58.0：授予前必須先選群組，角色寫入該群組分工表
+    if (!grantGroupId) {
+      setActionError("請先選擇授予群組。");
+      return;
+    }
     setSavingId(person.staffId);
     setActionError("");
     try {
-      const grantedRole = await grantReviewerRole(person.staffId, {
-        staffId: profile?.staffId ?? "",
-        name: profile?.name ?? "",
-      });
+      const grantedRole = await grantReviewerRole(
+        person.staffId,
+        {
+          staffId: profile?.staffId ?? "",
+          name: profile?.name ?? "",
+        },
+        grantGroupId,
+      );
       setPeople((current) =>
         current.map((item) =>
           item.staffId === person.staffId
-            ? { ...item, roles: [...new Set([...item.roles, grantedRole])] }
+            ? {
+                ...item,
+                roles: [...new Set([...item.roles, grantedRole])],
+                groupIds: [...new Set([...item.groupIds, grantGroupId])],
+              }
             : item,
         ),
       );
@@ -223,6 +238,7 @@ export function ReviewerManagement({
             className="button button-primary"
             onClick={() => {
               setCandidateSearch("");
+              setGrantGroupId("");
               setActionError("");
               setShowAddDialog(true);
             }}
@@ -242,8 +258,8 @@ export function ReviewerManagement({
           </label>
         </div>
         <p className="reviewer-management-note">
-          授予角色只會將「審查員」加入既有 users.roles；不建立 Firebase Auth
-          帳號，也不設定審查員負責的單位。單位指派仍是另一項設定。實際寫入必須由
+          授予角色會將「審查員」寫入所選群組的分工表，再由分工表衍生
+          users.roles；不建立 Firebase Auth 帳號。實際寫入必須由
           Firestore Rules 限定系統管理員。
         </p>
         {!canWriteRoles && (
@@ -352,7 +368,7 @@ export function ReviewerManagement({
             <div className="reviewer-modal-head">
               <div>
                 <h2 id="reviewer-modal-title">加入既有人員為審查員</h2>
-                <p>依目前組別篩選結果；選取後只新增「審查員」角色。</p>
+                <p>請先選擇授予群組，再選取人員授予「審查員」角色。</p>
               </div>
               <button
                 className="icon-button"
@@ -362,6 +378,26 @@ export function ReviewerManagement({
                 <X size={17} />
               </button>
             </div>
+            {/* v1.58.0：授予前明確指定群組，寫入該群組分工表 */}
+            <label className="reviewer-group-control">
+              <span>授予群組 *</span>
+              <select
+                value={grantGroupId}
+                onChange={(event) => setGrantGroupId(event.target.value)}
+              >
+                <option value="">請選擇群組</option>
+                {groupOptions.map((group) => (
+                  <option value={group.id} key={group.id}>
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {!grantGroupId && (
+              <p className="reviewer-management-note">
+                尚未選擇授予群組；選取群組後才能授予角色。
+              </p>
+            )}
             <label className="search-box reviewer-candidate-search">
               <Search size={16} />
               <input
@@ -384,7 +420,7 @@ export function ReviewerManagement({
                   <button
                     type="button"
                     className="button button-outline"
-                    disabled={Boolean(savingId) || !canWriteRoles}
+                    disabled={Boolean(savingId) || !canWriteRoles || !grantGroupId}
                     onClick={() => void addReviewer(person)}
                   >
                     <Plus size={14} />

@@ -1,7 +1,6 @@
 import { getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
 import {
-  arrayUnion,
   getFirestore,
   initializeFirestore,
   persistentLocalCache,
@@ -24,9 +23,13 @@ import { getCachedRefCollection } from "./refCache";
 import { getDocsCacheFirst } from "./cacheFirst";
 import { fetchAllPaged } from "./pagedQuery";
 import {
+  deriveGroupIds,
+  deriveStoredRoles,
   isConvenerRole,
   isOfficerRole,
   isReviewerRole,
+  mergeMembership,
+  parseMemberships,
 } from "./roleIdentity";
 import { activeRolesForReviewerExpiry } from "./reviewerValidity";
 import { syncReviewerDoc } from "./reviewerSync";
@@ -452,19 +455,23 @@ export async function readFirebaseGroupsForReviewerManagement(): Promise<
 }
 
 /**
- * 授予審查員角色（users/{staffId}.roles arrayUnion 審查員類別角色）。
+ * 授予審查員角色（寫入指定群組的分工表，再由分工表衍生 roles 聯集）。
  * v1.40.5：授予的角色改以 roles 集合中類別為審查員者為準（名稱由管理員設定，
  * 不再寫死「審查員」）；找不到此類角色時才退回舊名稱（遷移相容）。
+ * v1.58.0：授予時必須明確指定群組，不再只寫 roles 聯集產生全域審查員。
  * 回傳實際授予的角色名稱。
  */
 export async function grantReviewerRole(
   staffId: string,
   actor: { staffId: string; name: string },
+  groupId: string,
 ): Promise<string> {
   if (!isFirebaseReviewerRoleWriteEnabled())
     throw new Error("審查員角色寫入尚未啟用；需先完成 Firestore Rules 驗收。");
   const normalizedStaffId = staffId.trim();
   if (!normalizedStaffId) throw new Error("缺少人員職編，無法授予角色。");
+  const normalizedGroupId = groupId.trim();
+  if (!normalizedGroupId) throw new Error("請先選擇授予群組。");
   const db = getFirebaseDb();
   const reviewerRoleName = await resolveReviewerRoleName(db);
   const userRef = doc(db, "users", normalizedStaffId);
@@ -472,10 +479,21 @@ export async function grantReviewerRole(
   if (!userSnap.exists()) throw new Error("找不到該人員資料。");
   const before = userSnap.data();
   const beforeRoles = Array.isArray(before.roles) ? before.roles.map(String) : [];
-  const afterRoles = [...new Set([...beforeRoles, reviewerRoleName])];
+  const beforeMemberships = parseMemberships(before.memberships, {
+    roles: beforeRoles,
+    groupIds: Array.isArray(before.groupIds) ? before.groupIds.map(String) : [],
+  });
+  const memberships = mergeMembership(
+    beforeMemberships,
+    normalizedGroupId,
+    [reviewerRoleName],
+  );
+  const roles = deriveStoredRoles(memberships, beforeRoles);
   const batch = writeBatch(db);
   batch.update(userRef, {
-    roles: arrayUnion(reviewerRoleName),
+    memberships,
+    groupIds: deriveGroupIds(memberships),
+    roles,
     reviewerAccessExpiresAt: null,
   });
   batch.set(doc(collection(db, "auditLogs")), {
@@ -484,21 +502,22 @@ export async function grantReviewerRole(
     action: "授予審查員角色",
     targetType: "user",
     targetId: normalizedStaffId,
-    detail: `授予職編 ${normalizedStaffId} ${reviewerRoleName}角色，效期設為永久有效`,
+    detail: `授予職編 ${normalizedStaffId} ${reviewerRoleName}角色（群組 ${normalizedGroupId}），效期設為永久有效`,
     before: {
       roles: beforeRoles,
+      memberships: beforeMemberships,
       reviewerAccessExpiresAt: typeof before.reviewerAccessExpiresAt === "string"
         ? before.reviewerAccessExpiresAt
         : null,
     },
-    after: { roles: afterRoles, reviewerAccessExpiresAt: null },
+    after: { roles, memberships, reviewerAccessExpiresAt: null },
     createdAt: serverTimestamp(),
   });
   await batch.commit();
   // v1.51.0：授予審查員角色後同步審查員名單（同一寫入開關已在函式入口檢查）
   try {
     const roleMeta = await loadRoleMetaMap(db);
-    await syncReviewerDoc(db, normalizedStaffId, afterRoles, roleMeta);
+    await syncReviewerDoc(db, normalizedStaffId, roles, roleMeta);
   } catch {
     // 連動失敗不阻擋授予流程；名單可由管理員以「補建審查員名單」補建
   }

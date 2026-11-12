@@ -132,6 +132,26 @@ export function deriveRoles(memberships: Membership[]): string[] {
 }
 
 /**
+ * v1.58.0：寫入 users.roles 的唯一規則——聯集一律由分工表衍生，
+ * 不再併入「其他角色」（全域角色已刪除）。
+ * 僅保留兩個不在分工表的例外：「系統管理員」（isAdmin 判斷用，
+ * 從來不在分工表，清掉會讓管理員帳號失去管理員身分）與「一般人員」
+ * （無分工表人員的預設，與批次匯入新建一致）。
+ * 無任何角色時回 ["一般人員"]。
+ */
+export function deriveStoredRoles(
+  memberships: Membership[],
+  previousRoles: string[],
+): string[] {
+  const derived = deriveRoles(memberships.filter((m) => m.groupId));
+  const keep = (previousRoles ?? []).filter(
+    (r) => r === "系統管理員" || r === "一般人員",
+  );
+  const out = [...new Set([...derived, ...keep])];
+  return out.length > 0 ? out : ["一般人員"];
+}
+
+/**
  * 正規化 memberships：讀取以 memberships 為主；無則 fallback 舊欄位
  * （groupIds＋roles 視為同一群組組合的配對）。
  */
@@ -237,16 +257,6 @@ export function removeMembership(
   return memberships.filter((m) => m.groupId !== groupId);
 }
 
-/** 非群組角色＝聯集中未出現在任何 membership 者（全院適用）。 */
-export function otherRolesOf(
-  roles: string[],
-  memberships: Membership[],
-): string[] {
-  return roles.filter(
-    (r) => !memberships.some((m) => m.roles.includes(r)),
-  );
-}
-
 /** 人員列表角色欄：按群組分組的一段（群組名＋該群組角色）。 */
 export interface GroupedRoleSegment {
   label: string;
@@ -254,23 +264,18 @@ export interface GroupedRoleSegment {
 }
 
 /**
- * 人員列表角色欄分段：每段＝一個群組（無角色的 membership 不列）；
- * 非群組角色附於末段「其他」。無 membership 時只剩「其他」段（維持現行聯集顯示）。
+ * 人員列表角色欄分段：每段＝一個群組（無角色的 membership 不列）。
+ * v1.58.0：「其他角色」已刪除，roles 聯集一律由分工表衍生，
+ * 不再有非群組角色段；無 membership 者角色欄為空。
  */
 export function groupedRolesSegments(
   memberships: Membership[],
   groupNameOf: (groupId: string) => string,
-  roles: string[],
 ): GroupedRoleSegment[] {
   const segments: GroupedRoleSegment[] = [];
   for (const m of memberships) {
     if (m.roles.length === 0) continue;
     segments.push({ label: groupNameOf(m.groupId), roles: [...m.roles] });
-  }
-  const others = otherRolesOf(roles, memberships);
-  if (others.length > 0) {
-    // 無 membership 時只剩其他角色，label 留空＝維持現行聯集顯示（不加「其他：」）
-    segments.push({ label: segments.length === 0 ? "" : "其他", roles: others });
   }
   return segments;
 }
@@ -283,9 +288,8 @@ export function groupedRolesSegments(
 export function groupedRolesLabel(
   memberships: Membership[],
   groupNameOf: (groupId: string) => string,
-  roles: string[],
 ): string {
-  return groupedRolesSegments(memberships, groupNameOf, roles)
+  return groupedRolesSegments(memberships, groupNameOf)
     .map((s) => (s.label ? `${s.label}：${s.roles.join("、")}` : s.roles.join("、")))
     .join("；");
 }

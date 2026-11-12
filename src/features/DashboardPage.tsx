@@ -218,7 +218,7 @@ export function DashboardPage({
           {active === "supervisor" && (
             <SupervisorTab
               data={data}
-              districtGroupIds={user?.districtGroupIds ?? []}
+              titleUnitCodes={user?.titleUnitCodes ?? []}
               cycle={statsCycle}
               sections={sections}
             />

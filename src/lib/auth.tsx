@@ -56,8 +56,8 @@ export interface StaffProfile {
   /** 僅保留明確儲存的群組成員角色，不把舊角色聯集擴散至多個群組。 */
   memberships: Membership[];
   reviewerAccessExpiresAt: string;
-  /** 督導負責的群組 id（v1.15.0：督導儀表板轄區用） */
-  districtGroupIds: string[];
+  /** v1.58.0：督導負責的單位代碼（僅部級職稱為督導時設定；承接舊督導轄區群組） */
+  titleUnitCodes: string[];
   mustChangePassword: boolean;
 }
 
@@ -84,7 +84,7 @@ const DEMO_USER: StaffProfile = {
   roles: ["系統管理員"],
   memberships: [],
   reviewerAccessExpiresAt: "",
-  districtGroupIds: [],
+  titleUnitCodes: [],
   mustChangePassword: false,
 };
 
@@ -153,8 +153,8 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
   }
   cachedRoleMeta = roleMeta;
   const roles = activeRolesForReviewerExpiry(storedRoles, reviewerAccessExpiresAt, new Date(), roleMeta);
-  const districtGroupIds = Array.isArray(raw.districtGroupIds)
-    ? raw.districtGroupIds.map(String)
+  const titleUnitCodes = Array.isArray(raw.titleUnitCodes)
+    ? raw.titleUnitCodes.map(String)
     : [];
   return {
     staffId,
@@ -166,7 +166,7 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
     roles,
     memberships,
     reviewerAccessExpiresAt,
-    districtGroupIds,
+    titleUnitCodes,
     mustChangePassword: raw.mustChangePassword === true,
   };
 }
