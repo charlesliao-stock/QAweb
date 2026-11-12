@@ -1,6 +1,6 @@
 /**
  * 組織詮釋資料 Hook（v1.40.5）：載入 roles／titles 集合，建立名稱→詮釋資料
- * 對照表，供各頁的身分辨識使用（不以名稱字串比對）。
+ * 對照表，供各頁的身分辨識使用（角色身分由層級＋名稱關鍵字推導，v1.57.0 A3）。
  * 走參考資料共用快取（getCachedRefCollection），同頁重複掛載只讀一次。
  */
 import { useEffect, useState } from "react";
@@ -53,9 +53,7 @@ export function useOrgMeta(): OrgMeta {
           const v = d.data() as Record<string, unknown>;
           return {
             name: typeof v.name === "string" ? v.name : d.id,
-            category: v.category,
-            kind: v.kind,
-            scope: v.scope,
+            levelId: v.levelId,
           };
         });
         const titles: TitleMetaInput[] = tSnap.docs.map((d) => {

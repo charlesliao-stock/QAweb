@@ -1,10 +1,11 @@
 /**
- * 角色身分新舊並認（v1.21.0；v1.40.5 改吃 orgMeta 詮釋資料）。
+ * 角色身分新舊並認（v1.21.0；v1.40.5 改吃 orgMeta 詮釋資料；
+ * v1.57.0 A3：詮釋資料改由層級＋名稱關鍵字推導，見 lib/roleDerivation.ts）。
  *
- * 身分判斷改以角色文件上的 `category`／`kind` 欄位為準（見 lib/orgMeta.ts）；
- * 本檔的函式保留舊簽名，僅傳名稱字串時以名稱推導（legacy，行為與舊版一致，
+ * 身分判斷改以層級＋名稱關鍵字推導（見 lib/orgMeta.ts）；
+ * 本檔的函式保留舊簽名，僅傳名稱字串時以關鍵字推導（行為與舊版一致，
  * 供既有測試與尚未載入角色主檔的純函式使用）。正式流程請傳入 roleMeta
- *（由 roles 集合建立），新醫院自訂名稱時才不會被名稱卡住。
+ *（由 roles 集合建立）。
  */
 
 import {
@@ -25,28 +26,10 @@ import {
 export type { RoleCategory, RoleMeta, RoleMetaMap, RoleScope } from "./orgMeta";
 
 /**
- * 舊名稱對照（僅遷移相容；見 orgMeta.ts LEGACY_*）。
- * 保留匯出供既有引用；新程式請用 orgMeta 的類別判斷，不要直接比對這些名單。
+ * 舊名稱對照已移除（v1.57.0 A3）：身分改由名稱關鍵字推導，
+ * 精確比對名單會讓新名稱（如「品管組副召集人」）掉級；
+ * 需要名稱→身分時請用 deriveRoleCategory（lib/roleDerivation.ts）。
  */
-export const REVIEWER_ROLES = ["審查員", "品管組審查員", "單位審查員"];
-export const CONVENER_ROLES = [
-  "召集人",
-  "各組召集人",
-  "品管組召集人",
-  "單位召集人",
-];
-export const OFFICER_ROLES = ["執行幹事", "品管組執行幹事", "單位執行幹事"];
-/** 排程權限（召集人＋執行幹事）只認組級角色，不含單位級 */
-export const GROUP_CONVENER_ROLES = ["召集人", "品管組召集人"];
-export const GROUP_OFFICER_ROLES = ["執行幹事", "品管組執行幹事"];
-/** 單位級角色（以其單位所屬群組計群組範圍） */
-export const UNIT_LEVEL_ROLES = ["單位召集人", "單位執行幹事", "單位審查員"];
-
-/** 群組範圍角色：召集人／執行幹事／審查員（新舊皆含） */
-export const GROUP_SCOPED_ROLES = [
-  ...new Set([...CONVENER_ROLES, ...OFFICER_ROLES, ...REVIEWER_ROLES]),
-];
-
 export { legacyRoleCategory, legacyRoleScope };
 
 /** 是否為群組範圍角色（人員表單中走 memberships 配對列） */
@@ -57,7 +40,7 @@ export function isGroupScopedRole(
   return isGroupScopedRoleMeta(role, roleMeta);
 }
 
-/** 審查員身分：類別為審查員（無詮釋資料時以舊名稱推導）。 */
+/** 審查員身分：類別為審查員（無詮釋資料時以名稱關鍵字推導）。 */
 export function isReviewerRole(
   roles: string[] | undefined,
   roleMeta?: RoleMetaMap,
@@ -65,7 +48,7 @@ export function isReviewerRole(
   return isReviewerRoleMeta(roles, roleMeta);
 }
 
-/** 召集人身分：類別為召集人（無詮釋資料時以舊名稱推導）。 */
+/** 召集人身分：類別為召集人（無詮釋資料時以名稱關鍵字推導）。 */
 export function isConvenerRole(
   roles: string[] | undefined,
   roleMeta?: RoleMetaMap,
@@ -73,7 +56,7 @@ export function isConvenerRole(
   return isConvenerRoleMeta(roles, roleMeta);
 }
 
-/** 執行幹事身分：類別為執行幹事（無詮釋資料時以舊名稱推導）。 */
+/** 執行幹事身分：類別為執行幹事（無詮釋資料時以名稱關鍵字推導）。 */
 export function isOfficerRole(
   roles: string[] | undefined,
   roleMeta?: RoleMetaMap,
@@ -185,7 +168,7 @@ export function parseMemberships(
  * 該人員擔任指定角色的群組範圍：
  * - 組級／舊角色：memberships 中持有該角色的群組；
  * - 單位級角色：以其單位所屬群組計（unitGroupId 須由呼叫端傳入）。
- * 單位級與否改以角色詮釋資料判斷（傳入 roleMeta；未傳時以名稱推導）。
+ * 單位級與否改以角色詮釋資料判斷（傳入 roleMeta；未傳時以名稱關鍵字推導）。
  */
 /* ================= 群組＋角色分工表式列表（v1.52.0） ================= */
 

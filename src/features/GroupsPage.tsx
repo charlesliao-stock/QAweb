@@ -25,7 +25,7 @@ import {
   writeBatch,
   type WriteBatch,
 } from "../lib/db";
-import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
+import { EmptyState, Modal, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
 import { getDocsCacheFirst } from "../lib/cacheFirst";
@@ -47,15 +47,12 @@ import {
 } from "../lib/roleIdentity";
 import {
   buildRoleMetaMap,
-  ROLE_CATEGORY_LABELS,
   legacyTitleFlags,
-  ROLE_CATEGORY_OPTIONS,
-  ROLE_SCOPE_OPTIONS,
-  type RoleCategory,
   type RoleMetaMap,
   type RoleScope,
   type TitleFlags,
 } from "../lib/orgMeta";
+import { deriveRoleScope } from "../lib/roleDerivation";
 import {
   canDeleteLevel,
   groupByLevel,
@@ -122,18 +119,15 @@ interface RoleRow {
   name: string;
   /** v1.55.0：所屬層級 id（空＝未分層級） */
   levelId: string;
-  /** 功能類別（審查員／召集人／執行幹事／單位主管／院級主管／一般） */
-  category: RoleCategory;
-  /** 適用範圍（group＝群組角色；unit＝單位角色） */
-  kind: RoleScope;
+  /** 適用範圍（由層級推導：group＝群組角色；unit＝單位角色，v1.57.0 A3） */
+  scope: RoleScope;
   memberCount: number | null;
 }
 
 interface OptionItem {
   id: string;
   name: string;
-  category?: RoleCategory;
-  kind?: RoleScope;
+  scope?: RoleScope;
   /** v1.55.0：所屬層級 id（空＝未分層級） */
   levelId?: string;
 }
@@ -619,6 +613,13 @@ export function GroupsPage({
   const [userSearch, setUserSearch] = useState("");
   const [unitGroupFilter, setUnitGroupFilter] = useState("");
   const [unitSearch, setUnitSearch] = useState("");
+  /** v1.57.0 A1／A2：清單只在按「查詢」後顯示；輸入框改篩選條件不即時過濾，按查詢才套用 */
+  const [appliedUserUnitFilter, setAppliedUserUnitFilter] = useState("");
+  const [appliedUserSearch, setAppliedUserSearch] = useState("");
+  const [usersSearched, setUsersSearched] = useState(false);
+  const [appliedUnitGroupFilter, setAppliedUnitGroupFilter] = useState("");
+  const [appliedUnitSearch, setAppliedUnitSearch] = useState("");
+  const [unitsSearched, setUnitsSearched] = useState(false);
 
   function toggleListSort(key: string) {
     setSortState((prev) => ({
@@ -698,6 +699,11 @@ export function GroupsPage({
   /** 群組＋角色加入區（v1.52.0 分工表式）：群組下拉＋角色勾選＋加入／更新 */
   const [membershipAddGroupId, setMembershipAddGroupId] = useState("");
   const [membershipAddRoles, setMembershipAddRoles] = useState<string[]>([]);
+  /** v1.57.0 A6：群組→層級→角色三層下拉（層級與角色為加入區的暫存選擇，選後進已選角色） */
+  const [membershipAddLevelId, setMembershipAddLevelId] = useState("");
+  const [membershipAddRoleName, setMembershipAddRoleName] = useState("");
+  /** v1.57.0 A7：職稱改層級→職稱兩層下拉（""＝未選層級，"__ungrouped__"＝未分層級） */
+  const [userTitleLevelId, setUserTitleLevelId] = useState("");
   /** 正在編輯的列（群組 id）；null＝加入模式 */
   const [membershipEditingGroupId, setMembershipEditingGroupId] = useState<string | null>(null);
   const [membershipError, setMembershipError] = useState("");
@@ -713,15 +719,14 @@ export function GroupsPage({
   const [rolesLoading, setRolesLoading] = useState(true);
   const [roleCreateOpen, setRoleCreateOpen] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
-  /** v1.40.5：新角色功能類別（預設一般）與適用範圍（預設群組角色） */
-  const [newRoleCategory, setNewRoleCategory] = useState<RoleCategory>("general");
-  const [newRoleKind, setNewRoleKind] = useState<RoleScope>("group");
-  /** v1.55.0：新角色所屬層級（空＝未分層級） */
+  /** v1.55.0：新角色所屬層級（空＝未分層級）；v1.57.0 A3：身分由名稱關鍵字、範圍由層級推導，不再選類別／範圍 */
   const [newRoleLevelId, setNewRoleLevelId] = useState("");
   const [roleCreateError, setRoleCreateError] = useState("");
   const [roleCreateSaving, setRoleCreateSaving] = useState(false);
   /** 正在管理成員的角色 id（""＝未開啟） */
   const [managingRoleId, setManagingRoleId] = useState("");
+  /** v1.57.0 A4：正在編輯的角色 id（""＝彈窗未開啟；與成員管理面板分開） */
+  const [editingRoleId, setEditingRoleId] = useState("");
   const [roleMemberChecked, setRoleMemberChecked] = useState<string[]>([]);
   const [roleAddSearch, setRoleAddSearch] = useState("");
   const [roleAddGroupId, setRoleAddGroupId] = useState("");
@@ -744,14 +749,14 @@ export function GroupsPage({
   // ---- 群組單位管理（v1.21） ----
   const [managingGroupId, setManagingGroupId] = useState("");
   const [groupUnitChecked, setGroupUnitChecked] = useState<string[]>([]);
-  const [groupUnitAdd, setGroupUnitAdd] = useState("");
+  const [groupUnitAddSearch, setGroupUnitAddSearch] = useState("");
   const [groupBusy, setGroupBusy] = useState(false);
 
   const visibleUnits = sortedRows(
     units.filter((row) => {
-      const keyword = unitSearch.trim().toLocaleLowerCase();
+      const keyword = appliedUnitSearch.trim().toLocaleLowerCase();
       return (
-        (!unitGroupFilter || row.groupId === unitGroupFilter) &&
+        (!appliedUnitGroupFilter || row.groupId === appliedUnitGroupFilter) &&
         (!keyword ||
           row.code.toLocaleLowerCase().includes(keyword) ||
           row.name.toLocaleLowerCase().includes(keyword))
@@ -769,9 +774,9 @@ export function GroupsPage({
   );
   const visibleUsers = sortedRows(
     users.filter((row) => {
-      const keyword = userSearch.trim().toLocaleLowerCase();
+      const keyword = appliedUserSearch.trim().toLocaleLowerCase();
       return (
-        (!userUnitFilter || row.unitCode === userUnitFilter) &&
+        (!appliedUserUnitFilter || row.unitCode === appliedUserUnitFilter) &&
         (!keyword ||
           row.staffId.toLocaleLowerCase().includes(keyword) ||
           row.name.toLocaleLowerCase().includes(keyword))
@@ -798,8 +803,7 @@ export function GroupsPage({
       roleOptions.map((r) => ({
         id: r.id,
         name: r.name,
-        category: r.category ?? "general",
-        kind: r.kind ?? "group",
+        scope: r.scope ?? "group",
         levelId: r.levelId ?? "",
         memberCount:
           users.length > 0
@@ -815,6 +819,7 @@ export function GroupsPage({
 
   // ---- 各成員管理面板的衍生清單（v1.21） ----
   const managingRole = roleRows.find((r) => r.id === managingRoleId) ?? null;
+  const editingRole = roleRows.find((r) => r.id === editingRoleId) ?? null;
   const managingTitle = titles.find((item) => item.id === managingTitleId) ?? null;
   const roleMembers = useMemo(
     () =>
@@ -830,15 +835,18 @@ export function GroupsPage({
   const roleCandidates = useMemo(() => {
     if (!managingRole) return [];
     const kw = roleAddSearch.trim().toLowerCase();
-    return users.filter(
-      (u) =>
-        u.status === "在職" &&
-        !u.roles.includes(managingRole.name) &&
-        !u.memberships.some((m) => m.roles.includes(managingRole.name)) &&
-        (kw === "" ||
-          u.staffId.toLowerCase().includes(kw) ||
-          u.name.toLowerCase().includes(kw)),
-    );
+    // v1.57.0 A5：比照職稱／單位成員面板，搜尋框為空不列候選、候選上限 20 筆
+    if (kw === "") return [];
+    return users
+      .filter(
+        (u) =>
+          u.status === "在職" &&
+          !u.roles.includes(managingRole.name) &&
+          !u.memberships.some((m) => m.roles.includes(managingRole.name)) &&
+          (u.staffId.toLowerCase().includes(kw) ||
+            u.name.toLowerCase().includes(kw)),
+      )
+      .slice(0, 20);
   }, [users, managingRole, roleAddSearch]);
 
   const unitMembers = useMemo(
@@ -898,6 +906,19 @@ export function GroupsPage({
     [units, managingGroupId],
   );
 
+  /** v1.57.0 A5：群組加入單位改搜尋優先（搜尋框為空不列候選） */
+  const groupUnitCandidates = useMemo(() => {
+    if (!managingGroupId) return [];
+    const kw = groupUnitAddSearch.trim().toLowerCase();
+    if (kw === "") return [];
+    return units.filter(
+      (u) =>
+        u.groupId !== managingGroupId &&
+        (u.code.toLowerCase().includes(kw) ||
+          u.name.toLowerCase().includes(kw)),
+    );
+  }, [units, managingGroupId, groupUnitAddSearch]);
+
   const usersLoadedRef = useRef(false);
 
   const loadRoles = useCallback(async () => {
@@ -911,9 +932,7 @@ export function GroupsPage({
           const data = d.data() as Record<string, unknown>;
           return {
             name: typeof data.name === "string" ? data.name : d.id,
-            category: data.category,
-            kind: data.kind,
-            scope: data.scope,
+            levelId: data.levelId,
           };
         }),
       );
@@ -925,8 +944,7 @@ export function GroupsPage({
           return {
             id: d.id,
             name,
-            category: m?.category,
-            kind: m?.scope,
+            scope: m?.scope,
             levelId:
               typeof data.levelId === "string" ? data.levelId : "",
           };
@@ -1843,21 +1861,26 @@ export function GroupsPage({
     setUserForm(emptyUserForm());
     setUserError("");
     resetMembershipAddArea();
+    setUserTitleLevelId("");
     setUserView({ kind: "create" });
   }
 
   function openUserEdit(staffId: string) {
     const row = users.find((u) => u.staffId === staffId);
     if (!row) return;
+    const resolvedTitleId =
+      row.titleId ||
+      (() => {
+        const matches = titles.filter((title) => title.name === row.title);
+        return matches.length === 1 ? matches[0].id : "";
+      })();
+    const resolvedTitle = titles.find((item) => item.id === resolvedTitleId);
     setUserForm({
       staffId: row.staffId,
       name: row.name,
       unitCode: row.unitCode,
       title: row.title,
-      titleId: row.titleId || (() => {
-        const matches = titles.filter((title) => title.name === row.title);
-        return matches.length === 1 ? matches[0].id : "";
-      })(),
+      titleId: resolvedTitleId,
       hireDate: "",
       email: "",
       phone: "",
@@ -1880,6 +1903,16 @@ export function GroupsPage({
     });
     setUserError("");
     resetMembershipAddArea();
+    // v1.57.0 A7：編輯時職稱層級由現職稱帶入（未分層級職稱帶入 "__ungrouped__"）
+    setUserTitleLevelId(
+      resolvedTitle ? resolvedTitle.levelId || "__ungrouped__" : "",
+    );
+    // v1.57.0 A6：人員已歸類群組時，群組自動帶入（先取已有角色的第一個群組，否則取所屬單位的群組）
+    const autoGroupId =
+      row.memberships.find((m) => m.roles.length > 0)?.groupId ||
+      units.find((u) => u.code === row.unitCode)?.groupId ||
+      "";
+    if (autoGroupId) setMembershipAddGroupId(autoGroupId);
     void (async () => {
       try {
         const snap = await getDoc(doc(getFirebaseDb(), "users", staffId));
@@ -1909,6 +1942,8 @@ export function GroupsPage({
   function resetMembershipAddArea() {
     setMembershipAddGroupId("");
     setMembershipAddRoles([]);
+    setMembershipAddLevelId("");
+    setMembershipAddRoleName("");
     setMembershipEditingGroupId(null);
     setMembershipError("");
   }
@@ -1942,7 +1977,7 @@ export function GroupsPage({
       return;
     }
     if (membershipEditingGroupId === null && membershipAddRoles.length === 0) {
-      setMembershipError("請至少勾選一個角色");
+      setMembershipError("請至少選擇一個角色");
       return;
     }
     setUserForm((prev) => ({
@@ -2265,18 +2300,22 @@ export function GroupsPage({
     };
   }
 
-  function openRoleMembers(roleId: string) {
+  /** v1.57.0 A4：角色編輯改彈窗（名稱＋層級；成員管理維持內嵌面板） */
+  function openRoleEdit(roleId: string) {
     const role = roleRows.find((item) => item.id === roleId);
+    if (!role) return;
+    setEditingRoleId(roleId);
+    setRoleEditName(role.name);
+    setRoleEditLevelId(role.levelId ?? "");
+    setRoleEditError("");
+  }
+
+  function openRoleMembers(roleId: string) {
     setManagingRoleId(roleId);
     setRoleMemberChecked([]);
     setRoleAddSearch("");
     setRoleAddGroupId("");
     setRoleAddChecked([]);
-    setRoleEditName(role?.name ?? "");
-    setRoleEditCategory(role?.category ?? "general");
-    setRoleEditKind(role?.kind ?? "group");
-    setRoleEditLevelId(role?.levelId ?? "");
-    setRoleEditError("");
   }
 
   async function handleRoleMembersRemove() {
@@ -2321,7 +2360,7 @@ export function GroupsPage({
   async function handleRoleMembersAdd() {
     const role = roleRows.find((r) => r.id === managingRoleId);
     if (!role || roleAddChecked.length === 0) return;
-    const unitLevel = role.kind === "unit";
+    const unitLevel = role.scope === "unit";
     const unitGroupOf = (unitCode: string) =>
       units.find((u) => u.code === unitCode)?.groupId ?? "";
     const targets = users.filter((u) => roleAddChecked.includes(u.staffId));
@@ -2470,9 +2509,7 @@ export function GroupsPage({
       batch.set(roleRef, {
         name,
         description: "",
-        // v1.40.5：角色建立即寫入功能類別與適用範圍，身分判斷不再比對名稱
-        category: newRoleCategory,
-        kind: newRoleKind,
+        // v1.57.0 A3：不再寫入 category／kind；身分由名稱關鍵字、範圍由層級推導
         levelId: newRoleLevelId,
         ...auditFields(user?.staffId ?? "", true),
       });
@@ -2486,16 +2523,12 @@ export function GroupsPage({
         before: null,
         after: {
           name,
-          category: newRoleCategory,
-          kind: newRoleKind,
           levelId: newRoleLevelId,
         },
         createdAt: serverTimestamp(),
       });
       await batch.commit();
       setNewRoleName("");
-      setNewRoleCategory("general");
-      setNewRoleKind("group");
       setNewRoleLevelId("");
       setRoleCreateOpen(false);
       await loadRoles();
@@ -2507,17 +2540,16 @@ export function GroupsPage({
     }
   }
 
-  /** 既有角色更名／改類別／改範圍（v1.39.0 更名；v1.40.5 加類別與範圍）：
-   * 只改名稱時同步更新持有此角色的人員與權限範本；改範圍時遷移範本
-   * group↔unitRole（範本文件 id 含類別）；更名後對應不斷（以文件 id 計）。 */
+  /** 既有角色更名／改層級（v1.39.0 更名；v1.57.0 A3：類別／範圍改由名稱關鍵字／層級推導，不再手動設定）：
+   * 只改名稱時同步更新持有此角色的人員與權限範本；改層級致範圍變動時遷移範本
+   * group↔unitRole（範本文件 id 含類別）；更名後對應不斷（以文件 id 計）。
+   * 舊文件上的 category／kind 欄位留著不動、不刪除、不遷移。 */
   const [roleEditName, setRoleEditName] = useState("");
-  const [roleEditCategory, setRoleEditCategory] = useState<RoleCategory>("general");
-  const [roleEditKind, setRoleEditKind] = useState<RoleScope>("group");
   const [roleEditLevelId, setRoleEditLevelId] = useState("");
   const [roleEditError, setRoleEditError] = useState("");
   const [roleEditSaving, setRoleEditSaving] = useState(false);
   async function handleRoleRename() {
-    const role = roleRows.find((r) => r.id === managingRoleId);
+    const role = roleRows.find((r) => r.id === editingRoleId);
     if (!role || !user) return;
     const name = roleEditName.trim();
     if (!name) {
@@ -2525,11 +2557,13 @@ export function GroupsPage({
       return;
     }
     const nameChanged = name !== role.name;
-    const kindChanged = roleEditKind !== role.kind;
-    const categoryChanged = roleEditCategory !== role.category;
+    // 新範圍由改名後名稱＋新層級推導；範圍變動才遷移權限範本
+    const newScope = deriveRoleScope({ levelId: roleEditLevelId, name });
+    const scopeChanged = newScope !== role.scope;
     const levelChanged = (role.levelId ?? "") !== roleEditLevelId;
-    if (!nameChanged && !kindChanged && !categoryChanged && !levelChanged) {
+    if (!nameChanged && !scopeChanged && !levelChanged) {
       setRoleEditError("");
+      setEditingRoleId("");
       return;
     }
     if (nameChanged && roleRows.some((r) => r.id !== role.id && r.name === name)) {
@@ -2541,8 +2575,8 @@ export function GroupsPage({
     try {
       const db = getFirebaseDb();
       const oldName = role.name;
-      const oldCategory = role.kind === "unit" ? "unitRole" : "group";
-      const newCategory = roleEditKind === "unit" ? "unitRole" : "group";
+      const oldCategory = role.scope === "unit" ? "unitRole" : "group";
+      const newCategory = newScope === "unit" ? "unitRole" : "group";
       if (nameChanged) {
         // 新名稱已有權限範本時擋下，避免覆蓋別的範本
         const [groupTpl, unitRoleTpl] = await Promise.all([
@@ -2589,8 +2623,6 @@ export function GroupsPage({
       const batch = writeBatch(db);
       batch.update(doc(db, "roles", role.id), {
         name,
-        category: roleEditCategory,
-        kind: roleEditKind,
         levelId: roleEditLevelId,
         ...auditFields(user.staffId, false),
       });
@@ -2616,14 +2648,12 @@ export function GroupsPage({
         detail: `角色「${oldName}」更新為「${name}」`,
         before: {
           name: oldName,
-          category: role.category,
-          kind: role.kind,
+          scope: role.scope,
           levelId: role.levelId ?? "",
         },
         after: {
           name,
-          category: roleEditCategory,
-          kind: roleEditKind,
+          scope: newScope,
           levelId: roleEditLevelId,
         },
         createdAt: serverTimestamp(),
@@ -2631,6 +2661,7 @@ export function GroupsPage({
       await batch.commit();
       await loadRoles();
       await loadUsers();
+      setEditingRoleId("");
       onAction(`角色已更新為「${name}」`);
     } catch (error) {
       setRoleEditError(`儲存失敗：${toErrorMessage(error)}`);
@@ -2860,7 +2891,7 @@ export function GroupsPage({
         ...auditFields(user?.staffId ?? "", false),
       });
       onAction(`已將單位 ${code} 加入群組`);
-      setGroupUnitAdd("");
+      setGroupUnitAddSearch("");
       await loadMaster();
     } catch (error) {
       onAction(`加入失敗：${toErrorMessage(error)}`);
@@ -3266,7 +3297,6 @@ export function GroupsPage({
     (row, key) => (key === "title-count" ? (row.userCount ?? -1) : row.name),
   );
   const titleSections = groupByLevel(sortedTitleRows, titleLevels);
-  const titleFormSections = groupByLevel(titles, titleLevels);
   const sortedRoleRows = sortedRows(
     roleRows,
     sortState.key,
@@ -3477,8 +3507,6 @@ export function GroupsPage({
           <thead>
             <tr>
               <SortHeader label="角色名稱" sortKey="role-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-              <th>功能類別</th>
-              <th>適用範圍</th>
               <SortHeader label="成員數" sortKey="role-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
               <th>操作</th>
             </tr>
@@ -3489,8 +3517,6 @@ export function GroupsPage({
                 <td>
                   <b>{row.name}</b>
                 </td>
-                <td>{ROLE_CATEGORY_LABELS[row.category]}</td>
-                <td>{row.kind === "unit" ? "單位角色" : "群組角色"}</td>
                 <td>
                   {row.memberCount === null ? "—" : `${row.memberCount} 人`}
                 </td>
@@ -3499,7 +3525,7 @@ export function GroupsPage({
                     <>
                       <button
                         className="text-button"
-                        onClick={() => openRoleMembers(row.id)}
+                        onClick={() => openRoleEdit(row.id)}
                       >
                         <Pencil size={13} /> 編輯
                       </button>{" "}
@@ -3674,6 +3700,16 @@ export function GroupsPage({
             onChange={(e) => setUserSearch(e.target.value)}
           />
           <button
+            className="button button-primary button-sm"
+            onClick={() => {
+              setAppliedUserUnitFilter(userUnitFilter);
+              setAppliedUserSearch(userSearch);
+              setUsersSearched(true);
+            }}
+          >
+            查詢
+          </button>
+          <button
             className="button button-outline button-sm"
             disabled={backfilling}
             onClick={handleBackfillReviewers}
@@ -3707,6 +3743,16 @@ export function GroupsPage({
             value={unitSearch}
             onChange={(e) => setUnitSearch(e.target.value)}
           />
+          <button
+            className="button button-primary button-sm"
+            onClick={() => {
+              setAppliedUnitGroupFilter(unitGroupFilter);
+              setAppliedUnitSearch(unitSearch);
+              setUnitsSearched(true);
+            }}
+          >
+            查詢
+          </button>
         </div>
       )}
 
@@ -3779,643 +3825,450 @@ export function GroupsPage({
       )}
 
       {tab === "groups" ? (
-        groupView.kind === "list" ? (
-          masterLoading ? (
-            <section className="panel">
-              <p className="settings-note">讀取中…</p>
-            </section>
-          ) : groups.length === 0 ? (
-            <EmptyState
-              title="尚無群組"
-              description="使用右上角「新增群組」或「批次上傳」建立群組（例如：病房組、加護組）。"
-            />
-          ) : (
-            <section className="panel data-panel">
-              <div className="table-scroll">
-                <table className="permission-table">
-                  <thead>
-                    <tr>
-                      <SortHeader label="群組名稱" sortKey="group-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      <SortHeader label="所屬單位數" sortKey="group-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      {isAdmin && <th>操作</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedRows(groups, sortState.key, (row, key) => key === "group-count" ? row.unitCount : row.name).map((row) => (
-                      <tr key={row.id}>
-                        <td>
-                          <b>{row.name}</b>
-                        </td>
-                        <td>{row.unitCount} 個</td>
-                        {isAdmin && (
-                          <td>
-                            <button
-                              className="text-button"
-                              onClick={() => openGroupEdit(row.id)}
-                            >
-                              <Pencil size={13} /> 編輯
-                            </button>{" "}
-                            <button
-                              className="text-button"
-                              onClick={() => {
-                                setManagingGroupId(
-                                  managingGroupId === row.id ? "" : row.id,
-                                );
-                                setGroupUnitChecked([]);
-                                setGroupUnitAdd("");
-                              }}
-                            >
-                              單位管理
-                            </button>{" "}
-                            <button
-                              className="text-button"
-                              onClick={() => handleGroupDelete(row)}
-                            >
-                              <Trash2 size={13} /> 刪除
-                            </button>
-                          </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {managingGroupId && isAdmin && (
-                <div className="panel-inset divided">
-                  <MemberChecklist
-                    title={`群組「${groups.find((g) => g.id === managingGroupId)?.name ?? ""}」的單位`}
-                    note="加入／移除單位（改 unit.groupId）"
-                    emptyText="此群組尚無單位。"
-                    items={groupUnits.map((u) => ({
-                      id: u.code,
-                      label: u.name,
-                    }))}
-                    checked={groupUnitChecked}
-                    onToggle={(id, next) =>
-                      setGroupUnitChecked((prev) =>
-                        next
-                          ? [...prev, id]
-                          : prev.filter((x) => x !== id),
-                      )
-                    }
-                    onToggleAll={(next) =>
-                      setGroupUnitChecked(
-                        next ? groupUnits.map((u) => u.code) : [],
-                      )
-                    }
-                    onRemoveSelected={handleGroupUnitsRemove}
-                    removeLabel="批次移出"
-                    busy={groupBusy}
-                  />
-                  <div className="form-field" style={{ maxWidth: 320 }}>
-                    <label className="field-label">加入單位</label>
-                    <div className="select-wrap">
-                      <select
-                        value={groupUnitAdd}
-                        onChange={(e) => setGroupUnitAdd(e.target.value)}
-                      >
-                        <option value="">請選擇單位</option>
-                        {units
-                          .filter((u) => u.groupId !== managingGroupId)
-                          .map((u) => (
-                            <option key={u.code} value={u.code}>
-                              {u.code}・{u.name}
-                            </option>
-                          ))}
-                      </select>
-                      <ChevronDown size={15} />
-                    </div>
-                  </div>
-                  <div className="form-actions">
-                    <button
-                      className="button button-primary"
-                      disabled={!groupUnitAdd || groupBusy}
-                      onClick={() => handleGroupUnitAdd(groupUnitAdd)}
-                    >
-                      加入此群組
-                    </button>
-                    <button
-                      className="button button-outline"
-                      onClick={() => setManagingGroupId("")}
-                    >
-                      關閉
-                    </button>
-                  </div>
-                </div>
-              )}
-
-            </section>
-          )
+        masterLoading ? (
+          <section className="panel">
+            <p className="settings-note">讀取中…</p>
+          </section>
+        ) : groups.length === 0 ? (
+          <EmptyState
+            title="尚無群組"
+            description="使用右上角「新增群組」或「批次上傳」建立群組（例如：病房組、加護組）。"
+          />
         ) : (
-          <section className="panel data-panel indicator-form">
-            <SectionTitle
-              title={isGroupEditing ? "編輯群組" : "新增群組"}
-              note="群組名稱不可重複（例如：病房組）"
-            />
-            {groupError && <div className="login-error">{groupError}</div>}
-            <div className="form-grid">
-              <div className="form-field">
-                <label className="field-label">群組名稱 *</label>
-                <input
-                  className="text-input"
-                  value={groupForm.name}
-                  placeholder="例如 病房組"
-                  onChange={(e) =>
-                    setGroupForm({ name: e.target.value })
+          <section className="panel data-panel">
+            <div className="table-scroll">
+              <table className="permission-table">
+                <thead>
+                  <tr>
+                    <SortHeader label="群組名稱" sortKey="group-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    <SortHeader label="所屬單位數" sortKey="group-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    {isAdmin && <th>操作</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedRows(groups, sortState.key, (row, key) => key === "group-count" ? row.unitCount : row.name).map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <b>{row.name}</b>
+                      </td>
+                      <td>{row.unitCount} 個</td>
+                      {isAdmin && (
+                        <td>
+                          <button
+                            className="text-button"
+                            onClick={() => openGroupEdit(row.id)}
+                          >
+                            <Pencil size={13} /> 編輯
+                          </button>{" "}
+                          <button
+                            className="text-button"
+                            onClick={() => {
+                              setManagingGroupId(
+                                managingGroupId === row.id ? "" : row.id,
+                              );
+                              setGroupUnitChecked([]);
+                              setGroupUnitAddSearch("");
+                            }}
+                          >
+                            單位管理
+                          </button>{" "}
+                          <button
+                            className="text-button"
+                            onClick={() => handleGroupDelete(row)}
+                          >
+                            <Trash2 size={13} /> 刪除
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {managingGroupId && isAdmin && (
+              <div className="panel-inset divided">
+                <MemberChecklist
+                  title={`群組「${groups.find((g) => g.id === managingGroupId)?.name ?? ""}」的單位`}
+                  note="加入／移除單位（改 unit.groupId）"
+                  emptyText="此群組尚無單位。"
+                  items={groupUnits.map((u) => ({
+                    id: u.code,
+                    label: u.name,
+                  }))}
+                  checked={groupUnitChecked}
+                  onToggle={(id, next) =>
+                    setGroupUnitChecked((prev) =>
+                      next
+                        ? [...prev, id]
+                        : prev.filter((x) => x !== id),
+                    )
                   }
+                  onToggleAll={(next) =>
+                    setGroupUnitChecked(
+                      next ? groupUnits.map((u) => u.code) : [],
+                    )
+                  }
+                  onRemoveSelected={handleGroupUnitsRemove}
+                  removeLabel="批次移出"
+                  busy={groupBusy}
                 />
+                <div className="form-field" style={{ maxWidth: 320 }}>
+                  <label className="field-label">加入單位</label>
+                  <input
+                    className="text-input"
+                    placeholder="輸入單位代號或名稱搜尋"
+                    value={groupUnitAddSearch}
+                    onChange={(e) => setGroupUnitAddSearch(e.target.value)}
+                  />
+                </div>
+                {groupUnitAddSearch.trim() !== "" &&
+                  (groupUnitCandidates.length === 0 ? (
+                    <p className="settings-note">無符合的單位。</p>
+                  ) : (
+                    <div className="table-scroll">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>單位代號</th>
+                            <th>單位名稱</th>
+                            <th>操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {groupUnitCandidates.map((u) => (
+                            <tr key={u.code}>
+                              <td>{u.code}</td>
+                              <td>{u.name}</td>
+                              <td>
+                                <button
+                                  className="text-button"
+                                  disabled={groupBusy}
+                                  onClick={() => handleGroupUnitAdd(u.code)}
+                                >
+                                  <Plus size={13} /> 加入
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                <div className="form-actions">
+                  <button
+                    className="button button-outline"
+                    onClick={() => setManagingGroupId("")}
+                  >
+                    關閉
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="form-actions">
-              <button
-                className="button button-primary"
-                disabled={groupSaving}
-                onClick={handleGroupSave}
-              >
-                {groupSaving ? "儲存中…" : isGroupEditing ? "儲存修改" : "建立群組"}
-              </button>
-              <button
-                className="button button-outline"
-                onClick={() => setGroupView({ kind: "list" })}
-              >
-                取消
-              </button>
-            </div>
+            )}
+
           </section>
         )
       ) : tab === "units" ? (
-        unitView.kind === "list" ? (
-          masterLoading ? (
-            <section className="panel">
-              <p className="settings-note">讀取中…</p>
-            </section>
-          ) : units.length === 0 ? (
-            <EmptyState
-              title="尚無單位"
-              description="使用右上角「新增單位」或「批次上傳」建立單位（例如：9A病房，歸屬病房組）。"
-            />
-          ) : (
-            <section className="panel data-panel">
-              <div className="table-scroll">
-                <table className="permission-table">
-                  <thead>
-                    <tr>
-                      <SortHeader label="單位代號" sortKey="unit-code" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      <SortHeader label="單位名稱" sortKey="unit-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      <SortHeader label="所屬群組" sortKey="unit-group" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      <SortHeader label="所屬人員數" sortKey="unit-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      {isAdmin && <th>操作</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleUnits.length === 0 ? (
-                      <tr><td colSpan={isAdmin ? 5 : 4} className="muted-text">沒有符合篩選條件的單位</td></tr>
-                    ) : visibleUnits.map((row) => (
-                      <tr key={row.code}>
+        masterLoading ? (
+          <section className="panel">
+            <p className="settings-note">讀取中…</p>
+          </section>
+        ) : !unitsSearched ? (
+          <EmptyState
+            title="尚未查詢"
+            description="請設定篩選條件後按「查詢」，即可列出符合條件的單位。"
+          />
+        ) : units.length === 0 ? (
+          <EmptyState
+            title="尚無單位"
+            description="使用右上角「新增單位」或「批次上傳」建立單位（例如：9A病房，歸屬病房組）。"
+          />
+        ) : (
+          <section className="panel data-panel">
+            <div className="table-scroll">
+              <table className="permission-table">
+                <thead>
+                  <tr>
+                    <SortHeader label="單位代號" sortKey="unit-code" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    <SortHeader label="單位名稱" sortKey="unit-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    <SortHeader label="所屬群組" sortKey="unit-group" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    <SortHeader label="所屬人員數" sortKey="unit-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    {isAdmin && <th>操作</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleUnits.length === 0 ? (
+                    <tr><td colSpan={isAdmin ? 5 : 4} className="muted-text">沒有符合篩選條件的單位</td></tr>
+                  ) : visibleUnits.map((row) => (
+                    <tr key={row.code}>
+                      <td>
+                        <b>{row.code}</b>
+                      </td>
+                      <td>{row.name}</td>
+                      <td>{row.groupName}</td>
+                      <td>
+                        {row.memberCount === null ? "—" : `${row.memberCount} 人`}
+                      </td>
+                      {isAdmin && (
                         <td>
-                          <b>{row.code}</b>
-                        </td>
-                        <td>{row.name}</td>
-                        <td>{row.groupName}</td>
-                        <td>
-                          {row.memberCount === null ? "—" : `${row.memberCount} 人`}
-                        </td>
-                        {isAdmin && (
-                          <td>
+                          <button
+                            className="text-button"
+                            onClick={() => openUnitEdit(row.code)}
+                          >
+                            <Pencil size={13} /> 編輯
+                          </button>{" "}
+                          {isAdmin && (
                             <button
                               className="text-button"
-                              onClick={() => openUnitEdit(row.code)}
+                              onClick={() => {
+                                setManagingUnitCode(
+                                  managingUnitCode === row.code
+                                    ? ""
+                                    : row.code,
+                                );
+                                setUnitMemberChecked([]);
+                                setUnitAddSearch("");
+                              }}
                             >
-                              <Pencil size={13} /> 編輯
-                            </button>{" "}
-                            {isAdmin && (
-                              <button
-                                className="text-button"
-                                onClick={() => {
-                                  setManagingUnitCode(
-                                    managingUnitCode === row.code
-                                      ? ""
-                                      : row.code,
-                                  );
-                                  setUnitMemberChecked([]);
-                                  setUnitAddSearch("");
-                                }}
-                              >
-                                成員管理
-                              </button>
-                            )}{" "}
-                            <button
-                              className="text-button"
-                              onClick={() => handleUnitDelete(row.code)}
-                            >
-                              <Trash2 size={13} /> 刪除
+                              成員管理
                             </button>
-                          </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {managingUnitCode && isAdmin && (
-                <div className="panel-inset divided">
-                  <MemberChecklist
-                    title={`單位 ${managingUnitCode} 的成員`}
-                    note="加入／移除人員（改 person.unitCode）"
-                    items={unitMembers.map((u) => ({
-                      id: u.staffId,
-                      label: maskName(u.name),
-                      sub: u.title || undefined,
-                    }))}
-                    checked={unitMemberChecked}
-                    onToggle={(id, next) =>
-                      setUnitMemberChecked((prev) =>
-                        next ? [...prev, id] : prev.filter((x) => x !== id),
-                      )
-                    }
-                    onToggleAll={(next) =>
-                      setUnitMemberChecked(
-                        next ? unitMembers.map((u) => u.staffId) : [],
-                      )
-                    }
-                    onRemoveSelected={handleUnitMembersRemove}
-                    removeLabel="批次移出"
-                    busy={unitBusy}
+                          )}{" "}
+                          <button
+                            className="text-button"
+                            onClick={() => handleUnitDelete(row.code)}
+                          >
+                            <Trash2 size={13} /> 刪除
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {managingUnitCode && isAdmin && (
+              <div className="panel-inset divided">
+                <MemberChecklist
+                  title={`單位 ${managingUnitCode} 的成員`}
+                  note="加入／移除人員（改 person.unitCode）"
+                  items={unitMembers.map((u) => ({
+                    id: u.staffId,
+                    label: maskName(u.name),
+                    sub: u.title || undefined,
+                  }))}
+                  checked={unitMemberChecked}
+                  onToggle={(id, next) =>
+                    setUnitMemberChecked((prev) =>
+                      next ? [...prev, id] : prev.filter((x) => x !== id),
+                    )
+                  }
+                  onToggleAll={(next) =>
+                    setUnitMemberChecked(
+                      next ? unitMembers.map((u) => u.staffId) : [],
+                    )
+                  }
+                  onRemoveSelected={handleUnitMembersRemove}
+                  removeLabel="批次移出"
+                  busy={unitBusy}
+                />
+                <div className="form-field" style={{ maxWidth: 320 }}>
+                  <label className="field-label">加入人員</label>
+                  <input
+                    className="text-input"
+                    placeholder="輸入職編或姓名搜尋"
+                    value={unitAddSearch}
+                    onChange={(e) => setUnitAddSearch(e.target.value)}
                   />
-                  <div className="form-field" style={{ maxWidth: 320 }}>
-                    <label className="field-label">加入人員</label>
-                    <input
-                      className="text-input"
-                      placeholder="輸入職編或姓名搜尋"
-                      value={unitAddSearch}
-                      onChange={(e) => setUnitAddSearch(e.target.value)}
-                    />
-                  </div>
-                  {unitAddSearch.trim() !== "" &&
-                    (unitCandidates.length === 0 ? (
-                      <p className="settings-note">無符合的在職人員。</p>
-                    ) : (
+                </div>
+                {unitAddSearch.trim() !== "" &&
+                  (unitCandidates.length === 0 ? (
+                    <p className="settings-note">無符合的在職人員。</p>
+                  ) : (
+                    <div className="table-scroll">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>職編</th>
+                            <th>姓名</th>
+                            <th>所屬單位</th>
+                            <th>操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {unitCandidates.map((u) => (
+                            <tr key={u.staffId}>
+                              <td>{u.staffId}</td>
+                              <td>{maskName(u.name)}</td>
+                              <td>{u.unitCode || "—"}</td>
+                              <td>
+                                <button
+                                  className="text-button"
+                                  disabled={unitBusy}
+                                  onClick={() =>
+                                    handleUnitMemberAdd(u.staffId)
+                                  }
+                                >
+                                  <Plus size={13} /> 加入
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                <div className="form-actions">
+                  <button
+                    className="button button-outline"
+                    onClick={() => setManagingUnitCode("")}
+                  >
+                    關閉
+                  </button>
+                </div>
+              </div>
+            )}
+
+          </section>
+        )
+      ) : tab === "titles" ? (
+        titlesLoading || levelsLoading ? (
+          <section className="panel">
+            <p className="settings-note">讀取中…</p>
+          </section>
+        ) : titles.length === 0 ? (
+          <EmptyState
+            title="尚無職稱"
+            description="使用右上角「新增職稱」或「批次上傳」建立職稱。"
+          />
+        ) : (
+          <section className="panel data-panel">
+            {renderLevelCreate("title")}
+            {titleSections.map((section) => (
+              <div className="level-section" key={section.level?.id ?? "ungrouped"}>
+                {renderLevelHead(
+                  "title",
+                  section.level,
+                  section.items.reduce((n, r) => n + (r.userCount ?? 0), 0),
+                )}
+                {renderTitleTable(section.items)}
+              </div>
+            ))}
+            {managingTitle && isAdmin && (
+              <div className="panel-inset divided">
+                <MemberChecklist
+                  title={`職稱「${managingTitle.name}」的成員`}
+                  note="加入即轉任此職稱（一人一職稱）；移除即清除職稱"
+                  items={titleMembers.map((u) => ({
+                    id: u.staffId,
+                    label: maskName(u.name),
+                    sub: u.unitCode || undefined,
+                  }))}
+                  checked={titleMemberChecked}
+                  onToggle={(id, next) =>
+                    setTitleMemberChecked((prev) =>
+                      next ? [...prev, id] : prev.filter((x) => x !== id),
+                    )
+                  }
+                  onToggleAll={(next) =>
+                    setTitleMemberChecked(
+                      next ? titleMembers.map((u) => u.staffId) : [],
+                    )
+                  }
+                  onRemoveSelected={handleTitleMembersRemove}
+                  removeLabel="批次移出"
+                  busy={titleBusy}
+                />
+                <div className="form-field" style={{ maxWidth: 320 }}>
+                  <label className="field-label">加入人員（搜尋＋全選）</label>
+                  <input
+                    className="text-input"
+                    placeholder="輸入職編或姓名搜尋"
+                    value={titleAddSearch}
+                    onChange={(e) => setTitleAddSearch(e.target.value)}
+                  />
+                </div>
+                {titleAddSearch.trim() !== "" &&
+                  (titleCandidates.length === 0 ? (
+                    <p className="settings-note">無符合的在職人員。</p>
+                  ) : (
+                    <>
                       <div className="table-scroll">
-                        <table className="data-table">
+                        <table className="permission-table">
                           <thead>
                             <tr>
+                              <th style={{ width: 36 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={
+                                    titleCandidates.length > 0 &&
+                                    titleCandidates.every((u) =>
+                                      titleAddChecked.includes(u.staffId),
+                                    )
+                                  }
+                                  onChange={(e) =>
+                                    setTitleAddChecked(
+                                      e.target.checked
+                                        ? titleCandidates.map((u) => u.staffId)
+                                        : [],
+                                    )
+                                  }
+                                  aria-label="全選"
+                                />
+                              </th>
                               <th>職編</th>
                               <th>姓名</th>
-                              <th>所屬單位</th>
-                              <th>操作</th>
+                              <th>現職稱</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {unitCandidates.map((u) => (
+                            {titleCandidates.map((u) => (
                               <tr key={u.staffId}>
+                                <td>
+                                  <input
+                                    type="checkbox"
+                                    checked={titleAddChecked.includes(u.staffId)}
+                                    onChange={(e) =>
+                                      setTitleAddChecked((prev) =>
+                                        e.target.checked
+                                          ? [...prev, u.staffId]
+                                          : prev.filter((x) => x !== u.staffId),
+                                      )
+                                    }
+                                    aria-label={`選擇 ${u.staffId}`}
+                                  />
+                                </td>
                                 <td>{u.staffId}</td>
                                 <td>{maskName(u.name)}</td>
-                                <td>{u.unitCode || "—"}</td>
-                                <td>
-                                  <button
-                                    className="text-button"
-                                    disabled={unitBusy}
-                                    onClick={() =>
-                                      handleUnitMemberAdd(u.staffId)
-                                    }
-                                  >
-                                    <Plus size={13} /> 加入
-                                  </button>
-                                </td>
+                                <td>{u.title || "—"}</td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
                       </div>
-                    ))}
-                  <div className="form-actions">
-                    <button
-                      className="button button-outline"
-                      onClick={() => setManagingUnitCode("")}
-                    >
-                      關閉
-                    </button>
-                  </div>
-                </div>
-              )}
-
-            </section>
-          )
-        ) : (
-          <section className="panel data-panel indicator-form">
-            <SectionTitle
-              title={isUnitEditing ? `編輯單位 ${unitForm.code}` : "新增單位"}
-              note={isUnitEditing ? "單位代號不可變更（更名時代號不變）" : ""}
-            />
-            {unitError && <div className="login-error">{unitError}</div>}
-            <div className="form-grid">
-              <div className="form-field">
-                <label className="field-label">單位代號 *</label>
-                <input
-                  className="text-input"
-                  value={unitForm.code}
-                  disabled={isUnitEditing}
-                  placeholder="例如 9A"
-                  onChange={(e) =>
-                    setUnitForm((prev) => ({ ...prev, code: e.target.value }))
-                  }
-                />
-              </div>
-              <div className="form-field">
-                <label className="field-label">單位名稱 *</label>
-                <input
-                  className="text-input"
-                  value={unitForm.name}
-                  placeholder="例如 9A病房"
-                  onChange={(e) =>
-                    setUnitForm((prev) => ({ ...prev, name: e.target.value }))
-                  }
-                />
-              </div>
-              <div className="form-field">
-                <label className="field-label">所屬群組</label>
-                <div className="select-wrap">
-                  <select
-                    value={unitForm.groupId}
-                    onChange={(e) =>
-                      setUnitForm((prev) => ({ ...prev, groupId: e.target.value }))
-                    }
-                  >
-                    <option value="">— 未分類 —</option>
-                    {groups.map((g) => (
-                      <option key={g.id} value={g.id}>
-                        {g.name}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
-              </div>
-              <div className="form-field">
-                <label className="field-label" htmlFor="merged-from-units">合併自舊單位（可複選）</label>
-                <select
-                  id="merged-from-units"
-                  className="text-input"
-                  multiple
-                  size={Math.min(5, Math.max(3, units.length))}
-                  value={unitForm.mergedFromUnitCodes}
-                  onChange={(event) => setUnitForm((prev) => ({
-                    ...prev,
-                    mergedFromUnitCodes: Array.from(event.target.selectedOptions, (option) => option.value),
-                  }))}
-                >
-                  {units.filter((candidate) => candidate.code !== unitForm.code && (
-                    unitForm.mergedFromUnitCodes.includes(candidate.code) ||
-                    !units.some((other) => other.code !== unitForm.code && other.mergedFromUnitCodes.includes(candidate.code))
-                  )).map((candidate) => (
-                    <option key={candidate.code} value={candidate.code}>{candidate.name}（{candidate.code}）</option>
+                      <div className="form-actions">
+                        <button
+                          className="button button-primary"
+                          disabled={titleAddChecked.length === 0 || titleBusy}
+                          onClick={handleTitleMembersAdd}
+                        >
+                          加入所選（{titleAddChecked.length}）
+                        </button>
+                      </div>
+                    </>
                   ))}
-                </select>
-                <p className="settings-note">選取後，新單位護理長可在分析中查看合併前歷史資料；不會授予個人明細下鑽權限。</p>
-              </div>
-            </div>
-            <div className="form-actions">
-              <button
-                className="button button-primary"
-                disabled={unitSaving}
-                onClick={handleUnitSave}
-              >
-                {unitSaving ? "儲存中…" : isUnitEditing ? "儲存修改" : "建立單位"}
-              </button>
-              <button
-                className="button button-outline"
-                onClick={() => setUnitView({ kind: "list" })}
-              >
-                取消
-              </button>
-            </div>
-          </section>
-        )
-      ) : tab === "titles" ? (
-        titleView.kind === "list" ? (
-          titlesLoading || levelsLoading ? (
-            <section className="panel">
-              <p className="settings-note">讀取中…</p>
-            </section>
-          ) : titles.length === 0 ? (
-            <EmptyState
-              title="尚無職稱"
-              description="使用右上角「新增職稱」或「批次上傳」建立職稱。"
-            />
-          ) : (
-            <section className="panel data-panel">
-              {renderLevelCreate("title")}
-              {titleSections.map((section) => (
-                <div className="level-section" key={section.level?.id ?? "ungrouped"}>
-                  {renderLevelHead(
-                    "title",
-                    section.level,
-                    section.items.reduce((n, r) => n + (r.userCount ?? 0), 0),
-                  )}
-                  {renderTitleTable(section.items)}
-                </div>
-              ))}
-              {managingTitle && isAdmin && (
-                <div className="panel-inset divided">
-                  <MemberChecklist
-                    title={`職稱「${managingTitle.name}」的成員`}
-                    note="加入即轉任此職稱（一人一職稱）；移除即清除職稱"
-                    items={titleMembers.map((u) => ({
-                      id: u.staffId,
-                      label: maskName(u.name),
-                      sub: u.unitCode || undefined,
-                    }))}
-                    checked={titleMemberChecked}
-                    onToggle={(id, next) =>
-                      setTitleMemberChecked((prev) =>
-                        next ? [...prev, id] : prev.filter((x) => x !== id),
-                      )
-                    }
-                    onToggleAll={(next) =>
-                      setTitleMemberChecked(
-                        next ? titleMembers.map((u) => u.staffId) : [],
-                      )
-                    }
-                    onRemoveSelected={handleTitleMembersRemove}
-                    removeLabel="批次移出"
-                    busy={titleBusy}
-                  />
-                  <div className="form-field" style={{ maxWidth: 320 }}>
-                    <label className="field-label">加入人員（搜尋＋全選）</label>
-                    <input
-                      className="text-input"
-                      placeholder="輸入職編或姓名搜尋"
-                      value={titleAddSearch}
-                      onChange={(e) => setTitleAddSearch(e.target.value)}
-                    />
-                  </div>
-                  {titleAddSearch.trim() !== "" &&
-                    (titleCandidates.length === 0 ? (
-                      <p className="settings-note">無符合的在職人員。</p>
-                    ) : (
-                      <>
-                        <div className="table-scroll">
-                          <table className="permission-table">
-                            <thead>
-                              <tr>
-                                <th style={{ width: 36 }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={
-                                      titleCandidates.length > 0 &&
-                                      titleCandidates.every((u) =>
-                                        titleAddChecked.includes(u.staffId),
-                                      )
-                                    }
-                                    onChange={(e) =>
-                                      setTitleAddChecked(
-                                        e.target.checked
-                                          ? titleCandidates.map((u) => u.staffId)
-                                          : [],
-                                      )
-                                    }
-                                    aria-label="全選"
-                                  />
-                                </th>
-                                <th>職編</th>
-                                <th>姓名</th>
-                                <th>現職稱</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {titleCandidates.map((u) => (
-                                <tr key={u.staffId}>
-                                  <td>
-                                    <input
-                                      type="checkbox"
-                                      checked={titleAddChecked.includes(u.staffId)}
-                                      onChange={(e) =>
-                                        setTitleAddChecked((prev) =>
-                                          e.target.checked
-                                            ? [...prev, u.staffId]
-                                            : prev.filter((x) => x !== u.staffId),
-                                        )
-                                      }
-                                      aria-label={`選擇 ${u.staffId}`}
-                                    />
-                                  </td>
-                                  <td>{u.staffId}</td>
-                                  <td>{maskName(u.name)}</td>
-                                  <td>{u.title || "—"}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        <div className="form-actions">
-                          <button
-                            className="button button-primary"
-                            disabled={titleAddChecked.length === 0 || titleBusy}
-                            onClick={handleTitleMembersAdd}
-                          >
-                            加入所選（{titleAddChecked.length}）
-                          </button>
-                        </div>
-                      </>
-                    ))}
-                  <div className="form-actions">
-                    <button
-                      className="button button-outline"
-                      onClick={() => setManagingTitleId("")}
-                    >
-                      返回職稱清單
-                    </button>
-                  </div>
-                </div>
-              )}
-              <div className="panel-inset">
-                <p className="settings-note">
-                  職稱以名稱唯一；可在此新增職稱、管理成員或刪除職稱。職稱權限請到「組織與設定 → 權限管理」設定（按名稱共用）。
-                </p>
-              </div>
-            </section>
-          )
-        ) : (
-          <section className="panel data-panel indicator-form">
-            <SectionTitle
-              title={isTitleEditing ? "編輯職稱" : "新增職稱"}
-              note="職稱以名稱唯一；跨單位設定請到權限管理。"
-            />
-            {titleError && <div className="login-error">{titleError}</div>}
-            <div className="form-grid">
-              <div className="form-field">
-                <label className="field-label">職稱名稱 *</label>
-                <input
-                  className="text-input"
-                  value={titleForm.name}
-                  placeholder="例如 護理長"
-                  onChange={(e) =>
-                    setTitleForm((prev) => ({ ...prev, name: e.target.value }))
-                  }
-                />
-              </div>
-              <div className="form-field">
-                <label className="field-label">層級</label>
-                <div className="select-wrap">
-                  <select
-                    value={titleForm.levelId}
-                    onChange={(e) =>
-                      setTitleForm((prev) => ({ ...prev, levelId: e.target.value }))
-                    }
+                <div className="form-actions">
+                  <button
+                    className="button button-outline"
+                    onClick={() => setManagingTitleId("")}
                   >
-                    <option value="">— 未分層級 —</option>
-                    {titleLevels.map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.name}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={15} />
+                    返回職稱清單
+                  </button>
                 </div>
               </div>
-              <div className="form-field">
-                <label className="field-label">主管層級（決定儀表板與結果範圍；不以名稱判斷）</label>
-                <div className="form-grid">
-                  {(
-                    [
-                      ["isUnitHead", "單位主管"],
-                      ["isDistrictHead", "轄區主管"],
-                      ["isHospitalHead", "院級主管"],
-                      ["isOfficer", "執行幹事"],
-                      ["isConvener", "召集人"],
-                    ] as const
-                  ).map(([key, label]) => (
-                    <label className="check-row" key={key}>
-                      <input
-                        type="checkbox"
-                        checked={titleForm[key]}
-                        onChange={(e) =>
-                          setTitleForm((prev) => ({
-                            ...prev,
-                            [key]: e.target.checked,
-                          }))
-                        }
-                      />
-                      <span>{label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="form-actions">
-              <button
-                className="button button-primary"
-                disabled={titleSaving}
-                onClick={handleTitleSave}
-              >
-                {titleSaving ? "儲存中…" : isTitleEditing ? "儲存修改" : "建立職稱"}
-              </button>
-              <button
-                className="button button-outline"
-                onClick={() => setTitleView({ kind: "list" })}
-              >
-                取消
-              </button>
+            )}
+            <div className="panel-inset">
+              <p className="settings-note">
+                職稱以名稱唯一；可在此新增職稱、管理成員或刪除職稱。職稱權限請到「組織與設定 → 權限管理」設定（按名稱共用）。
+              </p>
             </div>
           </section>
         )
@@ -4426,11 +4279,16 @@ export function GroupsPage({
             <p>如需新增或異動人員資料，請聯絡系統管理員。</p>
           </div>
         </section>
-      ) : tab === "users" && userView.kind === "list" ? (
+      ) : tab === "users" ? (
         usersLoading ? (
           <section className="panel">
             <p className="settings-note">讀取中…</p>
           </section>
+        ) : !usersSearched ? (
+          <EmptyState
+            title="尚未查詢"
+            description="請設定篩選條件後按「查詢」，即可列出符合條件的人員。"
+          />
         ) : users.length === 0 ? (
           <EmptyState
             title="尚無人員"
@@ -4508,373 +4366,6 @@ export function GroupsPage({
             </div>
           </section>
         )
-      ) : tab === "users" ? (
-        <section className="panel data-panel indicator-form">
-          <SectionTitle
-            title={isUserEditing ? `編輯人員 ${userForm.staffId}` : "新增人員"}
-            note={
-              isUserEditing
-                ? "職編不可變更"
-                : "儲存後請再到 Firebase Console → Authentication 建立登入帳號"
-            }
-          />
-          {userError && <div className="login-error">{userError}</div>}
-          <div className="form-grid">
-            <div className="form-field">
-              <label className="field-label">職編 *</label>
-              <input
-                className="text-input"
-                value={userForm.staffId}
-                disabled={isUserEditing}
-                placeholder="例如 A12345（即登入帳號）"
-                onChange={(e) =>
-                  setUserForm((prev) => ({ ...prev, staffId: e.target.value }))
-                }
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">姓名 *</label>
-              <input
-                className="text-input"
-                value={userForm.name}
-                placeholder="例如 王小明"
-                onChange={(e) =>
-                  setUserForm((prev) => ({ ...prev, name: e.target.value }))
-                }
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">單位</label>
-              <div className="select-wrap">
-                <select
-                  value={userForm.unitCode}
-                  onChange={(e) => {
-                    const nextUnitCode = e.target.value;
-                    setUserForm((prev) => ({ ...prev, unitCode: nextUnitCode }));
-                  }}
-                >
-                  <option value="">— 未指定 —</option>
-                  {units.map((u) => (
-                    <option key={u.code} value={u.code}>
-                      {u.code}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
-            <div className="form-field">
-              <label className="field-label">職稱</label>
-              <div className="select-wrap">
-                <select
-                  value={userForm.titleId}
-                  onChange={(e) => {
-                    const title = titles.find((item) => item.id === e.target.value);
-                    setUserForm((prev) => ({
-                      ...prev,
-                      titleId: title?.id ?? "",
-                      title: title?.name ?? "",
-                    }));
-                  }}
-                >
-                  <option value="">— 未指定（一般使用者） —</option>
-                  {titleFormSections.map((section) => (
-                    <optgroup
-                      key={section.level?.id ?? "ungrouped"}
-                      label={section.level?.name ?? "未分層級"}
-                    >
-                      {section.items.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-              <p className="settings-note">可留白：新帳號預設為一般使用者，職稱與角色之後再賦予。</p>
-            </div>
-            <div className="form-field">
-              <label className="field-label">到職日</label>
-              <input
-                className="text-input"
-                type="date"
-                value={userForm.hireDate}
-                onChange={(e) =>
-                  setUserForm((prev) => ({ ...prev, hireDate: e.target.value }))
-                }
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">Email</label>
-              <input
-                className="text-input"
-                type="email"
-                value={userForm.email}
-                placeholder="例如 name@example.com（供通知與重設密碼）"
-                onChange={(e) =>
-                  setUserForm((prev) => ({ ...prev, email: e.target.value }))
-                }
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">電話</label>
-              <input
-                className="text-input"
-                value={userForm.phone}
-                placeholder="例如 0912-345-678"
-                onChange={(e) =>
-                  setUserForm((prev) => ({ ...prev, phone: e.target.value }))
-                }
-              />
-            </div>
-            {reviewerRoleSelected && (
-              <div className="form-field">
-                <label className="field-label" htmlFor="reviewer-access-expiry">審查員授權效期</label>
-                <input
-                  id="reviewer-access-expiry"
-                  className="text-input"
-                  type="date"
-                  value={userForm.reviewerAccessExpiresAt}
-                  onChange={(event) => setUserForm((prev) => ({
-                    ...prev,
-                    reviewerAccessExpiresAt: event.target.value,
-                  }))}
-                />
-                <p className="settings-note">留白為永久有效（預設）；設定日期後，審查員權限於該日結束後失效。</p>
-              </div>
-            )}
-            {!isUserEditing && (
-              <div className="form-field">
-                <label className="field-label">首次登入強制改密碼</label>
-                <label className="check-row">
-                  <input
-                    type="checkbox"
-                    checked={userForm.mustChangePassword}
-                    onChange={(e) =>
-                      setUserForm((prev) => ({
-                        ...prev,
-                        mustChangePassword: e.target.checked,
-                      }))
-                    }
-                  />
-                  <span>啟用（建議保持開啟）</span>
-                </label>
-                <p className="settings-note">帳號與初始密碼統一為職編：登入帳號為「職編@nurseboard.internal」，在 Firebase Console 建立使用者時初始密碼請設為該員職編；首次登入須更改密碼。</p>
-              </div>
-            )}
-          </div>
-
-          <SectionTitle
-            title="群組＋角色"
-            note="上方加入、下方列表；每個群組的角色與權限各自隔離，加入後即顯示於列表，按「儲存修改」才生效。"
-          />
-          {/* v1.52.0：分工表式——上方加入區＋下方角色列表（每群組一列，可編輯／刪除） */}
-          <div className="panel" style={{ padding: 12, marginBottom: 8 }}>
-            <div className="form-field">
-              <label className="field-label">群組</label>
-              <div className="select-wrap">
-                <select
-                  value={membershipAddGroupId}
-                  onChange={(e) => {
-                    // v1.51.0：切換群組不得清空已勾角色（加入區群組與角色為獨立 state）
-                    setMembershipAddGroupId(e.target.value);
-                    setMembershipError("");
-                  }}
-                >
-                  <option value="">請選擇群組</option>
-                  {groups.map((g) => (
-                    <option key={g.id} value={g.id}>
-                      {g.name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
-            <div className="form-grid">
-              {/* v1.55.0：角色勾選按層級分區顯示 */}
-              {roleFormSections.map((section) => (
-                <div key={section.level?.id ?? "ungrouped"} style={{ marginBottom: 8 }}>
-                  <p className="settings-note" style={{ margin: "4px 0" }}>
-                    {section.level?.name ?? "未分層級"}
-                  </p>
-                  {section.items.map((r) => (
-                    <label className="check-row" key={r.id}>
-                      <input
-                        type="checkbox"
-                        checked={membershipAddRoles.includes(r.name)}
-                        onChange={() => toggleMembershipAddRole(r.name)}
-                      />
-                      <span>{r.name}</span>
-                    </label>
-                  ))}
-                </div>
-              ))}
-            </div>
-            {membershipEditingGroupId !== null && (
-              <p className="settings-note">
-                正在編輯：{groupNameOf(membershipEditingGroupId)}
-                （按「更新」寫回原列；角色全取消會刪除該群組）
-              </p>
-            )}
-            {membershipError && <div className="login-error">{membershipError}</div>}
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button
-                className="button button-primary button-sm"
-                onClick={handleMembershipAddOrUpdate}
-              >
-                {membershipEditingGroupId === null ? (
-                  <>
-                    <Plus size={14} /> 加入
-                  </>
-                ) : (
-                  "更新"
-                )}
-              </button>
-              {membershipEditingGroupId !== null && (
-                <button
-                  className="button button-outline button-sm"
-                  onClick={cancelMembershipEdit}
-                >
-                  取消編輯
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="panel" style={{ padding: 12 }}>
-            <p className="settings-note" style={{ marginTop: 0 }}>
-              {userForm.memberships.length} 個群組・
-              {userForm.memberships.reduce((n, m) => n + m.roles.length, 0)} 個角色
-            </p>
-            {userForm.memberships.length === 0 ? (
-              <p className="settings-note">尚無群組＋角色，請由上方加入。</p>
-            ) : (
-              <div className="table-scroll">
-                <table className="permission-table">
-                  <thead>
-                    <tr>
-                      <th>群組</th>
-                      <th>角色</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {userForm.memberships.map((m) => (
-                      <tr key={m.groupId}>
-                        <td>
-                          <b>{groupNameOf(m.groupId)}</b>
-                        </td>
-                        <td>
-                          {m.roles.map((r) => (
-                            <span
-                              key={r}
-                              className="status-pill muted"
-                              style={{ marginRight: 4 }}
-                            >
-                              {r}
-                            </span>
-                          ))}
-                        </td>
-                        <td>
-                          <button
-                            className="text-button"
-                            onClick={() => startMembershipEdit(m.groupId)}
-                          >
-                            <Pencil size={13} /> 編輯
-                          </button>{" "}
-                          <button
-                            className="text-button"
-                            onClick={() => removeMembershipByGroup(m.groupId)}
-                          >
-                            <Trash2 size={13} /> 刪除
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          <SectionTitle title="其他角色" note="不指定群組的角色（全院適用）；仍須與適用單位職稱權限交集才生效。" />
-          {roleOptions.length === 0 ? (
-            <p className="settings-note">
-              尚未建立角色，請先到「角色」頁籤建立角色。
-            </p>
-          ) : (
-            <div className="form-grid">
-              {/* v1.55.0：其他角色按層級分區顯示 */}
-              {roleFormSections.map((section) => (
-                <div key={section.level?.id ?? "ungrouped"} style={{ marginBottom: 8 }}>
-                  <p className="settings-note" style={{ margin: "4px 0" }}>
-                    {section.level?.name ?? "未分層級"}
-                  </p>
-                  {section.items.map((r) => (
-                    <label className="check-row" key={r.id}>
-                      <input
-                        type="checkbox"
-                        checked={userForm.otherRoles.includes(r.name)}
-                        onChange={() => toggleOtherRole(r.name)}
-                      />
-                      <span>{r.name}</span>
-                    </label>
-                  ))}
-                </div>
-              ))}
-            </div>
-          )}
-
-          <SectionTitle
-            title="督導轄區群組"
-            note="只有督導需要填寫：勾選其負責的群組，督導儀表板依此顯示轄區單位"
-          />
-          {groups.length === 0 ? (
-            <p className="settings-note">尚無群組資料。</p>
-          ) : (
-            <div className="form-grid">
-              {groups.map((g) => (
-                <label className="check-row" key={g.id}>
-                  <input
-                    type="checkbox"
-                    checked={userForm.districtGroupIds.includes(g.id)}
-                    onChange={() =>
-                      setUserForm((prev) => ({
-                        ...prev,
-                        districtGroupIds:
-                          prev.districtGroupIds.includes(g.id)
-                            ? prev.districtGroupIds.filter((x) => x !== g.id)
-                            : [...prev.districtGroupIds, g.id],
-                      }))
-                    }
-                  />
-                  <span>{g.name}</span>
-                </label>
-              ))}
-            </div>
-          )}
-
-          <div className="form-actions">
-            <button
-              className="button button-primary"
-              disabled={userSaving}
-              onClick={handleUserSave}
-            >
-              {userSaving ? "儲存中…" : isUserEditing ? "儲存修改" : "建立人員"}
-            </button>
-            <button
-              className="button button-outline"
-              onClick={() => {
-                resetMembershipAddArea();
-                setUserView({ kind: "list" });
-              }}
-            >
-              取消
-            </button>
-          </div>
-        </section>
       ) : tab === "roles" ? (
         !isAdmin ? (
           <section className="panel">
@@ -4895,43 +4386,7 @@ export function GroupsPage({
                 placeholder="輸入角色名稱"
                 onChange={(event) => setNewRoleName(event.target.value)}
               />
-            </div>
-            <div className="form-field" style={{ maxWidth: 420 }}>
-              <label className="field-label">功能類別 *</label>
-              <div className="select-wrap">
-                <select
-                  value={newRoleCategory}
-                  onChange={(event) =>
-                    setNewRoleCategory(event.target.value as RoleCategory)
-                  }
-                >
-                  {ROLE_CATEGORY_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-              <p className="settings-note">功能類別決定此角色的身分（審查員／召集人／執行幹事等），不以名稱判斷。</p>
-            </div>
-            <div className="form-field" style={{ maxWidth: 420 }}>
-              <label className="field-label">適用範圍 *</label>
-              <div className="select-wrap">
-                <select
-                  value={newRoleKind}
-                  onChange={(event) =>
-                    setNewRoleKind(event.target.value as RoleScope)
-                  }
-                >
-                  {ROLE_SCOPE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
+              <p className="settings-note">身分（審查員／召集人／執行幹事）由名稱關鍵字推導，範圍由層級決定。</p>
             </div>
             <div className="form-field" style={{ maxWidth: 420 }}>
               <label className="field-label">層級</label>
@@ -4985,81 +4440,6 @@ export function GroupsPage({
               removeLabel="批次移出"
               busy={roleBusy}
             />
-            <div style={{ marginTop: 16 }}>
-              <SectionTitle title="角色設定" note="角色以名稱唯一；改名會同步更新所有持有此角色的人員與權限範本。改適用範圍時權限範本一併遷移。跨設定請到權限管理。" />
-              {roleEditError && <div className="login-error">{roleEditError}</div>}
-              <div className="form-field" style={{ maxWidth: 320 }}>
-                <label className="field-label">角色名稱 *</label>
-                <input
-                  className="text-input"
-                  value={roleEditName}
-                  placeholder="輸入角色名稱"
-                  onChange={(event) => setRoleEditName(event.target.value)}
-                />
-              </div>
-              <div className="form-field" style={{ maxWidth: 320 }}>
-                <label className="field-label">功能類別 *</label>
-                <div className="select-wrap">
-                  <select
-                    value={roleEditCategory}
-                    onChange={(event) =>
-                      setRoleEditCategory(event.target.value as RoleCategory)
-                    }
-                  >
-                    {ROLE_CATEGORY_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
-              </div>
-              <div className="form-field" style={{ maxWidth: 320 }}>
-                <label className="field-label">適用範圍 *</label>
-                <div className="select-wrap">
-                  <select
-                    value={roleEditKind}
-                    onChange={(event) =>
-                      setRoleEditKind(event.target.value as RoleScope)
-                    }
-                  >
-                    {ROLE_SCOPE_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
-              </div>
-              <div className="form-field" style={{ maxWidth: 320 }}>
-                <label className="field-label">層級</label>
-                <div className="select-wrap">
-                  <select
-                    value={roleEditLevelId}
-                    onChange={(event) => setRoleEditLevelId(event.target.value)}
-                  >
-                    <option value="">— 未分層級 —</option>
-                    {roleLevels.map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.name}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
-              </div>
-              <div className="form-actions">
-                <button
-                  className="button button-primary"
-                  disabled={roleEditSaving}
-                  onClick={handleRoleRename}
-                >
-                  {roleEditSaving ? "儲存中…" : "儲存修改"}
-                </button>
-              </div>
-            </div>
             <div className="form-field" style={{ maxWidth: 320 }}>
               <label className="field-label">加入人員（搜尋＋全選）</label>
               <input
@@ -5070,7 +4450,7 @@ export function GroupsPage({
               />
             </div>
             {/* v1.40.3：非單位級角色一律可指定群組加入，不再只對寫死名單顯示群組選單 */}
-            {managingRole.kind !== "unit" && (
+            {managingRole.scope !== "unit" && (
                 <div className="form-field" style={{ maxWidth: 320 }}>
                   <label className="field-label">適用群組 *</label>
                   <div className="select-wrap">
@@ -5089,79 +4469,80 @@ export function GroupsPage({
                   </div>
                 </div>
               )}
-            {managingRole.kind === "unit" && (
+            {managingRole.scope === "unit" && (
               <p className="settings-note">
                 單位級角色：加入時以各人所屬單位的群組計（無所屬單位群組者無法加入）。
               </p>
             )}
-            {roleCandidates.length === 0 ? (
-              <p className="settings-note">無可加入的在職人員。</p>
-            ) : (
-              <>
-                <div className="table-scroll">
-                  <table className="permission-table">
-                    <thead>
-                      <tr>
-                        <th style={{ width: 36 }}>
-                          <input
-                            type="checkbox"
-                            checked={
-                              roleCandidates.length > 0 &&
-                              roleCandidates.every((u) =>
-                                roleAddChecked.includes(u.staffId),
-                              )
-                            }
-                            onChange={(e) =>
-                              setRoleAddChecked(
-                                e.target.checked
-                                  ? roleCandidates.map((u) => u.staffId)
-                                  : [],
-                              )
-                            }
-                            aria-label="全選"
-                          />
-                        </th>
-                        <th>職編</th>
-                        <th>姓名</th>
-                        <th>所屬單位</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {roleCandidates.map((u) => (
-                        <tr key={u.staffId}>
-                          <td>
+            {roleAddSearch.trim() !== "" &&
+              (roleCandidates.length === 0 ? (
+                <p className="settings-note">無符合的在職人員。</p>
+              ) : (
+                <>
+                  <div className="table-scroll">
+                    <table className="permission-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: 36 }}>
                             <input
                               type="checkbox"
-                              checked={roleAddChecked.includes(u.staffId)}
-                              onChange={(e) =>
-                                setRoleAddChecked((prev) =>
-                                  e.target.checked
-                                    ? [...prev, u.staffId]
-                                    : prev.filter((x) => x !== u.staffId),
+                              checked={
+                                roleCandidates.length > 0 &&
+                                roleCandidates.every((u) =>
+                                  roleAddChecked.includes(u.staffId),
                                 )
                               }
-                              aria-label={`選擇 ${u.staffId}`}
+                              onChange={(e) =>
+                                setRoleAddChecked(
+                                  e.target.checked
+                                    ? roleCandidates.map((u) => u.staffId)
+                                    : [],
+                                )
+                              }
+                              aria-label="全選"
                             />
-                          </td>
-                          <td>{u.staffId}</td>
-                          <td>{maskName(u.name)}</td>
-                          <td>{u.unitCode || "—"}</td>
+                          </th>
+                          <th>職編</th>
+                          <th>姓名</th>
+                          <th>所屬單位</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="form-actions">
-                  <button
-                    className="button button-primary"
-                    disabled={roleAddChecked.length === 0 || roleBusy}
-                    onClick={handleRoleMembersAdd}
-                  >
-                    加入所選（{roleAddChecked.length}）
-                  </button>
-                </div>
-              </>
-            )}
+                      </thead>
+                      <tbody>
+                        {roleCandidates.map((u) => (
+                          <tr key={u.staffId}>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={roleAddChecked.includes(u.staffId)}
+                                onChange={(e) =>
+                                  setRoleAddChecked((prev) =>
+                                    e.target.checked
+                                      ? [...prev, u.staffId]
+                                      : prev.filter((x) => x !== u.staffId),
+                                  )
+                                }
+                                aria-label={`選擇 ${u.staffId}`}
+                              />
+                            </td>
+                            <td>{u.staffId}</td>
+                            <td>{maskName(u.name)}</td>
+                            <td>{u.unitCode || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="form-actions">
+                    <button
+                      className="button button-primary"
+                      disabled={roleAddChecked.length === 0 || roleBusy}
+                      onClick={handleRoleMembersAdd}
+                    >
+                      加入所選（{roleAddChecked.length}）
+                    </button>
+                  </div>
+                </>
+            ))}
             <div className="form-actions">
               <button
                 className="button button-outline"
@@ -5202,6 +4583,740 @@ export function GroupsPage({
           </section>
         )
       ) : null}
+
+      {tab === "groups" && groupView.kind !== "list" && (
+        <Modal
+          title={isGroupEditing ? "編輯群組" : "新增群組"}
+          note="群組名稱不可重複（例如：病房組）"
+          onClose={() => setGroupView({ kind: "list" })}
+        >
+          {groupError && <div className="login-error">{groupError}</div>}
+          <div className="form-grid">
+            <div className="form-field">
+              <label className="field-label">群組名稱 *</label>
+              <input
+                className="text-input"
+                value={groupForm.name}
+                placeholder="例如 病房組"
+                onChange={(e) =>
+                  setGroupForm({ name: e.target.value })
+                }
+              />
+            </div>
+          </div>
+          <div className="form-actions">
+            <button
+              className="button button-primary"
+              disabled={groupSaving}
+              onClick={handleGroupSave}
+            >
+              {groupSaving ? "儲存中…" : isGroupEditing ? "儲存修改" : "建立群組"}
+            </button>
+            <button
+              className="button button-outline"
+              onClick={() => setGroupView({ kind: "list" })}
+            >
+              取消
+            </button>
+          </div>
+        </Modal>
+      )}
+      {tab === "units" && unitView.kind !== "list" && (
+        <Modal
+          title={isUnitEditing ? `編輯單位 ${unitForm.code}` : "新增單位"}
+          note={isUnitEditing ? "單位代號不可變更（更名時代號不變）" : undefined}
+          onClose={() => setUnitView({ kind: "list" })}
+        >
+          {unitError && <div className="login-error">{unitError}</div>}
+          <div className="form-grid">
+            <div className="form-field">
+              <label className="field-label">單位代號 *</label>
+              <input
+                className="text-input"
+                value={unitForm.code}
+                disabled={isUnitEditing}
+                placeholder="例如 9A"
+                onChange={(e) =>
+                  setUnitForm((prev) => ({ ...prev, code: e.target.value }))
+                }
+              />
+            </div>
+            <div className="form-field">
+              <label className="field-label">單位名稱 *</label>
+              <input
+                className="text-input"
+                value={unitForm.name}
+                placeholder="例如 9A病房"
+                onChange={(e) =>
+                  setUnitForm((prev) => ({ ...prev, name: e.target.value }))
+                }
+              />
+            </div>
+            <div className="form-field">
+              <label className="field-label">所屬群組</label>
+              <div className="select-wrap">
+                <select
+                  value={unitForm.groupId}
+                  onChange={(e) =>
+                    setUnitForm((prev) => ({ ...prev, groupId: e.target.value }))
+                  }
+                >
+                  <option value="">— 未分類 —</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={15} />
+              </div>
+            </div>
+            <div className="form-field">
+              <label className="field-label" htmlFor="merged-from-units">合併自舊單位（可複選）</label>
+              <select
+                id="merged-from-units"
+                className="text-input"
+                multiple
+                size={Math.min(5, Math.max(3, units.length))}
+                value={unitForm.mergedFromUnitCodes}
+                onChange={(event) => setUnitForm((prev) => ({
+                  ...prev,
+                  mergedFromUnitCodes: Array.from(event.target.selectedOptions, (option) => option.value),
+                }))}
+              >
+                {units.filter((candidate) => candidate.code !== unitForm.code && (
+                  unitForm.mergedFromUnitCodes.includes(candidate.code) ||
+                  !units.some((other) => other.code !== unitForm.code && other.mergedFromUnitCodes.includes(candidate.code))
+                )).map((candidate) => (
+                  <option key={candidate.code} value={candidate.code}>{candidate.name}（{candidate.code}）</option>
+                ))}
+              </select>
+              <p className="settings-note">選取後，新單位護理長可在分析中查看合併前歷史資料；不會授予個人明細下鑽權限。</p>
+            </div>
+          </div>
+          <div className="form-actions">
+            <button
+              className="button button-primary"
+              disabled={unitSaving}
+              onClick={handleUnitSave}
+            >
+              {unitSaving ? "儲存中…" : isUnitEditing ? "儲存修改" : "建立單位"}
+            </button>
+            <button
+              className="button button-outline"
+              onClick={() => setUnitView({ kind: "list" })}
+            >
+              取消
+            </button>
+          </div>
+        </Modal>
+      )}
+      {tab === "titles" && titleView.kind !== "list" && (
+        <Modal
+          title={isTitleEditing ? "編輯職稱" : "新增職稱"}
+          note="職稱以名稱唯一；跨單位設定請到權限管理。"
+          onClose={() => setTitleView({ kind: "list" })}
+        >
+          {titleError && <div className="login-error">{titleError}</div>}
+          <div className="form-grid">
+            <div className="form-field">
+              <label className="field-label">職稱名稱 *</label>
+              <input
+                className="text-input"
+                value={titleForm.name}
+                placeholder="例如 護理長"
+                onChange={(e) =>
+                  setTitleForm((prev) => ({ ...prev, name: e.target.value }))
+                }
+              />
+            </div>
+            <div className="form-field">
+              <label className="field-label">層級</label>
+              <div className="select-wrap">
+                <select
+                  value={titleForm.levelId}
+                  onChange={(e) =>
+                    setTitleForm((prev) => ({ ...prev, levelId: e.target.value }))
+                  }
+                >
+                  <option value="">— 未分層級 —</option>
+                  {titleLevels.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={15} />
+              </div>
+            </div>
+            <div className="form-field">
+              <label className="field-label">主管層級（決定儀表板與結果範圍；不以名稱判斷）</label>
+              <div className="form-grid">
+                {(
+                  [
+                    ["isUnitHead", "單位主管"],
+                    ["isDistrictHead", "轄區主管"],
+                    ["isHospitalHead", "院級主管"],
+                    ["isOfficer", "執行幹事"],
+                    ["isConvener", "召集人"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label className="check-row" key={key}>
+                    <input
+                      type="checkbox"
+                      checked={titleForm[key]}
+                      onChange={(e) =>
+                        setTitleForm((prev) => ({
+                          ...prev,
+                          [key]: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="form-actions">
+            <button
+              className="button button-primary"
+              disabled={titleSaving}
+              onClick={handleTitleSave}
+            >
+              {titleSaving ? "儲存中…" : isTitleEditing ? "儲存修改" : "建立職稱"}
+            </button>
+            <button
+              className="button button-outline"
+              onClick={() => setTitleView({ kind: "list" })}
+            >
+              取消
+            </button>
+          </div>
+        </Modal>
+      )}
+      {tab === "users" && userView.kind !== "list" && (
+        <Modal
+          title={isUserEditing ? `編輯人員 ${userForm.staffId}` : "新增人員"}
+          note={isUserEditing ? "職編不可變更" : "儲存後請再到 Firebase Console → Authentication 建立登入帳號"}
+          onClose={() => {
+            resetMembershipAddArea();
+            setUserView({ kind: "list" });
+          }}
+          wide
+        >
+        {userError && <div className="login-error">{userError}</div>}
+        <div className="form-grid">
+          <div className="form-field">
+            <label className="field-label">職編 *</label>
+            <input
+              className="text-input"
+              value={userForm.staffId}
+              disabled={isUserEditing}
+              placeholder="例如 A12345（即登入帳號）"
+              onChange={(e) =>
+                setUserForm((prev) => ({ ...prev, staffId: e.target.value }))
+              }
+            />
+          </div>
+          <div className="form-field">
+            <label className="field-label">姓名 *</label>
+            <input
+              className="text-input"
+              value={userForm.name}
+              placeholder="例如 王小明"
+              onChange={(e) =>
+                setUserForm((prev) => ({ ...prev, name: e.target.value }))
+              }
+            />
+          </div>
+          <div className="form-field">
+            <label className="field-label">單位</label>
+            <div className="select-wrap">
+              <select
+                value={userForm.unitCode}
+                onChange={(e) => {
+                  const nextUnitCode = e.target.value;
+                  setUserForm((prev) => ({ ...prev, unitCode: nextUnitCode }));
+                }}
+              >
+                <option value="">— 未指定 —</option>
+                {units.map((u) => (
+                  <option key={u.code} value={u.code}>
+                    {u.code}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+          <div className="form-field">
+            <label className="field-label">職稱層級</label>
+            <div className="select-wrap">
+              <select
+                value={userTitleLevelId}
+                onChange={(e) => {
+                  setUserTitleLevelId(e.target.value);
+                  setUserForm((prev) => ({ ...prev, titleId: "", title: "" }));
+                }}
+              >
+                <option value="">請選擇層級</option>
+                {titleLevels.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+                <option value="__ungrouped__">未分層級</option>
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+          <div className="form-field">
+            <label className="field-label">職稱</label>
+            <div className="select-wrap">
+              <select
+                value={userForm.titleId}
+                disabled={!userTitleLevelId}
+                onChange={(e) => {
+                  const title = titles.find((item) => item.id === e.target.value);
+                  setUserForm((prev) => ({
+                    ...prev,
+                    titleId: title?.id ?? "",
+                    title: title?.name ?? "",
+                  }));
+                }}
+              >
+                <option value="">
+                  {userTitleLevelId ? "請選擇職稱" : "請先選擇層級"}
+                </option>
+                {titles
+                  .filter((t) =>
+                    userTitleLevelId === "__ungrouped__"
+                      ? !t.levelId
+                      : t.levelId === userTitleLevelId,
+                  )
+                  .map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
+            {userForm.titleId ? (
+              <p className="settings-note">
+                已選：{userForm.title}{" "}
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() =>
+                    setUserForm((prev) => ({ ...prev, titleId: "", title: "" }))
+                  }
+                >
+                  移除重選
+                </button>
+              </p>
+            ) : (
+              <p className="settings-note">可留白：新帳號預設為一般使用者，職稱與角色之後再賦予。</p>
+            )}
+          </div>
+          <div className="form-field">
+            <label className="field-label">到職日</label>
+            <input
+              className="text-input"
+              type="date"
+              value={userForm.hireDate}
+              onChange={(e) =>
+                setUserForm((prev) => ({ ...prev, hireDate: e.target.value }))
+              }
+            />
+          </div>
+          <div className="form-field">
+            <label className="field-label">Email</label>
+            <input
+              className="text-input"
+              type="email"
+              value={userForm.email}
+              placeholder="例如 name@example.com（供通知與重設密碼）"
+              onChange={(e) =>
+                setUserForm((prev) => ({ ...prev, email: e.target.value }))
+              }
+            />
+          </div>
+          <div className="form-field">
+            <label className="field-label">電話</label>
+            <input
+              className="text-input"
+              value={userForm.phone}
+              placeholder="例如 0912-345-678"
+              onChange={(e) =>
+                setUserForm((prev) => ({ ...prev, phone: e.target.value }))
+              }
+            />
+          </div>
+          {reviewerRoleSelected && (
+            <div className="form-field">
+              <label className="field-label" htmlFor="reviewer-access-expiry">審查員授權效期</label>
+              <input
+                id="reviewer-access-expiry"
+                className="text-input"
+                type="date"
+                value={userForm.reviewerAccessExpiresAt}
+                onChange={(event) => setUserForm((prev) => ({
+                  ...prev,
+                  reviewerAccessExpiresAt: event.target.value,
+                }))}
+              />
+              <p className="settings-note">留白為永久有效（預設）；設定日期後，審查員權限於該日結束後失效。</p>
+            </div>
+          )}
+          {!isUserEditing && (
+            <div className="form-field">
+              <label className="field-label">首次登入強制改密碼</label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={userForm.mustChangePassword}
+                  onChange={(e) =>
+                    setUserForm((prev) => ({
+                      ...prev,
+                      mustChangePassword: e.target.checked,
+                    }))
+                  }
+                />
+                <span>啟用（建議保持開啟）</span>
+              </label>
+              <p className="settings-note">帳號與初始密碼統一為職編：登入帳號為「職編@nurseboard.internal」，在 Firebase Console 建立使用者時初始密碼請設為該員職編；首次登入須更改密碼。</p>
+            </div>
+          )}
+        </div>
+
+        <SectionTitle
+          title="群組＋角色"
+          note="上方加入、下方列表；每個群組的角色與權限各自隔離，加入後即顯示於列表，按「儲存修改」才生效。"
+        />
+        {/* v1.52.0：分工表式——上方加入區＋下方角色列表（每群組一列，可編輯／刪除） */}
+        <div className="panel" style={{ padding: 12, marginBottom: 8 }}>
+          <div className="form-field">
+            <label className="field-label">群組</label>
+            <div className="select-wrap">
+              <select
+                value={membershipAddGroupId}
+                onChange={(e) => {
+                  // v1.51.0：切換群組不得清空已勾角色（加入區群組與角色為獨立 state）
+                  setMembershipAddGroupId(e.target.value);
+                  setMembershipError("");
+                }}
+              >
+                <option value="">請選擇群組</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+          {/* v1.57.0 A6：群組→層級→角色三層下拉；選角色後進下方已選列，可多重 */}
+          <div className="form-grid">
+            <div className="form-field">
+              <label className="field-label">層級</label>
+              <div className="select-wrap">
+                <select
+                  value={membershipAddLevelId}
+                  onChange={(e) => {
+                    setMembershipAddLevelId(e.target.value);
+                    setMembershipAddRoleName("");
+                  }}
+                >
+                  <option value="">請選擇層級</option>
+                  {roleLevels.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+                  <option value="__ungrouped__">未分層級</option>
+                </select>
+                <ChevronDown size={15} />
+              </div>
+            </div>
+            <div className="form-field">
+              <label className="field-label">角色</label>
+              <div className="select-wrap">
+                <select
+                  value={membershipAddRoleName}
+                  disabled={!membershipAddLevelId}
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    if (name) {
+                      setMembershipAddRoles((prev) =>
+                        prev.includes(name) ? prev : [...prev, name],
+                      );
+                      setMembershipAddRoleName("");
+                    }
+                  }}
+                >
+                  <option value="">
+                    {membershipAddLevelId ? "請選擇角色" : "請先選擇層級"}
+                  </option>
+                  {roleOptions
+                    .filter(
+                      (r) =>
+                        (membershipAddLevelId === "__ungrouped__"
+                          ? !r.levelId
+                          : r.levelId === membershipAddLevelId) &&
+                        !membershipAddRoles.includes(r.name),
+                    )
+                    .map((r) => (
+                      <option key={r.id} value={r.name}>
+                        {r.name}
+                      </option>
+                    ))}
+                </select>
+                <ChevronDown size={15} />
+              </div>
+            </div>
+          </div>
+          {membershipAddRoles.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 6,
+                alignItems: "center",
+                margin: "4px 0",
+              }}
+            >
+              <span className="settings-note">已選：</span>
+              {membershipAddRoles.map((r) => (
+                <span key={r} className="status-pill muted">
+                  {r}{" "}
+                  <button
+                    type="button"
+                    className="text-button"
+                    aria-label={`移除 ${r}`}
+                    onClick={() => toggleMembershipAddRole(r)}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {membershipEditingGroupId !== null && (
+            <p className="settings-note">
+              正在編輯：{groupNameOf(membershipEditingGroupId)}
+              （按「更新」寫回原列；角色全取消會刪除該群組）
+            </p>
+          )}
+          {membershipError && <div className="login-error">{membershipError}</div>}
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button
+              className="button button-primary button-sm"
+              onClick={handleMembershipAddOrUpdate}
+            >
+              {membershipEditingGroupId === null ? (
+                <>
+                  <Plus size={14} /> 加入
+                </>
+              ) : (
+                "更新"
+              )}
+            </button>
+            {membershipEditingGroupId !== null && (
+              <button
+                className="button button-outline button-sm"
+                onClick={cancelMembershipEdit}
+              >
+                取消編輯
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="panel" style={{ padding: 12 }}>
+          <p className="settings-note" style={{ marginTop: 0 }}>
+            {userForm.memberships.length} 個群組・
+            {userForm.memberships.reduce((n, m) => n + m.roles.length, 0)} 個角色
+          </p>
+          {userForm.memberships.length === 0 ? (
+            <p className="settings-note">尚無群組＋角色，請由上方加入。</p>
+          ) : (
+            <div className="table-scroll">
+              <table className="permission-table">
+                <thead>
+                  <tr>
+                    <th>群組</th>
+                    <th>角色</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {userForm.memberships.map((m) => (
+                    <tr key={m.groupId}>
+                      <td>
+                        <b>{groupNameOf(m.groupId)}</b>
+                      </td>
+                      <td>
+                        {m.roles.map((r) => (
+                          <span
+                            key={r}
+                            className="status-pill muted"
+                            style={{ marginRight: 4 }}
+                          >
+                            {r}
+                          </span>
+                        ))}
+                      </td>
+                      <td>
+                        <button
+                          className="text-button"
+                          onClick={() => startMembershipEdit(m.groupId)}
+                        >
+                          <Pencil size={13} /> 編輯
+                        </button>{" "}
+                        <button
+                          className="text-button"
+                          onClick={() => removeMembershipByGroup(m.groupId)}
+                        >
+                          <Trash2 size={13} /> 刪除
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <SectionTitle title="其他角色" note="不指定群組的角色（全院適用）；仍須與適用單位職稱權限交集才生效。" />
+        {roleOptions.length === 0 ? (
+          <p className="settings-note">
+            尚未建立角色，請先到「角色」頁籤建立角色。
+          </p>
+        ) : (
+          <div className="form-grid">
+            {/* v1.55.0：其他角色按層級分區顯示 */}
+            {roleFormSections.map((section) => (
+              <div key={section.level?.id ?? "ungrouped"} style={{ marginBottom: 8 }}>
+                <p className="settings-note" style={{ margin: "4px 0" }}>
+                  {section.level?.name ?? "未分層級"}
+                </p>
+                {section.items.map((r) => (
+                  <label className="check-row" key={r.id}>
+                    <input
+                      type="checkbox"
+                      checked={userForm.otherRoles.includes(r.name)}
+                      onChange={() => toggleOtherRole(r.name)}
+                    />
+                    <span>{r.name}</span>
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <SectionTitle
+          title="督導轄區群組"
+          note="只有督導需要填寫：勾選其負責的群組，督導儀表板依此顯示轄區單位"
+        />
+        {groups.length === 0 ? (
+          <p className="settings-note">尚無群組資料。</p>
+        ) : (
+          <div className="form-grid">
+            {groups.map((g) => (
+              <label className="check-row" key={g.id}>
+                <input
+                  type="checkbox"
+                  checked={userForm.districtGroupIds.includes(g.id)}
+                  onChange={() =>
+                    setUserForm((prev) => ({
+                      ...prev,
+                      districtGroupIds:
+                        prev.districtGroupIds.includes(g.id)
+                          ? prev.districtGroupIds.filter((x) => x !== g.id)
+                          : [...prev.districtGroupIds, g.id],
+                    }))
+                  }
+                />
+                <span>{g.name}</span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        <div className="form-actions">
+          <button
+            className="button button-primary"
+            disabled={userSaving}
+            onClick={handleUserSave}
+          >
+            {userSaving ? "儲存中…" : isUserEditing ? "儲存修改" : "建立人員"}
+          </button>
+          <button
+            className="button button-outline"
+            onClick={() => {
+              resetMembershipAddArea();
+              setUserView({ kind: "list" });
+            }}
+          >
+            取消
+          </button>
+        </div>
+        </Modal>
+      )}
+      {editingRole && (
+        <Modal
+          title={`編輯角色「${editingRole.name}」`}
+          note="角色以名稱唯一；改名會同步更新所有持有此角色的人員與權限範本。改層級影響範圍時權限範本一併遷移。身分由名稱關鍵字推導。跨設定請到權限管理。"
+          onClose={() => setEditingRoleId("")}
+        >
+          {roleEditError && <div className="login-error">{roleEditError}</div>}
+          <div className="form-field" style={{ maxWidth: 320 }}>
+            <label className="field-label">角色名稱 *</label>
+            <input
+              className="text-input"
+              value={roleEditName}
+              placeholder="輸入角色名稱"
+              onChange={(event) => setRoleEditName(event.target.value)}
+            />
+          </div>
+          <div className="form-field" style={{ maxWidth: 320 }}>
+            <label className="field-label">層級</label>
+            <div className="select-wrap">
+              <select
+                value={roleEditLevelId}
+                onChange={(event) => setRoleEditLevelId(event.target.value)}
+              >
+                <option value="">— 未分層級 —</option>
+                {roleLevels.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
+          </div>
+          <div className="form-actions">
+            <button
+              className="button button-primary"
+              disabled={roleEditSaving}
+              onClick={handleRoleRename}
+            >
+              {roleEditSaving ? "儲存中…" : "儲存修改"}
+            </button>
+            <button
+              className="button button-outline"
+              onClick={() => setEditingRoleId("")}
+            >
+              取消
+            </button>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

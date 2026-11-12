@@ -1,8 +1,5 @@
-import {
-  LEGACY_REVIEWER_ROLE_NAMES,
-  reviewerRoleNames,
-  type RoleMetaMap,
-} from "./orgMeta";
+import { reviewerRoleNames, type RoleMetaMap } from "./orgMeta";
+import { deriveRoleCategory } from "./roleDerivation";
 
 function taipeiDate(now: Date): string {
   const parts = new Intl.DateTimeFormat("en", {
@@ -24,7 +21,7 @@ export function isReviewerAccessActive(expiresAt: unknown, now = new Date()): bo
 
 /**
  * 只移除逾期的審查員角色，不影響同一人其他有效角色。
- * 審查員類別改以角色詮釋資料判斷（傳入 roleMeta；未傳時以舊名稱推導，
+ * 審查員類別改以角色詮釋資料判斷（傳入 roleMeta；未傳時以名稱關鍵字推導，
  * 行為與舊版一致）。
  */
 export function activeRolesForReviewerExpiry(
@@ -34,13 +31,13 @@ export function activeRolesForReviewerExpiry(
   roleMeta?: RoleMetaMap,
 ): string[] {
   if (isReviewerAccessActive(expiresAt, now)) return roles;
-  // 有詮釋資料時以類別為準；無詮釋資料時以舊名稱清單推導。
+  // 有詮釋資料時以類別為準；無詮釋資料時以名稱關鍵字推導。
   const reviewerNames = roleMeta
     ? new Set(reviewerRoleNames(roleMeta))
     : null;
   return roles.filter((role) =>
     reviewerNames
       ? !reviewerNames.has(role)
-      : !LEGACY_REVIEWER_ROLE_NAMES.includes(role),
+      : deriveRoleCategory(role) !== "reviewer",
   );
 }

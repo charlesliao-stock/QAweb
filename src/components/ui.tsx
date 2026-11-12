@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Check, Inbox } from "lucide-react";
+import { Check, Inbox, X } from "lucide-react";
 import type { PageId, Rag } from "../types";
 
 export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
@@ -78,6 +78,52 @@ export function BrandMark({ small = false }: { small?: boolean }) {
     <span className={`brand-mark${small ? " small" : ""}`} aria-hidden="true">
       <Check size={small ? 16 : 19} strokeWidth={2.8} />
     </span>
+  );
+}
+
+/**
+ * v1.57.0 A4：共用彈窗（沿用 reviewer-modal backdrop＋panel 樣式；點空白關閉，
+ * 右上有關閉鈕）。關閉不儲存，表單的取消／儲存流程維持原樣。
+ */
+export function Modal({
+  title,
+  note,
+  onClose,
+  wide = false,
+  children,
+}: {
+  title: string;
+  note?: string;
+  onClose: () => void;
+  wide?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="reviewer-modal-backdrop" onClick={onClose}>
+      <div
+        className={`reviewer-modal panel${wide ? " wide" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="reviewer-modal-head">
+          <div>
+            <h2>{title}</h2>
+            {note && <p>{note}</p>}
+          </div>
+          <button
+            type="button"
+            className="button button-ghost"
+            onClick={onClose}
+            aria-label="關閉"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
   );
 }
 

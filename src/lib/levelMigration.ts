@@ -144,8 +144,6 @@ export async function migrateOrgLevels(
     await setDoc(roleRef, {
       name: spec.name,
       description: spec.description,
-      category: spec.category,
-      kind: spec.kind,
       levelId: spec.levelId,
       ...auditFields(staffId, true),
     });
@@ -159,8 +157,6 @@ export async function migrateOrgLevels(
       before: null,
       after: {
         name: spec.name,
-        category: spec.category,
-        kind: spec.kind,
         levelId: spec.levelId,
       },
       createdAt: serverTimestamp(),

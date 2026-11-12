@@ -1,22 +1,26 @@
 /**
- * 組織身分詮釋資料（v1.40.5：寫死名稱稽核）。
+ * 組織身分詮釋資料（v1.57.0 A3：角色身分改由層級＋名稱關鍵字推導）。
  *
- * 問題：舊程式以角色／職稱「名稱字串」決定身分（例如 roles.includes("審查員")、
- * title.includes("護理長")），換一家名稱不同的醫院就全部失效。
- *
- * 新模型：身分由角色／職稱文件上的「使用者設定欄位」決定——
- * - 角色文件：`category`（功能類別）＋ `kind`（適用範圍：group／unit）；
- * - 職稱文件：`isUnitHead`／`isDistrictHead`／`isHospitalHead`／`isOfficer`／`isConvener`
- *  （是否為單位主管／轄區主管／院級主管／執行幹事職能／召集人職能）。
+ * 角色文件的 `category`／`kind` 欄位已不再讀取（舊文件上的欄位留著無害，
+ * 程式不再讀、也不再寫入；新角色不再寫這兩個欄位）。
+ * - 身分：角色名稱關鍵字（見 lib/roleDerivation.ts deriveRoleCategory）；
+ * - 範圍：所屬層級（層級名稱／id 對照），無層級資料時退回名稱推導。
+ * 職稱仍以文件旗標判斷（`isUnitHead`／`isDistrictHead`／`isHospitalHead`／
+ * `isOfficer`／`isConvener`），不受本版影響。
  * 人員與範本的對應一律以文件 id／參照欄位為準，不以名稱比對關聯。
  *
- * 相容：舊文件沒有這些欄位時，以名稱推導（legacy*，僅限遷移相容；管理員在
- * 人員管理頁補設欄位後即不再依賴名稱）。新醫院自訂名稱時，只要建角色／職稱
- * 時設定好類別與主管旗標，全部流程即按設定走，與名稱無關。
- *
- * 本檔零依賴、不碰 Firestore，可在 node 直接單元測試。
+ * 本檔只依賴推導模組（roleDerivation）、不碰 Firestore，可在 node 直接單元測試。
  */
 
+import { deriveRoleCategory, deriveRoleScope } from "./roleDerivation";
+
+/**
+ * 角色身分（v1.57.0 A3：名稱關鍵字推導只會產出 reviewer／convener／
+ * officer／general；unitHead／senior 保留在型別內供既有
+ * hasRoleCategory(roles, "unitHead"／"senior") 呼叫端編譯，
+ * 角色側不再推導出這兩類——現行 12 個角色本來就沒有這兩類，
+ * 單位主管／院級主管的實際判斷走職稱旗標（見各頁 titleFlagsOf）。
+ */
 export type RoleCategory =
   | "reviewer"
   | "convener"
@@ -27,40 +31,12 @@ export type RoleCategory =
 
 export type RoleScope = "group" | "unit";
 
-export const ROLE_CATEGORY_LABELS: Record<RoleCategory, string> = {
-  reviewer: "審查員",
-  convener: "召集人",
-  officer: "執行幹事",
-  unitHead: "單位主管",
-  senior: "院級主管",
-  general: "一般",
-};
-
-export const ROLE_SCOPE_LABELS: Record<RoleScope, string> = {
-  group: "群組角色",
-  unit: "單位角色",
-};
-
-/** 下拉選項（類別／範圍），供人員管理頁建立／編輯角色使用。 */
-export const ROLE_CATEGORY_OPTIONS: Array<{ value: RoleCategory; label: string }> =
-  (Object.keys(ROLE_CATEGORY_LABELS) as RoleCategory[]).map((value) => ({
-    value,
-    label: ROLE_CATEGORY_LABELS[value],
-  }));
-
-export const ROLE_SCOPE_OPTIONS: Array<{ value: RoleScope; label: string }> =
-  (Object.keys(ROLE_SCOPE_LABELS) as RoleScope[]).map((value) => ({
-    value,
-    label: ROLE_SCOPE_LABELS[value],
-  }));
-
 export interface RoleMetaInput {
   name: string;
-  /** 功能類別（新欄位；缺失時以名稱推導，見 legacyRoleCategory）。 */
-  category?: unknown;
-  /** 適用範圍（沿用既有 kind 語義；缺失時以名稱推導）。 */
-  kind?: unknown;
-  scope?: unknown;
+  /** 所屬層級 id（v1.55.0；空＝未分層級，範圍退回名稱推導）。 */
+  levelId?: unknown;
+  /** 所屬層級名稱（有值時優先於 levelId 判定範圍）。 */
+  levelName?: unknown;
 }
 
 export interface RoleMeta {
@@ -90,66 +66,27 @@ export interface TitleFlags {
 export type RoleMetaMap = Map<string, RoleMeta>;
 export type TitleMetaMap = Map<string, TitleFlags>;
 
-/* ================= 舊名稱對照（僅遷移相容） =================
- * 以下名單只用於「文件缺少新欄位時」的推導，等同舊版 roleIdentity.ts 的
- * 寫死集合。正式流程不再直接比對這些名稱；新建立的角色／職稱一律以欄位為準。
+/* ================= 名稱推導（v1.57.0 A3：唯一推導來源） =================
+ * 角色身分一律由 lib/roleDerivation.ts 的關鍵字／層級推導；
+ * 舊版的精確比對名單（LEGACY_*）已移除——新名稱只要含關鍵字
+ * 就不會掉級。以下 legacy* 僅保留舊簽名供相容，皆轉發至推導模組。
  */
-export const LEGACY_REVIEWER_ROLE_NAMES = ["審查員", "品管組審查員", "單位審查員"];
-export const LEGACY_CONVENER_ROLE_NAMES = [
-  "召集人",
-  "各組召集人",
-  "品管組召集人",
-  "單位召集人",
-];
-export const LEGACY_OFFICER_ROLE_NAMES = ["執行幹事", "品管組執行幹事", "單位執行幹事"];
-/** 舊組級召集人名稱（TaskHandoffPage 退路用）。 */
-export const LEGACY_GROUP_CONVENER_ROLE_NAMES = ["召集人", "品管組召集人"];
-/** 舊組級執行幹事名稱（TaskHandoffPage 退路用）。 */
-export const LEGACY_GROUP_OFFICER_ROLE_NAMES = ["執行幹事", "品管組執行幹事"];
-export const LEGACY_UNIT_HEAD_ROLE_NAMES = ["護理長", "單位護理長"];
-export const LEGACY_SENIOR_ROLE_NAMES = ["主任", "副主任", "督導"];
-
 export function legacyRoleCategory(name: string): RoleCategory {
-  if (LEGACY_REVIEWER_ROLE_NAMES.includes(name)) return "reviewer";
-  if (LEGACY_CONVENER_ROLE_NAMES.includes(name)) return "convener";
-  if (LEGACY_OFFICER_ROLE_NAMES.includes(name)) return "officer";
-  if (LEGACY_UNIT_HEAD_ROLE_NAMES.includes(name)) return "unitHead";
-  if (LEGACY_SENIOR_ROLE_NAMES.includes(name)) return "senior";
-  return "general";
+  return deriveRoleCategory(name);
 }
 
-export function parseRoleCategory(raw: unknown): RoleCategory | undefined {
-  if (
-    raw === "reviewer" ||
-    raw === "convener" ||
-    raw === "officer" ||
-    raw === "unitHead" ||
-    raw === "senior" ||
-    raw === "general"
-  ) {
-    return raw;
-  }
-  return undefined;
-}
-
-export function parseRoleScope(raw: unknown): RoleScope | undefined {
-  if (raw === "group" || raw === "unit") return raw;
-  return undefined;
-}
-
-/** 舊角色適用範圍推導：含「單位」→單位角色，其餘→群組角色（同 v1.39.3 分類）。 */
+/** 舊角色適用範圍推導：無層級資料時含「單位」→單位角色，其餘→群組角色。 */
 export function legacyRoleScope(name: string): RoleScope {
-  return name.includes("單位") ? "unit" : "group";
+  return deriveRoleScope({ name });
 }
 
-/** 角色文件 → 詮釋資料：欄位優先，缺失才以名稱推導。 */
+/** 角色文件 → 詮釋資料：身分由名稱關鍵字、範圍由層級推導。 */
 export function resolveRoleMeta(input: RoleMetaInput): RoleMeta {
   const name = input.name ?? "";
   return {
     name,
-    category: parseRoleCategory(input.category) ?? legacyRoleCategory(name),
-    scope:
-      parseRoleScope(input.kind ?? input.scope) ?? legacyRoleScope(name),
+    category: deriveRoleCategory(name),
+    scope: deriveRoleScope(input),
   };
 }
 

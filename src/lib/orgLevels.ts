@@ -48,11 +48,9 @@ export function roleLevelIdForName(name: string): string {
   return "";
 }
 
-/** 新角色規格（v1.55.0 一次建立，預設零權限） */
+/** 新角色規格（v1.55.0 一次建立，預設零權限；v1.57.0 A3：不再寫 category／kind，身分由名稱關鍵字推導、範圍由層級推導） */
 export interface NewRoleSpec {
   name: string;
-  category: string;
-  kind: "group" | "unit";
   levelId: string;
   description: string;
 }
@@ -60,45 +58,32 @@ export interface NewRoleSpec {
 export const NEW_ROLES: NewRoleSpec[] = [
   {
     name: "委員會召集人",
-    category: "convener",
-    kind: "group",
     levelId: "rl-committee",
     description: "委員會召集人：委員會層級的召集與監督。",
   },
   {
     name: "委員會執行秘書",
-    // v1.55.0：第 2 項唯一由名稱推斷的判斷——執行秘書歸執行幹事類別。
-    // 若執行秘書另有慣例，應改此處並同步更新權限範本，不默默改成一般。
-    category: "officer",
-    kind: "group",
+    // v1.57.0 A3：執行秘書由名稱關鍵字推導為執行幹事類別（同 v1.55.0 判定）。
     levelId: "rl-committee",
     description: "委員會執行秘書：委員會層級的執行事務。",
   },
   {
     name: "委員會執行幹事",
-    category: "officer",
-    kind: "group",
     levelId: "rl-committee",
     description: "委員會執行幹事：委員會層級的執行事務。",
   },
   {
     name: "品管組副召集人",
-    category: "convener",
-    kind: "group",
     levelId: "rl-qi",
     description: "品管組副召集人：所屬群組的排程權限與審查監督（組級）。",
   },
   {
     name: "品管組組長",
-    category: "general",
-    kind: "group",
     levelId: "rl-qi",
     description: "品管組組長：所屬群組的組務（組級）。",
   },
   {
     name: "單位組長",
-    category: "general",
-    kind: "unit",
     levelId: "rl-unit",
     description: "單位組長：所屬單位的組務（單位級）。",
   },

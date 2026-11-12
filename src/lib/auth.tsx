@@ -144,9 +144,7 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
         const v = d.data() as Record<string, unknown>;
         return {
           name: typeof v.name === "string" ? v.name : d.id,
-          category: v.category,
-          kind: v.kind,
-          scope: v.scope,
+          levelId: v.levelId,
         };
       }),
     );

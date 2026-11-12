@@ -9,8 +9,8 @@ import { useAuth} from "../lib/auth";
 import { usePermissions} from "../lib/usePermissions";
 import {
 ACTION_PERMISSION_ITEMS,
-deriveTemplateRowNames,
 emptyPermissions,
+EXCLUDED_ROLE_NAMES,
 GROUP_ONLY_PERM_KEYS,
 PAGE_PERMISSION_ITEMS,
 parsePermissions,
@@ -22,14 +22,41 @@ templateKey,
 type PermKey,
 type TemplateCategory,
 } from "../lib/permissions";
+import {
+DEFAULT_ROLE_LEVELS,
+DEFAULT_TITLE_LEVELS,
+roleLevelIdForName,
+sortedLevels,
+titleLevelIdForName,
+type OrgLevel,
+} from "../lib/orgLevels";
+import { deriveRoleScopeFromLevel } from "../lib/roleDerivation";
 
-/** 設定目標：群組的角色、單位的職稱、單位角色（v1.38.0 兩段式）。 */
-type Target = TemplateCategory;
+/**
+ * 設定目標（v1.57.0 B）：動態按層級，一層級一目標。
+ * 目標 key 加 kind 前綴（`role:`／`title:`），因角色與職稱都有「單位」層級；
+ * 角色目標與職稱目標分兩區列出。範本 category 維持 group／unit／unitRole
+ * 不動（方案 A：委員會／品管組層級→group 桶，單位角色層級→unitRole 桶，
+ * 職稱層級→unit 桶），can() 不動，不需遷移。
+ */
+type TargetKind = "role" | "title";
+
+interface PermissionTarget {
+key: string;
+kind: TargetKind;
+levelId: string;
+levelName: string;
+category: TemplateCategory;
+items: MatrixItem[];
+}
 
 interface TemplateRow {
 key: string;
 category: TemplateCategory;
 name: string;
+kind: TargetKind;
+levelId: string;
+targetKey: string;
 permissions: Record<PermKey, boolean>;
 cross: boolean;
 }
@@ -38,19 +65,6 @@ interface MatrixItem {
 key: PermKey;
 label: string;
 }
-
-const TARGET_LABELS: Record<Target, string> = {
-group: "群組",
-unit: "單位",
-unitRole: "單位角色",
-};
-
-/** 目標尚無任何職稱／角色時的指引（v1.39.2：列只取實際建立的，不寫死名單）。 */
-const EMPTY_GUIDANCE: Record<Target, string> = {
-group: "尚未建立任何群組角色，請先到「群組與人員」建立角色，再回來設定權限。",
-unit: "尚未建立任何職稱，請先到「群組與人員」建立職稱，再回來設定權限。",
-unitRole: "尚未建立任何單位角色，請先到「群組與人員」建立角色，再回來設定權限。",
-};
 
 const SHARED_ITEMS: MatrixItem[] = [
 ...PAGE_PERMISSION_ITEMS,
@@ -68,11 +82,68 @@ item.key,
 ),
 );
 
-const TARGET_ITEMS: Record<Target, MatrixItem[]> = {
-group: GROUP_ITEMS,
-unit: SHARED_ITEMS,
-unitRole: SHARED_ITEMS,
+/** 目標列出的權限鍵（v1.57.0 B 第 4 項）：按層級對應的範本桶決定。
+ * group 桶＝11 鍵（7 共用＋4 群組專屬），unit／unitRole 桶＝7 鍵；
+ * 管理員專屬 4 鍵永不列出。新增角色層級預設 group 桶（11 鍵），
+ * 新增職稱層級預設 unit 桶（7 鍵）。 */
+function itemsForCategory(category: TemplateCategory): MatrixItem[] {
+return category === "group" ? GROUP_ITEMS : SHARED_ITEMS;
+}
+
+/** 角色層級對應的範本桶（方案 A）：層級範圍 group→group、unit→unitRole；
+ * 自訂層級對不上時看層級名含「單位」與否，否則歸 group。 */
+function roleLevelCategory(level: OrgLevel): TemplateCategory {
+const scope = deriveRoleScopeFromLevel(level.id, level.name);
+if (scope === "unit") return "unitRole";
+if (scope === "group") return "group";
+return level.name.includes("單位") ? "unitRole" : "group";
+}
+
+/** 委員會層級（v1.57.0 B 第 3 項）：新建範本 cross 預設 true。 */
+function isCommitteeLevel(level: OrgLevel): boolean {
+return level.id === "rl-committee" || level.name === "委員會";
+}
+
+/**
+ * 層級清單 → 目標清單：角色層級在前、職稱層級在後，各按 order 排序；
+ * 新增層級自動多一個目標。
+ */
+function buildTargets(
+roleLevels: OrgLevel[],
+titleLevels: OrgLevel[],
+): PermissionTarget[] {
+const roleTargets: PermissionTarget[] = sortedLevels(roleLevels).map(
+(level) => {
+const category = roleLevelCategory(level);
+return {
+key: `role:${level.id}`,
+kind: "role",
+levelId: level.id,
+levelName: level.name,
+category,
+items: itemsForCategory(category),
 };
+},
+);
+const titleTargets: PermissionTarget[] = sortedLevels(titleLevels).map(
+(level) => ({
+key: `title:${level.id}`,
+kind: "title",
+levelId: level.id,
+levelName: level.name,
+category: "unit",
+items: SHARED_ITEMS,
+}),
+);
+return [...roleTargets, ...titleTargets];
+}
+
+/** 目標尚無任何職稱／角色時的指引（v1.39.2：列只取實際建立的，不寫死名單）。 */
+function emptyGuidance(target: PermissionTarget): string {
+return target.kind === "role"
+? `「${target.levelName}」層級尚未建立任何角色，請先到「群組與人員」建立角色，再回來設定權限。`
+: `「${target.levelName}」層級尚未建立任何職稱，請先到「群組與人員」建立職稱，再回來設定權限。`;
+}
 
 export function PermissionManagementPage({
 onAction,
@@ -81,7 +152,8 @@ onAction: (message: string) => void;
 }) {
 const { user} = useAuth();
 const { isAdmin} = usePermissions();
-const [target, setTarget] = useState<Target>("group");
+const [targets, setTargets] = useState<PermissionTarget[]>([]);
+const [target, setTarget] = useState<string>("role:rl-committee");
 const [rows, setRows] = useState<TemplateRow[]>([]);
 const [loading, setLoading] = useState(true);
 const [savingCell, setSavingCell] = useState("");
@@ -291,16 +363,20 @@ setResetBusy(false);
 
 /**
 * 範本列只取系統實際建立的職稱／角色（v1.39.2，不寫死名單；
-* v1.39.3 進頁改走伺服器讀取）：
-* 群組目標取 kind='group' 的角色文件名稱、單位目標取 titles 文件名稱、
-* 單位角色目標取 kind='unit' 的角色文件名稱（去重；無 kind 時以名稱
-* 分類：含「單位」→單位角色，其餘→群組）；系統管理員、一般人員
-* 永不列入。
-* 範本不存在時以全不勾、預設不跨顯示，改了即建立範本文件。
+* v1.39.3 進頁改走伺服器讀取；v1.57.0 B：目標改動態按層級，
+* 列一律以角色／職稱文件的 levelId 歸層級、再由層級對範本桶）：
+* 角色按 levelId 歸入 roleLevels 的層級、職稱按 levelId 歸入 titleLevels
+* 的層級；未分層級（levelId 空或對不上任何層級）者視為一般使用者，
+* 不列入任何目標。系統管理員、一般人員永不列入。
+* 層級集合讀到空（展示模式／遷移前）時以 v1.55.0 預設層級補齊，
+* levelId 缺失時以名稱推導（與 v1.55.0 遷移同一對照）；
+* 讀取失敗時不補（橫幅顯示失敗集合）。
+* 範本不存在時以全不勾顯示，改了即建立範本文件；新建委員會層級
+* 角色範本 cross 預設 true（既有範本的 cross 值不自動改）。
 * 進頁一律讀伺服器（v1.39.3）：cache-first 在此頁會吃到陳舊快照——
 * 記憶體快取無 TTL、持久快取非空即回、forceServerRefetch 從未被接上，
 * 他處建立的角色／職稱進不了本頁，「重新載入」也刷不掉。管理員專用頁、
-* 每進頁 3 次小集合讀取，正確性優先。讀前先失效 refCache，讓其他頁
+* 每進頁 5 次小集合讀取，正確性優先。讀前先失效 refCache，讓其他頁
 * 下次也重讀。
 */
 const loadData = useCallback(async () => {
@@ -315,10 +391,18 @@ invalidateRefCollection("titles");
 // 缺放行時，Promise.all 會讓 roles／titles 已讀到的資料也全數作廢、
 // 整頁只剩一條籠統紅字。改用 allSettled，讀到的集合照常列出，失敗
 // 的集合名稱逐一顯示在橫幅。
-const [templateResult, roleResult, titleResult] = await Promise.allSettled([
+const [
+templateResult,
+roleResult,
+titleResult,
+roleLevelResult,
+titleLevelResult,
+] = await Promise.allSettled([
 getDocsFromServer(collection(db, "permissionTemplates")),
 getDocsFromServer(collection(db, "roles")),
 getDocsFromServer(collection(db, "titles")),
+getDocsFromServer(collection(db, "roleLevels")),
+getDocsFromServer(collection(db, "titleLevels")),
 ]);
 const failures: string[] = [];
 const templates = new Map<
@@ -353,33 +437,108 @@ titleResult.status === "fulfilled"
 failures.push("職稱（titles）");
 return [];
 })();
-const namesByCategory = deriveTemplateRowNames(
-roleDocs.map((item) => {
+/** 層級讀取：成功但空集合時以預設層級補齊；失敗時不補、只報失敗。 */
+const readLevels = (
+result: PromiseSettledResult<{
+docs: Array<{ id: string; data: () => unknown}>;
+}>,
+label: string,
+fallback: OrgLevel[],
+): OrgLevel[] => {
+if (result.status !== "fulfilled") {
+failures.push(label);
+return [];
+}
+const levels = result.value.docs.map((item) => {
 const data = item.data() as Record<string, unknown>;
 return {
-name: typeof data.name === "string"? data.name: item.id,
-kind: data.kind,
+id: item.id,
+name: typeof data.name === "string"? data.name: "",
+order: typeof data.order === "number"? data.order: 0,
 };
-}),
-titleDocs.map((item) => {
-const data = item.data() as Record<string, unknown>;
-return { name: typeof data.name === "string"? data.name: item.id };
-}),
+});
+return levels.length > 0 ? levels : fallback;
+};
+const roleLevels = readLevels(
+roleLevelResult,
+"角色層級（roleLevels）",
+DEFAULT_ROLE_LEVELS,
+);
+const titleLevels = readLevels(
+titleLevelResult,
+"職稱層級（titleLevels）",
+DEFAULT_TITLE_LEVELS,
+);
+const nextTargets = buildTargets(roleLevels, titleLevels);
+const roleLevelById = new Map(roleLevels.map((level) => [level.id, level]));
+const titleLevelById = new Map(
+titleLevels.map((level) => [level.id, level]),
 );
 const nextRows: TemplateRow[] = [];
-(Object.keys(namesByCategory) as Target[]).forEach((category) => {
-for (const name of namesByCategory[category]) {
+const pushRole = (name: string, rawLevelId: string) => {
+if (!name || (EXCLUDED_ROLE_NAMES as readonly string[]).includes(name)) {
+return;
+}
+const levelId = rawLevelId || roleLevelIdForName(name);
+const level = roleLevelById.get(levelId);
+if (!level) return;
+const targetKey = `role:${level.id}`;
+const category = roleLevelCategory(level);
 const key = templateKey(category, name);
 const tpl = templates.get(key);
 nextRows.push({
 key,
 category,
 name,
+kind: "role",
+levelId: level.id,
+targetKey,
+permissions: tpl? {...tpl.permissions}: emptyPermissions(),
+cross: tpl? tpl.cross: isCommitteeLevel(level),
+});
+};
+const pushTitle = (name: string, rawLevelId: string) => {
+if (!name) return;
+const levelId = rawLevelId || titleLevelIdForName(name);
+const level = titleLevelById.get(levelId);
+if (!level) return;
+const targetKey = `title:${level.id}`;
+const key = templateKey("unit", name);
+const tpl = templates.get(key);
+nextRows.push({
+key,
+category: "unit",
+name,
+kind: "title",
+levelId: level.id,
+targetKey,
 permissions: tpl? {...tpl.permissions}: emptyPermissions(),
 cross: tpl? tpl.cross: false,
 });
+};
+for (const item of roleDocs) {
+const data = item.data() as Record<string, unknown>;
+pushRole(
+typeof data.name === "string"? data.name: item.id,
+typeof data.levelId === "string"? data.levelId: "",
+);
 }
+for (const item of titleDocs) {
+const data = item.data() as Record<string, unknown>;
+pushTitle(
+typeof data.name === "string"? data.name: item.id,
+typeof data.levelId === "string"? data.levelId: "",
+);
+}
+nextRows.sort((a, b) => {
+const targetOrder = (key: string) =>
+nextTargets.findIndex((item) => item.key === key);
+return (
+targetOrder(a.targetKey) - targetOrder(b.targetKey) ||
+a.name.localeCompare(b.name, "zh-Hant")
+);
 });
+setTargets(nextTargets);
 setRows(nextRows);
 setLoadError(
 failures.length > 0
@@ -396,6 +555,12 @@ setLoading(false);
 useEffect(() => {
 void loadData();
 }, [loadData]);
+
+/** 選中層級被刪除時 fallback 到第一個可用目標（預設第一個角色層級「委員會」）。 */
+useEffect(() => {
+if (targets.length === 0) return;
+if (!targets.some((item) => item.key === target)) setTarget(targets[0].key);
+}, [targets, target]);
 
 /** 範本寫入（upsert＋稽核紀錄）；寫入成功後失效 permissionTemplates 快取。 */
 async function saveTemplate(
@@ -457,14 +622,7 @@ if (nextCross === row.cross) return;
 const scopeId = `cross:${row.key}`;
 setSavingScope(scopeId);
 try {
-const crossLabel = (value: boolean) =>
-row.category === "group"
-? value
-? "跨群組"
-: "不跨群組"
-: value
-? "跨單位"
-: "不跨單位";
+const crossLabel = (value: boolean) => (value ? "跨區" : "不跨區");
 await saveTemplate(
 row,
 { cross: nextCross},
@@ -500,7 +658,6 @@ const busy = savingCell!== "" || savingScope!== "";
 return (
 <div>
 {rowsForTarget.map((row) => {
-const isGroup = row.category === "group";
 return (
 <div
 key={row.key}
@@ -512,17 +669,28 @@ padding: "6px 0",
 }}
 >
 <b style={{ minWidth: 120}}>{row.name}</b>
-<select
-value={row.cross? "all": "scoped"}
+<label style={{ display: "flex", alignItems: "center", gap: 4}}>
+<input
+type="radio"
+name={`cross-${row.key}`}
+checked={row.cross === true}
 disabled={!isAdmin || busy}
-onChange={(event) =>
-void saveCross(row, event.target.value === "all")
-}
-aria-label={`${row.name}：跨範圍設定`}
->
-<option value="scoped">{isGroup? "不跨群組": "不跨單位"}</option>
-<option value="all">{isGroup? "跨群組": "跨單位"}</option>
-</select>
+onChange={() => void saveCross(row, true)}
+aria-label={`${row.name}：跨區`}
+/>
+跨區
+</label>
+<label style={{ display: "flex", alignItems: "center", gap: 4}}>
+<input
+type="radio"
+name={`cross-${row.key}`}
+checked={row.cross === false}
+disabled={!isAdmin || busy}
+onChange={() => void saveCross(row, false)}
+aria-label={`${row.name}：不跨區`}
+/>
+不跨區
+</label>
 </div>
 );
 })}
@@ -589,7 +757,14 @@ description="如需調整角色或職稱權限，請聯絡系統管理員。"
 );
 }
 
-const rowsForTarget = rows.filter((row) => row.category === target);
+const selectedTarget = targets.find((item) => item.key === target);
+const rowsForTarget = selectedTarget
+? rows.filter((row) => row.targetKey === selectedTarget.key)
+: [];
+const targetItems = selectedTarget ? selectedTarget.items : SHARED_ITEMS;
+const targetGuidance = selectedTarget
+? emptyGuidance(selectedTarget)
+: "尚未建立任何職稱／角色層級，請先到「群組與人員」建立層級，再回來設定權限。";
 
 return (
 <>
@@ -608,23 +783,40 @@ return (
 <label>
 設定目標
 <select
-value={target}
-onChange={(event) => setTarget(event.target.value as Target)}
+value={selectedTarget? target: ""}
+onChange={(event) => setTarget(event.target.value)}
 aria-label="設定目標"
 style={{ marginLeft: 8}}
 >
-{(Object.keys(TARGET_LABELS) as Target[]).map((key) => (
-<option key={key} value={key}>{TARGET_LABELS[key]}</option>
+{targets.length === 0? (
+<option value="">（尚無層級）</option>
+): (
+<>
+<optgroup label="角色">
+{targets
+.filter((item) => item.kind === "role")
+.map((item) => (
+<option key={item.key} value={item.key}>{item.levelName}</option>
 ))}
+</optgroup>
+<optgroup label="職稱">
+{targets
+.filter((item) => item.kind === "title")
+.map((item) => (
+<option key={item.key} value={item.key}>{item.levelName}</option>
+))}
+</optgroup>
+</>
+)}
 </select>
 </label>
 </div>
 </section>
 <section className="panel data-panel">
 <div className="panel-inset">
-<SectionTitle title="一、權限是否跨單位／組" />
+<SectionTitle title="一、角色／職稱是否可以跨區" />
 {rowsForTarget.length === 0? (
-<p className="settings-note">{EMPTY_GUIDANCE[target]}</p>
+<p className="settings-note">{targetGuidance}</p>
 ): (
 crossSection(rowsForTarget)
 )}
@@ -634,11 +826,11 @@ crossSection(rowsForTarget)
 <div className="panel-inset">
 <SectionTitle title="二、權限設定" />
 {rowsForTarget.length === 0? (
-<p className="settings-note">{EMPTY_GUIDANCE[target]}</p>
+<p className="settings-note">{targetGuidance}</p>
 ): null}
 </div>
 {rowsForTarget.length !== 0 && (
-permissionMatrix(rowsForTarget, TARGET_ITEMS[target])
+permissionMatrix(rowsForTarget, targetItems)
 )}
 </section>
 <section className="panel data-panel">

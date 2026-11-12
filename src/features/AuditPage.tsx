@@ -69,11 +69,10 @@ import {
   convenerRoleNames,
   hasRoleCategory,
   hasRoleCategoryWithScope,
-  LEGACY_CONVENER_ROLE_NAMES,
-  LEGACY_OFFICER_ROLE_NAMES,
   officerRoleNames,
   titleFlagsOf,
 } from "../lib/orgMeta";
+import { deriveRoleCategory } from "../lib/roleDerivation";
 import {
   auditRowMatches,
   classifyScheduleProgress,
@@ -370,9 +369,14 @@ export function AuditPage({
         });
         const myConvenerGroupIds = groupsForRoles(
           memberships,
-          // 角色主檔尚未載入時（空表）以舊名稱退路，載入後改以類別為準
+          // 角色主檔尚未載入時（空表）以本人 membership 角色的名稱關鍵字退路，
+          // 載入後改以類別為準（召集人／執行幹事，不分組級／單位級）
           orgMeta.roleMeta.size === 0
-            ? [...LEGACY_CONVENER_ROLE_NAMES, ...LEGACY_OFFICER_ROLE_NAMES]
+            ? [...new Set(memberships.flatMap((m) => m.roles))].filter(
+                (n) =>
+                  deriveRoleCategory(n) === "convener" ||
+                  deriveRoleCategory(n) === "officer",
+              )
             : [
                 ...convenerRoleNames(orgMeta.roleMeta),
                 ...officerRoleNames(orgMeta.roleMeta),

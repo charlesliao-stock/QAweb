@@ -8,11 +8,8 @@ import { groupsForRoles, parseMemberships } from "../lib/roleIdentity";
 import { useOrgMeta } from "../lib/useOrgMeta";
 import { displayUnitCode, staffLabel } from "../lib/mask";
 import { useStaffNameMap } from "../lib/useStaffNames";
-import {
-  LEGACY_GROUP_CONVENER_ROLE_NAMES,
-  LEGACY_GROUP_OFFICER_ROLE_NAMES,
-  scheduleScopeRoleNames,
-} from "../lib/orgMeta";
+import { scheduleScopeRoleNames } from "../lib/orgMeta";
+import { deriveRoleCategory, deriveRoleScope } from "../lib/roleDerivation";
 import {
   filterHandoffTasks,
   isHandoffEligible,
@@ -113,9 +110,15 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
           ? []
           : groupsForRoles(
               memberships,
-              // 角色主檔尚未載入時（空表）以舊名稱退路，載入後改以類別＋範圍為準
+              // 角色主檔尚未載入時（空表）以本人 membership 角色的名稱關鍵字退路，
+              // 載入後改以類別＋範圍為準（只取組級召集人／執行幹事）
               orgMeta.roleMeta.size === 0
-                ? [...LEGACY_GROUP_CONVENER_ROLE_NAMES, ...LEGACY_GROUP_OFFICER_ROLE_NAMES]
+                ? [...new Set(memberships.flatMap((m) => m.roles))].filter(
+                    (n) =>
+                      (deriveRoleCategory(n) === "convener" ||
+                        deriveRoleCategory(n) === "officer") &&
+                      deriveRoleScope({ name: n }) === "group",
+                  )
                 : scheduleScopeRoleNames(orgMeta.roleMeta),
               undefined,
               orgMeta.roleMeta,
