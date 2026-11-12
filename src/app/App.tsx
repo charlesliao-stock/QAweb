@@ -88,6 +88,8 @@ const NAV_GROUPS = [
       { id: "schedule", label: "品管審查排程", icon: CalendarDays },
       { id: "audit", label: "品管審查", icon: ClipboardCheck },
       { id: "results", label: "結果分析", icon: FileBarChart2 },
+      // v1.56.0：任務交接由組織與設定移入品質管理（只改導覽位置與所屬分區，功能與權限不動）。
+      { id: "handoff", label: "任務交接", icon: ArrowRightLeft },
       { id: "capa", label: "CAPA 改善追蹤", icon: Activity },
     ],
   },
@@ -95,7 +97,6 @@ const NAV_GROUPS = [
     label: "組織與設定",
     items: [
       { id: "groups", label: "群組與人員", icon: GitBranch },
-      { id: "handoff", label: "任務交接", icon: ArrowRightLeft },
       { id: "admin", label: "系統管理", icon: Settings2 },
       { id: "permissions", label: "權限管理", icon: ShieldCheck },
     ],

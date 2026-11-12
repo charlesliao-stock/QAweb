@@ -5,6 +5,7 @@ import { getCachedRefCollection } from "./refCache";
 import { getDocsCacheFirst } from "./cacheFirst";
 import { useAuth } from "./auth";
 import {
+  ADMIN_ONLY_PERM_KEYS,
   can as evaluatePermission,
   parsePermissions,
   parseTemplateCategory,
@@ -98,8 +99,15 @@ export function usePermissions() {
   const isAdmin = (user?.roles ?? []).includes("系統管理員");
 
   const can = useCallback(
-    (key: PermKey, groupId?: string) =>
-      isAdmin || evaluatePermission(permUser, key, catalog, groupId),
+    (key: PermKey, groupId?: string) => {
+      // v1.56.0：組織與設定專屬鍵（群組與人員／系統管理／權限管理／管理角色與權限）
+      // 只限系統管理員。權限頁永不列出這些鍵，但舊範本可能仍勾著殘留值，
+      // 範本交集不可再放行非管理員；導覽顯示與路由守衛都走 can()，一併收掉。
+      if ((ADMIN_ONLY_PERM_KEYS as readonly string[]).includes(key)) {
+        return isAdmin;
+      }
+      return isAdmin || evaluatePermission(permUser, key, catalog, groupId);
+    },
     [isAdmin, permUser, catalog],
   );
 

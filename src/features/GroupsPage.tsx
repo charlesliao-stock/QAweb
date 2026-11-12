@@ -607,9 +607,8 @@ export function GroupsPage({
   onAction: (message: string) => void;
 }) {
   const { user } = useAuth();
+  // v1.56.0：組織與設定整區塊只限系統管理員（原管理員或品管執行幹事可維護已收掉）。
   const isAdmin = (user?.roles ?? []).includes("系統管理員");
-  const canManageMaster =
-    isAdmin || (user?.roles ?? []).includes("品管執行幹事");
 
   const [tab, setTab] = useState<Tab>("users");
   const [sortState, setSortState] = useState<{ key: string; dir: 1 | -1 }>({
@@ -711,6 +710,7 @@ export function GroupsPage({
   const [roleOptions, setRoleOptions] = useState<OptionItem[]>([]);
 
   // ---- 角色（v1.39.0：一名一檔，只寫名稱；建立後請至權限管理設定權限） ----
+  const [rolesLoading, setRolesLoading] = useState(true);
   const [roleCreateOpen, setRoleCreateOpen] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
   /** v1.40.5：新角色功能類別（預設一般）與適用範圍（預設群組角色） */
@@ -738,6 +738,7 @@ export function GroupsPage({
   const [managingTitleId, setManagingTitleId] = useState("");
   const [titleMemberChecked, setTitleMemberChecked] = useState<string[]>([]);
   const [titleAddSearch, setTitleAddSearch] = useState("");
+  const [titleAddChecked, setTitleAddChecked] = useState<string[]>([]);
   const [titleBusy, setTitleBusy] = useState(false);
 
   // ---- 群組單位管理（v1.21） ----
@@ -900,6 +901,7 @@ export function GroupsPage({
   const usersLoadedRef = useRef(false);
 
   const loadRoles = useCallback(async () => {
+    setRolesLoading(true);
     try {
       const snap = await getCachedRefCollection("roles", () =>
         getDocsCacheFirst(collection(getFirebaseDb(), "roles")),
@@ -932,6 +934,8 @@ export function GroupsPage({
       );
     } catch {
       setRoleOptions([]);
+    } finally {
+      setRolesLoading(false);
     }
   }, []);
 
@@ -1223,10 +1227,10 @@ export function GroupsPage({
   }, [tab, isAdmin, loadUsers]);
 
   useEffect(() => {
-    if (tab === "roles" && canManageMaster && users.length === 0) {
+    if (tab === "roles" && isAdmin && users.length === 0) {
       loadUsers();
     }
-  }, [tab, canManageMaster, users.length, loadUsers]);
+  }, [tab, isAdmin, users.length, loadUsers]);
 
   // ================= 群組 =================
 
@@ -2772,32 +2776,38 @@ export function GroupsPage({
     }
   }
 
-  async function handleTitleMemberAdd(staffId: string) {
+  /** v1.56.0：職稱加入成員改勾選批次加入，與角色頁同一流程（每人寫入內容與單筆加入相同）。 */
+  async function handleTitleMembersAdd() {
     const title = titles.find((item) => item.id === managingTitleId);
-    const target = users.find((item) => item.staffId === staffId);
-    if (!title || !target) return;
+    if (!title || titleAddChecked.length === 0) return;
+    const targets = users.filter((item) => titleAddChecked.includes(item.staffId));
     setTitleBusy(true);
     try {
-      const db = getFirebaseDb();
-      const batch = writeBatch(db);
-      batch.update(doc(db, "users", staffId), {
-        title: title.name,
-        titleId: title.id,
-        ...auditFields(user?.staffId ?? "", false),
-      });
-      batch.set(doc(collection(db, "auditLogs")), {
-        actor: user?.staffId ?? "",
-        actorName: user?.name ?? "",
-        action: "人員職稱異動",
-        targetType: "user",
-        targetId: staffId,
-        detail: `職編 ${staffId} 職稱「${target.title}」→「${title.name}」`,
-        before: { titleId: target.titleId, title: target.title, unitCode: target.unitCode },
-        after: { titleId: title.id, title: title.name, unitCode: target.unitCode },
-        createdAt: serverTimestamp(),
-      });
-      await batch.commit();
-      onAction(`已將 ${staffId} 轉任「${title.name}」`);
+      const me = user?.staffId ?? "";
+      await commitInBatches(
+        targets.map(
+          (target) => (b: WriteBatch) => {
+            b.update(doc(getFirebaseDb(), "users", target.staffId), {
+              title: title.name,
+              titleId: title.id,
+              ...auditFields(me, false),
+            });
+            b.set(doc(collection(getFirebaseDb(), "auditLogs")), {
+              actor: me,
+              actorName: user?.name ?? "",
+              action: "人員職稱異動",
+              targetType: "user",
+              targetId: target.staffId,
+              detail: `職編 ${target.staffId} 職稱「${target.title}」→「${title.name}」`,
+              before: { titleId: target.titleId, title: target.title, unitCode: target.unitCode },
+              after: { titleId: title.id, title: title.name, unitCode: target.unitCode },
+              createdAt: serverTimestamp(),
+            });
+          },
+        ),
+      );
+      onAction(`已將 ${targets.length} 位人員轉任「${title.name}」`);
+      setTitleAddChecked([]);
       setTitleAddSearch("");
       await loadUsers();
       await loadTitles();
@@ -3276,7 +3286,7 @@ export function GroupsPage({
     const idx = level ? sorted.findIndex((l) => l.id === level.id) : -1;
     const isEditing =
       levelEdit?.target === target && levelEdit?.id === level?.id;
-    const canEdit = target === "title" ? canManageMaster : isAdmin;
+    const canEdit = target === "title" ? isAdmin : isAdmin;
     return (
       <div className="level-section-head">
         {isEditing ? (
@@ -3349,7 +3359,7 @@ export function GroupsPage({
 
   /** 新增層級（區段上方的小按鈕＋展開表單） */
   function renderLevelCreate(target: "title" | "role") {
-    const canEdit = target === "title" ? canManageMaster : isAdmin;
+    const canEdit = target === "title" ? isAdmin : isAdmin;
     if (!canEdit) return null;
     if (levelCreateTarget !== target) {
       return (
@@ -3409,7 +3419,7 @@ export function GroupsPage({
             <tr>
               <SortHeader label="職稱名稱" sortKey="title-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
               <SortHeader label="使用人數" sortKey="title-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-              {canManageMaster && <th>操作</th>}
+              {isAdmin && <th>操作</th>}
             </tr>
           </thead>
           <tbody>
@@ -3421,7 +3431,7 @@ export function GroupsPage({
                 <td>
                   {row.userCount === null ? "—" : `${row.userCount} 人`}
                 </td>
-                {canManageMaster && (
+                {isAdmin && (
                   <td>
                     <button
                       className="text-button"
@@ -3438,6 +3448,7 @@ export function GroupsPage({
                           );
                           setTitleMemberChecked([]);
                           setTitleAddSearch("");
+                          setTitleAddChecked([]);
                         }}
                       >
                         成員管理
@@ -3490,6 +3501,12 @@ export function GroupsPage({
                         className="text-button"
                         onClick={() => openRoleMembers(row.id)}
                       >
+                        <Pencil size={13} /> 編輯
+                      </button>{" "}
+                      <button
+                        className="text-button"
+                        onClick={() => openRoleMembers(row.id)}
+                      >
                         成員管理
                       </button>{" "}
                       <button
@@ -3534,7 +3551,7 @@ export function GroupsPage({
     );
     if (tab === "groups") {
       if (groupView.kind === "list")
-        return canManageMaster ? (
+        return isAdmin ? (
           <button className="button button-primary" onClick={openGroupCreate}>
             <Plus size={16} />
             新增群組
@@ -3544,7 +3561,7 @@ export function GroupsPage({
     }
     if (tab === "units") {
       if (unitView.kind === "list")
-        return canManageMaster ? (
+        return isAdmin ? (
           <button className="button button-primary" onClick={openUnitCreate}>
             <Plus size={16} />
             新增單位
@@ -3554,7 +3571,7 @@ export function GroupsPage({
     }
     if (tab === "titles") {
       if (titleView.kind === "list")
-        return canManageMaster ? (
+        return isAdmin ? (
           <button className="button button-primary" onClick={openTitleCreate}>
             <Plus size={16} />
             新增職稱
@@ -3694,7 +3711,7 @@ export function GroupsPage({
       )}
 
       {/* 批次上傳工具列（僅清單檢視） */}
-      {tab === "groups" && groupView.kind !== "edit" && canManageMaster && (
+      {tab === "groups" && groupView.kind !== "edit" && isAdmin && (
         <div className="batch-toolbar">
           <BatchImporter
             sampleBaseName="群組範例"
@@ -3707,7 +3724,7 @@ export function GroupsPage({
           />
         </div>
       )}
-      {tab === "units" && unitView.kind !== "edit" && canManageMaster && (
+      {tab === "units" && unitView.kind !== "edit" && isAdmin && (
         <div className="batch-toolbar">
           <BatchImporter
             sampleBaseName="單位範例"
@@ -3720,7 +3737,7 @@ export function GroupsPage({
           />
         </div>
       )}
-      {tab === "titles" && titleView.kind !== "edit" && canManageMaster && (
+      {tab === "titles" && titleView.kind !== "edit" && isAdmin && (
         <div className="batch-toolbar">
           <BatchImporter
             sampleBaseName="職稱範例"
@@ -3747,7 +3764,7 @@ export function GroupsPage({
           />
         </div>
       )}
-      {tab === "roles" && !managingRole && canManageMaster && (
+      {tab === "roles" && !managingRole && isAdmin && (
         <div className="batch-toolbar">
           <BatchImporter
             sampleBaseName="角色範例"
@@ -3780,7 +3797,7 @@ export function GroupsPage({
                     <tr>
                       <SortHeader label="群組名稱" sortKey="group-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
                       <SortHeader label="所屬單位數" sortKey="group-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      {canManageMaster && <th>操作</th>}
+                      {isAdmin && <th>操作</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -3790,7 +3807,7 @@ export function GroupsPage({
                           <b>{row.name}</b>
                         </td>
                         <td>{row.unitCount} 個</td>
-                        {canManageMaster && (
+                        {isAdmin && (
                           <td>
                             <button
                               className="text-button"
@@ -3823,7 +3840,7 @@ export function GroupsPage({
                   </tbody>
                 </table>
               </div>
-              {managingGroupId && canManageMaster && (
+              {managingGroupId && isAdmin && (
                 <div className="panel-inset divided">
                   <MemberChecklist
                     title={`群組「${groups.find((g) => g.id === managingGroupId)?.name ?? ""}」的單位`}
@@ -3886,13 +3903,7 @@ export function GroupsPage({
                   </div>
                 </div>
               )}
-              {!canManageMaster && (
-                <div className="panel-inset">
-                  <p className="settings-note">
-                    群組維護限品管執行幹事或系統管理員。
-                  </p>
-                </div>
-              )}
+
             </section>
           )
         ) : (
@@ -3953,12 +3964,12 @@ export function GroupsPage({
                       <SortHeader label="單位名稱" sortKey="unit-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
                       <SortHeader label="所屬群組" sortKey="unit-group" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
                       <SortHeader label="所屬人員數" sortKey="unit-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                      {canManageMaster && <th>操作</th>}
+                      {isAdmin && <th>操作</th>}
                     </tr>
                   </thead>
                   <tbody>
                     {visibleUnits.length === 0 ? (
-                      <tr><td colSpan={canManageMaster ? 5 : 4} className="muted-text">沒有符合篩選條件的單位</td></tr>
+                      <tr><td colSpan={isAdmin ? 5 : 4} className="muted-text">沒有符合篩選條件的單位</td></tr>
                     ) : visibleUnits.map((row) => (
                       <tr key={row.code}>
                         <td>
@@ -3969,7 +3980,7 @@ export function GroupsPage({
                         <td>
                           {row.memberCount === null ? "—" : `${row.memberCount} 人`}
                         </td>
-                        {canManageMaster && (
+                        {isAdmin && (
                           <td>
                             <button
                               className="text-button"
@@ -4087,13 +4098,7 @@ export function GroupsPage({
                   </div>
                 </div>
               )}
-              {!canManageMaster && (
-                <div className="panel-inset">
-                  <p className="settings-note">
-                    單位維護限品管執行幹事或系統管理員。
-                  </p>
-                </div>
-              )}
+
             </section>
           )
         ) : (
@@ -4236,7 +4241,7 @@ export function GroupsPage({
                     busy={titleBusy}
                   />
                   <div className="form-field" style={{ maxWidth: 320 }}>
-                    <label className="field-label">加入人員（加入即轉任）</label>
+                    <label className="field-label">加入人員（搜尋＋全選）</label>
                     <input
                       className="text-input"
                       placeholder="輸入職編或姓名搜尋"
@@ -4248,56 +4253,86 @@ export function GroupsPage({
                     (titleCandidates.length === 0 ? (
                       <p className="settings-note">無符合的在職人員。</p>
                     ) : (
-                      <div className="table-scroll">
-                        <table className="data-table">
-                          <thead>
-                            <tr>
-                              <th>職編</th>
-                              <th>姓名</th>
-                              <th>現職稱</th>
-                              <th>操作</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {titleCandidates.map((u) => (
-                              <tr key={u.staffId}>
-                                <td>{u.staffId}</td>
-                                <td>{maskName(u.name)}</td>
-                                <td>{u.title || "—"}</td>
-                                <td>
-                                  <button
-                                    className="text-button"
-                                    disabled={titleBusy}
-                                    onClick={() =>
-                                      handleTitleMemberAdd(u.staffId)
+                      <>
+                        <div className="table-scroll">
+                          <table className="permission-table">
+                            <thead>
+                              <tr>
+                                <th style={{ width: 36 }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={
+                                      titleCandidates.length > 0 &&
+                                      titleCandidates.every((u) =>
+                                        titleAddChecked.includes(u.staffId),
+                                      )
                                     }
-                                  >
-                                    <Plus size={13} /> 加入
-                                  </button>
-                                </td>
+                                    onChange={(e) =>
+                                      setTitleAddChecked(
+                                        e.target.checked
+                                          ? titleCandidates.map((u) => u.staffId)
+                                          : [],
+                                      )
+                                    }
+                                    aria-label="全選"
+                                  />
+                                </th>
+                                <th>職編</th>
+                                <th>姓名</th>
+                                <th>現職稱</th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                            </thead>
+                            <tbody>
+                              {titleCandidates.map((u) => (
+                                <tr key={u.staffId}>
+                                  <td>
+                                    <input
+                                      type="checkbox"
+                                      checked={titleAddChecked.includes(u.staffId)}
+                                      onChange={(e) =>
+                                        setTitleAddChecked((prev) =>
+                                          e.target.checked
+                                            ? [...prev, u.staffId]
+                                            : prev.filter((x) => x !== u.staffId),
+                                        )
+                                      }
+                                      aria-label={`選擇 ${u.staffId}`}
+                                    />
+                                  </td>
+                                  <td>{u.staffId}</td>
+                                  <td>{maskName(u.name)}</td>
+                                  <td>{u.title || "—"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="form-actions">
+                          <button
+                            className="button button-primary"
+                            disabled={titleAddChecked.length === 0 || titleBusy}
+                            onClick={handleTitleMembersAdd}
+                          >
+                            加入所選（{titleAddChecked.length}）
+                          </button>
+                        </div>
+                      </>
                     ))}
                   <div className="form-actions">
                     <button
                       className="button button-outline"
                       onClick={() => setManagingTitleId("")}
                     >
-                      關閉
+                      返回職稱清單
                     </button>
                   </div>
                 </div>
               )}
-              {!canManageMaster && (
-                <div className="panel-inset">
-                  <p className="settings-note">
-                    職稱維護限品管執行幹事或系統管理員。
-                  </p>
-                </div>
-              )}
+              <div className="panel-inset">
+                <p className="settings-note">
+                  職稱以名稱唯一；可在此新增職稱、管理成員或刪除職稱。職稱權限請到「組織與設定 → 權限管理」設定（按名稱共用）。
+                </p>
+              </div>
             </section>
           )
         ) : (
@@ -4863,51 +4898,57 @@ export function GroupsPage({
             </div>
             <div className="form-field" style={{ maxWidth: 420 }}>
               <label className="field-label">功能類別 *</label>
-              <select
-                className="text-input"
-                value={newRoleCategory}
-                onChange={(event) =>
-                  setNewRoleCategory(event.target.value as RoleCategory)
-                }
-              >
-                {ROLE_CATEGORY_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+              <div className="select-wrap">
+                <select
+                  value={newRoleCategory}
+                  onChange={(event) =>
+                    setNewRoleCategory(event.target.value as RoleCategory)
+                  }
+                >
+                  {ROLE_CATEGORY_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={15} />
+              </div>
               <p className="settings-note">功能類別決定此角色的身分（審查員／召集人／執行幹事等），不以名稱判斷。</p>
             </div>
             <div className="form-field" style={{ maxWidth: 420 }}>
               <label className="field-label">適用範圍 *</label>
-              <select
-                className="text-input"
-                value={newRoleKind}
-                onChange={(event) =>
-                  setNewRoleKind(event.target.value as RoleScope)
-                }
-              >
-                {ROLE_SCOPE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+              <div className="select-wrap">
+                <select
+                  value={newRoleKind}
+                  onChange={(event) =>
+                    setNewRoleKind(event.target.value as RoleScope)
+                  }
+                >
+                  {ROLE_SCOPE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={15} />
+              </div>
             </div>
             <div className="form-field" style={{ maxWidth: 420 }}>
               <label className="field-label">層級</label>
-              <select
-                className="text-input"
-                value={newRoleLevelId}
-                onChange={(event) => setNewRoleLevelId(event.target.value)}
-              >
-                <option value="">— 未分層級 —</option>
-                {roleLevels.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.name}
-                  </option>
-                ))}
-              </select>
+              <div className="select-wrap">
+                <select
+                  value={newRoleLevelId}
+                  onChange={(event) => setNewRoleLevelId(event.target.value)}
+                >
+                  <option value="">— 未分層級 —</option>
+                  {roleLevels.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={15} />
+              </div>
             </div>
             <div className="form-actions">
               <button className="button button-primary" disabled={roleCreateSaving} onClick={handleRoleCreate}>
@@ -4958,50 +4999,56 @@ export function GroupsPage({
               </div>
               <div className="form-field" style={{ maxWidth: 320 }}>
                 <label className="field-label">功能類別 *</label>
-                <select
-                  className="text-input"
-                  value={roleEditCategory}
-                  onChange={(event) =>
-                    setRoleEditCategory(event.target.value as RoleCategory)
-                  }
-                >
-                  {ROLE_CATEGORY_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
+                <div className="select-wrap">
+                  <select
+                    value={roleEditCategory}
+                    onChange={(event) =>
+                      setRoleEditCategory(event.target.value as RoleCategory)
+                    }
+                  >
+                    {ROLE_CATEGORY_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={15} />
+                </div>
               </div>
               <div className="form-field" style={{ maxWidth: 320 }}>
                 <label className="field-label">適用範圍 *</label>
-                <select
-                  className="text-input"
-                  value={roleEditKind}
-                  onChange={(event) =>
-                    setRoleEditKind(event.target.value as RoleScope)
-                  }
-                >
-                  {ROLE_SCOPE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
+                <div className="select-wrap">
+                  <select
+                    value={roleEditKind}
+                    onChange={(event) =>
+                      setRoleEditKind(event.target.value as RoleScope)
+                    }
+                  >
+                    {ROLE_SCOPE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={15} />
+                </div>
               </div>
               <div className="form-field" style={{ maxWidth: 320 }}>
                 <label className="field-label">層級</label>
-                <select
-                  className="text-input"
-                  value={roleEditLevelId}
-                  onChange={(event) => setRoleEditLevelId(event.target.value)}
-                >
-                  <option value="">— 未分層級 —</option>
-                  {roleLevels.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.name}
-                    </option>
-                  ))}
-                </select>
+                <div className="select-wrap">
+                  <select
+                    value={roleEditLevelId}
+                    onChange={(event) => setRoleEditLevelId(event.target.value)}
+                  >
+                    <option value="">— 未分層級 —</option>
+                    {roleLevels.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={15} />
+                </div>
               </div>
               <div className="form-actions">
                 <button
@@ -5009,7 +5056,7 @@ export function GroupsPage({
                   disabled={roleEditSaving}
                   onClick={handleRoleRename}
                 >
-                  {roleEditSaving ? "儲存中…" : "儲存"}
+                  {roleEditSaving ? "儲存中…" : "儲存修改"}
                 </button>
               </div>
             </div>
@@ -5125,10 +5172,14 @@ export function GroupsPage({
             </div>
             </div>
           </section>
+        ) : rolesLoading || levelsLoading ? (
+          <section className="panel">
+            <p className="settings-note">讀取中…</p>
+          </section>
         ) : roleRows.length === 0 ? (
           <EmptyState
             title="尚無角色"
-            description="角色清單載入中，或請使用右上角「新增角色」建立角色。"
+            description="使用右上角「新增角色」或「批次上傳」建立角色。"
           />
         ) : (
           <section className="panel data-panel">
