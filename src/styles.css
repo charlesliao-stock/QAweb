@@ -1098,6 +1098,17 @@ button:disabled {
 .panel.data-panel {
   padding: 0;
 }
+/* v1.54.0：data-panel 內非表格內容統一邊界（上下 16px／左右 20px）。
+   滿版表格（.table-scroll）維持貼邊不動；標題、表單、按鈕、說明文字與
+   內嵌展開區包在 .panel-inset 內。直接改 .panel.data-panel 的 padding
+   會動到全站滿版表格，故不改。 */
+.panel-inset {
+  padding: 16px 20px;
+}
+/* 內嵌展開區：上方分隔線，與上方列表區隔 */
+.panel-inset.divided {
+  border-top: 1px solid #edf0f1;
+}
 /* 表單面板同樣需要邊界 */
 .panel.indicator-form {
   padding: 22px 26px;

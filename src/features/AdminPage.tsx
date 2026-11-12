@@ -1185,6 +1185,7 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
 
   return (
     <section className="panel data-panel">
+      <div className="panel-inset">
       <SectionTitle
         title="稽核軌跡紀錄"
         note="最近 50 筆，僅系統管理員可查閱"
@@ -1207,16 +1208,24 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
           ) : undefined
         }
       />
+      </div>
       {!canManageRoles ? (
-        <p className="settings-note">稽核軌跡僅開放系統管理員查閱。</p>
+        <div className="panel-inset">
+          <p className="settings-note">稽核軌跡僅開放系統管理員查閱。</p>
+        </div>
       ) : !open ? (
-        <p className="settings-note">
-          平時隱藏，需要時點右上「展開」查看，可關鍵字搜尋與日期篩選。
-        </p>
+        <div className="panel-inset">
+          <p className="settings-note">
+            平時隱藏，需要時點右上「展開」查看，可關鍵字搜尋與日期篩選。
+          </p>
+        </div>
       ) : rows === null ? (
-        <p className="settings-note">讀取中…</p>
+        <div className="panel-inset">
+          <p className="settings-note">讀取中…</p>
+        </div>
       ) : (
         <>
+          <div className="panel-inset">
           <div className="form-grid" style={{ marginBottom: 12 }}>
             <div className="form-field">
               <label className="field-label">關鍵字搜尋</label>
@@ -1236,6 +1245,7 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
                 onChange={(e) => setDateFilter(e.target.value)}
               />
             </div>
+          </div>
           </div>
           {filtered.length === 0 ? (
             <EmptyState
@@ -1275,19 +1285,21 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
             </div>
           )}
           {(keyword.trim() || dateFilter) && (
-            <p className="settings-note">
-              篩選結果 {filtered.length}／{rows.length} 筆
-              <button
-                className="text-button"
-                style={{ marginLeft: 8 }}
-                onClick={() => {
-                  setKeyword("");
-                  setDateFilter("");
-                }}
-              >
-                <X size={13} /> 清除篩選
-              </button>
-            </p>
+            <div className="panel-inset">
+              <p className="settings-note">
+                篩選結果 {filtered.length}／{rows.length} 筆
+                <button
+                  className="text-button"
+                  style={{ marginLeft: 8 }}
+                  onClick={() => {
+                    setKeyword("");
+                    setDateFilter("");
+                  }}
+                >
+                  <X size={13} /> 清除篩選
+                </button>
+              </p>
+            </div>
           )}
         </>
       )}

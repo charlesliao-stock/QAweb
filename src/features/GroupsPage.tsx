@@ -425,10 +425,12 @@ function BatchImporter({
       )}
       {preview && (
         <section className="panel data-panel import-preview">
-          <SectionTitle
-            title={`匯入預覽（共 ${preview.length} 筆，可匯入 ${okCount} 筆）`}
-            note="僅「通過」的資料列會被匯入"
-          />
+          <div className="panel-inset">
+            <SectionTitle
+              title={`匯入預覽（共 ${preview.length} 筆，可匯入 ${okCount} 筆）`}
+              note="僅「通過」的資料列會被匯入"
+            />
+          </div>
           <div className="table-scroll">
             <table className="permission-table">
               <thead>
@@ -461,20 +463,22 @@ function BatchImporter({
               </tbody>
             </table>
           </div>
-          <div className="form-actions">
-            <button
-              className="button button-primary"
-              disabled={importing || okCount === 0}
-              onClick={handleConfirm}
-            >
-              {importing ? "匯入中…" : `確認匯入（${okCount} 筆）`}
-            </button>
-            <button
-              className="button button-outline"
-              onClick={() => setPreview(null)}
-            >
-              取消
-            </button>
+          <div className="panel-inset">
+            <div className="form-actions">
+              <button
+                className="button button-primary"
+                disabled={importing || okCount === 0}
+                onClick={handleConfirm}
+              >
+                {importing ? "匯入中…" : `確認匯入（${okCount} 筆）`}
+              </button>
+              <button
+                className="button button-outline"
+                onClick={() => setPreview(null)}
+              >
+                取消
+              </button>
+            </div>
           </div>
         </section>
       )}
@@ -3272,7 +3276,7 @@ export function GroupsPage({
                 </table>
               </div>
               {managingGroupId && canManageMaster && (
-                <div style={{ marginTop: 12 }}>
+                <div className="panel-inset divided">
                   <MemberChecklist
                     title={`群組「${groups.find((g) => g.id === managingGroupId)?.name ?? ""}」的單位`}
                     note="加入／移除單位（改 unit.groupId）"
@@ -3335,9 +3339,11 @@ export function GroupsPage({
                 </div>
               )}
               {!canManageMaster && (
-                <p className="settings-note">
-                  群組維護限品管執行幹事或系統管理員。
-                </p>
+                <div className="panel-inset">
+                  <p className="settings-note">
+                    群組維護限品管執行幹事或系統管理員。
+                  </p>
+                </div>
               )}
             </section>
           )
@@ -3453,7 +3459,7 @@ export function GroupsPage({
                 </table>
               </div>
               {managingUnitCode && isAdmin && (
-                <div style={{ marginTop: 12 }}>
+                <div className="panel-inset divided">
                   <MemberChecklist
                     title={`單位 ${managingUnitCode} 的成員`}
                     note="加入／移除人員（改 person.unitCode）"
@@ -3534,9 +3540,11 @@ export function GroupsPage({
                 </div>
               )}
               {!canManageMaster && (
-                <p className="settings-note">
-                  單位維護限品管執行幹事或系統管理員。
-                </p>
+                <div className="panel-inset">
+                  <p className="settings-note">
+                    單位維護限品管執行幹事或系統管理員。
+                  </p>
+                </div>
               )}
             </section>
           )
@@ -3699,7 +3707,7 @@ export function GroupsPage({
                 </table>
               </div>
               {managingTitle && isAdmin && (
-                <div style={{ marginTop: 12 }}>
+                <div className="panel-inset divided">
                   <MemberChecklist
                     title={`職稱「${managingTitle.name}」的成員`}
                     note="加入即轉任此職稱（一人一職稱）；移除即清除職稱"
@@ -3780,9 +3788,11 @@ export function GroupsPage({
                 </div>
               )}
               {!canManageMaster && (
-                <p className="settings-note">
-                  職稱維護限品管執行幹事或系統管理員。
-                </p>
+                <div className="panel-inset">
+                  <p className="settings-note">
+                    職稱維護限品管執行幹事或系統管理員。
+                  </p>
+                </div>
               )}
             </section>
           )
@@ -4350,6 +4360,7 @@ export function GroupsPage({
           </section>
         ) : managingRole ? (
           <section className="panel data-panel">
+            <div className="panel-inset">
             <MemberChecklist
               title={`角色「${managingRole.name}」的成員`}
               note="勾選＋全選可批次移除（同時從 memberships 移除該角色）"
@@ -4537,6 +4548,7 @@ export function GroupsPage({
                 返回角色清單
               </button>
             </div>
+            </div>
           </section>
         ) : roleRows.length === 0 ? (
           <EmptyState
@@ -4594,9 +4606,11 @@ export function GroupsPage({
                 </tbody>
               </table>
             </div>
-            <p className="settings-note">
-              角色以名稱唯一；可在此新增角色、管理成員或刪除角色。成員管理與刪除限系統管理員。角色權限請到「組織與設定 → 權限管理」設定（按名稱共用）。
-            </p>
+            <div className="panel-inset">
+              <p className="settings-note">
+                角色以名稱唯一；可在此新增角色、管理成員或刪除角色。成員管理與刪除限系統管理員。角色權限請到「組織與設定 → 權限管理」設定（按名稱共用）。
+              </p>
+            </div>
           </section>
         )
       ) : null}

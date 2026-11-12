@@ -604,6 +604,7 @@ return (
 ): (
 <>
 <section className="panel data-panel">
+<div className="panel-inset">
 <label>
 設定目標
 <select
@@ -617,24 +618,31 @@ style={{ marginLeft: 8}}
 ))}
 </select>
 </label>
+</div>
 </section>
 <section className="panel data-panel">
+<div className="panel-inset">
 <SectionTitle title="一、權限是否跨單位／組" />
 {rowsForTarget.length === 0? (
 <p className="settings-note">{EMPTY_GUIDANCE[target]}</p>
 ): (
 crossSection(rowsForTarget)
 )}
+</div>
 </section>
 <section className="panel data-panel">
+<div className="panel-inset">
 <SectionTitle title="二、權限設定" />
 {rowsForTarget.length === 0? (
 <p className="settings-note">{EMPTY_GUIDANCE[target]}</p>
-): (
+): null}
+</div>
+{rowsForTarget.length !== 0 && (
 permissionMatrix(rowsForTarget, TARGET_ITEMS[target])
 )}
 </section>
 <section className="panel data-panel">
+<div className="panel-inset">
 <SectionTitle title="重置權限資料（洗掉重來）" note="僅系統管理員。先備份、再刪除；刪除後無法復原。" />
 {isDemoMode()? (
 <p className="settings-note">展示模式不提供重置（僅影響記憶體展示資料，重新整理即還原）。</p>
@@ -666,6 +674,7 @@ onClick={() => void executePermissionReset()}
 </div>
 </>
 )}
+</div>
 </section>
 </>
 )}
