@@ -159,6 +159,15 @@ interface ChartModalData {
   mode: UnitMode;
   cols: AnalysisPeriodColumn[];
   unitId?: string;
+  /** v1.53.0：分組曲線（sectionKey：group-…／question-…／historical-…）；無值＝整支指標 */
+  sectionKey?: string;
+  sectionLabel?: string;
+}
+
+/** v1.53.0：分組參照（分組子列／分組明細列的 key＋顯示名稱） */
+interface SectionRef {
+  key: string;
+  label: string;
 }
 
 interface DocModalData {
@@ -170,6 +179,9 @@ interface DocModalData {
   unitId?: string;
   /** 下探單元（組別／單位分析當時的單元） */
   mode: UnitMode;
+  /** v1.53.0：分組選項明細（只列該組題目）；無值＝整支指標 */
+  sectionKey?: string;
+  sectionLabel?: string;
 }
 
 /** 下探狀態：L1 單位矩陣（l2UnitId 為 null）；L2 人員各選項結果（l2UnitId 有值） */
@@ -194,6 +206,9 @@ interface DrillState {
 interface UnitPanel {
   kind: "chart" | "doc";
   indicatorId: string;
+  /** v1.53.0：分組版（只看該組）；無值＝整支指標 */
+  sectionKey?: string;
+  sectionLabel?: string;
 }
 
 function fmtRate(rate: number | null): string {
@@ -1017,20 +1032,88 @@ export function ResultsPage({
     return { values, labels, tips, cols };
   }
 
+  /**
+   * v1.53.0：單一期間欄的分組達閾值率——與 matrixScoringDetails 同一口徑。
+   * 人次模式：sectionPassRateOf（每人先算分組 rate 再判達標）；單位模式：
+   * unitScoringBreakdownRows 單欄（B 法）。歷史分組以當欄紀錄補齊題目 id。
+   */
+  function sectionCellValue(
+    indicator: IndicatorOpt,
+    column: AnalysisPeriodColumn,
+    periodRecords: AnalysisRecord[],
+    mode: UnitMode,
+    sectionKey: string,
+  ): PassRate {
+    const section = resolveDrillSection(indicator.questions, sectionKey, periodRecords);
+    if (!section) return { pass: 0, total: 0, rate: null };
+    if (mode === "unit") {
+      const row = unitScoringBreakdownRows(periodRecords, indicator.questions, [column], indicator.threshold)
+        .find((r) => r.key === sectionKey);
+      return row
+        ? { pass: row.yes, total: row.valid, rate: row.rate }
+        : { pass: 0, total: 0, rate: null };
+    }
+    return sectionPassRateOf(periodRecords, section.ids, section.kind, indicator.threshold);
+  }
+
+  /** v1.53.0：分組曲線圖數列（每組一張單線圖；只取有資料的欄） */
+  function sectionChartSeries(
+    indicatorId: string,
+    unitId: string | undefined,
+    mode: UnitMode,
+    sectionKey: string,
+  ): { values: number[]; labels: string[]; tips: string[]; cols: AnalysisPeriodColumn[] } {
+    const ind = indOf.get(indicatorId);
+    const values: number[] = [];
+    const labels: string[] = [];
+    const tips: string[] = [];
+    const cols: AnalysisPeriodColumn[] = [];
+    if (!ind) return { values, labels, tips, cols };
+    for (const col of appliedColumns) {
+      const recs = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
+      const pr = sectionCellValue(ind, col, recs, mode, sectionKey);
+      if (pr.rate != null) {
+        values.push(pr.rate);
+        labels.push(col.label);
+        tips.push(`${col.label}：${formatPassRate(pr, true)}`);
+        cols.push(col);
+      }
+    }
+    return { values, labels, tips, cols };
+  }
+
+  /** v1.53.0：選項明細只留該分組的題目（以題目 id 過濾；歷史分組無現行題目→空列） */
+  function sectionOptionRows(
+    rows: OptionDetailRow[],
+    questions: AuditQuestion[],
+    sectionKey: string,
+    records: AnalysisRecord[],
+  ): OptionDetailRow[] {
+    const section = resolveDrillSection(questions, sectionKey, records);
+    if (!section) return rows;
+    const ids = new Set(section.ids);
+    return rows.filter((row) => ids.has(row.questionId));
+  }
+
   function openChart(
     indicatorId: string,
     unitId: string | undefined,
     mode: UnitMode,
     scopeLabel: string,
+    section?: SectionRef,
   ) {
     const ind = indOf.get(indicatorId);
     if (!ind) return;
-    const { values, labels, tips, cols } = chartSeries(indicatorId, unitId, mode);
+    const { values, labels, tips, cols } = section
+      ? sectionChartSeries(indicatorId, unitId, mode, section.key)
+      : chartSeries(indicatorId, unitId, mode);
     setChartModal({
-      title: `${ind.code}・${ind.name} 達閾值率曲線`,
+      title: section
+        ? `${ind.code}・${ind.name}・${section.label} 達閾值率曲線`
+        : `${ind.code}・${ind.name} 達閾值率曲線`,
       subtitle: `${periodDesc}・${scopeLabel}・${
         mode === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"
-      }`,
+      }${section ? `・分組：${section.label}` : ""}`,
       values,
       labels,
       tips,
@@ -1039,6 +1122,8 @@ export function ResultsPage({
       mode,
       cols,
       unitId,
+      sectionKey: section?.key,
+      sectionLabel: section?.label,
     });
   }
 
@@ -1088,18 +1173,26 @@ export function ResultsPage({
     unitId: string | undefined,
     scopeLabel: string,
     mode: UnitMode,
+    section?: SectionRef,
   ) {
     const ind = indOf.get(indicatorId);
     if (!ind) return;
     // A3：查表取該指標全部期間的紀錄（可再限單位）。
     const recs = recordsForIndex(recordIndex, indicatorId, allMonths, unitId);
+    const rows = section
+      ? sectionOptionRows(optionDetailRows(recs, ind.questions), ind.questions, section.key, recs)
+      : optionDetailRows(recs, ind.questions);
     setDocModal({
-      title: `${ind.code}・${ind.name} 各選項得分狀況`,
-      subtitle: `${periodDesc}・${scopeLabel}・共 ${recs.length} 人次`,
-      rows: optionDetailRows(recs, ind.questions),
+      title: section
+        ? `${ind.code}・${ind.name}・${section.label} 各選項得分狀況`
+        : `${ind.code}・${ind.name} 各選項得分狀況`,
+      subtitle: `${periodDesc}・${scopeLabel}・共 ${recs.length} 人次${section ? `・分組：${section.label}` : ""}`,
+      rows,
       indicatorId,
       unitId,
       mode,
+      sectionKey: section?.key,
+      sectionLabel: section?.label,
     });
   }
 
@@ -1447,6 +1540,18 @@ export function ResultsPage({
                   openChart(id, undefined, groupUnit, "全部單位")
                 }
                 onDoc={(id) => openDoc(id, undefined, "全部單位", groupUnit)}
+                onDetailChart={(id, detailKey, detailLabel) =>
+                  openChart(id, undefined, groupUnit, "全部單位", {
+                    key: detailKey,
+                    label: detailLabel,
+                  })
+                }
+                onDetailDoc={(id, detailKey, detailLabel) =>
+                  openDoc(id, undefined, "全部單位", groupUnit, {
+                    key: detailKey,
+                    label: detailLabel,
+                  })
+                }
               />
             </section>
           )}
@@ -1503,21 +1608,56 @@ export function ResultsPage({
                       : { kind: "doc", indicatorId: id },
                   )
                 }
+                onDetailChart={(id, detailKey, detailLabel) =>
+                  setUnitPanel((p) =>
+                    p?.kind === "chart" &&
+                    p.indicatorId === id &&
+                    p.sectionKey === detailKey
+                      ? null
+                      : {
+                          kind: "chart",
+                          indicatorId: id,
+                          sectionKey: detailKey,
+                          sectionLabel: detailLabel,
+                        },
+                  )
+                }
+                onDetailDoc={(id, detailKey, detailLabel) =>
+                  setUnitPanel((p) =>
+                    p?.kind === "doc" &&
+                    p.indicatorId === id &&
+                    p.sectionKey === detailKey
+                      ? null
+                      : {
+                          kind: "doc",
+                          indicatorId: id,
+                          sectionKey: detailKey,
+                          sectionLabel: detailLabel,
+                        },
+                  )
+                }
               />
               {unitPanel &&
                 (() => {
                   const ind = indOf.get(unitPanel.indicatorId);
                   if (!ind) return null;
                   if (unitPanel.kind === "chart") {
-                    const s = chartSeries(
-                      ind.id,
-                      selUnitCode,
-                      unitUnit,
-                    );
+                    const s = unitPanel.sectionKey
+                      ? sectionChartSeries(
+                          ind.id,
+                          selUnitCode,
+                          unitUnit,
+                          unitPanel.sectionKey,
+                        )
+                      : chartSeries(ind.id, selUnitCode, unitUnit);
                     return (
                       <UnitBelowPanel
-                        title={`${ind.code}・${ind.name} 達閾值率曲線`}
-                        subtitle={`${periodDesc}・單位：${selUnit}・${unitUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}`}
+                        title={
+                          unitPanel.sectionKey
+                            ? `${ind.code}・${ind.name}・${unitPanel.sectionLabel} 達閾值率曲線`
+                            : `${ind.code}・${ind.name} 達閾值率曲線`
+                        }
+                        subtitle={`${periodDesc}・單位：${selUnit}・${unitUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}${unitPanel.sectionKey ? `・分組：${unitPanel.sectionLabel}` : ""}`}
                         onClose={() => setUnitPanel(null)}
                       >
                         {s.values.length === 0 ? (
@@ -1532,7 +1672,9 @@ export function ResultsPage({
                             }
                             legend="達閾值率"
                             onPointClick={(i) =>
-                              openDrill(ind.id, s.cols[i], unitUnit, selUnitCode)
+                              openDrill(ind.id, s.cols[i], unitUnit, selUnitCode, unitPanel.sectionKey
+                                ? { sectionKey: unitPanel.sectionKey }
+                                : undefined)
                             }
                           />
                         )}
@@ -1548,12 +1690,25 @@ export function ResultsPage({
                   );
                   return (
                     <UnitBelowPanel
-                      title={`${ind.code}・${ind.name} 各選項得分狀況`}
-                      subtitle={`${periodDesc}・單位：${selUnit}・共 ${recs.length} 人次`}
+                      title={
+                        unitPanel.sectionKey
+                          ? `${ind.code}・${ind.name}・${unitPanel.sectionLabel} 各選項得分狀況`
+                          : `${ind.code}・${ind.name} 各選項得分狀況`
+                      }
+                      subtitle={`${periodDesc}・單位：${selUnit}・共 ${recs.length} 人次${unitPanel.sectionKey ? `・分組：${unitPanel.sectionLabel}` : ""}`}
                       onClose={() => setUnitPanel(null)}
                     >
                       <OptionDetailTable
-                        rows={optionDetailRows(recs, ind.questions)}
+                        rows={
+                          unitPanel.sectionKey
+                            ? sectionOptionRows(
+                                optionDetailRows(recs, ind.questions),
+                                ind.questions,
+                                unitPanel.sectionKey,
+                                recs,
+                              )
+                            : optionDetailRows(recs, ind.questions)
+                        }
                         onQuestionClick={(questionId) =>
                           openDrill(ind.id, allPeriodColumn, unitUnit, selUnitCode, {
                             questionId,
@@ -1708,6 +1863,43 @@ export function ResultsPage({
                           }
                         >
                           <span>{row.isTotal ? indSel.name : row.label}</span>
+                          {!row.isTotal && (
+                            <span className="analysis-indicator-actions">
+                              <button
+                                type="button"
+                                className="icon-button"
+                                title="曲線圖"
+                                aria-label={`${row.label} 曲線圖`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openChart(selIndicator, undefined, indUnit, isNurseLeader ? "本單位" : "全部單位", {
+                                    key: row.key,
+                                    label: row.label,
+                                  });
+                                }}
+                              >
+                                <TrendingUp size={16} />
+                              </button>
+                              {/* v1.53.0：歷史分組無現行題目，選項明細為空列，故不顯示文件圖示 */}
+                              {!row.key.startsWith("historical-") && (
+                                <button
+                                  type="button"
+                                  className="icon-button"
+                                  title="各選項得分狀況"
+                                  aria-label={`${row.label} 各選項得分狀況`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openDoc(selIndicator, undefined, isNurseLeader ? "本單位" : "全部單位", indUnit, {
+                                      key: row.key,
+                                      label: row.label,
+                                    });
+                                  }}
+                                >
+                                  <FileText size={16} />
+                                </button>
+                              )}
+                            </span>
+                          )}
                           <strong>
                             {formatPassRate({ pass: row.yes, total: row.valid, rate: row.rate })}
                           </strong>
@@ -1858,7 +2050,9 @@ export function ResultsPage({
                 onPointClick={(i) => {
                   const cm = chartModal;
                   setChartModal(null);
-                  openDrill(cm.indicatorId, cm.cols[i], cm.mode, cm.unitId);
+                  openDrill(cm.indicatorId, cm.cols[i], cm.mode, cm.unitId, cm.sectionKey
+                    ? { sectionKey: cm.sectionKey }
+                    : undefined);
                 }}
               />
             )}
@@ -2418,6 +2612,8 @@ function RateMatrix({
   onDetailCell,
   onChart,
   onDoc,
+  onDetailChart,
+  onDetailDoc,
 }: {
   rows: {
     id: string;
@@ -2431,6 +2627,9 @@ function RateMatrix({
   onDetailCell?: (rowId: string, detailKey: string, col: AnalysisPeriodColumn) => void;
   onChart: (rowId: string) => void;
   onDoc: (rowId: string) => void;
+  /** v1.53.0：分組子列曲線圖／文件圖示（點開看該組；同主列做法） */
+  onDetailChart?: (rowId: string, detailKey: string, detailLabel: string) => void;
+  onDetailDoc?: (rowId: string, detailKey: string, detailLabel: string) => void;
 }) {
   return (
     <div className="analysis-table-wrap">
@@ -2505,7 +2704,32 @@ function RateMatrix({
             ...(row.details ?? []).map((detail) => (
               <tr key={`${row.id}-detail-${detail.key}`} className="analysis-matrix-detail-row">
                 <td className="ind-col">
-                  <div className="analysis-matrix-subrow">{detail.label}</div>
+                  <div className="analysis-matrix-subrow">
+                    <span>{detail.label}</span>
+                    <span className="analysis-indicator-actions">
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title="曲線圖"
+                        aria-label={`${detail.label} 曲線圖`}
+                        onClick={() => onDetailChart?.(row.id, detail.key, detail.label)}
+                      >
+                        <TrendingUp size={16} />
+                      </button>
+                      {/* v1.53.0：歷史分組無現行題目，選項明細為空列，故不顯示文件圖示 */}
+                      {!detail.key.startsWith("historical-") && (
+                        <button
+                          type="button"
+                          className="icon-button"
+                          title="各選項得分狀況"
+                          aria-label={`${detail.label} 各選項得分狀況`}
+                          onClick={() => onDetailDoc?.(row.id, detail.key, detail.label)}
+                        >
+                          <FileText size={16} />
+                        </button>
+                      )}
+                    </span>
+                  </div>
                 </td>
                 {columns.map((column) => {
                   const detailCell = detail.cells[column.key] ?? { pass: 0, total: 0, rate: null };

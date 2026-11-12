@@ -4937,6 +4937,10 @@ button:disabled {
   font-size: var(--font-small, 13px);
 }
 .analysis-matrix-subrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding-left: 28px;
   white-space: nowrap;
 }
@@ -5002,6 +5006,10 @@ button:disabled {
 .score-breakdown-row strong {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+/* v1.53.0：分組明細列圖示靠右，與數字併排 */
+.score-breakdown-row .analysis-indicator-actions {
+  margin-left: auto;
 }
 /* v1.50.0：可點選下探的數字（摘要卡／分組明細列／選項明細／錯題排行／原因件數） */
 .summary-cell.clickable {
