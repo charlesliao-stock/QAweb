@@ -23,6 +23,7 @@ import {
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   getDocsFromServer,
   query,
@@ -38,7 +39,7 @@ import {
   SYSTEM_CONFIG_KEY,
 } from "../lib/refCache";
 import { getDocCacheFirst, getDocsCacheFirst } from "../lib/cacheFirst";
-import { indicatorCodeOf } from "../lib/indicators";
+import { indicatorCodeOf, effectiveThreshold } from "../lib/indicators";
 import { buildTaskIndex } from "../lib/taskIndex";
 import { usePermissions } from "../lib/usePermissions";
 import { useAuth } from "../lib/auth";
@@ -61,7 +62,8 @@ import {
   createTempSchedule,
   DEFAULT_FREQUENCY,
   DEFAULT_INTERVAL_MONTHS,
-  deleteSchedule,
+  deleteScheduleWithTasks,
+  findDuplicateTempSchedule,
   findDuplicateUnits,
   FREQUENCY_OPTIONS,
   frequencyLabel,
@@ -85,6 +87,11 @@ import {
   type IndicatorSchedule,
   type ReviewFrequency,
 } from "../lib/scheduling";
+import {
+  buildBelowThresholdRows,
+  nextCalendarMonth,
+  type BelowThresholdRow,
+} from "../lib/belowThreshold";
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
@@ -645,6 +652,38 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     loadData();
   }
 
+  /** v1.60.0：刪除排程（主清單／查閱視窗共用）：排程文件＋其未完成任務；已完成任務與已提交紀錄保留 */
+  async function handleDeleteSchedule(row: RowItem) {
+    const sched = row.schedule;
+    if (!sched) return;
+    const label = sched.selfReview
+      ? "自審"
+      : sched.category === "temp"
+        ? "加審"
+        : periodLabel(sched.category, sched.period);
+    const ok = window.confirm(
+      `確定刪除「${label}」排程（${row.name}）？將一併刪除該排程的未完成任務；已完成任務與已提交的審查紀錄不受影響。`,
+    );
+    if (!ok) return;
+    try {
+      const db = getFirebaseDb();
+      const { deletedTasks, keptDoneTasks } = await deleteScheduleWithTasks(
+        db,
+        row.indicatorId,
+        sched.category,
+        sched.period,
+        actor,
+      );
+      onAction(
+        `已刪除${label}排程（刪除 ${deletedTasks} 筆未完成任務，已完成 ${keptDoneTasks} 筆保留）`,
+      );
+      setDetailRow(null);
+      loadData();
+    } catch (error) {
+      onAction(`刪除失敗：${toErrorMessage(error)}`);
+    }
+  }
+
   async function handleGenerate(row: RowItem) {
     const sched = row.schedule;
     if (!sched) return;
@@ -1052,6 +1091,24 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                                 </button>
                               )}
                             </div>
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                gap: 2,
+                              }}
+                            >
+                              {!!sched && canEdit && (
+                                <button
+                                  className="button button-outline button-sm"
+                                  onClick={() => handleDeleteSchedule(r)}
+                                  title="刪除此排程（含其未完成任務；已完成任務與審查紀錄保留）"
+                                >
+                                  <Trash2 size={14} /> 刪除
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </td>
                         <td className="muted-text">
@@ -1086,6 +1143,11 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             deadlineDay={deadlineDay}
             filterYear={filterYear}
             cycle={cycle}
+            existingTemps={schedules.filter(
+              (s) =>
+                s.indicatorId === addAuditRow.indicatorId &&
+                s.category === "temp",
+            )}
             onAction={onAction}
             onClose={() => setAddAuditRow(null)}
             onDone={() => {
@@ -1100,8 +1162,14 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             assignment={assignments.get(detailRow.indicatorId) ?? null}
             usersMap={usersMap}
             unitNameOf={unitNameOf}
+            canEdit={canEdit}
+            actor={actor}
             onAction={onAction}
             onClose={() => setDetailRow(null)}
+            onDeleted={() => {
+              setDetailRow(null);
+              loadData();
+            }}
           />
         )}
         {selfAuditOpen && (
@@ -1184,6 +1252,8 @@ function Modal({
   note,
   onClose,
   wide,
+  medium,
+  layer,
   children,
 }: {
   title: string;
@@ -1191,12 +1261,19 @@ function Modal({
   onClose: () => void;
   /** v1.20：寬版（查閱視窗 2 倍寬） */
   wide?: boolean;
+  /** v1.60.0：中寬（約 960px），加審對話框用 */
+  medium?: boolean;
+  /** v1.60.0：巢狀彈窗層級（2＝第二層） */
+  layer?: 1 | 2 | 3;
   children: ReactNode;
 }) {
   return (
-    <div className="reviewer-modal-backdrop" onClick={onClose}>
+    <div
+      className={`reviewer-modal-backdrop${layer != null && layer > 1 ? ` reviewer-modal-layer-${layer}` : ""}`}
+      onClick={onClose}
+    >
       <div
-        className={`reviewer-modal panel${wide ? " wide" : ""}`}
+        className={`reviewer-modal panel${wide ? " wide" : ""}${medium ? " medium" : ""}`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -1685,13 +1762,21 @@ function ScheduleEditor({
 
   async function handleDelete() {
     const ok = window.confirm(
-      `確定刪除 ${periodLabel(category, period)} 的排程設定？（已產生的任務不受影響）`,
+      `確定刪除 ${periodLabel(category, period)} 的排程設定？將一併刪除該排程的未完成任務；已完成任務與已提交的審查紀錄不受影響。`,
     );
     if (!ok) return;
     try {
       const db = getFirebaseDb();
-      await deleteSchedule(db, indicatorId, category, period, actor);
-      onAction(`已刪除 ${periodLabel(category, period)} 排程設定`);
+      const { deletedTasks, keptDoneTasks } = await deleteScheduleWithTasks(
+        db,
+        indicatorId,
+        category,
+        period,
+        actor,
+      );
+      onAction(
+        `已刪除 ${periodLabel(category, period)} 排程設定（刪除 ${deletedTasks} 筆未完成任務，已完成 ${keptDoneTasks} 筆保留）`,
+      );
       onSaved();
     } catch (error) {
       onAction(`刪除失敗：${toErrorMessage(error)}`);
@@ -1945,6 +2030,7 @@ function AddAuditDialog({
   deadlineDay,
   filterYear,
   cycle,
+  existingTemps,
   onAction,
   onClose,
   onDone,
@@ -1959,6 +2045,8 @@ function AddAuditDialog({
   deadlineDay: number;
   filterYear: number;
   cycle: "year" | "academic";
+  /** 該指標既有的臨時排程（重複加審偵測＋「已加審」判定用） */
+  existingTemps: IndicatorSchedule[];
   onAction: (m: string) => void;
   onClose: () => void;
   onDone: () => void;
@@ -1980,6 +2068,15 @@ function AddAuditDialog({
   );
   const [items, setItems] = useState<AssignmentItem[]>([]);
   const [saving, setSaving] = useState(false);
+  // v1.60.0：常駐錯誤區（失敗訊息留著直到關閉或下次成功，不只靠一閃即逝的 toast）
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  // v1.60.0：未達閾值挑選帶入的目標曆年（月份只是 1–12 數字，年份須明確帶入，否則 2025/7 會變成建立當年的 7 月）
+  const [pickedYear, setPickedYear] = useState<number | null>(null);
+  // v1.60.0：未達閾值挑選彈窗
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerRows, setPickerRows] = useState<BelowThresholdRow[] | null>(null);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerError, setPickerError] = useState<string | null>(null);
 
   // 審核員候選：全部組別審查員主檔 ∪ 分工表審查員（組別由其單位推導）
   const reviewerMeta = useMemo(() => {
@@ -2035,6 +2132,94 @@ function AddAuditDialog({
 
   const duplicates = useMemo(() => findDuplicateUnits(items), [items]);
 
+  // v1.60.0：未達閾值挑選清單（開啟彈窗時載入）：該指標全部審查紀錄
+  // （帶 taskId 才能 join 任務判常規／加審）＋任務表＋既有臨時排程。
+  useEffect(() => {
+    if (!pickerOpen) return;
+    let cancelled = false;
+    (async () => {
+      setPickerLoading(true);
+      setPickerError(null);
+      setPickerRows(null);
+      try {
+        const db = getFirebaseDb();
+        const [recSnap, taskSnap, indSnap] = await Promise.all([
+          getDocs(
+            query(
+              collection(db, "reviewRecords"),
+              where("indicatorId", "==", row.indicatorId),
+            ),
+          ),
+          getDocs(
+            query(
+              collection(db, "reviewTasks"),
+              where("indicatorId", "==", row.indicatorId),
+            ),
+          ),
+          getDoc(doc(db, "indicators", row.indicatorId)),
+        ]);
+        if (cancelled) return;
+        const threshold = effectiveThreshold(
+          indSnap.exists()
+            ? (indSnap.data() as Record<string, unknown>)
+            : {},
+        );
+        const records = recSnap.docs.map((d) => {
+          const v = d.data() as Record<string, unknown>;
+          return {
+            taskId: String(v.taskId ?? ""),
+            indicatorId: String(v.indicatorId ?? ""),
+            unitId: String(v.unitId ?? ""),
+            year: Number(v.year ?? 0),
+            month: Number(v.month ?? 0),
+            rate: typeof v.rate === "number" ? v.rate : null,
+            thresholdAtSchedule:
+              typeof v.thresholdAtSchedule === "number"
+                ? v.thresholdAtSchedule
+                : undefined,
+          };
+        });
+        const tasks = taskSnap.docs.map((d) => {
+          const v = d.data() as Record<string, unknown>;
+          return {
+            id: d.id,
+            scheduleCategory:
+              typeof v.scheduleCategory === "string"
+                ? v.scheduleCategory
+                : undefined,
+          };
+        });
+        setPickerRows(
+          buildBelowThresholdRows({
+            records,
+            tasks,
+            indicatorId: row.indicatorId,
+            threshold,
+            tempSchedules: existingTemps,
+          }),
+        );
+      } catch (error) {
+        if (!cancelled)
+          setPickerError(`讀取未達閾值清單失敗：${toErrorMessage(error)}`);
+      } finally {
+        if (!cancelled) setPickerLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pickerOpen, row.indicatorId, existingTemps]);
+
+  /** v1.60.0：點某個失敗年月 → 預填下一個月（完整年月）＋該月未達單位；件數與審查員由使用者補填 */
+  function applyBelowThresholdRow(r: BelowThresholdRow) {
+    const target = nextCalendarMonth(r.year, r.month);
+    setMonths([target.month]);
+    setPickedYear(target.year);
+    setSelUnits(r.units.map((u) => u.unitId));
+    setUnlimited(false);
+    setPickerOpen(false);
+  }
+
   function toggleId(list: string[], id: string): string[] {
     return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
   }
@@ -2085,6 +2270,10 @@ function AddAuditDialog({
   const previewTasks = months.length * pairCount;
 
   async function handleConfirm() {
+    // v1.60.0：防重入（按鈕 disabled 之外再守一道，避免連點在同一個
+    // React 批次內兩次進入建立流程而產生重複加審）
+    if (saving) return;
+    setSubmitError(null);
     if (months.length === 0) {
       onAction("請至少選擇一個審查月份");
       return;
@@ -2097,6 +2286,28 @@ function AddAuditDialog({
       onAction("請先將審核員與單位加入分工表");
       return;
     }
+    // v1.60.0：短時間內相同內容（同月份、同單位集合）的加審擋下，
+    // 避免重複建立；不同月份／單位／隔天以上的正常第二次加審不受影響
+    const dup = findDuplicateTempSchedule(
+      existingTemps,
+      {
+        months: [...months].sort((a, b) => a - b),
+        unitIds: items.flatMap((it) => it.units.map((u) => u.unitId)),
+        unlimitedUnits: items.some((it) => it.unlimitedUnits === true),
+        selfReview: false,
+      },
+      Date.now(),
+    );
+    if (dup) {
+      const d = new Date(Number(dup.period));
+      const dupTime = Number.isNaN(d.getTime())
+        ? ""
+        : `（建立於 ${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}）`;
+      const msg = `已有相同內容的加審${dupTime}建立（${[...dup.months].sort((a, b) => a - b).map((m) => MONTH_LABELS[m - 1]).join("、")}・${dup.unlimitedUnits ? "不限單位" : `${dup.unitIds.length} 單位`}），請先查閱既有加審，確認是否重複。`;
+      setSubmitError(msg);
+      onAction(msg);
+      return;
+    }
     setSaving(true);
     try {
       const db = getFirebaseDb();
@@ -2107,7 +2318,9 @@ function AddAuditDialog({
         caseCount: parseCaseCount(Number(caseCount.value)),
         reviewerIds: [],
         items,
-        refYear: filterYear,
+        refYear: pickedYear ?? filterYear,
+        // v1.60.0：挑選帶入的目標曆年；未挑選時沿用舊行為（建立當年）
+        yearOverride: pickedYear ?? undefined,
         selfReview: false,
         actor,
         deadlineDay,
@@ -2115,18 +2328,23 @@ function AddAuditDialog({
       onAction(`已建立加審排程（臨時）：${taskCount} 筆任務`);
       onDone();
     } catch (error) {
-      onAction(`加審失敗：${toErrorMessage(error)}`);
+      const msg = `加審失敗：${toErrorMessage(error)}`;
+      setSubmitError(msg);
+      console.error("[加審失敗]", error);
+      onAction(msg);
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <Modal
-      title={`加審：${row.name}`}
-      note={`建立臨時排程並直接產生任務（${filterYear}年・${cycle === "academic" ? "學年度" : "年度"}月份）`}
-      onClose={onClose}
-    >
+    <>
+      <Modal
+        title={`加審：${row.name}`}
+        note={`建立臨時排程並直接產生任務（${pickedYear ?? filterYear}年・${cycle === "academic" ? "學年度" : "年度"}月份）`}
+        onClose={onClose}
+        medium
+      >
       <div className="form-field">
         <label className="field-label">
           審查月份（可複選）
@@ -2138,6 +2356,20 @@ function AddAuditDialog({
           onChange={setMonths}
           disabled={false}
         />
+        <div className="form-actions" style={{ marginTop: 8 }}>
+          <button
+            type="button"
+            className="button button-outline button-sm"
+            onClick={() => setPickerOpen(true)}
+          >
+            由未達閾值挑選
+          </button>
+          {pickedYear != null && (
+            <span className="muted-text">
+              目標年份 {pickedYear} 年（由未達閾值挑選帶入，月份／單位仍可手動改）
+            </span>
+          )}
+        </div>
         {cycle === "academic" && (
           <p className="settings-note">
             學年度月份依 8 月制順序排列（8–12 月為前一年曆年、1–7
@@ -2293,6 +2525,12 @@ function AddAuditDialog({
         </p>
       </div>
 
+      {submitError && (
+        <div className="form-error" role="alert">
+          {submitError}
+        </div>
+      )}
+
       <div className="form-actions">
         <button
           className="button button-primary"
@@ -2309,7 +2547,99 @@ function AddAuditDialog({
           取消
         </button>
       </div>
-    </Modal>
+      </Modal>
+
+      {pickerOpen && (
+        <Modal
+          title={`未達閾值清單：${row.name}`}
+          note="常規審查中未達閾值的年月及單位（點年月自動帶入下一個月與該月未達單位）"
+          onClose={() => setPickerOpen(false)}
+          layer={2}
+        >
+          {pickerLoading ? (
+            <p className="settings-note">讀取中…</p>
+          ) : pickerError ? (
+            <div className="form-error" role="alert">
+              {pickerError}
+            </div>
+          ) : pickerRows && pickerRows.length === 0 ? (
+            <p className="settings-note">
+              此指標目前沒有常規審查未達閾值的年月。
+            </p>
+          ) : (
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>年月</th>
+                    <th>審查結果</th>
+                    <th>未達單位</th>
+                    <th>狀態</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(pickerRows ?? []).map((r) => {
+                    const target = nextCalendarMonth(r.year, r.month);
+                    return (
+                      <tr key={`${r.year}-${r.month}`}>
+                        <td>
+                          <button
+                            className="text-button"
+                            onClick={() => applyBelowThresholdRow(r)}
+                            title={`帶入 ${target.year}/${target.month} 與未達單位`}
+                          >
+                            <b>
+                              {r.year}/{r.month}
+                            </b>
+                          </button>
+                        </td>
+                        <td>
+                          {r.units
+                            .map(
+                              (u) =>
+                                `${u.unitId} ${u.rate}%(${u.pass}/${u.total})`,
+                            )
+                            .join("、")}
+                          <div className="muted-text">
+                            閾值 {r.threshold}%
+                          </div>
+                        </td>
+                        <td>
+                          {r.units
+                            .map(
+                              (u) =>
+                                `${unitNameOf(u.unitId)}（${u.unitId}）`,
+                            )
+                            .join("、")}
+                        </td>
+                        <td>
+                          {r.alreadyAddReviewed ? (
+                            <span className="status-pill info">已加審</span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="settings-note">
+            點年月自動選取下一個月及該月未達單位；件數與審查員請回加審對話框指定，月份／單位仍可手動增減。
+          </p>
+          <div className="form-actions">
+            <button
+              className="button button-ghost"
+              onClick={() => setPickerOpen(false)}
+            >
+              關閉
+            </button>
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
 /* ================= 自審（護理長，臨時排程） ================= */
@@ -2348,6 +2678,8 @@ function SelfAuditDialog({
     defaultSelfAuditReviewers(unitUsers, userUnitCode),
   );
   const [saving, setSaving] = useState(false);
+  // v1.60.0：常駐錯誤區（與加審對話框一致）
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   function toggleReviewer(id: string) {
     setReviewerIds((prev) =>
@@ -2358,6 +2690,9 @@ function SelfAuditDialog({
   const previewTasks = previewTempTaskCount(months, [userUnitCode], reviewerIds);
 
   async function handleConfirm() {
+    // v1.60.0：防重入（與加審對話框一致）
+    if (saving) return;
+    setSubmitError(null);
     if (!indicatorId) {
       onAction("請選擇指標");
       return;
@@ -2390,7 +2725,10 @@ function SelfAuditDialog({
       onAction(`已建立自審排程（臨時）：${indName}・${taskCount} 筆任務`);
       onDone();
     } catch (error) {
-      onAction(`自審失敗：${toErrorMessage(error)}`);
+      const msg = `自審失敗：${toErrorMessage(error)}`;
+      setSubmitError(msg);
+      console.error("[自審失敗]", error);
+      onAction(msg);
     } finally {
       setSaving(false);
     }
@@ -2494,6 +2832,12 @@ function SelfAuditDialog({
         </p>
       </div>
 
+      {submitError && (
+        <div className="form-error" role="alert">
+          {submitError}
+        </div>
+      )}
+
       <div className="form-actions">
         <button
           className="button button-primary"
@@ -2531,16 +2875,58 @@ function ScheduleDetailModal({
   assignment,
   usersMap,
   unitNameOf,
+  canEdit,
+  actor,
   onAction,
   onClose,
+  onDeleted,
 }: {
   row: RowItem;
   assignment: IndicatorAssignment | null;
   usersMap: Map<string, string>;
   unitNameOf: (code: string) => string;
+  /** v1.60.0：manageSchedule 才顯示刪除入口 */
+  canEdit: boolean;
+  actor: { id: string; name: string };
   onAction: (m: string) => void;
   onClose: () => void;
+  onDeleted: () => void;
 }) {
+  const [deleting, setDeleting] = useState(false);
+
+  /** v1.60.0：刪除此排程（文件＋其未完成任務；已完成任務與審查紀錄保留） */
+  async function handleDelete() {
+    const sched = row.schedule;
+    if (!sched || deleting) return;
+    const label = sched.selfReview
+      ? "自審"
+      : sched.category === "temp"
+        ? "加審"
+        : periodLabel(sched.category, sched.period);
+    const ok = window.confirm(
+      `確定刪除「${label}」排程（${row.name}）？將一併刪除該排程的未完成任務；已完成任務與已提交的審查紀錄不受影響。`,
+    );
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      const db = getFirebaseDb();
+      const { deletedTasks, keptDoneTasks } = await deleteScheduleWithTasks(
+        db,
+        row.indicatorId,
+        sched.category,
+        sched.period,
+        actor,
+      );
+      onAction(
+        `已刪除${label}排程（刪除 ${deletedTasks} 筆未完成任務，已完成 ${keptDoneTasks} 筆保留）`,
+      );
+      onDeleted();
+    } catch (error) {
+      onAction(`刪除失敗：${toErrorMessage(error)}`);
+    } finally {
+      setDeleting(false);
+    }
+  }
   const sched = row.schedule;
   const isTemp = row.category === "temp";
   const [tasks, setTasks] = useState<TaskLite[]>([]);
@@ -2775,6 +3161,15 @@ function ScheduleDetailModal({
       )}
 
       <div className="form-actions">
+        {canEdit && row.schedule && (
+          <button
+            className="button button-ghost"
+            disabled={deleting}
+            onClick={handleDelete}
+          >
+            <Trash2 size={15} /> {deleting ? "刪除中…" : "刪除此排程"}
+          </button>
+        )}
         <button className="button button-outline" onClick={onClose}>
           關閉
         </button>

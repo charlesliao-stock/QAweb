@@ -90,18 +90,27 @@ export function Modal({
   note,
   onClose,
   wide = false,
+  medium = false,
+  layer = 1,
   children,
 }: {
   title: string;
   note?: string;
   onClose: () => void;
   wide?: boolean;
+  /** v1.60.0：中寬（約 960px），加審對話框用 */
+  medium?: boolean;
+  /** v1.60.0：巢狀彈窗層級（2＝第二層，backdrop 用 layer-2 樣式） */
+  layer?: 1 | 2 | 3;
   children: ReactNode;
 }) {
   return (
-    <div className="reviewer-modal-backdrop" onClick={onClose}>
+    <div
+      className={`reviewer-modal-backdrop${layer > 1 ? ` reviewer-modal-layer-${layer}` : ""}`}
+      onClick={onClose}
+    >
       <div
-        className={`reviewer-modal panel${wide ? " wide" : ""}`}
+        className={`reviewer-modal panel${wide ? " wide" : ""}${medium ? " medium" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}

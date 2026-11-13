@@ -5,8 +5,11 @@ import {
   doc,
   getDoc,
   getDocs,
+  query,
   serverTimestamp,
   setDoc,
+  where,
+  writeBatch,
 } from "./db";
 import { logAudit } from "./audit";
 import { isReviewerRole } from "./roleIdentity";
@@ -979,6 +982,12 @@ export interface TempScheduleInput {
   items?: AssignmentItem[];
   /** 關聯年份（v1.18 加審；顯示／查閱用） */
   refYear?: number;
+  /**
+   * 目標曆年（v1.60.0 未達閾值挑選用）：指定時 period 時間戳的年份
+   * 取此值（任務曆年跟著走），refYear 亦同步為此值；未指定時沿用舊
+   * 行為（period＝建立當下時間戳，任務曆年＝建立當年）。
+   */
+  yearOverride?: number;
   /** true＝自審（護理長為自己單位），false＝加審 */
   selfReview: boolean;
   notes?: string;
@@ -1025,18 +1034,36 @@ export async function createTempSchedule(
   const allUnitIds = [
     ...new Set(items.flatMap((it) => it.units.map((u) => u.unitId))),
   ];
+  // v1.60.0：未達閾值挑選可指定目標曆年。temp 的任務曆年由 period
+  // 時間戳的年份決定（monthToCalendarYear 的 temp 分支），故以當下
+  // 時間換年產生 period，毫秒精度不變、唯一性與 Date.now() 相同。
+  const periodMs = (() => {
+    if (
+      typeof input.yearOverride === "number" &&
+      Number.isInteger(input.yearOverride)
+    ) {
+      const d = new Date();
+      d.setFullYear(input.yearOverride);
+      return d.getTime();
+    }
+    return Date.now();
+  })();
   const sched: IndicatorSchedule = {
     indicatorId: input.indicatorId,
     category: "temp",
-    period: String(Date.now()),
+    period: String(periodMs),
     periodLabel: "臨時",
     months: parseScheduleMonths(input.months),
     frequency: null,
     intervalMonths: null,
     refYear:
-      typeof input.refYear === "number" && Number.isInteger(input.refYear)
-        ? input.refYear
-        : null,
+      typeof input.yearOverride === "number" &&
+      Number.isInteger(input.yearOverride)
+        ? input.yearOverride
+        : typeof input.refYear === "number" &&
+            Number.isInteger(input.refYear)
+          ? input.refYear
+          : null,
     caseCount: parseCaseCount(input.caseCount),
     unitIds: allUnitIds.length > 0 ? allUnitIds : unitIds,
     unlimitedUnits: items.some((it) => it.unlimitedUnits === true),
@@ -1065,4 +1092,136 @@ export async function createTempSchedule(
     scheduleId: scheduleDocId(sched.indicatorId, sched.category, sched.period),
     taskCount,
   };
+}
+
+/* ================= v1.60.0：刪除排程連帶任務、重複加審偵測 ================= */
+
+/** 任務是否屬於該排程（純函式）：以任務的 scheduleCategory／schedulePeriod 標記判定；未標記的舊任務不歸屬，不誤刪。 */
+export function isTaskOfSchedule(
+  task: {
+    scheduleCategory?: unknown;
+    schedulePeriod?: unknown;
+  },
+  sched: { category: ScheduleCategory; period: string },
+): boolean {
+  return (
+    task.scheduleCategory === sched.category &&
+    String(task.schedulePeriod ?? "") === sched.period
+  );
+}
+
+/**
+ * 刪除排程＋其未完成任務（v1.60.0）。
+ * - 排程文件刪除（沿用 deleteSchedule，稽核「刪除排程」）。
+ * - 只刪標記屬於該排程（scheduleCategory／schedulePeriod 相符）且
+ *   status 非 done 的任務；已完成任務與已提交的審查紀錄（reviewRecords）
+ *   一律保留；未標記的舊任務因無法歸屬而不刪。
+ * - 另寫稽核「刪除排程任務」，附刪除／保留筆數。
+ */
+export async function deleteScheduleWithTasks(
+  db: any,
+  indicatorId: string,
+  category: ScheduleCategory,
+  period: string,
+  actor: { id: string; name: string },
+): Promise<{
+  deletedTasks: number;
+  keptDoneTasks: number;
+  scheduleFound: boolean;
+}> {
+  const sched = await getSchedule(db, indicatorId, category, period);
+  let deletedTasks = 0;
+  let keptDoneTasks = 0;
+  if (sched) {
+    const snap = await getDocs(
+      query(
+        collection(db, "reviewTasks"),
+        where("indicatorId", "==", indicatorId),
+      ),
+    );
+    const BATCH_LIMIT = 400;
+    let batch = writeBatch(db);
+    let ops = 0;
+    const commits: Promise<void>[] = [];
+    const flush = () => {
+      if (ops > 0) {
+        commits.push(batch.commit());
+        batch = writeBatch(db);
+        ops = 0;
+      }
+    };
+    snap.docs.forEach((d) => {
+      const data = d.data() as Record<string, unknown>;
+      if (!isTaskOfSchedule(data, sched)) return;
+      if (data.status === "done") {
+        keptDoneTasks += 1;
+        return;
+      }
+      batch.delete(d.ref);
+      ops += 1;
+      deletedTasks += 1;
+      if (ops >= BATCH_LIMIT) flush();
+    });
+    flush();
+    await Promise.all(commits);
+  }
+  await deleteSchedule(db, indicatorId, category, period, actor);
+  if (sched) {
+    auditSchedule(
+      db,
+      actor,
+      "刪除排程任務",
+      sched,
+      `${indicatorId}・${periodLabel(category, period)}：刪除 ${deletedTasks} 筆未完成任務（已完成 ${keptDoneTasks} 筆保留）`,
+    );
+  }
+  return { deletedTasks, keptDoneTasks, scheduleFound: sched != null };
+}
+
+/** 近期重複加審比對用的臨時排程最小欄位 */
+export interface TempScheduleLike {
+  category: ScheduleCategory;
+  period: string;
+  months: number[];
+  unitIds: string[];
+  unlimitedUnits: boolean;
+  selfReview: boolean;
+}
+
+/**
+ * 近期重複加審偵測（v1.60.0，純函式）。
+ * 同指標、同一類臨時排程（加審／自審分開比）、相同排序月份、
+ * 相同單位集合（含不限單位）且建立時間在 windowMs 內（預設 10 分鐘）
+ * → 回傳該筆排程，否則 null。
+ * 只擋短時間內的重複建立；正常第二次加審（不同月份／單位／隔天以上）
+ * 不受影響。period 非時間戳的舊臨時排程不參與比對。
+ */
+export function findDuplicateTempSchedule(
+  temps: TempScheduleLike[],
+  input: {
+    months: number[];
+    unitIds: string[];
+    unlimitedUnits: boolean;
+    selfReview: boolean;
+  },
+  nowMs: number,
+  windowMs = 10 * 60 * 1000,
+): TempScheduleLike | null {
+  const monthsKey = [...input.months].sort((a, b) => a - b).join(",");
+  const unitsKey = input.unlimitedUnits
+    ? "NA"
+    : [...input.unitIds].sort().join(",");
+  for (const t of temps) {
+    if (t.category !== "temp" || t.selfReview !== input.selfReview) continue;
+    const tMs = Number(t.period);
+    if (!Number.isFinite(tMs) || tMs <= 0) continue;
+    if (nowMs - tMs > windowMs || tMs > nowMs + 60 * 1000) continue;
+    if ([...t.months].sort((a, b) => a - b).join(",") !== monthsKey) continue;
+    const tUnits = t.unlimitedUnits
+      ? "NA"
+      : [...t.unitIds].sort().join(",");
+    if (tUnits !== unitsKey) continue;
+    return t;
+  }
+  return null;
 }
