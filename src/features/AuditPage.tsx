@@ -19,6 +19,10 @@
  * supplementDeadlineDay 日）；待完成＝今天在第一區間開始之前。
  * 一列一排程，顯示現階段區間；進行中 100% 的列顯示、但不給審查按鈕；
  * 已結束保留檢視（含檢視彈窗內的修改）；待完成無任何操作按鈕。
+ * v1.59.1：審查員可見範圍改為聯集（分工表指派＋reviewTasks 任務指派，
+ * 含無分工表的臨時加審／自審）；檢視彈窗按身分限縮單位摘要／明細
+ * （審查員＝被指派單位、護理長＝自審本人單位、召集人／執行幹事＝所屬群組
+ * 整列、管理員／高階主管＝全部）。執行頁 assignedUnitIds 限縮不動。
  */
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -55,8 +59,18 @@ import {
   normalizeAssignmentItem,
   parseIndicatorSchedule,
   periodicQuotaGroupId,
+  scheduleDocId,
   type IndicatorSchedule,
 } from "../lib/scheduling";
+import {
+  modalUnitScope,
+  taskUnitsBySchedule,
+  unionUnits,
+  unitVisibleInModal,
+  type AuditScheduleLike,
+  type AuditTaskLike,
+  type ModalUnitScope,
+} from "../lib/auditVisibility";
 import {
   groupsForRoles,
   isConvenerRole,
@@ -141,6 +155,8 @@ interface ActiveRow {
   reviewMonthCount: number;
   /** 本人被指派的單位（分工表）；空＝未被指派 */
   assignedUnitIds: string[];
+  /** v1.59.1：檢視彈窗可見單位（null＝該列全部可見；否則只列這些單位） */
+  modalUnitIds: ModalUnitScope;
   monthOptions: MonthOption[];
   /** 該指標本區間的審查紀錄（檢視用） */
   records: RecordRow[];
@@ -206,6 +222,8 @@ export function AuditPage({
   const [dataRefreshKey, setDataRefreshKey] = useState(0);
   // v1.28 階段 6（B6）：審查紀錄分頁未拉完（觸及上限／分頁異常）時顯示可見提示
   const [recordsTruncated, setRecordsTruncated] = useState(false);
+  // v1.59.1：本人任務分頁未拉完時顯示可見提示（任務不全＝加審／自審列可能少列）
+  const [myTasksTruncated, setMyTasksTruncated] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("group");
   const [sortDir, setSortDir] = useState<1 | -1>(1);
   // v1.20：清單上方篩選區（組別／指標／關鍵字）；表頭篩選列移除
@@ -250,7 +268,7 @@ export function AuditPage({
         const db = getFirebaseDb();
         const staffId = user.staffId;
         const today = new Date();
-        const [iSnap, gSnap, uSnap, sSnap, aSnap, meSnap, sysSnap] =
+        const [iSnap, gSnap, uSnap, sSnap, aSnap, meSnap, sysSnap, myTaskPage] =
           await Promise.all([
             getCachedRefCollection("indicators", () =>
               getDocsCacheFirst(query(collection(db, "indicators"), limit(500))),
@@ -267,6 +285,15 @@ export function AuditPage({
             // v1.46.0：補資料日取系統參數現值（讀不到用預設 10）
             getCachedRef(SYSTEM_CONFIG_KEY, () =>
               getDocCacheFirst(doc(db, "systemParams", "config")),
+            ),
+            // v1.59.1：本人任務（審查員聯集路徑；單一等號 where＋同欄位
+            // orderBy，不需複合索引；分頁拉完，失敗／未拉完只影響聯集
+            // 新增路徑，分工表路徑不受影響）
+            fetchAllPaged(
+              collection(db, "reviewTasks"),
+              [where("reviewerId", "==", staffId)],
+              undefined,
+              { orderByField: "reviewerId" },
             ),
           ]);
         if (cancelled) return;
@@ -386,12 +413,77 @@ export function AuditPage({
         );
         setEditableGroupIds(myConvenerGroupIds);
 
+        // v1.59.1：本人任務（審查員聯集路徑；reviewTasks 無 scheduleId，
+        // 以 indicatorId＋scheduleCategory＋schedulePeriod 對應排程，
+        // 舊任務缺鍵時由 auditVisibility.ts fallback 歸屬）
+        if (!cancelled) setMyTasksTruncated(myTaskPage.truncated);
+        const myTasks: AuditTaskLike[] = [];
+        myTaskPage.docs.forEach((d) => {
+          const v = d.data() as Record<string, unknown>;
+          const indicatorId =
+            typeof v.indicatorId === "string" ? v.indicatorId : "";
+          if (!indicatorId) return;
+          myTasks.push({
+            indicatorId,
+            scheduleCategory:
+              typeof v.scheduleCategory === "string"
+                ? v.scheduleCategory
+                : undefined,
+            schedulePeriod:
+              typeof v.schedulePeriod === "string"
+                ? v.schedulePeriod
+                : undefined,
+            year: Number(v.year ?? 0),
+            month: Number(v.month ?? 0),
+            unitId: typeof v.unitId === "string" ? v.unitId : "",
+          });
+        });
+
+        // v1.46.0：進度三態＋現階段區間（精確到日；空窗期仍算進行中）。
+        // v1.59.1：先對全部排程分類（任務 fallback 歸屬需要區間月份），
+        // 再以可見性過濾；一列一排程：進行中顯示包含今天（或空窗期對應）
+        // 的區間；待完成顯示下一個未開始的區間；已結束顯示最後一個區間。
+        const classifiedAll: {
+          sched: IndicatorSchedule;
+          state: AuditProgressState;
+          interval: ReviewInterval;
+        }[] = [];
+        for (const s of schedules) {
+          if (!indicators.get(s.indicatorId)) continue;
+          const cls = classifyScheduleProgress(
+            schedLike(s),
+            today,
+            deadlineDay,
+          );
+          if (!cls) continue;
+          classifiedAll.push({
+            sched: s,
+            state: cls.state,
+            interval: cls.interval,
+          });
+        }
+        const taskUnitsBySched = taskUnitsBySchedule(
+          myTasks,
+          classifiedAll.map((c): AuditScheduleLike => ({
+            key: scheduleDocId(
+              c.sched.indicatorId,
+              c.sched.category,
+              c.sched.period,
+            ),
+            indicatorId: c.sched.indicatorId,
+            intervalMonthKeys: new Set(c.interval.allMonths.map(ymKey)),
+          })),
+        );
+
         interface Cand {
           sched: IndicatorSchedule;
           assigned: string[];
+          state: AuditProgressState;
+          interval: ReviewInterval;
         }
         const cands: Cand[] = [];
-        for (const s of schedules) {
+        for (const c of classifiedAll) {
+          const s = c.sched;
           const ind = indicators.get(s.indicatorId);
           if (!ind) continue;
           let visible = false;
@@ -402,6 +494,16 @@ export function AuditPage({
             if (units) {
               visible = true;
               assigned.push(...units);
+            }
+            // v1.59.1：任務指派聯集——臨時排程（加審／自審）無分工表，
+            // 審查員改以 reviewTasks（reviewerId＝本人）所屬排程列出，
+            // 不論 category 年度／學年度／temp；執行時仍只限被指派單位。
+            const taskUnits = taskUnitsBySched.get(
+              scheduleDocId(s.indicatorId, s.category, s.period),
+            );
+            if (taskUnits && taskUnits.size > 0) {
+              visible = true;
+              assigned.push(...taskUnits);
             }
           }
           if (
@@ -420,28 +522,17 @@ export function AuditPage({
             visible = true;
           }
           if (!visible) continue;
-          cands.push({ sched: s, assigned: [...new Set(assigned)] });
+          cands.push({
+            sched: s,
+            assigned: unionUnits(assigned),
+            state: c.state,
+            interval: c.interval,
+          });
         }
         if (cancelled) return;
 
-        // v1.46.0：進度三態＋現階段區間（精確到日；空窗期仍算進行中）。
-        // 一列一排程：進行中顯示包含今天（或空窗期對應）的區間；
-        // 待完成顯示下一個未開始的區間；已結束顯示最後一個區間。
-        const classified: {
-          sched: IndicatorSchedule;
-          assigned: string[];
-          state: AuditProgressState;
-          interval: ReviewInterval;
-        }[] = [];
-        for (const c of cands) {
-          const cls = classifyScheduleProgress(
-            schedLike(c.sched),
-            today,
-            deadlineDay,
-          );
-          if (!cls) continue;
-          classified.push({ ...c, state: cls.state, interval: cls.interval });
-        }
+        // 下游沿用 classified（已分類＋已過濾的可見列）。
+        const classified = cands;
         if (cancelled) return;
 
         // ---- 審查紀錄（v1.28 階段 6 B6）：單一查詢＋游標分頁，前端按指標分組 ----
@@ -566,6 +657,24 @@ export function AuditPage({
               label: `${year}年${month}月`,
             }),
           );
+          // v1.59.1：檢視彈窗可見單位（與上方清單可見性分支一一對應，
+          // 多重身分取聯集；召集人／執行幹事為群組範圍＝整列可見，
+          // 不可縮成單一單位；無分支貢獻時 []＝fail closed）
+          const modalUnitIds = modalUnitScope({
+            isAdmin,
+            isSenior,
+            isConvenerInGroup:
+              isConvener &&
+              !!ind.groupId &&
+              myConvenerGroupIds.includes(ind.groupId),
+            isHeadNurseApplies:
+              isHeadNurse &&
+              s.selfReview &&
+              !!user.unitCode &&
+              s.unitIds.includes(user.unitCode),
+            ownUnitCode: user.unitCode ?? "",
+            assignedUnits: assigned,
+          });
           out.push({
             sched: s,
             indicatorId: s.indicatorId,
@@ -579,6 +688,7 @@ export function AuditPage({
             progress,
             reviewMonthCount,
             assignedUnitIds: assigned,
+            modalUnitIds,
             monthOptions,
             records: [...inRecords].sort(
               (a, b) =>
@@ -769,17 +879,23 @@ export function AuditPage({
 
   const viewUnitSummaries = useMemo(() => {
     if (!viewRow) return [];
+    const scope = viewRow.modalUnitIds;
     const summaries = new Map<string, { count: number; rates: number[] }>();
     viewRow.sched.unitIds.forEach((unitId) =>
       summaries.set(unitId, { count: 0, rates: [] }),
     );
     viewRow.records.forEach((record) => {
+      // v1.59.1：紀錄單位不在彈窗可見範圍內不計入摘要
+      if (!unitVisibleInModal(scope, record.unitId)) return;
       const summary = summaries.get(record.unitId) ?? { count: 0, rates: [] };
       summary.count += 1;
       if (record.rate != null) summary.rates.push(record.rate);
       summaries.set(record.unitId, summary);
     });
-    return [...summaries.entries()].map(([unitId, summary]) => ({
+    return [...summaries.entries()]
+      // v1.59.1：只列彈窗可見範圍內的單位（null＝全部）
+      .filter(([unitId]) => unitVisibleInModal(scope, unitId))
+      .map(([unitId, summary]) => ({
       unitId,
       count: summary.count,
       planned:
@@ -801,10 +917,12 @@ export function AuditPage({
     () =>
       viewRow?.records.filter(
         (record) =>
-          !selectedUnitFilter ||
-          (selectedUnitFilter === "__na__"
-            ? record.unitId === ""
-            : record.unitId === selectedUnitFilter),
+          // v1.59.1：明細只列彈窗可見範圍內的單位（null＝全部）
+          unitVisibleInModal(viewRow.modalUnitIds, record.unitId) &&
+          (!selectedUnitFilter ||
+            (selectedUnitFilter === "__na__"
+              ? record.unitId === ""
+              : record.unitId === selectedUnitFilter)),
       ) ?? [],
     [viewRow, selectedUnitFilter],
   );
@@ -932,6 +1050,14 @@ export function AuditPage({
           style={{ color: "#b3372f", fontWeight: 600 }}
         >
           審查紀錄未完整載入（分頁中斷），進度可能低估；請重新整理後再確認。
+        </p>
+      )}
+      {myTasksTruncated && (
+        <p
+          className="settings-note"
+          style={{ color: "#b3372f", fontWeight: 600 }}
+        >
+          本人任務未完整載入（分頁中斷），加審／自審排程可能未全列出；請重新整理後再確認。
         </p>
       )}
       <section className="panel">
