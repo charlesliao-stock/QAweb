@@ -612,11 +612,11 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     showTemp,
   ]);
 
-  /** 各指標的臨時（加審）筆數：加審按鈕下方顯示用 */
+  /** 各指標的加審筆數：加審按鈕下方顯示用（v1.59.0：只計 temp 且非自審；自審不計） */
   const tempCountByIndicator = useMemo(() => {
     const m = new Map<string, number>();
     for (const s of schedules) {
-      if (s.category !== "temp") continue;
+      if (s.category !== "temp" || s.selfReview) continue;
       m.set(s.indicatorId, (m.get(s.indicatorId) ?? 0) + 1);
     }
     return m;
@@ -855,19 +855,11 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                         <td>{r.groupName}</td>
                         <td>
                           {isTemp ? (
-                            <>
-                              臨時
-                              {sched?.selfReview && (
-                                <div>
-                                  <span className="status-pill info">自審</span>
-                                </div>
-                              )}
-                              {sched?.refYear != null && (
-                                <div className="muted-text">
-                                  {sched.refYear}年加審
-                                </div>
-                              )}
-                            </>
+                            sched?.selfReview ? (
+                              <span className="status-pill info">自審</span>
+                            ) : (
+                              <span className="status-pill danger">加審</span>
+                            )
                           ) : (
                             <>
                               {categoryLabel(r.category)}
@@ -925,18 +917,6 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                                 )}
                               </span>
                             </button>
-                          )}
-                          {schedDone && sched && (
-                            <div className="muted-text">
-                              {sched.months.length} 個月・
-                              {sched.unlimitedUnits
-                                ? "不限單位"
-                                : `${sched.unitIds.length} 單位`}
-                              {sched.caseCount != null &&
-                                (sched.unlimitedUnits
-                                  ? `・${sched.caseCount} 件/每區間`
-                                  : `・${sched.caseCount} 件/每單位每區間`)}
-                            </div>
                           )}
                         </td>
                         <td>
@@ -1049,7 +1029,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                                     <Plus size={14} /> 加審
                                   </button>
                                   <div className="muted-text">
-                                    臨時 {tempCount} 筆
+                                    加審 {tempCount} 筆
                                   </div>
                                 </>
                               )}
@@ -2419,7 +2399,7 @@ function SelfAuditDialog({
   return (
     <Modal
       title="新增自審"
-      note="護理長為自己單位建立的臨時自審排程（清單類別顯示「臨時」＋自審標籤）"
+      note="護理長為自己單位建立的臨時自審排程（清單年別欄顯示「自審」標籤）"
       onClose={onClose}
     >
       <div className="form-field" style={{ maxWidth: 320 }}>
@@ -2661,7 +2641,7 @@ function ScheduleDetailModal({
   return (
     <Modal
       title={`查閱：${row.name}`}
-      note={`${isTemp ? "臨時" : categoryLabel(row.category)}・${sched.periodLabel}${sched.selfReview ? "・自審" : ""}`}
+      note={`${isTemp ? (sched.selfReview ? "自審" : "加審") : categoryLabel(row.category)}・${sched.periodLabel}`}
       onClose={onClose}
       wide
     >
@@ -2673,7 +2653,10 @@ function ScheduleDetailModal({
               <td style={{ whiteSpace: "nowrap" }}><b>期間</b></td>
               <td data-label="期間">
                 {sched.periodLabel}
-                {sched.refYear != null && `（${sched.refYear}年加審）`}
+                {isTemp &&
+                  !sched.selfReview &&
+                  sched.refYear != null &&
+                  `（${sched.refYear}年加審）`}
               </td>
             </tr>
             <tr>

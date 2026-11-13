@@ -298,23 +298,50 @@ export function scheduleLastEnd(
 }
 
 /**
- * 審核區間顯示文字。
+ * 審核區間顯示文字（v1.59.0）。
+ * - 單月（起訖同年同月，任何類別）：「2026/11」
  * - 年度／學年度：「2026/1-3」；跨年「2026/11-2027/1」
- * - 臨時：「2026/3、5」（實際月份）
+ * - 臨時：勾選月份按連續分組；連續的顯示區間（「2026/3-5」，跨年
+ *   「2026/12-2027/1」），不連續的每組各顯示完整年月（「2026/3、2026/5」）
  * - 舊排程：「2026/1-10」（整期起訖）
  */
 export function intervalDisplay(
   iv: ReviewInterval,
   category: "year" | "academic" | "temp",
 ): string {
-  if (category === "temp") {
-    const ms = iv.reviewMonths.map((m) => m.month);
-    return `${iv.start.year}/${ms.join("、")}`;
-  }
   const s = iv.start;
   const e = iv.end;
+  // v1.59.0：單月特例（起訖同年同月，如頻次 12 次／年的單月區間）
+  if (s.year === e.year && s.month === e.month)
+    return `${s.year}/${s.month}`;
+  if (category === "temp") {
+    const groups = groupConsecutiveMonths(iv.reviewMonths);
+    return groups
+      .map((g) => {
+        if (g.length === 1) return `${g[0].year}/${g[0].month}`;
+        const a = g[0];
+        const b = g[g.length - 1];
+        return a.year === b.year
+          ? `${a.year}/${a.month}-${b.month}`
+          : `${a.year}/${a.month}-${b.year}/${b.month}`;
+      })
+      .join("、");
+  }
   if (s.year === e.year) return `${s.year}/${s.month}-${e.month}`;
   return `${s.year}/${s.month}-${e.year}/${e.month}`;
+}
+
+/** 曆年月按連續分組（相鄰月份差一個月為同一組；輸入不需預先排序） */
+function groupConsecutiveMonths(months: CalendarYM[]): CalendarYM[][] {
+  const sorted = [...months].sort(cmpYM);
+  const groups: CalendarYM[][] = [];
+  for (const m of sorted) {
+    const last = groups[groups.length - 1];
+    const prev = last?.[last.length - 1];
+    if (prev && cmpYM(addMonths(prev, 1), m) === 0) last.push(m);
+    else groups.push([m]);
+  }
+  return groups;
 }
 
 /** 審查紀錄年月歸屬：優先 year/month 欄位，否則用建立時間 */

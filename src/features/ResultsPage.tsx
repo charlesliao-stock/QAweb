@@ -110,6 +110,10 @@ import {
   type RecordIndex,
 } from "../lib/resultsMatrix";
 import { unitHistoryCodes } from "../lib/unitHistory";
+import {
+  buildTempTaskKeys,
+  columnTempNote,
+} from "../lib/tempChartNote";
 
 interface IndicatorOpt {
   id: string;
@@ -152,6 +156,8 @@ interface ChartModalData {
   labels: string[];
   /** hover 提示（與 values 對齊）：期間＋正確率＋（正確數／審查數） */
   tips: string[];
+  /** v1.59.0：x 軸標籤附註（與 values 對齊）：「（加審）」／「（有加審）」／null */
+  notes: (string | null)[];
   /** 閾值（紅色虛線）；null 表示不畫 */
   threshold: number | null;
   /** v1.50.0：曲線圖上的點可點下探，須帶回指標／單元／期間欄／單位 */
@@ -354,8 +360,25 @@ export function ResultsPage({
   const [units, setUnits] = useState<UnitOpt[]>([]);
   const [records, setRecords] = useState<AnalysisRecord[]>([]);
   const [tasks, setTasks] = useState<
-    { id: string; unitId: string; reviewerId: string }[]
+    {
+      id: string;
+      unitId: string;
+      reviewerId: string;
+      /** v1.59.0：曲線圖加審標註反查用（任務來源排程類別／期別） */
+      indicatorId: string;
+      year: number;
+      month: number;
+      scheduleCategory?: string;
+      schedulePeriod?: string;
+    }[]
   >([]);
+  /**
+   * v1.59.0：自審臨時排程鍵集合（`${indicatorId}|${period}`），
+   * 曲線圖加審標註時排除自審任務；掛載時由 indicatorSchedules 載入一次。
+   */
+  const [selfReviewTempKeys, setSelfReviewTempKeys] = useState<
+    Set<string>
+  >(new Set());
   const [loading, setLoading] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
   /**
@@ -463,7 +486,7 @@ export function ResultsPage({
     (async () => {
       try {
         const db = getFirebaseDb();
-        const [isnap, gsnap, usnap] = await Promise.all([
+        const [isnap, gsnap, usnap, ssnap] = await Promise.all([
           getCachedRefCollection("indicators", () =>
             getDocsCacheFirst(collection(db, "indicators")),
           ),
@@ -473,8 +496,23 @@ export function ResultsPage({
           getCachedRefCollection("units", () =>
             getDocsCacheFirst(collection(db, "units")),
           ),
+          // v1.59.0：臨時排程自審旗標（曲線圖加審標註排除自審任務用）
+          getDocsCacheFirst(collection(db, "indicatorSchedules")),
         ]);
         if (cancelled) return;
+        const selfKeys = new Set<string>();
+        ssnap.docs.forEach((d) => {
+          const data = d.data() as Record<string, unknown>;
+          if (
+            data.category === "temp" &&
+            data.selfReview === true &&
+            typeof data.indicatorId === "string" &&
+            typeof data.period === "string"
+          ) {
+            selfKeys.add(`${data.indicatorId}|${data.period}`);
+          }
+        });
+        setSelfReviewTempKeys(selfKeys);
         const list: IndicatorOpt[] = [];
         isnap.docs.forEach((d) => {
           const data = d.data() as Record<string, unknown>;
@@ -643,17 +681,42 @@ export function ResultsPage({
           });
         }
         const rl = mergeYearDocs(recCached.hits, recFresh);
-        let tl: { id: string; unitId: string; reviewerId: string }[] = [];
+        // v1.59.0：任務表改為全部身分皆載入（原只限審查員範圍過濾用），
+        // 曲線圖加審標註需反查 reviewTasks.scheduleCategory。
+        let tl: {
+          id: string;
+          unitId: string;
+          reviewerId: string;
+          indicatorId: string;
+          year: number;
+          month: number;
+          scheduleCategory?: string;
+          schedulePeriod?: string;
+        }[] = [];
         let taskFetchedAt: number | null = null;
-        if (scope.kind === "reviewer") {
+        {
           const taskCached = getCachedYears<{
             id: string;
             unitId: string;
             reviewerId: string;
+            indicatorId: string;
+            year: number;
+            month: number;
+            scheduleCategory?: string;
+            schedulePeriod?: string;
           }>("reviewTasks", years, cacheScope);
           const taskFresh = new Map<
             number,
-            { id: string; unitId: string; reviewerId: string }[]
+            {
+              id: string;
+              unitId: string;
+              reviewerId: string;
+              indicatorId: string;
+              year: number;
+              month: number;
+              scheduleCategory?: string;
+              schedulePeriod?: string;
+            }[]
           >();
           if (taskCached.missing.length > 0) {
             const tsnaps = await Promise.all(
@@ -672,6 +735,11 @@ export function ResultsPage({
                 id: string;
                 unitId: string;
                 reviewerId: string;
+                indicatorId: string;
+                year: number;
+                month: number;
+                scheduleCategory?: string;
+                schedulePeriod?: string;
               }[] = [];
               snap.docs.forEach((d) => {
                 const v = d.data() as Record<string, unknown>;
@@ -679,6 +747,17 @@ export function ResultsPage({
                   id: d.id,
                   unitId: String(v.unitId ?? ""),
                   reviewerId: String(v.reviewerId ?? ""),
+                  indicatorId: String(v.indicatorId ?? ""),
+                  year: Number(v.year ?? 0),
+                  month: Number(v.month ?? 0),
+                  scheduleCategory:
+                    typeof v.scheduleCategory === "string"
+                      ? v.scheduleCategory
+                      : undefined,
+                  schedulePeriod:
+                    typeof v.schedulePeriod === "string"
+                      ? v.schedulePeriod
+                      : undefined,
                 });
               });
               setCachedYear("reviewTasks", y, cacheScope, docs);
@@ -738,8 +817,18 @@ export function ResultsPage({
     return records.filter((r) => unitIds.has(r.unitId));
   }, [records, tasks, scope, visibleUnitCodes]);
 
-  const causeCountRows = useMemo(() => {
-    const counts = new Map<string, number>();
+  /**
+   * v1.59.0：加審任務月鍵集合（曲線圖標註反查用）。
+   * 任務表以查詢年份載入（全部身分）；自審任務以 indicatorSchedules
+   * 的 selfReview 排除。注意：任務不分權限範圍載入，標註只看任務
+   * 存在與否，實際顯示的紀錄仍受 scopedRecords 權限過濾。
+   */
+  const tempTaskKeys = useMemo(
+    () => buildTempTaskKeys(tasks, selfReviewTempKeys),
+    [tasks, selfReviewTempKeys],
+  );
+
+  const causeCountRows = useMemo(() => {    const counts = new Map<string, number>();
     for (const record of recordsInMonths(scopedRecords, allMonths)) {
       for (const answer of record.answers) {
         for (const word of new Set(answer.commonErrors ?? [])) {
@@ -1010,26 +1099,33 @@ export function ResultsPage({
     return [...details].map(([key, value]) => ({ key, ...value }));
   }
 
-  /** 曲線圖數列（只取有資料的欄；附 hover 提示文字） */
+  /** 曲線圖數列（只取有資料的欄；附 hover 提示文字；v1.59.0 附加審標註） */
   function chartSeries(
     indicatorId: string,
     unitId: string | undefined,
     mode: UnitMode,
-  ): { values: number[]; labels: string[]; tips: string[]; cols: AnalysisPeriodColumn[] } {
+  ): { values: number[]; labels: string[]; tips: string[]; cols: AnalysisPeriodColumn[]; notes: (string | null)[] } {
     const values: number[] = [];
     const labels: string[] = [];
     const tips: string[] = [];
     const cols: AnalysisPeriodColumn[] = [];
+    const notes: (string | null)[] = [];
     for (const col of appliedColumns) {
       const c = cellValue(indicatorId, col, unitId, mode);
       if (c.rate != null) {
+        const note = columnTempNote(
+          recordsForIndex(recordIndex, indicatorId, col.months, unitId),
+          tempTaskKeys,
+          col.months.length,
+        );
         values.push(c.rate);
         labels.push(col.label);
-        tips.push(`${col.label}：${formatPassRate(c, true)}`);
+        tips.push(`${col.label}${note ?? ""}：${formatPassRate(c, true)}`);
         cols.push(col);
+        notes.push(note);
       }
     }
-    return { values, labels, tips, cols };
+    return { values, labels, tips, cols, notes };
   }
 
   /**
@@ -1056,30 +1152,33 @@ export function ResultsPage({
     return sectionPassRateOf(periodRecords, section.ids, section.kind, indicator.threshold);
   }
 
-  /** v1.53.0：分組曲線圖數列（每組一張單線圖；只取有資料的欄） */
+  /** v1.53.0：分組曲線圖數列（每組一張單線圖；只取有資料的欄；v1.59.0 附加審標註） */
   function sectionChartSeries(
     indicatorId: string,
     unitId: string | undefined,
     mode: UnitMode,
     sectionKey: string,
-  ): { values: number[]; labels: string[]; tips: string[]; cols: AnalysisPeriodColumn[] } {
+  ): { values: number[]; labels: string[]; tips: string[]; cols: AnalysisPeriodColumn[]; notes: (string | null)[] } {
     const ind = indOf.get(indicatorId);
     const values: number[] = [];
     const labels: string[] = [];
     const tips: string[] = [];
     const cols: AnalysisPeriodColumn[] = [];
-    if (!ind) return { values, labels, tips, cols };
+    const notes: (string | null)[] = [];
+    if (!ind) return { values, labels, tips, cols, notes };
     for (const col of appliedColumns) {
       const recs = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
       const pr = sectionCellValue(ind, col, recs, mode, sectionKey);
       if (pr.rate != null) {
+        const note = columnTempNote(recs, tempTaskKeys, col.months.length);
         values.push(pr.rate);
         labels.push(col.label);
-        tips.push(`${col.label}：${formatPassRate(pr, true)}`);
+        tips.push(`${col.label}${note ?? ""}：${formatPassRate(pr, true)}`);
         cols.push(col);
+        notes.push(note);
       }
     }
-    return { values, labels, tips, cols };
+    return { values, labels, tips, cols, notes };
   }
 
   /** v1.53.0：選項明細只留該分組的題目（以題目 id 過濾；歷史分組無現行題目→空列） */
@@ -1104,7 +1203,7 @@ export function ResultsPage({
   ) {
     const ind = indOf.get(indicatorId);
     if (!ind) return;
-    const { values, labels, tips, cols } = section
+    const { values, labels, tips, cols, notes } = section
       ? sectionChartSeries(indicatorId, unitId, mode, section.key)
       : chartSeries(indicatorId, unitId, mode);
     setChartModal({
@@ -1117,6 +1216,7 @@ export function ResultsPage({
       values,
       labels,
       tips,
+      notes,
       threshold: ind.threshold > 0 ? ind.threshold : null,
       indicatorId,
       mode,
@@ -1229,13 +1329,22 @@ export function ResultsPage({
       (point): point is { column: AnalysisPeriodColumn; pr: PassRate } & { pr: { rate: number } } => point.pr.rate != null,
     );
     const optionRows = optionDetailRows(indRecs, indSel.questions);
+    // v1.59.0：曲線圖加審標註（與 chartSeries 同一判別：該欄紀錄對上加審任務月鍵）
+    const chartNotes = pts.map((point) =>
+      columnTempNote(
+        recordsInMonths(indRecs, point.column.months),
+        tempTaskKeys,
+        point.column.months.length,
+      ),
+    );
     return {
       unitCount: unitIds.size, total: indRecs.length, unitPr, personPr: merged,
       // v1.44.0：結果分析不再讀預存摘要；明細只含本人單位範圍，不提供全院彙總。
       ownPersonPr: merged, ownTotal: indRecs.length,
       chartValues: pts.map((point) => point.pr.rate as number),
       chartLabels: pts.map((point) => point.column.label),
-      chartTips: pts.map((point) => `${point.column.label}：${formatPassRate(point.pr, true)}`),
+      chartTips: pts.map((point, i) => `${point.column.label}${chartNotes[i] ?? ""}：${formatPassRate(point.pr, true)}`),
+      chartNotes,
       chartCols: pts.map((point) => point.column),
       optionRows,
       // 分組計分只在指標開啟 groupScoring 時顯示（v1.44.0）。
@@ -1245,7 +1354,7 @@ export function ResultsPage({
           ? unitScoringBreakdownRows(indRecs, indSel.questions, appliedColumns, th)
           : personScoringBreakdownRows(indRecs, indSel.questions, th),
     };
-  }, [indRecs, indSel, indUnit, appliedColumns]);
+  }, [indRecs, indSel, indUnit, appliedColumns, tempTaskKeys]);
 
   const errorAnalysisRows = questionErrorRows(
     errorUnit === "all"
@@ -1667,6 +1776,7 @@ export function ResultsPage({
                             values={s.values}
                             labels={s.labels}
                             tooltips={s.tips}
+                            notes={s.notes}
                             threshold={
                               ind.threshold > 0 ? ind.threshold : null
                             }
@@ -1921,6 +2031,7 @@ export function ResultsPage({
                     values={indSummary.chartValues}
                     labels={indSummary.chartLabels}
                     tooltips={indSummary.chartTips}
+                    notes={indSummary.chartNotes}
                     threshold={indSel.threshold > 0 ? indSel.threshold : null}
                     legend="正確率"
                     onPointClick={(i) =>
@@ -2045,6 +2156,7 @@ export function ResultsPage({
                 values={chartModal.values}
                 labels={chartModal.labels}
                 tooltips={chartModal.tips}
+                notes={chartModal.notes}
                 threshold={chartModal.threshold}
                 legend="達閾值率"
                 onPointClick={(i) => {

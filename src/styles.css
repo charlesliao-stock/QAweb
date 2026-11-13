@@ -1260,6 +1260,15 @@ button:disabled {
   stroke: #fff;
   stroke-width: 3;
 }
+/* v1.59.0：未達閾值的點標紅（填色／描邊改紅色；連線 .chart-line 不改色） */
+.chart-dot.below {
+  fill: #dc2626;
+  stroke: #dc2626;
+}
+.chart-dot.latest.below {
+  fill: #dc2626;
+  stroke: #dc2626;
+}
 .chart-x-labels {
   display: flex;
   justify-content: space-between;
@@ -4735,6 +4744,11 @@ button:disabled {
   font-size: 11px;
   fill: #8a9493;
 }
+/* v1.59.0：曲線圖 x 軸標籤附註（加審／有加審），藍色 80% 字體 */
+.trend-chart .chart-label-note {
+  font-size: 80%;
+  fill: #2563eb;
+}
 .button-sm {
   padding: 6px 12px;
   font-size: var(--font-small);
@@ -4804,6 +4818,9 @@ button:disabled {
 }
 :root[data-mode="dark"] .trend-chart .chart-label {
   fill: #7d8a89;
+}
+:root[data-mode="dark"] .trend-chart .chart-label-note {
+  fill: #7aa5ff;
 }
 
 /* v1.14.0：審查總覽入口、季度分析、審查員管理 */

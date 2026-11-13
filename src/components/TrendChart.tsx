@@ -6,13 +6,17 @@
  * v1.50.0：只有一個資料點時只畫一個點、放圖中央（x=300），不畫折線與面積；
  * hover 提示框改跟滑鼠（onMouseMove 取滑鼠在容器內的座標定位）；圖例列右側
  * 的查詢結果（.chart-current）移除。
+ * v1.59.0：未達閾值的點標紅（填色／描邊改紅色，連線不改色；閾值取
+ * threshold prop，與紅色虛線閾值線同一來源；無資料的點不會出現在 values 中）。
  */
 import { useRef, useState } from "react";
+import { isPassing } from "../lib/analysisRates";
 
 export function TrendChart({
   values = [],
   labels = [],
   tooltips = [],
+  notes = [],
   threshold = null,
   legend = "整體達標率",
   onPointClick,
@@ -22,6 +26,9 @@ export function TrendChart({
   labels?: string[];
   /** hover 提示文字（與 values 對齊；未提供時用「標籤：數值%」） */
   tooltips?: string[];
+  /** x 軸標籤附註（v1.59.0：與 labels 對齊，如「（加審）」／「（有加審）」；
+   *  以藍色 80% 字體接在標籤右方；null／缺值不顯示） */
+  notes?: (string | null)[];
   /** 閾值（紅色虛線水平線；null 表示不畫） */
   threshold?: number | null;
   legend?: string;
@@ -155,7 +162,11 @@ export function TrendChart({
                 r="4"
                 className={
                   `chart-dot${index === n - 1 ? " latest" : ""}` +
-                  (onPointClick ? " clickable" : "")
+                  (onPointClick ? " clickable" : "") +
+                  // v1.59.0：未達閾值（rate < 閾值，沿用 isPassing 口徑；閾值 null／≤0 不標）
+                  (threshold != null && !isPassing(values[index], threshold)
+                    ? " below"
+                    : "")
                 }
                 style={{ pointerEvents: "none" }}
               />
@@ -172,6 +183,9 @@ export function TrendChart({
                   className="chart-label"
                 >
                   {lb}
+                  {notes[index] ? (
+                    <tspan className="chart-label-note">{notes[index]}</tspan>
+                  ) : null}
                 </text>
               ),
           )}

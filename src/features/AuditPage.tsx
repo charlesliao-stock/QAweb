@@ -1025,7 +1025,7 @@ export function AuditPage({
                 <tr>
                   <SortTh label="組別" k="group" />
                   <SortTh label="指標名稱" k="name" />
-                  <SortTh label="審核區間" k="interval" />
+                  <SortTh label="審查區間" k="interval" />
                   <SortTh label="審核進度（人次）" k="person" />
                   <SortTh label="審核進度（單位次）" k="unit" />
                   <th>操作</th>
@@ -1038,11 +1038,13 @@ export function AuditPage({
                   >
                     <td>{r.groupName}</td>
                     <td>
+                      {r.sched.category === "temp" && (
+                        <span className="badge">
+                          {r.sched.selfReview ? "自審" : "加審"}
+                        </span>
+                      )}{" "}
                       <b>{r.indicatorName}</b>
                       <div className="muted-text">{r.indicatorId}</div>
-                      {r.sched.category === "temp" && (
-                        <span className="badge">臨時</span>
-                      )}
                     </td>
                     <td>{r.intervalLabel}</td>
                     <td>
