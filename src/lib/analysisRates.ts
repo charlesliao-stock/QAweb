@@ -35,6 +35,8 @@ export interface AnalysisAnswer {
 
 export interface AnalysisRecord {
   indicatorId: string;
+  /** 審查任務 ID；用於將加審紀錄精確連回 reviewTasks。 */
+  taskId?: string;
   unitId: string;
   year: number;
   month: number;

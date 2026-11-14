@@ -1190,6 +1190,38 @@ button:disabled {
   font-size: var(--font-small);
   padding: 0 3px 4px;
 }
+.chart-options,
+.drill-history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  margin: 8px 0 12px;
+  color: var(--text, #344347);
+  font-size: var(--font-small);
+}
+.chart-options .check-row,
+.drill-history-controls .check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.drill-history-controls select {
+  min-width: 56px;
+  margin: 0 4px;
+}
+.chart-label-note {
+  fill: #2563eb;
+  font-size: 10px;
+}
+.extra-review-note {
+  display: inline;
+  margin-left: 4px;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 600;
+}
 .chart-legend > span:first-child {
   display: flex;
   align-items: center;
@@ -4903,6 +4935,13 @@ button:disabled {
 .analysis-matrix td.rate-cell.clickable:hover {
   background: #eef6f4;
   text-decoration: underline;
+}
+.data-table td.rate-cell.below {
+  color: #b42318;
+  font-weight: 700;
+}
+:root[data-mode="dark"] .data-table td.rate-cell.below {
+  color: #ff8a83;
 }
 :root[data-mode="dark"] .analysis-matrix td.rate-cell.clickable:hover {
   background: #22302e;

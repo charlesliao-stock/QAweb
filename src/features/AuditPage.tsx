@@ -100,6 +100,7 @@ import {
   type ReviewInterval,
 } from "../lib/reviewActive";
 import {
+  indicatorCodeOf,
   normalizeQuestions,
   type AuditQuestion,
 } from "../lib/indicators";
@@ -109,6 +110,7 @@ import { ReviewQuestionList } from "./ReviewQuestionList";
 
 interface IndicatorLite {
   id: string;
+  code: string;
   name: string;
   groupId: string;
 }
@@ -142,6 +144,7 @@ interface MonthOption {
 interface ActiveRow {
   sched: IndicatorSchedule;
   indicatorId: string;
+  indicatorCode: string;
   indicatorName: string;
   groupId: string;
   groupName: string;
@@ -163,7 +166,7 @@ interface ActiveRow {
   unitNameOf: (code: string) => string;
 }
 
-type SortKey = "group" | "name" | "interval" | "person" | "unit";
+type SortKey = "group" | "code" | "interval" | "person" | "unit";
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
@@ -307,6 +310,7 @@ export function AuditPage({
           const v = d.data() as Record<string, unknown>;
           indicators.set(d.id, {
             id: d.id,
+            code: indicatorCodeOf(d.id),
             name: typeof v.name === "string" && v.name ? v.name : d.id,
             groupId: typeof v.groupId === "string" ? v.groupId : "",
           });
@@ -678,6 +682,7 @@ export function AuditPage({
           out.push({
             sched: s,
             indicatorId: s.indicatorId,
+            indicatorCode: ind.code,
             indicatorName: ind.name,
             groupId: ind.groupId,
             groupName: groupName.get(ind.groupId) ?? "未分類",
@@ -825,8 +830,8 @@ export function AuditPage({
     const dir = sortDir;
     const val = (r: ActiveRow): number | string => {
       switch (sortKey) {
-        case "name":
-          return r.indicatorName;
+        case "code":
+          return r.indicatorCode;
         case "interval":
           return r.interval.start.year * 100 + r.interval.start.month;
         case "person":
@@ -1150,7 +1155,7 @@ export function AuditPage({
               <thead>
                 <tr>
                   <SortTh label="組別" k="group" />
-                  <SortTh label="指標名稱" k="name" />
+                  <SortTh label="指標編號" k="code" />
                   <SortTh label="審查區間" k="interval" />
                   <SortTh label="審核進度（人次）" k="person" />
                   <SortTh label="審核進度（單位次）" k="unit" />
@@ -1169,8 +1174,7 @@ export function AuditPage({
                           {r.sched.selfReview ? "自審" : "加審"}
                         </span>
                       )}{" "}
-                      <b>{r.indicatorName}</b>
-                      <div className="muted-text">{r.indicatorId}</div>
+                      <b>{r.indicatorCode}</b>
                     </td>
                     <td>{r.intervalLabel}</td>
                     <td>

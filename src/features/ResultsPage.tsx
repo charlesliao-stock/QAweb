@@ -582,6 +582,12 @@ export function ResultsPage({
     [startMonth, endMonth, interval],
   );
   const queryYears = useMemo(() => calendarYearsOf(columns), [columns]);
+  const queryLoadYears = useMemo(
+    () => queryYears.length > 0
+      ? [...new Set([...queryYears, Math.min(...queryYears) - 1])].sort((a, b) => a - b)
+      : queryYears,
+    [queryYears],
+  );
   /** 已生效的期間欄：未查詢前沿用 live 值（畫面為空白頁，不渲染矩陣） */
   const appliedColumns = useMemo(
     () =>
@@ -660,6 +666,7 @@ export function ResultsPage({
                 : [];
               docs.push({
                 indicatorId: String(v.indicatorId ?? ""),
+                taskId: typeof v.taskId === "string" ? v.taskId : undefined,
                 unitId: String(v.unitId ?? ""),
                 year: Number(v.year ?? 0),
                 month: Number(v.month ?? 0),
@@ -799,9 +806,9 @@ export function ResultsPage({
   /** 每次查詢皆失效所選年份，避免再次查詢命中過期快取。 */
   function handleQuery() {
     if (!rangeValid || tab === "manage") return;
-    invalidateCachedYears("reviewRecords", queryYears, cacheScope);
-    invalidateCachedYears("reviewTasks", queryYears, cacheScope);
-    setApplied({ years: queryYears, startMonth, endMonth, interval });
+    invalidateCachedYears("reviewRecords", queryLoadYears, cacheScope);
+    invalidateCachedYears("reviewTasks", queryLoadYears, cacheScope);
+    setApplied({ years: queryLoadYears, startMonth, endMonth, interval });
     setReloadNonce((n) => n + 1);
   }
   // 範圍內紀錄（依權限範圍過濾）
@@ -827,6 +834,22 @@ export function ResultsPage({
     () => buildTempTaskKeys(tasks, selfReviewTempKeys),
     [tasks, selfReviewTempKeys],
   );
+  const tempTaskIds = useMemo(
+    () => new Set(tasks.filter((task) =>
+      task.scheduleCategory === "temp" &&
+      !(task.schedulePeriod && selfReviewTempKeys.has(`${task.indicatorId}|${task.schedulePeriod}`)),
+    ).map((task) => task.id)),
+    [tasks, selfReviewTempKeys],
+  );
+  const hasTempReview = (
+    indicatorId: string,
+    col: AnalysisPeriodColumn,
+    unitId?: string,
+  ) => {
+    const periodRecords = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
+    return periodRecords.some((record) => Boolean(record.taskId && tempTaskIds.has(record.taskId))) ||
+      columnTempNote(periodRecords, tempTaskKeys, col.months.length) != null;
+  };
 
   const causeCountRows = useMemo(() => {    const counts = new Map<string, number>();
     for (const record of recordsInMonths(scopedRecords, allMonths)) {
@@ -1641,6 +1664,7 @@ export function ResultsPage({
                 cellOf={(id, col) =>
                   cellValue(id, col, undefined, groupUnit)
                 }
+                hasExtraReview={(id, col) => hasTempReview(id, col)}
                 onCell={(id, col) => openDrill(id, col, groupUnit)}
                 onDetailCell={(id, detailKey, col) =>
                   openDrill(id, col, groupUnit, undefined, { sectionKey: detailKey })
@@ -1697,6 +1721,7 @@ export function ResultsPage({
                 cellOf={(id, col) =>
                   cellValue(id, col, selUnitCode, unitUnit)
                 }
+                hasExtraReview={(id, col) => hasTempReview(id, col, selUnitCode)}
                 onCell={(id, col) =>
                   openDrill(id, col, unitUnit, selUnitCode)
                 }
@@ -2720,6 +2745,7 @@ function RateMatrix({
   rows,
   columns,
   cellOf,
+  hasExtraReview,
   onCell,
   onDetailCell,
   onChart,
@@ -2734,6 +2760,7 @@ function RateMatrix({
   }[];
   columns: AnalysisPeriodColumn[];
   cellOf: (rowId: string, col: AnalysisPeriodColumn) => CellValue;
+  hasExtraReview?: (rowId: string, col: AnalysisPeriodColumn) => boolean;
   onCell?: (rowId: string, col: AnalysisPeriodColumn) => void;
   /** v1.50.0：分組／逐題明細格可點下探（帶分組 key，只顯示該分組的個人結果） */
   onDetailCell?: (rowId: string, detailKey: string, col: AnalysisPeriodColumn) => void;
@@ -2808,7 +2835,7 @@ function RateMatrix({
                         : undefined
                     }
                   >
-                    {fmtCell(cell)}
+                    {fmtCell(cell)}{hasExtraReview?.(row.id, c) ? <small className="extra-review-note">(加審)</small> : null}
                   </td>
                 );
               })}
@@ -2867,7 +2894,7 @@ function RateMatrix({
                           : undefined
                       }
                     >
-                      {formatPassRate(detailCell)}
+                      {formatPassRate(detailCell)}{hasExtraReview?.(row.id, column) ? <small className="extra-review-note">(加審)</small> : null}
                     </td>
                   );
                 })}
@@ -3011,6 +3038,22 @@ function DrillModal({
   const ind = indOf.get(drill.indicatorId);
   const th = ind?.threshold ?? 0;
   const col = drill.column;
+  const [showRecentResults, setShowRecentResults] = useState(false);
+  const [recentResultCount, setRecentResultCount] = useState(3);
+  const historyMonths = useMemo(() => {
+    const byMonth = recordIndex.get(drill.indicatorId);
+    if (!byMonth) return [] as { year: number; month: number; key: number; label: string }[];
+    const currentStart = Math.min(...col.months.map(({ year, month }) => year * 100 + month));
+    return [...byMonth.keys()]
+      .filter((key) => key < currentStart)
+      .sort((a, b) => b - a)
+      .slice(0, recentResultCount)
+      .map((key) => {
+        const year = Math.floor(key / 100);
+        const month = key % 100;
+        return { year, month, key, label: `${year}/${String(month).padStart(2, "0")}` };
+      });
+  }, [recordIndex, drill.indicatorId, col.months, recentResultCount]);
   // v1.50.0：分組／逐題／選項篩選——只顯示該分組／該題的個人結果
   const section = useMemo(() => {
     if (!drill.sectionKey || !ind) return null;
@@ -3203,18 +3246,31 @@ function DrillModal({
           </button>
         </div>
         {!l2Active ? (
+          <>
+          <div className="drill-history-controls">
+            <label className="check-row">
+              <input type="checkbox" checked={showRecentResults} onChange={(event) => setShowRecentResults(event.target.checked)} />
+              顯示近
+              <select aria-label="顯示近幾次審查結果" value={recentResultCount} onChange={(event) => setRecentResultCount(Number(event.target.value))}>
+                {Array.from({ length: 12 }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count}</option>)}
+              </select>
+              次的審查結果
+            </label>
+            {showRecentResults && <span className="muted-text">歷史結果包含所選查詢年份及前一年度資料。</span>}
+          </div>
           <div className="analysis-table-wrap">
             <table className="data-table analysis-matrix">
               <thead>
                 <tr>
                   <th className="ind-col">單位</th>
                   <th className="rate-col">{col.label}</th>
+                  {showRecentResults && historyMonths.map((month) => <th key={month.key} className="rate-col">{month.label}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {l1Units.length === 0 ? (
                   <tr>
-                    <td colSpan={2}>無資料</td>
+                    <td colSpan={2 + (showRecentResults ? historyMonths.length : 0)}>無資料</td>
                   </tr>
                 ) : (
                   l1Units.map((unitId) => {
@@ -3226,7 +3282,7 @@ function DrillModal({
                           {unitId === "" ? "NA" : `${unitId}・${unitNameOf.get(unitId) ?? ""}`}
                         </td>
                         <td
-                          className={`rate-cell${clickable ? " clickable" : ""}`}
+                          className={`rate-cell${clickable ? " clickable" : ""}${cell?.rate != null && th > 0 && cell.rate < th ? " below" : ""}`}
                           title={
                             clickable
                               ? `${cell.title}（點選看被審人員）`
@@ -3250,6 +3306,13 @@ function DrillModal({
                         >
                           {cell ? fmtCell(cell) : "—"}
                         </td>
+                        {showRecentResults && historyMonths.map((month) => {
+                          const history = passRateOf(
+                            recordsForIndex(recordIndex, drill.indicatorId, [{ year: month.year, month: month.month }], unitId),
+                            th,
+                          );
+                          return <td key={month.key} className={`rate-cell${history.rate != null && th > 0 && history.rate < th ? " below" : ""}`} title={history.rate != null && th > 0 && history.rate < th ? "未達閾值" : "達閾值"}>{fmtRate(history.rate)}</td>;
+                        })}
                       </tr>
                     );
                   })
@@ -3257,6 +3320,7 @@ function DrillModal({
               </tbody>
             </table>
           </div>
+          </>
         ) : (
           <>
             <div className="drill-back">
