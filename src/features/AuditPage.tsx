@@ -171,7 +171,7 @@ interface ActiveRow {
   unitNameOf: (code: string) => string;
 }
 
-type SortKey = "group" | "code" | "interval" | "person" | "unit";
+type SortKey = "group" | "code" | "name" | "interval" | "person" | "unit";
 
 function fmtPct(p: number | null): string {
   return p == null ? "—" : `${p}%`;
@@ -828,9 +828,14 @@ export function AuditPage({
   }, [rows, selGroup]);
 
   const filtered = useMemo(() => {
+    // 進行中＝查詢當月仍在審查區間內者；區間已結束、僅剩補資料期限的列不列入
+    const now = new Date();
+    const nowYm = now.getFullYear() * 100 + (now.getMonth() + 1);
     const list = rows.filter(
       (r) =>
         r.state === selProgress &&
+        (selProgress !== "active" ||
+          r.interval.end.year * 100 + r.interval.end.month >= nowYm) &&
         auditRowMatches(r, {
           groupId: selGroup,
           indicatorId: selIndicator,
@@ -842,6 +847,8 @@ export function AuditPage({
       switch (sortKey) {
         case "code":
           return r.indicatorCode;
+        case "name":
+          return r.indicatorName;
         case "interval":
           return r.interval.start.year * 100 + r.interval.start.month;
         case "person":
@@ -875,7 +882,7 @@ export function AuditPage({
         : "待完成的審查排程";
   const progressNote =
     selProgress === "active"
-      ? "依您的身分列出進行中的審查排程（含區間已結束、仍在補資料期限內的區間）；點標題可排序"
+      ? "依您的身分列出當月進行中的審查排程；點標題可排序"
       : selProgress === "ended"
         ? "依您的身分列出已結束的審查排程（已過排程區間及補資料日期）；檢視可查看結果，符合權限者可修改紀錄"
         : "依您的身分列出已排程但尚未開始的審查排程；點標題可排序";
@@ -1172,6 +1179,7 @@ export function AuditPage({
                 <tr>
                   <SortTh label="組別" k="group" />
                   <SortTh label="指標編號" k="code" />
+                  <SortTh label="指標名稱" k="name" />
                   <SortTh label="審查區間" k="interval" />
                   <SortTh label="審核進度（人次）" k="person" />
                   <SortTh label="審核進度（單位次）" k="unit" />
@@ -1192,6 +1200,7 @@ export function AuditPage({
                       )}{" "}
                       <b>{r.indicatorCode}</b>
                     </td>
+                    <td>{r.indicatorName}</td>
                     <td>{r.intervalLabel}</td>
                     <td>
                       <ProgressCell

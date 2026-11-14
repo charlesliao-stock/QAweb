@@ -16,6 +16,7 @@ import {
   Download,
   Pencil,
   Plus,
+  Search,
   Trash2,
   Upload,
   X,
@@ -801,7 +802,8 @@ export function IndicatorsPage({
     { kind: "list" } | { kind: "create" } | { kind: "edit"; id: string }
   >({ kind: "list" });
   const [rows, setRows] = useState<IndicatorRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [queried, setQueried] = useState(false);
   const [searchKw, setSearchKw] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
   const [sortKey, setSortKey] = useState<IndicatorSortKey>("code");
@@ -869,6 +871,7 @@ export function IndicatorsPage({
   }, []);
 
   const loadList = useCallback(async () => {
+    setQueried(true);
     setLoading(true);
     try {
       const snap = await loadRefCollection("indicators");
@@ -948,8 +951,7 @@ export function IndicatorsPage({
 
   useEffect(() => {
     loadMeta();
-    loadList();
-  }, [loadMeta, loadList]);
+  }, [loadMeta]);
 
   function setField<K extends keyof IndicatorForm>(
     key: K,
@@ -1647,18 +1649,40 @@ export function IndicatorsPage({
       {view.kind === "list" && (
         <FilterPanel
           actions={
-            (groupFilter || searchKw) && (
+            <>
               <button
                 type="button"
-                className="button button-outline"
-                onClick={() => {
-                  setGroupFilter("");
-                  setSearchKw("");
-                }}
+                className="button button-primary"
+                onClick={() => void loadList()}
+                disabled={loading}
               >
-                清除篩選
+                <Search size={16} />
+                查詢
               </button>
-            )
+              {(groupFilter || searchKw) && (
+                <button
+                  type="button"
+                  className="button button-outline"
+                  onClick={() => {
+                    setGroupFilter("");
+                    setSearchKw("");
+                  }}
+                >
+                  清除篩選
+                </button>
+              )}
+              <button className="button button-primary" onClick={openCreate}>
+                <Plus size={16} />
+                新增指標
+              </button>
+              <button
+                className="button button-outline"
+                onClick={() => setBatchOpen(true)}
+              >
+                <Plus size={16} />
+                批次新增
+              </button>
+            </>
           }
         >
           <div className="select-wrap indicator-filter-group">
@@ -1684,39 +1708,32 @@ export function IndicatorsPage({
             aria-label="依編號或指標名稱篩選"
             value={searchKw}
             onChange={(e) => setSearchKw(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void loadList();
+            }}
           />
         </FilterPanel>
       )}
 
       {view.kind === "list" ? (
-        loading ? (
+        !queried ? (
+          <EmptyState
+            title="請先查詢"
+            description="設定篩選條件後，按上方「查詢」載入指標清單。"
+          />
+        ) : loading ? (
           <section className="panel">
             <p className="settings-note">讀取中…</p>
           </section>
         ) : rows.length === 0 ? (
           <EmptyState
             title="尚無指標"
-            description="使用上方工具列的「新增指標」建立第一支指標，分類組別、編號、名稱、負責人與閾值為必填。"
+            description="使用上方篩選區的「新增指標」建立第一支指標，分類組別、編號、名稱、負責人與閾值為必填。"
           />
         ) : (
           <ListPanel
             title="指標清單"
             count={visibleRows.length}
-            actions={
-              <>
-                <button className="button button-primary" onClick={openCreate}>
-                  <Plus size={16} />
-                  新增指標
-                </button>
-                <button
-                  className="button button-outline"
-                  onClick={() => setBatchOpen(true)}
-                >
-                  <Plus size={16} />
-                  批次新增
-                </button>
-              </>
-            }
           >
               <table className="permission-table">
                 <thead>

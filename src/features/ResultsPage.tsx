@@ -423,16 +423,16 @@ export function ResultsPage({
   const [hideEmptyMonths, setHideEmptyMonths] = useState(false);
   // 組別分析
   const [selGroup, setSelGroup] = useState("");
-  const [groupUnit, setGroupUnit] = useState<UnitMode>("person");
+  const [groupUnit, setGroupUnit] = useState<UnitMode>("unit");
   // 單位分析
   const [selUnit, setSelUnit] = useState("");
-  const [unitUnit, setUnitUnit] = useState<UnitMode>("person");
+  const [unitUnit, setUnitUnit] = useState<UnitMode>("unit");
   const [selGroupU, setSelGroupU] = useState("");
   const [selIndU, setSelIndU] = useState("all");
   // 指標分析
   const [selGroup2, setSelGroup2] = useState("");
   const [selIndicator, setSelIndicator] = useState("");
-  const [indUnit, setIndUnit] = useState<UnitMode>("person");
+  const [indUnit, setIndUnit] = useState<UnitMode>("unit");
   const [errorUnit, setErrorUnit] = useState("all");
   // Modal
   const [chartModal, setChartModal] = useState<ChartModalData | null>(null);

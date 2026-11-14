@@ -19,6 +19,7 @@ import {
   Copy,
   Eye,
   Plus,
+  Search,
   Trash2,
   X,
 } from "lucide-react";
@@ -326,7 +327,8 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
   const myUnitCode = user?.unitCode ?? "";
 
   const [view, setView] = useState<View>({ kind: "list" });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [queried, setQueried] = useState(false);
 
   const [indicators, setIndicators] = useState<IndicatorLite[]>([]);
   const [groupMap, setGroupMap] = useState<Map<string, string>>(new Map());
@@ -391,7 +393,56 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     })();
   }, []);
 
+  // 篩選下拉用的輕量參考資料（走 refCache，不另計費）；排程本體須按「查詢」才載入
+  const applyRefs = useCallback(
+    (
+      isnap: Awaited<ReturnType<typeof loadRefCollection>>,
+      gsnap: Awaited<ReturnType<typeof loadRefCollection>>,
+    ) => {
+      const gm = new Map<string, string>();
+      gsnap.docs.forEach((d) => {
+        const name = d.data().name;
+        if (typeof name === "string") gm.set(d.id, name);
+      });
+      setGroupMap(gm);
+      setIndicators(
+        isnap.docs
+          .map((d) => {
+            const data = d.data();
+            return {
+              id: d.id,
+              code: indicatorCodeOf(d.id),
+              name: typeof data.name === "string" ? data.name : "",
+              groupId: typeof data.groupId === "string" ? data.groupId : "",
+              status: typeof data.status === "string" ? data.status : "",
+            };
+          })
+          .sort((a, b) => a.id.localeCompare(b.id, "zh-Hant")),
+      );
+    },
+    [],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [isnap, gsnap] = await Promise.all([
+          loadRefCollection("indicators"),
+          loadRefCollection("groups"),
+        ]);
+        if (!cancelled) applyRefs(isnap, gsnap);
+      } catch {
+        /* 下拉選項讀不到時留空，按查詢仍會完整載入 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyRefs]);
+
   const loadData = useCallback(async () => {
+    setQueried(true);
     setLoading(true);
     try {
       const db = getFirebaseDb();
@@ -406,26 +457,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
           listSchedules(db),
         ]);
 
-      const gm = new Map<string, string>();
-      gsnap.docs.forEach((d) => {
-        const name = d.data().name;
-        if (typeof name === "string") gm.set(d.id, name);
-      });
-      setGroupMap(gm);
-
-      const inds: IndicatorLite[] = isnap.docs
-        .map((d) => {
-          const data = d.data();
-          return {
-            id: d.id,
-            code: indicatorCodeOf(d.id),
-            name: typeof data.name === "string" ? data.name : "",
-            groupId: typeof data.groupId === "string" ? data.groupId : "",
-            status: typeof data.status === "string" ? data.status : "",
-          };
-        })
-        .sort((a, b) => a.id.localeCompare(b.id, "zh-Hant"));
-      setIndicators(inds);
+      applyRefs(isnap, gsnap);
       setSchedules(scheds);
 
       const am = new Map<string, IndicatorAssignment>();
@@ -500,17 +532,14 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     } finally {
       setLoading(false);
     }
-  }, [onAction]);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  }, [onAction, applyRefs]);
 
   // 任務索引（v1.28 階段 6 B5 起）：前端按 indicatorId 分組取代 N+1 查詢。
   // 只讀「檢視年度」的任務（年度＝該年；學年度 8 月～隔年 7 月，故讀 Y 與 Y+1 兩個
   // 日曆年），不再整個集合全掃。year 單欄位 in 查詢，免複合索引。
   // 臨時排程若屬其他年度，切換到該年度檢視時才會有任務數。
   useEffect(() => {
+    if (!queried) return;
     let cancelled = false;
     (async () => {
       try {
@@ -537,7 +566,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     return () => {
       cancelled = true;
     };
-  }, [filterYear, taskReloadTick]);
+  }, [filterYear, taskReloadTick, queried]);
 
   // v1.18：年別鎖定系統統計週期；一列＝一支啟用指標＋當期；臨時排程另列
   const cycle: "year" | "academic" = statsCycle;
@@ -769,19 +798,30 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
         />
         <FilterPanel
           actions={
-            (filterGroup || filterIndicator || filterKeyword) && (
+            <>
               <button
                 type="button"
-                className="button button-outline"
-                onClick={() => {
-                  setFilterGroup("");
-                  setFilterIndicator("");
-                  setFilterKeyword("");
-                }}
+                className="button button-primary"
+                onClick={() => void loadData()}
+                disabled={loading}
               >
-                清除篩選
+                <Search size={16} />
+                查詢
               </button>
-            )
+              {(filterGroup || filterIndicator || filterKeyword) && (
+                <button
+                  type="button"
+                  className="button button-outline"
+                  onClick={() => {
+                    setFilterGroup("");
+                    setFilterIndicator("");
+                    setFilterKeyword("");
+                  }}
+                >
+                  清除篩選
+                </button>
+              )}
+            </>
           }
         >
             <div className="form-field" style={{ maxWidth: 170 }}>
@@ -884,7 +924,12 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
           月～隔年 7 月）。清單只列出已啟用的指標。
         </p>
 
-        {loading ? (
+        {!queried ? (
+          <EmptyState
+            title="請先查詢"
+            description="設定年份與篩選條件後，按上方「查詢」載入排程資料。"
+          />
+        ) : loading ? (
           <section className="panel">
             <p className="settings-note">讀取中…</p>
           </section>
@@ -1477,6 +1522,7 @@ function OptionMultiPicker({
   defaultGroupId,
   selected,
   onToggle,
+  onToggleAll,
   disabled,
   searchPlaceholder,
 }: {
@@ -1486,6 +1532,8 @@ function OptionMultiPicker({
   defaultGroupId?: string;
   selected: string[];
   onToggle: (id: string) => void;
+  /** 提供時顯示「全選」：對目前篩選結果全選／取消全選 */
+  onToggleAll?: (ids: string[], select: boolean) => void;
   disabled?: boolean;
   searchPlaceholder?: string;
 }) {
@@ -1507,6 +1555,8 @@ function OptionMultiPicker({
       return true;
     });
   }, [options, groupFilter, kw]);
+  const allSelected =
+    filtered.length > 0 && filtered.every((o) => sel.has(o.id));
   return (
     <div className="form-field">
       <label className="field-label">
@@ -1550,6 +1600,23 @@ function OptionMultiPicker({
           padding: 8,
         }}
       >
+        {onToggleAll && filtered.length > 0 && (
+          <label className="check-row" style={{ marginBottom: 6 }}>
+            <input
+              type="checkbox"
+              checked={allSelected}
+              disabled={disabled}
+              onChange={() =>
+                onToggleAll(
+                  filtered.map((o) => o.id),
+                  !allSelected,
+                )
+              }
+            />
+            <b>全選</b>
+            <span className="muted-text">（目前篩選結果 {filtered.length} 項）</span>
+          </label>
+        )}
         {filtered.length === 0 ? (
           <p className="settings-note">無符合項目</p>
         ) : (
@@ -3410,6 +3477,13 @@ function AssignmentEditor({
           groupMap={groupMap}
           selected={selUnits}
           onToggle={(id) => setSelUnits((prev) => toggleId(prev, id))}
+          onToggleAll={(ids, select) =>
+            setSelUnits((prev) =>
+              select
+                ? [...prev, ...ids.filter((id) => !prev.includes(id))]
+                : prev.filter((id) => !ids.includes(id)),
+            )
+          }
           disabled={!canEdit || unlimited}
           searchPlaceholder="搜尋單位名稱或代碼"
         />
