@@ -58,28 +58,6 @@ export const DASHBOARD_SECTION_KEYS: DashboardSectionKey[] = [
   "riskyUnits",
 ];
 
-export const DASHBOARD_SECTION_LABELS: Record<DashboardSectionKey, string> = {
-  monthlyTodo: "本月待辦",
-  nextMonthPreview: "次月預告",
-  overdueLocked: "逾期／鎖定",
-  unlockReview: "解鎖審核",
-  lagLights: "落後燈號",
-  alert48h: "48h 警示",
-  focusIndicators: "本月重點指標",
-  overAudit: "超額加審提醒",
-  personalTrend: "個人走勢",
-  weakTop3: "常犯扣分 Top3",
-  unitAvg: "單位 vs 全院平均",
-  pareto: "帕累托 Top3",
-  trendAlerts: "近 3 個月趨勢警訊",
-  unitProgress: "轄區單位進度",
-  groupPassRate: "組別達標率",
-  overview: "全院戰情總覽",
-  radar: "科部雷達圖",
-  redFlags: "紅旗指標 Top3",
-  riskyUnits: "高風險單位 Top3",
-};
-
 /** 階段 2 預設：只留「本月任務提醒」相關區塊 */
 export const DEFAULT_DASHBOARD_SECTIONS: DashboardSections = {
   monthlyTodo: true,
@@ -138,16 +116,4 @@ export function getPersonalDashboardSections(): Partial<DashboardSections> {
   } catch {
     return {};
   }
-}
-
-/** 寫入個人偏好（只存明確指定的鍵；供之後的設定 UI 使用） */
-export function setPersonalDashboardSections(
-  patch: Partial<DashboardSections>,
-): void {
-  if (typeof localStorage === "undefined") return;
-  const merged = {
-    ...getPersonalDashboardSections(),
-    ...parseDashboardSections(patch),
-  };
-  localStorage.setItem(PERSONAL_KEY, JSON.stringify(merged));
 }

@@ -542,8 +542,3 @@ export function unitPassRate(
 
 /** RAG 燈號（沿用 resultAnalysis 語義）：達標綠／未達標紅／無資料灰 */
 export type { RagState };
-export function ragOf(avg: number | null, threshold: number): RagState {
-  if (avg == null) return "gray";
-  if (!(threshold > 0)) return "gray";
-  return avg >= threshold ? "green" : "red";
-}

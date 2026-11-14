@@ -19,14 +19,6 @@ import {
   periodLabel,
   type CycleCategory,
 } from "./cycle";
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
-/** 月份快捷：一年 2 / 3 / 4 次，12 個月平均分配的起始月份（v1.18 前 UI 用；保留供舊資料相容） */
-export const QUICK_MONTHS: Record<2 | 3 | 4, number[]> = {
-  2: [1, 7],
-  3: [1, 5, 9],
-  4: [1, 4, 7, 10],
-};
 
 /** 審查頻次：一年幾次（v1.18 排程設定下拉） */
 export type ReviewFrequency = 2 | 3 | 4;
@@ -195,15 +187,6 @@ export function intervalRangeLabels(
     });
 }
 
-/** 審查員主檔（人員管理→審查員頁籤）：依指標分類組別分組 */
-export interface ReviewReviewerDoc {
-  /** 指標分類組別 id（即 groups collection 的 id） */
-  groupId: string;
-  /** 人員職編（users 文件 id） */
-  personId: string;
-  createdAt: unknown;
-}
-
 /**
  * 審核排程設定（每支指標每年一份；v1.16.0 起改用 IndicatorSchedule，
  * 本介面僅供舊資料相容讀取）。
@@ -229,57 +212,12 @@ export interface IndicatorYearSchedule {
 }
 
 /**
- * 防禦性解析年度排程的 unitCaseCounts（只接受 ≥1 整數）。
- */
-export function parseUnitCaseCounts(raw: unknown): Record<string, number> {
-  const out: Record<string, number> = {};
-  if (raw && typeof raw === "object") {
-    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-      if (typeof v === "number" && Number.isInteger(v) && v >= 1) out[k] = v;
-    }
-  }
-  return out;
-}
-
-/**
  * 防禦性解析單一審查件數（只接受 ≥1 整數，否則 null）。
  */
 export function parseCaseCount(raw: unknown): number | null {
   return typeof raw === "number" && Number.isInteger(raw) && raw >= 1
     ? raw
     : null;
-}
-
-/**
- * 年度件數表單初值（字串，供數字輸入框用）。
- * 遷移順序：caseCount → 舊 unitCaseCounts 第一個值 → 分工表舊 caseCount 第一個值 → ""。
- * （v1.10.0 的每單位表格是過度設計；使用者確認全單位件數相同，v1.10.1 起改單一值。）
- */
-export function initialCaseCount(
-  schedule:
-    | {
-        caseCount?: number | null;
-        unitCaseCounts?: Record<string, number>;
-      }
-    | null
-    | undefined,
-  assignment: { items: AssignmentItem[] } | null | undefined,
-): string {
-  if (schedule?.caseCount != null && schedule.caseCount >= 1)
-    return String(schedule.caseCount);
-  const ucc = schedule?.unitCaseCounts;
-  if (ucc) {
-    const first = Object.values(ucc).find(
-      (v) => typeof v === "number" && Number.isInteger(v) && v >= 1,
-    );
-    if (first != null) return String(first);
-  }
-  for (const it of assignment?.items ?? []) {
-    for (const u of it.units) {
-      if (u.caseCount != null) return String(u.caseCount);
-    }
-  }
-  return "";
 }
 
 /** 分工表：一位審查員負責的單位＋每輪審查件數（v1.9.0） */
@@ -344,22 +282,6 @@ export interface IndicatorAssignment {
 }
 
 export type ReviewTaskStatus = "pending" | "done" | "locked";
-
-/** 解鎖申請（v1.15.0 新增集合 unlockRequests） */
-export interface UnlockRequest {
-  taskId: string;
-  indicatorId: string;
-  unitId: string;
-  year: number;
-  month: number;
-  requestedBy: string;
-  requestedByName: string;
-  reason: string;
-  status: "pending" | "approved" | "rejected";
-  handledBy?: string;
-  handledAt?: unknown;
-  createdAt?: unknown;
-}
 
 /** 解鎖申請 doc id：taskId__unlock_<隨機>（一任務可多次申請，以時間區分） */
 export function unlockRequestDocId(taskId: string): string {
@@ -488,18 +410,6 @@ export function findDuplicateUnits(
   return dup;
 }
 
-/** 展開任務筆數預估：月份數 × 所有 (審查員, 單位) 配對數；不限單位項目計 1（v1.51.0） */
-export function estimateTaskCount(
-  months: number[],
-  items: AssignmentItem[],
-): number {
-  const pairs = items.reduce(
-    (n, it) => n + (it.unlimitedUnits === true ? 1 : it.units.length),
-    0,
-  );
-  return months.length * pairs;
-}
-
 /**
  * @deprecated 改用 buildReviewTasksPerCalendar（經 monthToCalendarYear 換算）或 buildTasksFromSchedule
  */
@@ -558,14 +468,6 @@ export function buildReviewTasks(
     }
   }
   return tasks;
-}
-
-/** 預估全年總件數：任務筆數 × 單一審查件數（未設定則 0） */
-export function estimateTotalCases(
-  taskCount: number,
-  caseCount: number | null,
-): number {
-  return caseCount != null ? taskCount * caseCount : 0;
 }
 
 /* =====================================================================

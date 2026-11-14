@@ -1,3 +1,4 @@
+import { toErrorMessage } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
@@ -258,11 +259,6 @@ function emptyUserForm(): UserForm {
     titleUnitCodes: [],
     reviewerAccessExpiresAt: "",
   };
-}
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  return "讀寫失敗，請檢查網路連線後再試";
 }
 
 function auditFields(staffId: string, isCreate: boolean) {

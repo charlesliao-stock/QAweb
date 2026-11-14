@@ -20,8 +20,6 @@ import {
 
 /** 維護開關文件路徑（監測 workflow 寫入、前端攔截讀取）。 */
 export const SYSTEM_STATUS_PATH = "configs/system_status";
-/** 流量控管設定文件路徑（系統管理頁由管理員維護，監測 workflow 每輪讀取）。 */
-export const QUOTA_SETTINGS_PATH = "configs/quotaSettings";
 /** 狀態檢查快取 TTL：5 分鐘。 */
 export const MAINTENANCE_TTL_MS = 5 * 60 * 1000;
 /** 阻擋時發出的瀏覽器事件（App.tsx 監聽後顯示維護中橫幅）。 */
@@ -129,9 +127,6 @@ export function isMaintenanceError(err: unknown): boolean {
 let adminFlag = false;
 export function setMaintenanceAdmin(v: boolean): void {
   adminFlag = v === true;
-}
-export function isMaintenanceAdmin(): boolean {
-  return adminFlag;
 }
 
 interface CachedStatus {

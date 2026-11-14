@@ -24,6 +24,7 @@
  * （審查員＝被指派單位、護理長＝自審本人單位、召集人／執行幹事＝所屬群組
  * 整列、管理員／高階主管＝全部）。執行頁 assignedUnitIds 限縮不動。
  */
+import { toErrorMessage } from "../lib/errors";
 import { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
@@ -174,11 +175,6 @@ interface ActiveRow {
 }
 
 type SortKey = "group" | "code" | "interval" | "person" | "unit";
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  return "讀寫失敗，請檢查網路連線後再試";
-}
 
 function fmtPct(p: number | null): string {
   return p == null ? "—" : `${p}%`;

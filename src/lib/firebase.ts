@@ -86,10 +86,6 @@ export function getFirebaseAuth(): Auth {
 export type FirestoreCacheStatus = "persistent" | "fallback";
 let firestoreCacheStatus: FirestoreCacheStatus = "fallback";
 
-export function getFirestoreCacheStatus(): FirestoreCacheStatus {
-  return firestoreCacheStatus;
-}
-
 export function getFirebaseDb(): Firestore {
   if (dbInstance) return dbInstance;
   const app = getFirebaseApp();

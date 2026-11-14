@@ -8,20 +8,7 @@
  *（由 roles 集合建立）。
  */
 
-import {
-  hasRoleCategoryWithScope,
-  hasSchedulePermissionMeta,
-  isConvenerRoleMeta,
-  isGroupConvenerRoleMeta,
-  isGroupOfficerRoleMeta,
-  isGroupScopedRoleMeta,
-  isOfficerRoleMeta,
-  isReviewerRoleMeta,
-  isUnitLevelRoleMeta,
-  legacyRoleCategory,
-  legacyRoleScope,
-  type RoleMetaMap,
-} from "./orgMeta";
+import { hasSchedulePermissionMeta, isConvenerRoleMeta, isGroupScopedRoleMeta, isOfficerRoleMeta, isReviewerRoleMeta, isUnitLevelRoleMeta, legacyRoleCategory, legacyRoleScope, type RoleMetaMap } from "./orgMeta";
 
 export type { RoleCategory, RoleMeta, RoleMetaMap, RoleScope } from "./orgMeta";
 
@@ -64,22 +51,6 @@ export function isOfficerRole(
   return isOfficerRoleMeta(roles, roleMeta);
 }
 
-/** 組級召集人（排程權限用） */
-export function isGroupConvenerRole(
-  roles: string[] | undefined,
-  roleMeta?: RoleMetaMap,
-): boolean {
-  return isGroupConvenerRoleMeta(roles, roleMeta);
-}
-
-/** 組級執行幹事（排程權限用） */
-export function isGroupOfficerRole(
-  roles: string[] | undefined,
-  roleMeta?: RoleMetaMap,
-): boolean {
-  return isGroupOfficerRoleMeta(roles, roleMeta);
-}
-
 /** 是否有排程權限：組級召集人或組級執行幹事 */
 export function hasSchedulePermission(
   roles: string[] | undefined,
@@ -94,14 +65,6 @@ export function isUnitLevelRole(
   roleMeta?: RoleMetaMap,
 ): boolean {
   return isUnitLevelRoleMeta(role, roleMeta);
-}
-
-/** 單位級執行幹事（AuditPage 自審範圍用）。 */
-export function hasUnitOfficerRole(
-  roles: string[] | undefined,
-  roleMeta?: RoleMetaMap,
-): boolean {
-  return hasRoleCategoryWithScope(roles, "officer", "unit", roleMeta);
 }
 
 /* ================= 人員多群組模型（v1.21.0） ================= */

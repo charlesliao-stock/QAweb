@@ -10,7 +10,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import type { PageId, Rag } from "../types";
+import type { PageId } from "../types";
 
 export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
   {
@@ -56,32 +56,6 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
       description: "檢視審查員名單、依組別篩選並授予審查員角色",
     },
   };
-
-export function ragFor(value: number, threshold: number): Rag {
-  if (value >= threshold) return "green";
-  if (value >= threshold - 5) return "amber";
-  return "red";
-}
-
-export function RagBadge({
-  value,
-  threshold,
-  compact = false,
-}: {
-  value: number;
-  threshold: number;
-  compact?: boolean;
-}) {
-  const state = ragFor(value, threshold);
-  const label =
-    state === "green" ? "達標" : state === "amber" ? "接近閾值" : "未達標";
-  return (
-    <span className={`rag-badge rag-${state}${compact ? " compact" : ""}`}>
-      <i />
-      {compact ? label : `${label} · ${value}%`}
-    </span>
-  );
-}
 
 export function BrandMark({ small = false }: { small?: boolean }) {
   return (

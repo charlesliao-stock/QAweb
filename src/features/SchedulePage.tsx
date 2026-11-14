@@ -5,6 +5,7 @@
  * 排程讀寫一律走 src/lib/scheduling.ts 的新模型（indicatorSchedules），
  * 稽核由 lib 內自動寫入。
  */
+import { toErrorMessage } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
@@ -100,11 +101,6 @@ import {
   nextCalendarMonth,
   type BelowThresholdRow,
 } from "../lib/belowThreshold";
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  return "讀寫失敗，請檢查網路連線後再試";
-}
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");

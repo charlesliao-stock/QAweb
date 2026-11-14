@@ -8,8 +8,6 @@
 /** 排程類別：年度（曆年）／學年度（8 月制）／臨時 */
 export type CycleCategory = "year" | "academic" | "temp";
 
-export const CYCLE_CATEGORIES: CycleCategory[] = ["year", "academic", "temp"];
-
 /** 類別中文標籤：年度／學年度／臨時 */
 export function categoryLabel(c: string): string {
   if (c === "year") return "年度";

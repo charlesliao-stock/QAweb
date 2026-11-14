@@ -42,7 +42,6 @@ export const PERM_KEYS = [
 ] as const;
 
 export type PermKey = (typeof PERM_KEYS)[number];
-export type RolePermissions = Partial<Record<PermKey, boolean>>;
 
 export const PERM_LABELS: Record<PermKey, string> = Object.fromEntries(
   [...PAGE_PERMISSION_ITEMS, ...ACTION_PERMISSION_ITEMS].map((item) => [

@@ -184,10 +184,6 @@ const EMPTY_FLAGS: TitleFlags = {
   isConvener: false,
 };
 
-export function emptyTitleFlags(): TitleFlags {
-  return { ...EMPTY_FLAGS };
-}
-
 /* ================= 身分判斷（吃詮釋資料，不比對名稱） ================= */
 
 export function roleMetaOf(
@@ -289,14 +285,6 @@ export function isUnitLevelRoleMeta(
       m.category === "officer") &&
     m.scope === "unit"
   );
-}
-
-/** 單位級執行幹事（AuditPage 自審範圍用）：執行幹事類別且適用範圍為單位。 */
-export function hasUnitOfficerRoleMeta(
-  roles: string[] | undefined,
-  roleMeta?: RoleMetaMap,
-): boolean {
-  return hasRoleCategoryWithScope(roles, "officer", "unit", roleMeta);
 }
 
 /** 屬於指定類別的角色名稱清單（由詮釋資料算出，不寫死名稱）。 */

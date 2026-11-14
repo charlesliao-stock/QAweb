@@ -1,3 +1,4 @@
+import { toErrorMessage } from "../lib/errors";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, ListChecks, Pencil, ScanLine } from "lucide-react";
 import {
@@ -106,11 +107,6 @@ interface UnlockRow {
   id: string;
   status: string;
   reason: string;
-}
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  return "讀寫失敗，請檢查網路連線後再試";
 }
 
 function ymLabel(year: number, month: number): string {

@@ -157,9 +157,6 @@ export const CAPA_STATUS_LABEL: Record<CapaStage, string> = {
   待確認: "待確認", 原因分析: "原因分析", 措施規劃: "措施規劃", 措施執行: "措施執行",
   成效驗證: "成效驗證", 結案核准: "結案核准", 正式結案: "已核准結案", 已退回: "退回補充",
 };
-export function allowedTriggerPeriods(settings: CapaSettings, indicatorId: string): number {
-  return settings.indicatorOverrides[indicatorId] ?? settings.defaultTriggerPeriods;
-}
 export function newId(prefix = "capa"): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }

@@ -1,3 +1,4 @@
+import { toErrorMessage } from "../lib/errors";
 import {
   Fragment,
   useCallback,
@@ -207,11 +208,6 @@ function nextVersion(version: string): string {
   const m = /^v(\d+)\.(\d+)$/.exec(version.trim());
   if (!m) return "v1.1";
   return `v${m[1]}.${Number(m[2]) + 1}`;
-}
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  return "讀寫失敗，請檢查網路連線後再試";
 }
 
 /** 審核表編輯值（單筆表單＋批次新增共用，v1.18 抽取） */

@@ -1,3 +1,4 @@
+import { toErrorMessage } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowRightLeft, Search, X } from "lucide-react";
 import { collection, doc, getDoc, getDocs, query, serverTimestamp, where, writeBatch } from "../lib/db";
@@ -52,10 +53,6 @@ interface PersonRow {
   name: string;
   title: string;
   unitCode: string;
-}
-
-function toErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : "讀寫失敗，請檢查網路連線後再試";
 }
 
 export function TaskHandoffPage({ onAction }: { onAction: (message: string) => void }) {

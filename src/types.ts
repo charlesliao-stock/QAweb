@@ -11,8 +11,6 @@ export type PageId =
   | "permissions"
   | "reviewers";
 
-export type Rag = "green" | "amber" | "red";
-
 export interface Indicator {
   id: string;
   code: string;
