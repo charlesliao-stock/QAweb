@@ -18,6 +18,7 @@ import {
   ChevronRight,
   Download,
   FileText,
+  Plus,
   TrendingUp,
   Upload,
   X,
@@ -1399,7 +1400,28 @@ export function ResultsPage({
   }, [indRecs, indSel, errorUnit, errorUnitCode]);
   return (
     <div className="results-page">
-      <PageHeading page="results" />
+      <PageHeading
+        page="results"
+        action={tab === "indicator" && indSel ? (
+          <button
+            className="button button-primary"
+            onClick={() => {
+              const rate = indUnit === "unit" ? indSummary?.unitPr.rate : indSummary?.personPr.rate;
+              window.dispatchEvent(new CustomEvent("capa:open", { detail: {
+                indicatorId: indSel.id,
+                indicatorCode: indSel.code,
+                indicatorName: indSel.name,
+                threshold: indSel.threshold,
+                period: applied?.endMonth ?? "",
+                periodKeys: allMonths,
+                ...(typeof rate === "number" ? { rate } : {}),
+              } }));
+            }}
+          >
+            <Plus size={15} />由此建立 CAPA
+          </button>
+        ) : undefined}
+      />
 
       <div className="results-tabs" role="tablist" aria-label="結果分析檢視">
         {(

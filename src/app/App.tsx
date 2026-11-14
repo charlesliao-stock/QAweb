@@ -76,6 +76,18 @@ const SchedulePage = lazy(() =>
 );
 import type { PageId } from "../types";
 
+type CapaLaunchContext = {
+  indicatorId?: string;
+  indicatorCode?: string;
+  indicatorName?: string;
+  threshold?: number;
+  period?: string;
+  periodKeys?: string[];
+  unitCode?: string;
+  unitName?: string;
+  rate?: number;
+};
+
 const NAV_GROUPS = [
   {
     label: "工作台",
@@ -470,6 +482,8 @@ function Shell() {
   const { user, loading, needsPasswordChange, logout } = useAuth();
   const { can, ready: permissionsReady } = usePermissions();
   const [page, setPage] = useState<PageId>("dashboard");
+  const [capaLaunch, setCapaLaunch] = useState<CapaLaunchContext | null>(null);
+  const clearCapaLaunch = useCallback(() => setCapaLaunch(null), []);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [isMobile, setIsMobile] = useState(
@@ -480,6 +494,14 @@ function Shell() {
   const [toast, setToast] = useState("");
   // v1.41.0 流量控管：攔截到維護中阻擋時，db.ts 會發出事件，這裡顯示橫幅
   const [maintenanceBanner, setMaintenanceBanner] = useState("");
+  useEffect(() => {
+    const handler = (event: Event) => {
+      setCapaLaunch((event as CustomEvent<CapaLaunchContext>).detail ?? {});
+      setPage("capa");
+    };
+    window.addEventListener("capa:open", handler);
+    return () => window.removeEventListener("capa:open", handler);
+  }, []);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -637,7 +659,7 @@ function Shell() {
                 {page === "results" && <ResultsPage onAction={notify} />}
                 {page === "groups" && <GroupsPage onAction={notify} />}
                 {page === "handoff" && <TaskHandoffPage onAction={notify} />}
-                {page === "capa" && <CapaPage onAction={notify} />}
+                {page === "capa" && <CapaPage onAction={notify} launchContext={capaLaunch} onLaunchConsumed={clearCapaLaunch} />}
                 {page === "admin" && <AdminPage onAction={notify} />}
                 {page === "permissions" && <PermissionManagementPage onAction={notify} />}
               </>
