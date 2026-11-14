@@ -1,11 +1,6 @@
 /* ============ 結果分析頁（v1.13.0） ============ */
 /* v1.30.3：結果分析篩選器兩條橫向（第一條＝主體選擇器、第二條＝年／期間＋查詢） */
-.results-filters {
-  display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
-  margin-bottom: 16px;
-}
+
 .results-month-field {
   display: flex;
   flex-direction: column;
@@ -115,15 +110,7 @@
   color: #b42318;
   font-size: var(--font-small);
 }
-.results-filters .field-label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 150px;
-}
-.results-filters .select-wrap {
-  min-width: 150px;
-}
+
 /* v1.28 階段 3：查詢按鈕放篩選列最右端（v1.30.3 維持不變，第二條最後面） */
 .results-query-actions {
   display: flex;
@@ -146,9 +133,7 @@
   font-size: var(--font-small);
   margin: -8px 0 16px;
 }
-.rag-badge.rag-gray i {
-  background: #9aa5a4;
-}
+
 .trend-chart .chart-label {
   font-size: 11px;
   fill: #8a9493;
@@ -162,10 +147,7 @@
   padding: 6px 12px;
   font-size: var(--font-small);
 }
-.button-block {
-  width: 100%;
-  margin-top: 8px;
-}
+
 /* 預設（寬螢幕）：顯示表格，隱藏卡片；窄螢幕（≤640px）反之（沿用 .my-review 模式） */
 .results-page .task-cards {
   display: none;
@@ -179,16 +161,9 @@
     flex-direction: column;
     gap: 10px;
   }
-  .results-filters .field-label,
-  .results-filters .select-wrap {
-    min-width: 0;
-    flex: 1 1 45%;
-  }
+  
   /* v1.30.3：第一條只有主體選擇器一個欄位，窄螢幕改全寬 */
-  .results-filters-main .field-label,
-  .results-filters-main .select-wrap {
-    flex: 1 1 100%;
-  }
+  
   .results-month-field {
     min-width: 0;
     flex: 1 1 42%;
@@ -233,45 +208,7 @@
 }
 
 /* v1.14.0：審查總覽入口、季度分析、審查員管理 */
-.audit-search {
-  margin: 2px 0 12px;
-}
-.audit-indicator-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-.audit-indicator-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--line, #e6ebec);
-  border-radius: 12px;
-  background: var(--surface, #fff);
-  color: var(--ink, #1f2e36);
-  cursor: pointer;
-  text-align: left;
-  font: inherit;
-}
-.audit-indicator-row:hover {
-  border-color: #0f766e;
-}
-.audit-indicator-main {
-  display: grid;
-  gap: 2px;
-}
-.audit-indicator-main b {
-  font-size: 15px;
-}
-.audit-indicator-main small {
-  color: var(--muted, #6b7a7d);
-  font-size: 12px;
-}
+
 .muted-text {
   color: var(--muted, #6b7a7d);
 }
@@ -514,156 +451,6 @@
 }
 
 /* 季度分析 */
-.quarter-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: flex-end;
-  margin: 4px 0 14px;
-}
-.quarter-control {
-  display: grid;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--muted, #6b7a7d);
-}
-.quarter-control select {
-  height: 36px;
-  border: 1px solid var(--line, #e6ebec);
-  border-radius: 8px;
-  padding: 0 10px;
-  background: var(--surface, #fff);
-  color: var(--ink, #1f2e36);
-  max-width: 260px;
-}
-.quarter-mode {
-  display: flex;
-  border: 1px solid var(--line, #e6ebec);
-  border-radius: 999px;
-  overflow: hidden;
-}
-.quarter-mode button {
-  border: 0;
-  background: transparent;
-  padding: 8px 16px;
-  cursor: pointer;
-  color: var(--muted, #506165);
-  font-size: 14px;
-}
-.quarter-mode button.active {
-  background: #0f766e;
-  color: #fff;
-}
-.quarter-summary {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px;
-  margin: 0 0 14px;
-}
-.quarter-summary > div {
-  border: 1px solid var(--line, #e6ebec);
-  border-radius: 12px;
-  padding: 10px 12px;
-  display: grid;
-  gap: 2px;
-  background: var(--surface, #fff);
-}
-.quarter-summary span {
-  font-size: 12px;
-  color: var(--muted, #6b7a7d);
-}
-.quarter-summary strong {
-  font-size: 18px;
-  color: var(--ink, #1f2e36);
-}
-.quarter-empty {
-  color: var(--muted, #6b7a7d);
-  padding: 12px 0;
-}
-.quarter-chart-wrap {
-  margin: 6px 0 4px;
-}
-.quarter-chart-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  font-size: 12px;
-  color: var(--muted, #506165);
-  margin-bottom: 6px;
-}
-.quarter-chart-legend i {
-  display: inline-block;
-  width: 12px;
-  height: 4px;
-  border-radius: 2px;
-  margin-right: 6px;
-  vertical-align: middle;
-}
-.threshold-legend i {
-  background: #dc2626;
-  height: 2px;
-}
-.quarter-chart-scroll {
-  overflow-x: auto;
-}
-.quarter-chart {
-  width: 100%;
-  min-width: 560px;
-  height: auto;
-  display: block;
-}
-.quarter-gridline {
-  stroke: var(--line, #eef2f3);
-  stroke-width: 1;
-}
-.quarter-axis-label {
-  fill: var(--muted, #6b7a7d);
-  font-size: 11px;
-}
-.quarter-threshold-line {
-  stroke: #dc2626;
-  stroke-width: 1.5;
-  stroke-dasharray: 6 4;
-}
-.quarter-detail-heading {
-  margin: 16px 0 8px;
-}
-.quarter-detail-heading h3 {
-  margin: 0 0 2px;
-  font-size: 15px;
-  color: var(--ink, #1f2e36);
-}
-.quarter-detail-heading span {
-  font-size: 12px;
-  color: var(--muted, #6b7a7d);
-}
-.quarter-spark-values {
-  white-space: nowrap;
-}
-.quarter-spark-values span {
-  display: inline-block;
-  margin-right: 8px;
-  font-size: 12px;
-  color: var(--muted, #6b7a7d);
-}
-.quarter-spark-values span.selected {
-  color: var(--ink, #1f2e36);
-  font-weight: 700;
-}
-.quarter-result.met {
-  color: #0f766e;
-  font-weight: 700;
-}
-.quarter-result.below {
-  color: #dc2626;
-  font-weight: 700;
-}
-.quarter-disclaimer {
-  font-size: 12px;
-  color: var(--muted, #6b7a7d);
-  margin-top: 10px;
-}
-
 
 /* 手機審查結果管理摘要卡片；桌機仍使用原本可水平捲動的完整資料表。 */
 .review-results-cards {

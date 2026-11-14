@@ -17,7 +17,11 @@ pnpm dev
 
 正式靜態檔案由 `pnpm build` 產生於 `dist/`。Vite production base path 已依 GitHub repository 名稱設為 `/QAweb/`。
 
-## GitHub Pages 自動部署
+## 自動部署
+
+正式站由 `.github/workflows/deploy-firebase.yml` 在推送 `firebase-mvp` 時部署到 Firebase Hosting；以下為 `deploy.yml` 的 `main` 建置檢查／GitHub Pages 說明。
+
+### GitHub Pages / 建置檢查
 
 `.github/workflows/deploy.yml` 對 `main` 的 pull request 執行建置檢查；push 到 `main` 或在 `main` 手動執行 workflow 時，會建置 `dist/` 並部署到 GitHub Pages。GitHub repository 的 **Settings → Pages → Build and deployment → Source** 必須設定為 **GitHub Actions**。
 
@@ -33,7 +37,7 @@ cp .env.example .env.local
 
 `.env.example` 已含公開的 Firebase Web SDK client config；本機如需測試 Auth 模式，將 `VITE_FIREBASE_AUDIT_READS` 設為 `true`。審查員角色寫入旗標 `VITE_FIREBASE_REVIEWER_ROLE_WRITES` 預設 `false`；Rules 尚未驗收前不得開啟。`.env.local` 不應提交到 GitHub。網站端不含管理員憑證；Firebase Web 設定不是資料保護機制。Security Rules 必須依已驗證使用者角色及查詢條件限制各集合，不可因前端隱藏或篩選而視為已完成授權。
 
-Firebase Auth 模式下，`系統管理員` 會優先取得完整前端導覽與全院結果查詢視角。審查員管理頁可讀取既有 `users` 清單並提供將「審查員」加入使用者 `roles` 的操作；寫入預設關閉，需在 Rules 驗收後啟用。此 repository 沒有 Rules 檔。這個動作不建立 Firebase Auth 帳號、不指派單位，也尚未寫入稽核事件。系統管理頁的權限矩陣、稽核事件列表、群組管理、CAPA 及任務清單仍未接資料。前端完整導覽不代表伺服器端已授予權限；正式角色管理需使用受控後端／Rules 並加入不可竄改的稽核紀錄。
+Firebase Auth 模式下，`系統管理員` 會優先取得完整前端導覽與全院結果查詢視角。Firestore Rules 由 `firestore.rules` 管理，並隨 `deploy-firebase.yml` 於推送 `firebase-mvp` 時部署（索引不會自動部署）。這個動作不建立 Firebase Auth 帳號、不指派單位，也尚未寫入稽核事件。系統管理頁的權限矩陣、稽核事件列表、群組管理、CAPA 及任務清單仍未接資料。前端完整導覽不代表伺服器端已授予權限；正式角色管理需使用受控後端／Rules 並加入不可竄改的稽核紀錄。
 
 ## 正式使用前仍需完成
 

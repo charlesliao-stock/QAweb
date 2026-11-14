@@ -27,8 +27,6 @@
   border-right-color: #223036;
 }
 :root[data-mode="dark"] .sidebar-brand b,
-:root[data-mode="dark"] .topbar-crumb b,
-:root[data-mode="dark"] .topbar-user b,
 :root[data-mode="dark"] .profile-info b {
   color: var(--ink);
 }
@@ -36,7 +34,6 @@
   background: rgba(17, 26, 30, 0.94);
   border-bottom-color: #223036;
 }
-:root[data-mode="dark"] .topbar-crumb,
 :root[data-mode="dark"] .nav-group-label {
   color: var(--muted);
 }
@@ -115,38 +112,7 @@
 }
 
 /* ============ 顯示設定彈出面板（頂欄） ============ */
-.display-settings-wrap {
-  position: relative;
-}
-.display-pop {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 10px);
-  width: 240px;
-  background: var(--surface, #fff);
-  border: 1px solid var(--line, #e8edef);
-  border-radius: 12px;
-  box-shadow: 0 16px 48px rgba(20, 40, 44, 0.16);
-  padding: 14px 16px 16px;
-  z-index: 60;
-}
-:root[data-mode="dark"] .display-pop {
-  background: #152024;
-  border-color: #2a3a41;
-}
-.display-pop h4 {
-  margin: 0 0 8px;
-  font-size: var(--font-body);
-  color: var(--ink, #20313a);
-}
-.display-pop .pop-row-label {
-  font-size: var(--font-small);
-  color: var(--muted, #7c8b92);
-  margin: 10px 0 6px;
-}
-.display-pop .pop-row-label:first-of-type {
-  margin-top: 0;
-}
+
 .font-size-options {
   display: flex;
   gap: 6px;
@@ -221,11 +187,4 @@
 .mode-toggle.on .toggle-track::after {
   left: 18px;
 }
-.display-pop-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 55;
-  background: transparent;
-  border: 0;
-  cursor: default;
-}
+

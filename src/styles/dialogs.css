@@ -1,58 +1,5 @@
 /* 審查員管理 */
-.reviewer-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: flex-end;
-  margin: 4px 0 8px;
-}
-.reviewer-group-control {
-  display: grid;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--muted, #6b7a7d);
-}
-.reviewer-group-control select {
-  height: 36px;
-  border: 1px solid var(--line, #e6ebec);
-  border-radius: 8px;
-  padding: 0 10px;
-  background: var(--surface, #fff);
-  color: var(--ink, #1f2e36);
-}
-.reviewer-search {
-  flex: 1 1 220px;
-}
-.reviewer-management-note,
-.reviewer-safe-mode-note {
-  font-size: 12px;
-  color: var(--muted, #6b7a7d);
-}
-.reviewer-safe-mode-note {
-  border: 1px dashed #d9a441;
-  border-radius: 8px;
-  padding: 8px 12px;
-  background: #fffaf0;
-  color: #8a6d1c;
-}
-.reviewer-sort-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: none;
-  border: 0;
-  cursor: pointer;
-  font: inherit;
-  color: inherit;
-  padding: 0;
-}
-.reviewer-empty {
-  text-align: center;
-  color: var(--muted, #6b7a7d);
-}
-.reviewer-loading {
-  color: var(--muted, #6b7a7d);
-}
+
 .reviewer-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -92,45 +39,6 @@
   margin: 0;
   font-size: 12px;
   color: var(--muted, #6b7a7d);
-}
-.reviewer-candidate-search {
-  width: 100%;
-  margin: 4px 0 10px;
-}
-.reviewer-candidate-list {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-.reviewer-candidate {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  border: 1px solid var(--line, #e6ebec);
-  border-radius: 10px;
-  padding: 10px 12px;
-}
-.reviewer-candidate > div {
-  display: grid;
-  gap: 2px;
-}
-.reviewer-candidate span {
-  font-size: 12px;
-  color: var(--muted, #6b7a7d);
-}
-.not-connected-state {
-  text-align: center;
-  padding: 32px 16px;
-}
-.not-connected-state h2 {
-  font-size: 17px;
-  margin: 0 0 8px;
-  color: var(--ink, #1f2e36);
-}
-.not-connected-state p {
-  color: var(--muted, #6b7a7d);
-  margin: 0;
 }
 
 /* v1.18：批次新增指標 dialog（寬版）＋欄位錯誤訊息 */
