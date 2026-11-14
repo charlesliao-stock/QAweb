@@ -3,7 +3,15 @@ import { ArrowRightLeft, Search, X } from "lucide-react";
 import { collection, doc, getDoc, getDocs, query, serverTimestamp, where, writeBatch } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
-import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
+import {
+  EmptyState,
+  FilterPanel,
+  ListPanel,
+  PageHeading,
+  SectionTitle,
+  SortableTh,
+  useTableSort,
+} from "../components/ui";
 import { groupsForRoles, parseMemberships } from "../lib/roleIdentity";
 import { useOrgMeta } from "../lib/useOrgMeta";
 import { displayUnitCode, staffLabel } from "../lib/mask";
@@ -302,6 +310,22 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
     }
   }
 
+  const {
+    sortedRows: sortedTasks,
+    sort: taskSort,
+    toggleSort: toggleTaskSort,
+  } = useTableSort<
+    TaskRow,
+    "reviewer" | "unit" | "indicator" | "period" | "deadline" | "status"
+  >(tasks, {
+    reviewer: (t) => staffNames.get(t.reviewerId) ?? t.reviewerId,
+    unit: (t) => `${t.groupName}／${t.unitName}`,
+    indicator: (t) => t.indicatorName,
+    period: (t) => t.year * 100 + t.month,
+    deadline: (t) => t.deadline,
+    status: (t) => (t.status === "locked" ? 1 : 0),
+  });
+
   if (!canOpen && !refLoading) {
     return <EmptyState title="無交接權限" description="僅系統管理員，或隸屬原指標組別的召集人／執行幹事可進行未完成任務交接。" />;
   }
@@ -310,31 +334,28 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
     <>
       <PageHeading page="handoff" />
       <SectionTitle title="任務交接" note="進頁不自動載入資料；請先查詢未完成任務。只交接已分配未完成的部分，交接立即生效，已完成任務不會轉派。" />
-      <section className="panel">
-        <h3>原審查員</h3>
-        <div className="org-filter-row" role="search">
+      <FilterPanel title="原審查員">
           <label className="form-field"><span className="field-label">群組</span><select className="text-input" value={groupFilter} onChange={(e) => { setGroupFilter(e.target.value); setUnitFilter(""); }}><option value="">全部可管理群組</option>{availableGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</select></label>
           <label className="form-field"><span className="field-label">單位</span><select className="text-input" value={unitFilter} onChange={(e) => setUnitFilter(e.target.value)}><option value="">全部單位</option>{availableUnits.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
           <label className="form-field"><span className="field-label">職編搜尋</span><input className="text-input" value={staffSearch} onChange={(e) => setStaffSearch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void runSearch(); }} placeholder="輸入原審查員職編" /></label>
           <div className="form-field"><span className="field-label">&nbsp;</span><button type="button" className="button button-primary" onClick={() => void runSearch()} disabled={searching || refLoading}><Search size={15} />{searching ? "查詢中…" : "查詢"}</button></div>
-        </div>
-        <p className="settings-note">群組／單位下拉與職編搜尋擇一使用；有填職編時以職編精確比對為準，群組／單位篩選不套用。</p>
-        <div style={{ marginTop: 12 }}>
-          {!searched ? (
-            <EmptyState title="尚未查詢" description="請選擇群組／單位，或輸入原審查員職編，再按「查詢」。" />
-          ) : tasks.length === 0 ? (
-            <EmptyState title="沒有符合條件的未完成任務" description="請調整群組、單位或原審查員職編後再查詢；已完成任務不會顯示。" />
-          ) : (
-            <>
-              <div className="form-actions" style={{ marginBottom: 10 }}>
-                <button type="button" className="button button-outline" onClick={toggleAll}>{tasks.length > 0 && tasks.every((t) => selectedTasks.includes(t.id)) ? "取消全選" : "全選查詢結果"}</button>
-                <span className="settings-note">已勾選 {selected.length}／{tasks.length} 筆</span>
-              </div>
-              <div className="table-scroll"><table className="data-table"><thead><tr><th>選取</th><th>原審查員</th><th>群組／單位</th><th>指標</th><th>審查期間</th><th>期限</th><th>狀態</th></tr></thead><tbody>{tasks.map((t) => <tr key={t.id}><td><input type="checkbox" checked={selectedTasks.includes(t.id)} onChange={() => toggleTask(t.id)} aria-label={`選取任務 ${t.id}`} /></td><td>{staffLabel(t.reviewerId, staffNames.get(t.reviewerId) ?? "")}</td><td>{t.groupName}／{t.unitName}</td><td>{t.indicatorName}</td><td>{t.year} 年 {t.month} 月</td><td>{t.deadline || "—"}</td><td>{t.status === "locked" ? "逾期鎖定" : "未完成"}</td></tr>)}</tbody></table></div>
-            </>
-          )}
-        </div>
-      </section>
+      </FilterPanel>
+      <p className="settings-note">群組／單位下拉與職編搜尋擇一使用；有填職編時以職編精確比對為準，群組／單位篩選不套用。</p>
+      <ListPanel title="未完成任務" count={searched ? tasks.length : undefined}>
+        {!searched ? (
+          <EmptyState title="尚未查詢" description="請選擇群組／單位，或輸入原審查員職編，再按「查詢」。" />
+        ) : tasks.length === 0 ? (
+          <EmptyState title="沒有符合條件的未完成任務" description="請調整群組、單位或原審查員職編後再查詢；已完成任務不會顯示。" />
+        ) : (
+          <>
+            <div className="form-actions" style={{ margin: "12px 22px" }}>
+              <button type="button" className="button button-outline" onClick={toggleAll}>{tasks.length > 0 && tasks.every((t) => selectedTasks.includes(t.id)) ? "取消全選" : "全選查詢結果"}</button>
+              <span className="settings-note">已勾選 {selected.length}／{tasks.length} 筆</span>
+            </div>
+            <table className="data-table"><thead><tr><th>選取</th><SortableTh label="原審查員" sortKey="reviewer" sort={taskSort} onSort={toggleTaskSort} /><SortableTh label="群組／單位" sortKey="unit" sort={taskSort} onSort={toggleTaskSort} /><SortableTh label="指標" sortKey="indicator" sort={taskSort} onSort={toggleTaskSort} /><SortableTh label="審查期間" sortKey="period" sort={taskSort} onSort={toggleTaskSort} /><SortableTh label="期限" sortKey="deadline" sort={taskSort} onSort={toggleTaskSort} /><SortableTh label="狀態" sortKey="status" sort={taskSort} onSort={toggleTaskSort} /></tr></thead><tbody>{sortedTasks.map((t) => <tr key={t.id}><td><input type="checkbox" checked={selectedTasks.includes(t.id)} onChange={() => toggleTask(t.id)} aria-label={`選取任務 ${t.id}`} /></td><td>{staffLabel(t.reviewerId, staffNames.get(t.reviewerId) ?? "")}</td><td>{t.groupName}／{t.unitName}</td><td>{t.indicatorName}</td><td>{t.year} 年 {t.month} 月</td><td>{t.deadline || "—"}</td><td>{t.status === "locked" ? "逾期鎖定" : "未完成"}</td></tr>)}</tbody></table>
+          </>
+        )}
+      </ListPanel>
       <section className="panel">
         <h3>新審查員</h3>
         <div className="org-filter-row" role="search">

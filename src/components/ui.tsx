@@ -1,5 +1,15 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import { AlertCircle, Check, Inbox, LoaderCircle, RefreshCw, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  AlertCircle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Check,
+  Inbox,
+  LoaderCircle,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import type { PageId, Rag } from "../types";
 
 export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
@@ -331,5 +341,139 @@ export function SummaryCell({
       <strong>{value}</strong>
       <small>{note}</small>
     </div>
+  );
+}
+
+/* ===== 統一頁面模板：篩選區塊 + 列表區塊（可排序） =====
+ * 全站列表頁一律「篩選區塊 → 列表區塊」兩段式；樣式在 shared-components.css
+ * 的 .filter-panel / .list-panel，隨主題 token 變化。 */
+
+/** 篩選區塊：放篩選欄位與搜尋，actions 放「清除」等按鈕。 */
+export function FilterPanel({
+  title = "篩選條件",
+  children,
+  actions,
+}: {
+  title?: string;
+  children: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <section className="panel filter-panel" aria-label={title}>
+      <div className="filter-panel-head">
+        <h2>{title}</h2>
+        {actions && <div className="filter-panel-actions">{actions}</div>}
+      </div>
+      <div className="filter-panel-body">{children}</div>
+    </section>
+  );
+}
+
+/** 列表區塊：標題＋筆數＋工具列（新增／匯出等）＋可橫向捲動的表格。 */
+export function ListPanel({
+  title,
+  count,
+  actions,
+  children,
+}: {
+  title: string;
+  count?: number;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="panel data-panel list-panel" aria-label={title}>
+      <div className="list-panel-head">
+        <div>
+          <h2>{title}</h2>
+          {count !== undefined && (
+            <span className="list-panel-count">共 {count} 筆</span>
+          )}
+        </div>
+        {actions && <div className="list-panel-actions">{actions}</div>}
+      </div>
+      <div className="table-scroll">{children}</div>
+    </section>
+  );
+}
+
+export type SortDirection = "asc" | "desc";
+export type SortState<K extends string> = { key: K; direction: SortDirection };
+export type SortValue = string | number | boolean | null | undefined;
+
+function compareSortValues(a: SortValue, b: SortValue): number {
+  const aEmpty = a === null || a === undefined || a === "";
+  const bEmpty = b === null || b === undefined || b === "";
+  if (aEmpty || bEmpty) return aEmpty === bEmpty ? 0 : aEmpty ? 1 : -1;
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  return String(a).localeCompare(String(b), "zh-Hant", { numeric: true });
+}
+
+/**
+ * 列表排序 hook。accessors 以欄位 key 對應取值函式；空值永遠排在最後，
+ * 中文用 zh-Hant、數字字串用 numeric 比較。點同一欄位切換升／降冪。
+ */
+export function useTableSort<T, K extends string>(
+  rows: readonly T[],
+  accessors: Record<K, (row: T) => SortValue>,
+  initial?: SortState<K>,
+) {
+  const [sort, setSort] = useState<SortState<K> | null>(initial ?? null);
+  const toggleSort = useCallback((key: K) => {
+    setSort((cur) =>
+      cur && cur.key === key
+        ? { key, direction: cur.direction === "asc" ? "desc" : "asc" }
+        : { key, direction: "asc" },
+    );
+  }, []);
+  // 資料量為單頁列表，每次 render 直接排序，accessor 依賴的外部資料（如姓名對照）
+  // 載入後才會即時反映。
+  const sortedRows = (() => {
+    if (!sort) return [...rows];
+    const get = accessors[sort.key];
+    if (!get) return [...rows];
+    const sign = sort.direction === "asc" ? 1 : -1;
+    const isEmpty = (v: SortValue) => v === null || v === undefined || v === "";
+    // 穩定排序：同值維持原順序；空值永遠排在最後，不受升降冪影響
+    return rows
+      .map((row, index) => ({ row, index, value: get(row) }))
+      .sort((x, y) => {
+        const xe = isEmpty(x.value);
+        const ye = isEmpty(y.value);
+        if (xe || ye) return xe === ye ? x.index - y.index : xe ? 1 : -1;
+        const c = compareSortValues(x.value, y.value);
+        return c !== 0 ? c * sign : x.index - y.index;
+      })
+      .map((x) => x.row);
+  })();
+  return { sortedRows, sort, toggleSort };
+}
+
+/** 可排序表頭；sort 為 useTableSort 回傳的狀態。 */
+export function SortableTh<K extends string>({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  className,
+}: {
+  label: string;
+  sortKey: K;
+  sort: SortState<K> | null;
+  onSort: (key: K) => void;
+  className?: string;
+}) {
+  const direction = sort && sort.key === sortKey ? sort.direction : null;
+  const Icon = direction ? (direction === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
+  return (
+    <th
+      className={className}
+      aria-sort={direction ? (direction === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <button type="button" className="th-sort" onClick={() => onSort(sortKey)}>
+        {label}
+        <Icon size={14} aria-hidden="true" />
+      </button>
+    </th>
   );
 }

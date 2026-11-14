@@ -34,7 +34,15 @@ import {
   where,
   writeBatch,
 } from "../lib/db";
-import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
+import {
+  EmptyState,
+  FilterPanel,
+  ListPanel,
+  PageHeading,
+  SectionTitle,
+  SortableTh,
+  type SortState,
+} from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
 import { getDocsCacheFirst } from "../lib/cacheFirst";
@@ -938,6 +946,11 @@ export function IndicatorsPage({
   }, [onAction]);
 
   /** 清單排序切換（沿用審查員頁籤 ▲▼ 模式） */
+  const tableSort: SortState<IndicatorSortKey> = {
+    key: sortKey,
+    direction: sortDir === 1 ? "asc" : "desc",
+  };
+
   function toggleSort(key: IndicatorSortKey) {
     if (sortKey === key) {
       setSortDir((d) => (d === 1 ? -1 : 1));
@@ -1658,7 +1671,22 @@ export function IndicatorsPage({
       />
 
       {view.kind === "list" && (
-        <div className="indicator-filter-row" role="search">
+        <FilterPanel
+          actions={
+            (groupFilter || searchKw) && (
+              <button
+                type="button"
+                className="button button-outline"
+                onClick={() => {
+                  setGroupFilter("");
+                  setSearchKw("");
+                }}
+              >
+                清除篩選
+              </button>
+            )
+          }
+        >
           <div className="select-wrap indicator-filter-group">
             <select
               value={groupFilter}
@@ -1683,20 +1711,7 @@ export function IndicatorsPage({
             value={searchKw}
             onChange={(e) => setSearchKw(e.target.value)}
           />
-          <div className="indicator-filter-actions">
-            <button className="button button-primary" onClick={openCreate}>
-              <Plus size={16} />
-              新增指標
-            </button>
-            <button
-              className="button button-outline"
-              onClick={() => setBatchOpen(true)}
-            >
-              <Plus size={16} />
-              批次新增
-            </button>
-          </div>
-        </div>
+        </FilterPanel>
       )}
 
       {view.kind === "list" ? (
@@ -1710,68 +1725,34 @@ export function IndicatorsPage({
             description="使用上方工具列的「新增指標」建立第一支指標，分類組別、編號、名稱、負責人與閾值為必填。"
           />
         ) : (
-          <section className="panel data-panel">
-            <div className="table-scroll">
+          <ListPanel
+            title="指標清單"
+            count={visibleRows.length}
+            actions={
+              <>
+                <button className="button button-primary" onClick={openCreate}>
+                  <Plus size={16} />
+                  新增指標
+                </button>
+                <button
+                  className="button button-outline"
+                  onClick={() => setBatchOpen(true)}
+                >
+                  <Plus size={16} />
+                  批次新增
+                </button>
+              </>
+            }
+          >
               <table className="permission-table">
                 <thead>
                   <tr>
-                    <th>
-                      <button
-                        type="button"
-                        className="th-sort"
-                        onClick={() => toggleSort("code")}
-                        title="依編號排序"
-                      >
-                        編號
-                        {sortKey === "code" && (sortDir === 1 ? " ▲" : " ▼")}
-                      </button>
-                    </th>
-                    <th>
-                      <button
-                        type="button"
-                        className="th-sort"
-                        onClick={() => toggleSort("name")}
-                        title="依名稱排序"
-                      >
-                        指標名稱
-                        {sortKey === "name" && (sortDir === 1 ? " ▲" : " ▼")}
-                      </button>
-                    </th>
-                    <th>
-                      <button
-                        type="button"
-                        className="th-sort"
-                        onClick={() => toggleSort("group")}
-                        title="依組別排序"
-                      >
-                        組別
-                        {sortKey === "group" && (sortDir === 1 ? " ▲" : " ▼")}
-                      </button>
-                    </th>
+                    <SortableTh label="編號" sortKey="code" sort={tableSort} onSort={toggleSort} />
+                    <SortableTh label="指標名稱" sortKey="name" sort={tableSort} onSort={toggleSort} />
+                    <SortableTh label="組別" sortKey="group" sort={tableSort} onSort={toggleSort} />
                     <th>負責人</th>
-                    <th>
-                      <button
-                        type="button"
-                        className="th-sort"
-                        onClick={() => toggleSort("threshold")}
-                        title="依閾值排序"
-                      >
-                        閾值
-                        {sortKey === "threshold" &&
-                          (sortDir === 1 ? " ▲" : " ▼")}
-                      </button>
-                    </th>
-                    <th>
-                      <button
-                        type="button"
-                        className="th-sort"
-                        onClick={() => toggleSort("status")}
-                        title="依狀態排序"
-                      >
-                        狀態
-                        {sortKey === "status" && (sortDir === 1 ? " ▲" : " ▼")}
-                      </button>
-                    </th>
+                    <SortableTh label="閾值" sortKey="threshold" sort={tableSort} onSort={toggleSort} />
+                    <SortableTh label="狀態" sortKey="status" sort={tableSort} onSort={toggleSort} />
                     <th>操作</th>
                   </tr>
                 </thead>
@@ -1849,8 +1830,7 @@ export function IndicatorsPage({
                   )}
                 </tbody>
               </table>
-            </div>
-          </section>
+          </ListPanel>
         )
       ) : (
         <section className="panel data-panel indicator-form">

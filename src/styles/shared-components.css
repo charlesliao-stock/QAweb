@@ -597,3 +597,89 @@
   white-space: nowrap;
 }
 /* 可點擊排序的表頭按鈕（v1.12.2：審查員名單） */
+
+/* ===== 統一頁面模板：篩選區塊 + 列表區塊 ===== */
+.filter-panel {
+  padding: 16px 22px 18px;
+  margin-bottom: 14px;
+}
+.filter-panel-head,
+.list-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.filter-panel-head h2,
+.list-panel-head h2 {
+  margin: 0;
+  font-size: var(--font-subtitle);
+  color: var(--ink);
+}
+.filter-panel-head {
+  margin-bottom: 12px;
+}
+.filter-panel-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 16px;
+  align-items: flex-end;
+}
+.filter-panel-body .form-field,
+.filter-panel-body label {
+  margin-bottom: 0;
+}
+.filter-panel-actions,
+.list-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.list-panel {
+  margin-bottom: 14px;
+}
+.list-panel-head {
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--line);
+}
+.list-panel-head > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.list-panel-count {
+  font-size: var(--font-small);
+  color: var(--muted);
+}
+.list-panel .data-table,
+.list-panel .permission-table {
+  margin: 0;
+}
+.th-sort .lucide {
+  opacity: 0.45;
+  flex: none;
+}
+th[aria-sort="ascending"] .th-sort .lucide,
+th[aria-sort="descending"] .th-sort .lucide {
+  opacity: 1;
+  color: var(--teal);
+}
+@media (max-width: 720px) {
+  .filter-panel,
+  .list-panel-head {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .filter-panel-body > * {
+    flex: 1 1 100%;
+  }
+}
+.list-panel .table-scroll > p,
+.list-panel .table-scroll > .login-error {
+  margin: 12px 22px;
+}
+.filter-panel .select-wrap {
+  min-width: 160px;
+}

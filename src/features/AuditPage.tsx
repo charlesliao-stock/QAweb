@@ -26,7 +26,6 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowUpDown,
   ChevronDown,
   ClipboardCheck,
   Eye,
@@ -51,7 +50,15 @@ import {
 } from "../lib/refCache";
 import { getDocCacheFirst, getDocsCacheFirst } from "../lib/cacheFirst";
 import { fetchAllPaged } from "../lib/pagedQuery";
-import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
+import {
+  EmptyState,
+  FilterPanel,
+  ListPanel,
+  PageHeading,
+  SectionTitle,
+  SortableTh,
+  type SortState,
+} from "../components/ui";
 import { useAuth } from "../lib/auth";
 import { usePermissions } from "../lib/usePermissions";
 import { staffLabel } from "../lib/mask";
@@ -940,23 +947,13 @@ export function AuditPage({
     }
   }
 
-  function SortTh({ label, k }: { label: string; k: SortKey }) {
-    const active = sortKey === k;
-    return (
-      <th>
-        <button
-          type="button"
-          className={`th-sort${active ? " active" : ""}`}
-          onClick={() => toggleSort(k)}
-          aria-label={`依${label}排序`}
-        >
-          {label}
-          <ArrowUpDown size={13} />
-          {active && (sortDir === 1 ? " ▲" : " ▼")}
-        </button>
-      </th>
-    );
-  }
+  const tableSort: SortState<SortKey> = {
+    key: sortKey,
+    direction: sortDir === 1 ? "asc" : "desc",
+  };
+  const SortTh = ({ label, k }: { label: string; k: SortKey }) => (
+    <SortableTh label={label} sortKey={k} sort={tableSort} onSort={toggleSort} />
+  );
 
   function openExec(row: ActiveRow) {
     setExecRow(row);
@@ -1065,9 +1062,23 @@ export function AuditPage({
           本人任務未完整載入（分頁中斷），加審／自審排程可能未全列出；請重新整理後再確認。
         </p>
       )}
-      <section className="panel">
-        <SectionTitle title={progressTitle} note={progressNote} />
-        <div className="filter-bar">
+      <FilterPanel
+        actions={
+          (selGroup || selIndicator || keyword) && (
+            <button
+              type="button"
+              className="button button-outline"
+              onClick={() => {
+                setSelGroup("");
+                setSelIndicator("");
+                setKeyword("");
+              }}
+            >
+              清除篩選
+            </button>
+          )
+        }
+      >
           <div className="form-field" style={{ maxWidth: 200 }}>
             <label className="field-label">組別</label>
             <div className="select-wrap">
@@ -1137,7 +1148,9 @@ export function AuditPage({
               onChange={(e) => setKeyword(e.target.value)}
             />
           </div>
-        </div>
+      </FilterPanel>
+      <ListPanel title={progressTitle} count={filtered.length}>
+        {progressNote && <p className="settings-note">{progressNote}</p>}
         {loading ? (
           <p className="muted-text" role="status">
             載入中…
@@ -1150,7 +1163,7 @@ export function AuditPage({
         ) : filtered.length === 0 ? (
           <p className="muted-text">沒有符合篩選條件的指標。</p>
         ) : (
-          <div className="table-scroll">
+          <>
             <table className="data-table">
               <thead>
                 <tr>
@@ -1219,9 +1232,9 @@ export function AuditPage({
                 ))}
               </tbody>
             </table>
-          </div>
+          </>
         )}
-      </section>
+      </ListPanel>
 
       {viewRow && (
         <div className="reviewer-modal-backdrop" onClick={() => setViewRow(null)}>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, Plus, Search, X } from "lucide-react";
-import { SectionTitle } from "../components/ui";
+import { Plus, Search, X } from "lucide-react";
+import { FilterPanel, ListPanel, SortableTh, useTableSort } from "../components/ui";
 import {
   grantReviewerRole,
   isFirebaseReviewerRoleWriteEnabled,
@@ -14,7 +14,6 @@ import { useOrgMeta } from "../lib/useOrgMeta";
 import { isReviewerRole } from "../lib/roleIdentity";
 
 type SortKey = "staffId" | "name" | "groups" | "unitCode" | "status";
-type SortState = { key: SortKey; direction: "asc" | "desc" };
 
 function groupLabel(
   person: FirebaseUserRow,
@@ -37,10 +36,6 @@ export function ReviewerManagement({
   const [groupFilter, setGroupFilter] = useState("");
   const [search, setSearch] = useState("");
   const [candidateSearch, setCandidateSearch] = useState("");
-  const [sort, setSort] = useState<SortState>({
-    key: "name",
-    direction: "asc",
-  });
   const [showAddDialog, setShowAddDialog] = useState(false);
   /** v1.58.0：授予審查員時明確指定的群組（寫入該群組分工表，不再產生全域角色） */
   const [grantGroupId, setGrantGroupId] = useState("");
@@ -106,7 +101,7 @@ export function ReviewerManagement({
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
   }, [groupOptions, people]);
-  const visiblePeople = useMemo(() => {
+  const filteredPeople = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     return people
       .filter((person) =>
@@ -118,18 +113,22 @@ export function ReviewerManagement({
           .includes(query),
       )
       .filter((person) => isReviewerRole(person.roles, orgMeta.roleMeta))
-      .sort((a, b) => {
-        const left =
-          sort.key === "groups" ? groupLabel(a, groupNames) : a[sort.key];
-        const right =
-          sort.key === "groups" ? groupLabel(b, groupNames) : b[sort.key];
-        const compared = left.localeCompare(right, "zh-Hant", {
-          numeric: true,
-          sensitivity: "base",
-        });
-        return sort.direction === "asc" ? compared : -compared;
-      });
-  }, [people, groupFilter, search, sort, groupNames, orgMeta.roleMeta]);
+  }, [people, groupFilter, search, groupNames, orgMeta.roleMeta]);
+
+  const { sortedRows: sortedPeople, sort, toggleSort } = useTableSort<
+    FirebaseUserRow,
+    SortKey
+  >(
+    filteredPeople,
+    {
+      staffId: (p) => p.staffId,
+      name: (p) => p.name,
+      groups: (p) => groupLabel(p, groupNames),
+      unitCode: (p) => p.unitCode,
+      status: (p) => p.status,
+    },
+    { key: "name", direction: "asc" },
+  );
 
   const candidates = useMemo(() => {
     const query = candidateSearch.trim().toLocaleLowerCase();
@@ -146,17 +145,6 @@ export function ReviewerManagement({
       )
       .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
   }, [people, groupFilter, candidateSearch, groupNames, orgMeta.roleMeta]);
-
-  const toggleSort = (key: SortKey) => {
-    setSort((current) =>
-      current.key === key
-        ? {
-            key,
-            direction: current.direction === "asc" ? "desc" : "asc",
-          }
-        : { key, direction: "asc" },
-    );
-  };
 
   const addReviewer = async (person: FirebaseUserRow) => {
     if (!canWriteRoles) {
@@ -213,14 +201,26 @@ export function ReviewerManagement({
 
   return (
     <>
-      <section className="panel reviewer-management-panel">
-        <SectionTitle
-          title="審查員管理"
-          note="既有 Firebase users 帳號 · 不建立新帳號"
-        />
-        <div className="reviewer-toolbar">
-          <label className="reviewer-group-control">
-            <span>組別</span>
+      <FilterPanel
+        title="篩選條件"
+        actions={
+          (groupFilter || search) && (
+            <button
+              type="button"
+              className="button button-outline"
+              onClick={() => {
+                setGroupFilter("");
+                setSearch("");
+              }}
+            >
+              清除篩選
+            </button>
+          )
+        }
+      >
+        <label className="reviewer-group-control">
+          <span className="field-label">組別</span>
+          <span className="select-wrap">
             <select
               value={groupFilter}
               onChange={(event) => setGroupFilter(event.target.value)}
@@ -232,7 +232,23 @@ export function ReviewerManagement({
                 </option>
               ))}
             </select>
-          </label>
+          </span>
+        </label>
+        <label className="search-box reviewer-search">
+          <Search size={16} />
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="搜尋職編、姓名、組別或單位"
+            aria-label="搜尋審查員"
+          />
+        </label>
+      </FilterPanel>
+
+      <ListPanel
+        title="審查員管理"
+        count={sortedPeople.length}
+        actions={
           <button
             type="button"
             className="button button-primary"
@@ -247,16 +263,8 @@ export function ReviewerManagement({
             <Plus size={16} />
             加入審查員
           </button>
-          <label className="search-box reviewer-search">
-            <Search size={16} />
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜尋職編、姓名、組別或單位"
-              aria-label="搜尋審查員"
-            />
-          </label>
-        </div>
+        }
+      >
         <p className="reviewer-management-note">
           授予角色會將「審查員」寫入所選群組的分工表，再由分工表衍生
           users.roles；不建立 Firebase Auth 帳號。實際寫入必須由
@@ -278,78 +286,51 @@ export function ReviewerManagement({
             {actionError}
           </p>
         )}
-        <div className="table-scroll">
-          <table className="data-table reviewer-table">
-            <thead>
-              <tr>
-                <SortHeader
-                  label="職編"
-                  active={sort.key === "staffId"}
-                  direction={sort.direction}
-                  onClick={() => toggleSort("staffId")}
-                />
-                <SortHeader
-                  label="姓名"
-                  active={sort.key === "name"}
-                  direction={sort.direction}
-                  onClick={() => toggleSort("name")}
-                />
-                <SortHeader
-                  label="組別"
-                  active={sort.key === "groups"}
-                  direction={sort.direction}
-                  onClick={() => toggleSort("groups")}
-                />
-                <SortHeader
-                  label="所屬單位"
-                  active={sort.key === "unitCode"}
-                  direction={sort.direction}
-                  onClick={() => toggleSort("unitCode")}
-                />
-                <SortHeader
-                  label="帳號狀態"
-                  active={sort.key === "status"}
-                  direction={sort.direction}
-                  onClick={() => toggleSort("status")}
-                />
+        <table className="data-table reviewer-table">
+          <thead>
+            <tr>
+              <SortableTh label="職編" sortKey="staffId" sort={sort} onSort={toggleSort} />
+              <SortableTh label="姓名" sortKey="name" sort={sort} onSort={toggleSort} />
+              <SortableTh label="組別" sortKey="groups" sort={sort} onSort={toggleSort} />
+              <SortableTh label="所屬單位" sortKey="unitCode" sort={sort} onSort={toggleSort} />
+              <SortableTh label="帳號狀態" sortKey="status" sort={sort} onSort={toggleSort} />
+            </tr>
+          </thead>
+          <tbody>
+            {sortedPeople.map((person) => (
+              <tr key={person.staffId}>
+                <td>{person.staffId}</td>
+                <td>
+                  <b>{person.name}</b>
+                </td>
+                <td>{groupLabel(person, groupNames)}</td>
+                <td>{person.unitCode || "未指定"}</td>
+                <td>
+                  <span
+                    className={`status-pill ${person.status === "停用" ? "muted" : "success"}`}
+                  >
+                    {person.status || "未設定"}
+                  </span>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {visiblePeople.map((person) => (
-                <tr key={person.staffId}>
-                  <td>{person.staffId}</td>
-                  <td>
-                    <b>{person.name}</b>
-                  </td>
-                  <td>{groupLabel(person, groupNames)}</td>
-                  <td>{person.unitCode || "未指定"}</td>
-                  <td>
-                    <span
-                      className={`status-pill ${person.status === "停用" ? "muted" : "success"}`}
-                    >
-                      {person.status || "未設定"}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-              {!loading && !error && visiblePeople.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="reviewer-empty">
-                    {people.some((person) => isReviewerRole(person.roles, orgMeta.roleMeta))
-                      ? "沒有符合組別或搜尋條件的審查員。"
-                      : "目前尚未授予任何人審查員角色。"}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+            ))}
+            {!loading && !error && sortedPeople.length === 0 && (
+              <tr>
+                <td colSpan={5} className="reviewer-empty">
+                  {people.some((person) => isReviewerRole(person.roles, orgMeta.roleMeta))
+                    ? "沒有符合組別或搜尋條件的審查員。"
+                    : "目前尚未授予任何人審查員角色。"}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
         {loading && (
           <p className="reviewer-loading" role="status">
             正在讀取 users 人員清單…
           </p>
         )}
-      </section>
+      </ListPanel>
 
       {showAddDialog && (
         <div
@@ -447,32 +428,3 @@ export function ReviewerManagement({
   );
 }
 
-function SortHeader({
-  label,
-  active,
-  direction,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  direction: "asc" | "desc";
-  onClick: () => void;
-}) {
-  const Icon = active
-    ? direction === "asc"
-      ? ArrowUp
-      : ArrowDown
-    : ArrowUpDown;
-  return (
-    <th
-      aria-sort={
-        active ? (direction === "asc" ? "ascending" : "descending") : "none"
-      }
-    >
-      <button type="button" className="reviewer-sort-button" onClick={onClick}>
-        {label}
-        <Icon size={14} aria-hidden="true" />
-      </button>
-    </th>
-  );
-}
