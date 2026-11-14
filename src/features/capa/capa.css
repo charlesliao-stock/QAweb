@@ -5,3 +5,119 @@
 .capa-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.capa-settings-card{padding:16px}.capa-settings-card>.capa-muted{margin:0 0 12px}.capa-muted{color:#79898f;font-size:11px;line-height:1.6}.capa-setting-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-top:1px solid #edf1f2;color:#384f57;font-size:12px}.capa-setting-row span{display:flex;flex-direction:column;gap:4px}.capa-setting-row small{color:#819096;font-size:10px}.capa-setting-row input[type=checkbox]{width:18px;height:18px;accent-color:#0f766e}.capa-setting-row select,.capa-setting-field input,.capa-override-add select{min-height:34px;padding:7px 8px;border:1px solid #dfe7e9;border-radius:8px;background:#fff;color:#334a52;font:inherit;font-size:12px}.capa-setting-field{display:flex;flex-direction:column;gap:5px;margin:10px 0;color:#687a81;font-size:11px}.capa-setting-facts{display:grid;gap:7px;margin:12px 0;padding:10px;border-radius:9px;background:#f4f8f8;color:#54736e;font-size:11px}.capa-setting-facts span{display:flex;align-items:center;gap:6px}.capa-override-add{display:flex;gap:7px}.capa-override-add select:first-child{flex:1}.capa-override-row{display:flex;align-items:center;gap:8px;padding:9px 2px;border-bottom:1px solid #eef2f3;font-size:11px}.capa-override-row span{flex:1;color:#62747b}.capa-templates-panel{padding:16px}.capa-template-groups{display:grid;gap:19px}.capa-template-groups h3{margin:0 0 8px;color:#60727a;font-size:12px}.capa-template-row{display:flex;justify-content:space-between;gap:16px;padding:13px 0;border-top:1px solid #edf1f2}.capa-template-row>div:first-child{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;align-items:baseline}.capa-template-row b{font-size:13px}.capa-template-row span{color:#71828a;font-size:10px}.capa-template-row p{grid-column:1/-1;margin:0;color:#7b898e;font-size:11px;line-height:1.5}.template-row-actions{display:flex;align-items:center;gap:9px;white-space:nowrap}.capa-modal-backdrop{position:fixed;z-index:1000;inset:0;display:grid;place-items:center;padding:16px;background:rgba(20,38,45,.38)}.capa-modal{box-sizing:border-box;width:min(660px,100%);max-height:90vh;overflow:auto;padding:21px;border:1px solid #e4ebec;border-radius:14px;background:white;box-shadow:0 20px 70px rgba(13,40,47,.2)}.capa-modal>header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px}.capa-modal h2{margin:4px 0 0;font-size:20px}.capa-kicker{color:#0f766e;font-size:9px;font-weight:800;letter-spacing:.15em}.capa-modal>p{color:#728289;font-size:12px;line-height:1.6}.capa-modal footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}.capa-check{display:flex!important;flex-direction:row!important;align-items:center;gap:8px!important;margin-top:12px}.capa-check input{width:auto!important;min-height:auto!important;accent-color:#0f766e}
 @media(max-width:1050px){.capa-master-detail{grid-template-columns:minmax(240px,290px) minmax(0,1fr)}.capa-settings-grid{grid-template-columns:1fr}.capa-step{min-width:58px}.capa-step span{font-size:9px}}
 @media(max-width:760px){.capa-toolbar{align-items:flex-start;flex-direction:column}.capa-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.capa-stat{padding:11px}.capa-stat span{font-size:11px}.capa-stat strong{font-size:23px}.capa-master-detail{grid-template-columns:1fr}.capa-master{max-height:310px;min-height:220px}.capa-detail{max-height:none;min-height:560px}.capa-detail-scroll{overflow:visible}.capa-detail-head{padding:15px}.capa-detail-head h2{font-size:17px}.capa-detail-head p{line-height:1.6}.capa-stepper{justify-content:flex-start}.capa-step{min-width:72px}.capa-form-grid,.capa-form-grid.two,.capa-form-grid.three{grid-template-columns:1fr}.capa-detail-foot{position:sticky;bottom:0;background:#fff}.capa-approval-row{align-items:flex-start;flex-wrap:wrap}.approval-actions{width:100%;justify-content:flex-end}.capa-template-row{align-items:flex-start;flex-direction:column}.capa-template-row>div:first-child{grid-template-columns:1fr}.capa-template-row p{grid-column:auto}.template-row-actions{flex-wrap:wrap}.capa-override-add{flex-wrap:wrap}.capa-override-add select:first-child{min-width:100%}.capa-modal{padding:16px}.capa-modal .capa-form-grid.two{grid-template-columns:1fr}}
+
+
+/* CAPA 案件工作台：以逾期優先的案件清單搭配固定詳情欄，重要脈絡首屏可讀。 */
+.capa-stats{gap:10px;margin-bottom:13px}
+.capa-stat{position:relative;min-height:82px;padding:13px 15px 12px 17px;overflow:hidden;border-radius:11px;box-shadow:0 2px 9px rgba(20,45,55,.025)}
+.capa-stat:before{position:absolute;inset:0 auto 0 0;width:3px;background:#6b94b8;content:""}
+.capa-stat.amber:before{background:#d39a3e}.capa-stat.teal:before{background:#4c9b91}.capa-stat.green:before{background:#4d9a70}.capa-stat.red:before{background:#c55a54}
+.capa-stat>div{display:flex;min-width:0;flex-direction:column;gap:4px}
+.capa-stat span{color:#52676f;font-size:12px;font-weight:700}
+.capa-stat small{color:#86949a;font-size:10px;line-height:1.35}
+.capa-stat strong{flex:none;margin-left:8px;font-size:27px;line-height:1;font-variant-numeric:tabular-nums}
+.capa-stat.red strong{color:#b94b45}
+.capa-master-detail{grid-template-columns:minmax(325px,36%) minmax(0,1fr);gap:13px;align-items:stretch}
+.capa-master,.capa-detail{min-height:590px;max-height:calc(100vh - 250px);border-radius:12px}
+.capa-master{max-height:calc(100vh - 245px)}
+.capa-panel-head{padding:14px 15px 10px}
+.capa-panel-head h2{display:flex;align-items:center;gap:9px;font-size:15px}
+.capa-count{display:inline-flex;align-items:center;gap:5px;color:#86949a;font-size:11px;font-weight:500}
+.capa-count i{font-style:normal;color:#b3bec1}
+.capa-panel-head small{font-size:10px}
+.capa-search{min-height:37px;margin:0 12px 8px;border-radius:8px;background:#fff}
+.capa-search:focus-within{border-color:#77aaa3;box-shadow:0 0 0 3px rgba(15,118,110,.08)}
+.capa-search input{font-size:11px}
+.capa-search>button{display:grid;flex:none;place-items:center;padding:3px;border:0;border-radius:5px;background:transparent;color:#829096;cursor:pointer}
+.capa-search>button:hover{background:#eef4f3;color:#365f58}
+.capa-filter-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:7px;padding:0 12px 9px}
+.capa-filter-row .capa-select{width:100%;min-width:0;margin:0;padding:7px 8px;font-size:10px}
+.capa-clear-filters{padding:5px 2px;border:0;background:transparent;color:#0f766e;font-size:10px;font-weight:650;white-space:nowrap;cursor:pointer}
+.capa-case-list{min-height:0;overscroll-behavior:contain}
+.capa-case-row{gap:6px;padding:11px 32px 11px 13px;border-top-color:#edf1f2;transition:background .15s ease,box-shadow .15s ease}
+.capa-case-row:focus-visible{z-index:1;outline:2px solid #4b9a91;outline-offset:-2px}
+.capa-case-row.selected{background:linear-gradient(90deg,#eaf5f3 0%,#f4f9f8 100%);box-shadow:inset 3px 0 #0f766e}
+.case-row-top{min-height:20px}
+.case-row-top b{color:#435a62;font-size:11px;letter-spacing:.015em}
+.case-row-top .capa-pill{padding:3px 7px;font-size:9px}
+.capa-case-row>strong{display:block;overflow:hidden;color:#263c44;font-size:12px;font-weight:700;line-height:1.4;text-overflow:ellipsis;white-space:nowrap}
+.case-row-indicator{display:flex;align-items:center;gap:7px;min-width:0;color:#75858a;font-size:10px}
+.case-row-indicator b{padding:2px 5px;border-radius:4px;background:#f1f5f5;color:#526a71;font-size:9px;font-variant-numeric:tabular-nums}
+.case-row-indicator>span{color:#98a4a7;font-size:9px}
+.case-row-indicator i{overflow:hidden;color:#76858b;font-size:10px;font-style:normal;text-overflow:ellipsis;white-space:nowrap}
+.case-row-bottom{min-width:0;margin-top:1px}
+.case-row-bottom>span:first-child{font-size:10px}
+.case-row-due{flex:none;color:#819096;font-size:9px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.case-row-due.overdue{color:#b44741;font-weight:750}
+.case-row-status{display:flex;align-items:center;gap:6px;margin-top:1px}
+.case-row-status .capa-pill{padding:3px 7px;font-size:9px}
+.case-return-note{color:#a6443e;font-size:9px;font-weight:700}
+.capa-list-foot{padding:8px 12px;color:#89979b;font-size:9px}
+.capa-loading-list{display:grid;gap:8px;padding:8px 12px}
+.capa-loading-list>span{height:78px;border:1px solid #edf1f2;border-radius:8px;background:linear-gradient(90deg,#f6f8f8,#fff,#f6f8f8);background-size:200% 100%;animation:capa-loading 1.4s ease infinite}
+.capa-loading-list small{color:#87959a;font-size:10px;text-align:center}
+@keyframes capa-loading{to{background-position:-200% 0}}
+.capa-empty{display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:25px 18px;text-align:center}
+.capa-empty b{color:#435960;font-size:13px}
+.capa-empty>span{max-width:270px;color:#819096;font-size:11px;line-height:1.55}
+.capa-empty>div{display:flex;flex-wrap:wrap;justify-content:center;gap:7px;margin-top:5px}
+.capa-empty .button{display:inline-flex;align-items:center;gap:6px;padding:7px 10px;font-size:10px}
+.capa-detail-head{padding:15px 18px 12px}
+.capa-detail-topline{display:flex;align-items:center;justify-content:space-between;gap:9px}
+.capa-detail-topline .case-meta{gap:8px;min-width:0}
+.capa-detail-topline .case-meta>b{color:#52676f;font-size:11px;font-variant-numeric:tabular-nums}
+.capa-detail-topline .capa-pill{font-size:9px}
+.case-meta-status{display:flex;flex:none;gap:5px}
+.capa-detail-head h2{margin:8px 0 9px;color:#20353d;font-size:18px;line-height:1.35}
+.capa-detail-meta{display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:7px}
+.capa-detail-meta span{display:inline-flex;align-items:baseline;gap:5px;min-width:0;color:#65777e;font-size:10px;line-height:1.4}
+.capa-detail-meta b{flex:none;color:#89969a;font-size:9px;font-weight:600}
+.capa-detail-head>p{font-size:10px;line-height:1.5}
+.capa-stepper{display:block;padding:9px 17px 10px;background:#fbfdfd}
+.capa-stepper-caption{display:flex;justify-content:space-between;gap:10px;margin-bottom:8px;color:#71828a;font-size:10px}
+.capa-stepper-caption b{color:#445b62;font-size:10px}
+.capa-stepper-caption span{color:#0f766e;font-weight:700;text-align:right}
+.capa-stepper-track{display:flex;gap:3px;overflow-x:auto;padding:1px 2px 4px;scrollbar-width:thin}
+.capa-step{min-width:68px}
+.capa-step:not(:last-child):after{top:12px;left:calc(50% + 15px);width:calc(100% - 30px)}
+.capa-step i{width:24px;height:24px}
+.capa-step span{font-size:9px}
+.capa-detail-scroll{padding:13px 17px}
+.capa-case-overview{margin-bottom:2px;padding:13px;border:1px solid #e3eceb;border-radius:11px;background:linear-gradient(135deg,#f8fbfa 0%,#fff 75%)}
+.capa-overview-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px}
+.capa-overview-heading>div{display:flex;align-items:center;gap:8px}
+.capa-overview-heading h3{margin:0;color:#304950;font-size:13px}
+.capa-overview-heading>span{color:#859398;font-size:9px;text-align:right}
+.capa-kicker{color:#0f766e;font-size:8px;font-weight:800;letter-spacing:.12em;white-space:nowrap}
+.capa-overview-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,.9fr);gap:11px;align-items:stretch}
+.capa-overview-context{min-width:0}
+.capa-overview-context dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 13px;margin:0 0 11px}
+.capa-overview-context dl>div{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:baseline;gap:6px;min-width:0}
+.capa-overview-context dt{color:#89969a;font-size:9px;white-space:nowrap}
+.capa-overview-context dd{overflow:hidden;margin:0;color:#415a61;font-size:10px;line-height:1.4;text-overflow:ellipsis}
+.capa-overview-context dd b{color:#354f57;font-variant-numeric:tabular-nums}
+.capa-result-block{padding:9px 10px;border:1px solid #edf1f1;border-radius:8px;background:#fff}
+.capa-result-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#566b71;font-size:9px}
+.capa-result-heading>span{color:#77898d;font-size:9px}
+.capa-result-snapshots{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
+.capa-result-snapshot{display:grid;min-width:76px;gap:2px;padding:6px 8px;border:1px solid #f0cecb;border-radius:7px;background:#fff7f6}
+.capa-result-snapshot.met{border-color:#cce3d4;background:#f2faf5}
+.capa-result-snapshot>span{color:#78878b;font-size:8px}
+.capa-result-snapshot>b{color:#b34a44;font-size:13px;font-variant-numeric:tabular-nums}
+.capa-result-snapshot.met>b{color:#2f8059}
+.capa-result-snapshot small{color:#b04d46;font-size:8px}
+.capa-result-snapshot.met small{color:#39805d}
+.capa-no-snapshot{margin:7px 0 0;color:#879397;font-size:9px;line-height:1.5}
+.capa-overview-finding{display:flex;min-width:0;flex-direction:column;gap:8px;padding:10px;border:1px solid #e8edef;border-radius:8px;background:#fff;color:#5e7379;font-size:10px}
+.capa-overview-finding>span{display:flex;flex-direction:column;gap:3px}
+.capa-overview-finding>span b{color:#394f56;font-size:10px}
+.capa-overview-finding>span small{color:#879398;font-size:9px;font-weight:400;line-height:1.4}
+.capa-overview-finding textarea{box-sizing:border-box;width:100%;min-height:76px;flex:1;padding:8px 9px;border:1px solid #dfe7e9;border-radius:7px;background:#fff;color:#273d45;font:inherit;font-size:10px;font-weight:450;line-height:1.55;resize:vertical;outline-color:#71a9a4}
+.capa-overview-finding textarea:disabled{background:#f6f8f8;color:#76868c}
+.capa-section{padding:13px 0}
+.capa-section-heading{margin-bottom:9px}
+.capa-section-heading h3{color:#2f454d;font-size:13px}
+.capa-section-heading small{font-size:10px}
+@media(max-width:1080px){.capa-master-detail{grid-template-columns:minmax(295px,34%) minmax(0,1fr)}.capa-detail-meta{gap:5px 10px}.capa-overview-grid{grid-template-columns:1fr}.capa-overview-finding textarea{min-height:64px}}
+@media(max-width:760px){.capa-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.capa-master-detail{grid-template-columns:minmax(0,1fr);gap:10px}.capa-master{min-height:250px;max-height:360px}.capa-detail{min-height:560px;max-height:none}.capa-detail-scroll{overflow:visible}.capa-detail-head{padding:13px 14px 11px}.capa-detail-head h2{font-size:16px}.capa-stepper{padding:9px 12px}.capa-stepper-track{justify-content:flex-start}.capa-step{min-width:76px}.capa-detail-scroll{padding:11px 13px}.capa-overview-context dl{grid-template-columns:repeat(2,minmax(0,1fr))}.capa-detail-foot{position:sticky;bottom:0;background:#fff}}
+@media(max-width:480px){.capa-stat{min-height:74px;padding:10px 10px 10px 13px}.capa-stat span{font-size:11px}.capa-stat small{font-size:9px}.capa-stat strong{font-size:23px}.capa-filter-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px}.capa-clear-filters{grid-column:1/-1;justify-self:end}.capa-detail-topline{align-items:flex-start}.capa-detail-topline .case-meta{flex-wrap:wrap;gap:5px}.case-meta-status{flex-direction:column;align-items:flex-end}.capa-detail-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.capa-overview-heading{align-items:flex-start;flex-direction:column}.capa-overview-heading>span{text-align:left}.capa-overview-grid{gap:9px}.capa-overview-context dl{grid-template-columns:1fr}.capa-overview-finding textarea{min-height:82px}}
