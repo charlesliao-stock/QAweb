@@ -2064,22 +2064,8 @@ function QuestionNavigator({
         </summary>
         {list(true)}
       </details>
-      <aside className="review-question-sidebar" aria-label="固定題目清單">
-        <header>
-          <b>題目清單</b>
-          <span>{answeredCount}/{questions.length} 題</span>
-        </header>
-        <div className="review-sidebar-progress">
-          <i
-            style={{
-              width: `${questions.length ? Math.round((answeredCount / questions.length) * 100) : 0}%`,
-            }}
-          />
-        </div>
+      <aside className="review-question-sidebar" aria-label="固定題號導覽">
         {list(false)}
-        <small className="review-nav-legend">
-          <Check size={12} /> 已答　<Camera size={12} /> 已附照片
-        </small>
       </aside>
     </div>
   );

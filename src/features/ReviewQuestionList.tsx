@@ -7,7 +7,7 @@
  * 兩種模式：edit（審查執行，可作答＋填備註）／view（檢視結果，唯讀＋顯示備註）
  */
 import { useState, type ReactNode } from "react";
-import { Camera } from "lucide-react";
+import { Camera, Check, X } from "lucide-react";
 import {
   groupQuestionsIntoSections,
   optionLabelsOf,
@@ -188,20 +188,27 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                           role="radiogroup"
                           aria-label={q.itemText}
                         >
-                          {optionLabelsOf(q.optionSet).map((label, oi) => (
-                            <label
-                              key={oi}
-                              className={`check-row${sel === oi ? " checked" : ""}`}
-                            >
-                              <input
-                                type="radio"
-                                name={`q-${q.id}`}
-                                checked={sel === oi}
-                                onChange={() => onAnswer(q.id, oi)}
-                              />
-                              <span>{label}</span>
-                            </label>
-                          ))}
+                          {optionLabelsOf(q.optionSet).map((label, oi) => {
+                            const negative = label === "不符合" || label === "否";
+                            const positive = label === "符合" || label === "是";
+                            return (
+                              <label
+                                key={oi}
+                                className={`check-row${sel === oi ? " checked" : ""}${negative ? " review-option-negative" : ""}`}
+                              >
+                                <input
+                                  type="radio"
+                                  name={`q-${q.id}`}
+                                  checked={sel === oi}
+                                  onChange={() => onAnswer(q.id, oi)}
+                                />
+                                <span className="review-option-icon" aria-hidden="true">
+                                  {positive ? <Check size={17} strokeWidth={2.5} /> : negative ? <X size={17} strokeWidth={2.5} /> : null}
+                                </span>
+                                <span>{label}</span>
+                              </label>
+                            );
+                          })}
                         </div>
                         {(q.commonErrors ?? []).length > 0 && (
                           <fieldset className="common-error-fieldset">
