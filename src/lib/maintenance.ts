@@ -32,7 +32,16 @@ export interface SystemStatus {
   updatedAt: string;
   alert80SentFor: string;
   shutdownSentFor: string;
+  /** 監測 workflow 寫入的當日用量（太平洋日期＋讀／寫／刪次數＋更新時間 ISO） */
+  usageDate?: string;
+  usageReads?: number;
+  usageWrites?: number;
+  usageDeletes?: number;
+  usageUpdatedAt?: string;
 }
+
+/** Firestore 免費額度（每日，與 scripts/quota-lib.mjs 的 QUOTAS 一致） */
+export const QUOTAS = { reads: 50000, writes: 20000, deletes: 20000 } as const;
 
 export interface QuotaSettings {
   warnPercent: number;

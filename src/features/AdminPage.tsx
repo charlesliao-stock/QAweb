@@ -73,6 +73,7 @@ import {
   DEFAULT_QUOTA_SETTINGS,
   normalizeQuotaSettings,
   type QuotaSettings,
+  QUOTAS,
   type SystemStatus,
 } from "../lib/maintenance";
 
@@ -1381,6 +1382,14 @@ function QuotaControlSection({
         updatedAt: "",
         alert80SentFor: typeof v.alert80SentFor === "string" ? v.alert80SentFor : "",
         shutdownSentFor: typeof v.shutdownSentFor === "string" ? v.shutdownSentFor : "",
+        usageDate: typeof v.usageDate === "string" ? v.usageDate : "",
+        usageReads: typeof v.usageReads === "number" ? v.usageReads : undefined,
+        usageWrites: typeof v.usageWrites === "number" ? v.usageWrites : undefined,
+        usageDeletes: typeof v.usageDeletes === "number" ? v.usageDeletes : undefined,
+        usageUpdatedAt:
+          v.usageUpdatedAt && typeof (v.usageUpdatedAt as { toDate?: unknown }).toDate === "function"
+            ? (v.usageUpdatedAt as { toDate: () => Date }).toDate().toISOString()
+            : "",
       });
     } catch {
       setStatus(null);
@@ -1481,6 +1490,7 @@ function QuotaControlSection({
               ? ` · 本日已提醒 ${status.alert80SentFor}`
               : ""}
           </p>
+          <QuotaUsageBars status={status} warn={Number(warnInput)} stop={Number(stopInput)} />
           <div className="form-grid">
             <div className="form-field">
               <label className="field-label">提醒門檻（%）</label>
@@ -1532,7 +1542,7 @@ function QuotaControlSection({
           {validation !== "" && <p className="settings-note">{validation}</p>}
           <p className="settings-note">
             門檻以免費額度（讀 50,000／寫 20,000／刪 20,000 次／天）計算，讀、寫、刪任一先到即觸發；
-            監測每 10 分鐘檢查一次，停用監測後不會自動提醒、關站或恢復。
+            監測每 30 分鐘檢查一次，停用監測後不會自動提醒、關站或恢復。
           </p>
           <div className="form-actions">
             <button
@@ -1553,6 +1563,75 @@ function QuotaControlSection({
         </>
       )}
     </section>
+  );
+}
+
+/** 當日 Firestore 讀／寫／刪用量條（資料由監測 workflow 寫入 configs/system_status） */
+function QuotaUsageBars({
+  status,
+  warn,
+  stop,
+}: {
+  status: SystemStatus | null;
+  warn: number;
+  stop: number;
+}) {
+  const hasData =
+    status?.usageReads !== undefined &&
+    status?.usageWrites !== undefined &&
+    status?.usageDeletes !== undefined;
+  if (!status || !hasData) {
+    return (
+      <p className="settings-note">
+        尚無當日用量資料：需由流量監測 workflow 定時執行並寫入後才會顯示。
+      </p>
+    );
+  }
+  const rows = [
+    { label: "讀取", used: status.usageReads ?? 0, quota: QUOTAS.reads },
+    { label: "寫入", used: status.usageWrites ?? 0, quota: QUOTAS.writes },
+    { label: "刪除", used: status.usageDeletes ?? 0, quota: QUOTAS.deletes },
+  ];
+  const updated = status.usageUpdatedAt
+    ? new Date(status.usageUpdatedAt).toLocaleString("zh-TW", { hour12: false })
+    : "—";
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <p className="settings-note">
+        今日用量（太平洋日 {status.usageDate || "—"}，更新於 {updated}；指標最多延遲約 4 分鐘）
+      </p>
+      {rows.map((r) => {
+        const pct = (r.used / r.quota) * 100;
+        const color =
+          pct >= stop ? "#dc2626" : pct >= warn ? "#d97706" : "#16a34a";
+        return (
+          <div key={r.label} style={{ marginBottom: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <b>{r.label}</b>
+              <span>
+                {r.used.toLocaleString()} / {r.quota.toLocaleString()}（{pct.toFixed(1)}%）
+              </span>
+            </div>
+            <div
+              role="progressbar"
+              aria-label={`${r.label}用量`}
+              aria-valuenow={Math.round(Math.min(pct, 100))}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              style={{ height: 8, background: "#e5e7eb", borderRadius: 4, overflow: "hidden" }}
+            >
+              <div
+                style={{
+                  width: `${Math.min(pct, 100)}%`,
+                  height: "100%",
+                  background: color,
+                }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

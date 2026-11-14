@@ -2,7 +2,7 @@
 /**
 * 流量控管 — 監測執行檔（v1.41.0，方案 A）。
 *
-* GitHub Actions 每 10 分鐘執行一次（.github/workflows/quota-monitor.yml）：
+* GitHub Actions 每 30 分鐘執行一次（.github/workflows/quota-monitor.yml）：
 * 1. 用 service account 查 Cloud Monitoring 當日累計讀／寫／刪
 * （太平洋時間當日 00:00 起算；指標更新最多延遲約 4 分鐘）。
 * 2. 讀 configs/quotaSettings（未設定用預設 80／95；門檻不在 workflow 寫死）。
@@ -212,6 +212,22 @@ reads: await getMetricTotal(READ_METRIC, dayStart, now, token),
 writes: await getMetricTotal(WRITE_METRIC, dayStart, now, token),
 deletes: await getMetricTotal(DELETE_METRIC, dayStart, now, token),
 };
+// 把當日用量寫進狀態文件，供系統管理「流量控管」顯示次數與百分比（失敗不影響後續開關動作）
+try {
+await patchFirestoreDoc(
+STATUS_PATH,
+{
+usageDate: today,
+usageReads: usage.reads,
+usageWrites: usage.writes,
+usageDeletes: usage.deletes,
+usageUpdatedAt: now,
+},
+token,
+);
+} catch (err) {
+log(`寫入用量失敗（不影響監測）：${err.message}`);
+}
 const decision = evaluateUsage({ usage, settings, status, today});
 log(
 `太平洋日 ${today}｜用量 ${usageText(usage)}｜門檻 提醒 ${settings.warnPercent}%／關站 ${settings.shutdownPercent}%｜動作 ${decision.action}（${decision.reason}）`,
