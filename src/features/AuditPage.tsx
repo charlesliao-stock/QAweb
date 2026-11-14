@@ -236,6 +236,11 @@ export function AuditPage({
   const [selProgress, setSelProgress] =
     useState<AuditProgressState>("active");
   const [keyword, setKeyword] = useState("");
+  // 切到「已結束」才補讀歷史年份紀錄（之後維持已載入，避免來回切換重讀）
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  useEffect(() => {
+    if (selProgress === "ended") setHistoryLoaded(true);
+  }, [selProgress]);
   const [viewRow, setViewRow] = useState<ActiveRow | null>(null);
   const [selectedUnitFilter, setSelectedUnitFilter] = useState("");
   const [detailListOpen, setDetailListOpen] = useState(false);
@@ -540,9 +545,20 @@ export function AuditPage({
         // 伺服器端年份只是預篩、不影響正確性）。
         // 單一範圍 where ＋ 同欄位 orderBy（分頁 helper 內加），不需複合索引；
         // 分頁循序拉完，修掉舊 limit(2000) 靜默截斷。
-        let minYear = today.getFullYear() - 1;
+        // v1.62：預設只讀「目前年度（學年度）」的紀錄——年度＝今年；學年度 8 月制，
+        // 8 月起為今年、之前為去年。進行中／待完成的列照樣依其區間起始年往前補讀
+        // （補審期限內仍可能在上一年度）；「已結束」的列只在使用者切到「已結束」
+        // 進度時才補讀歷史年份（historyLoaded），避免每次進頁都拉近四年全部紀錄。
+        const sysCfg = sysSnap.data() as Record<string, unknown> | undefined;
+        const academic = sysCfg?.statsCycle === "academic";
+        let minYear =
+          academic && today.getMonth() + 1 < 8
+            ? today.getFullYear() - 1
+            : today.getFullYear();
         for (const c of classified) {
-          minYear = Math.min(minYear, c.interval.start.year);
+          if (historyLoaded || c.state !== "ended") {
+            minYear = Math.min(minYear, c.interval.start.year);
+          }
         }
         minYear = Math.max(minYear, today.getFullYear() - 3);
         const recordsByIndicator = new Map<string, RecordRow[]>();
@@ -709,7 +725,7 @@ export function AuditPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.staffId, dataRefreshKey, orgMeta.roleMeta]);
+  }, [user?.staffId, dataRefreshKey, orgMeta.roleMeta, historyLoaded]);
 
   /* ---------- 檢視 modal：載入該指標題目（逐題明細分組＋指引用；v1.24） ---------- */
   useEffect(() => {
