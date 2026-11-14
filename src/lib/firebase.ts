@@ -72,7 +72,6 @@ export function getFirebaseAuth(): Auth {
  * demo 模式不走 Firestore SDK，狀態值與 demo 路徑無關（見 cacheFirst.ts 的隔離測試）。
  */
 export type FirestoreCacheStatus = "persistent" | "fallback";
-let firestoreCacheStatus: FirestoreCacheStatus = "fallback";
 
 export function getFirebaseDb(): Firestore {
   if (dbInstance) return dbInstance;
@@ -85,12 +84,10 @@ export function getFirebaseDb(): Firestore {
         tabManager: persistentMultipleTabManager(),
       }),
     });
-    firestoreCacheStatus = "persistent";
   } catch {
     // Safari 私密模式 IndexedDB 不可用、或已初始化：退回預設 getFirestore，
     // 絕不讓初始化失敗拖垮整站（快取未命中時走伺服器，行為與改前一致）。
     dbInstance = getFirestore(app);
-    firestoreCacheStatus = "fallback";
   }
   return dbInstance;
 }

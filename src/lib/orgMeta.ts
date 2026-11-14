@@ -176,14 +176,6 @@ export function titleFlagsOf(
   return legacyTitleFlags(titleName ?? "");
 }
 
-const EMPTY_FLAGS: TitleFlags = {
-  isUnitHead: false,
-  isDistrictHead: false,
-  isHospitalHead: false,
-  isOfficer: false,
-  isConvener: false,
-};
-
 /* ================= 身分判斷（吃詮釋資料，不比對名稱） ================= */
 
 export function roleMetaOf(

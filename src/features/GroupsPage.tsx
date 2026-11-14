@@ -40,7 +40,6 @@ import {
   SectionTitle,
 } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
-import { getCachedRefCollection } from "../lib/refCache";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import { syncReviewerDoc, backfillReviewerDocs } from "../lib/reviewerSync";
