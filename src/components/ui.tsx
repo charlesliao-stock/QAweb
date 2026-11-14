@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Check, Inbox, X } from "lucide-react";
 import type { PageId, Rag } from "../types";
 
@@ -104,6 +104,72 @@ export function Modal({
   layer?: 1 | 2 | 3;
   children: ReactNode;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const getFocusable = () => Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((element) => element.getClientRects().length > 0);
+
+    const frame = window.requestAnimationFrame(() => {
+      (getFocusable()[0] ?? dialog).focus({ preventScroll: true });
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const backdrops = document.querySelectorAll<HTMLElement>(
+        ".reviewer-modal-backdrop",
+      );
+      const ownBackdrop = dialog.closest<HTMLElement>(
+        ".reviewer-modal-backdrop",
+      );
+      if (!ownBackdrop || backdrops.item(backdrops.length - 1) !== ownBackdrop) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = getFocusable();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      if (previousFocus?.isConnected) {
+        previousFocus.focus({ preventScroll: true });
+      }
+    };
+  }, []);
+
   return (
     <div
       className={`reviewer-modal-backdrop${layer > 1 ? ` reviewer-modal-layer-${layer}` : ""}`}
@@ -111,9 +177,11 @@ export function Modal({
     >
       <div
         className={`reviewer-modal panel${wide ? " wide" : ""}${medium ? " medium" : ""}`}
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="reviewer-modal-head">

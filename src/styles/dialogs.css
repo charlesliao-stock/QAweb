@@ -1,0 +1,404 @@
+/* 審查員管理 */
+.reviewer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  margin: 4px 0 8px;
+}
+.reviewer-group-control {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted, #6b7a7d);
+}
+.reviewer-group-control select {
+  height: 36px;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: var(--surface, #fff);
+  color: var(--ink, #1f2e36);
+}
+.reviewer-search {
+  flex: 1 1 220px;
+}
+.reviewer-management-note,
+.reviewer-safe-mode-note {
+  font-size: 12px;
+  color: var(--muted, #6b7a7d);
+}
+.reviewer-safe-mode-note {
+  border: 1px dashed #d9a441;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #fffaf0;
+  color: #8a6d1c;
+}
+.reviewer-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  padding: 0;
+}
+.reviewer-empty {
+  text-align: center;
+  color: var(--muted, #6b7a7d);
+}
+.reviewer-loading {
+  color: var(--muted, #6b7a7d);
+}
+.reviewer-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 30, 35, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 60;
+}
+.reviewer-modal-backdrop.reviewer-modal-layer-2 {
+  z-index: 70;
+  background: rgba(15, 30, 35, 0.5);
+}
+.reviewer-modal-backdrop.reviewer-modal-layer-3 {
+  z-index: 80;
+  background: rgba(15, 30, 35, 0.58);
+}
+.reviewer-modal {
+  width: min(560px, 100%);
+  max-height: 85vh;
+  overflow: auto;
+}
+.reviewer-modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.reviewer-modal-head h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+  color: var(--ink, #1f2e36);
+}
+.reviewer-modal-head p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted, #6b7a7d);
+}
+.reviewer-candidate-search {
+  width: 100%;
+  margin: 4px 0 10px;
+}
+.reviewer-candidate-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.reviewer-candidate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.reviewer-candidate > div {
+  display: grid;
+  gap: 2px;
+}
+.reviewer-candidate span {
+  font-size: 12px;
+  color: var(--muted, #6b7a7d);
+}
+.not-connected-state {
+  text-align: center;
+  padding: 32px 16px;
+}
+.not-connected-state h2 {
+  font-size: 17px;
+  margin: 0 0 8px;
+  color: var(--ink, #1f2e36);
+}
+.not-connected-state p {
+  color: var(--muted, #6b7a7d);
+  margin: 0;
+}
+
+/* v1.18：批次新增指標 dialog（寬版）＋欄位錯誤訊息 */
+.reviewer-modal.batch-modal {
+  width: min(1180px, 100%);
+}
+.batch-existing-audit-preview {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+}
+.batch-existing-audit-preview h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--ink, #1f2e36);
+}
+.batch-existing-audit-preview > p {
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+.batch-existing-audit-list {
+  display: grid;
+  gap: 8px;
+}
+.batch-existing-audit-card {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+.batch-existing-audit-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.batch-existing-audit-heading span,
+.batch-existing-audit-card p {
+  color: var(--muted, #6b7a7d);
+  font-size: 12px;
+}
+.batch-existing-audit-card p {
+  margin: 6px 0;
+}
+.batch-existing-audit-card details summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.batch-existing-audit-card ol {
+  margin: 6px 0 0;
+  padding-inline-start: 22px;
+  overflow-wrap: anywhere;
+}
+.batch-existing-audit-card li + li {
+  margin-top: 8px;
+}
+.batch-existing-audit-card li .muted-text {
+  display: block;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.batch-save-choice-backdrop {
+  z-index: 90;
+  background: rgba(15, 30, 35, 0.62);
+}
+.reviewer-modal.batch-save-choice {
+  width: min(620px, 100%);
+}
+.batch-save-choice h2 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  color: var(--ink, #1f2e36);
+}
+.batch-save-choice > p {
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+.batch-save-choice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+/* v1.20：查閱視窗 2 倍寬（原 560px → 1120px） */
+.reviewer-modal.wide {
+  width: min(1600px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+}
+/* v1.60.0：加審對話框中寬（約 960px） */
+.reviewer-modal.medium {
+  width: min(960px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+}
+/* v1.60.0：對話框內常駐錯誤區（失敗訊息一直留著，直到關閉或下次成功） */
+.form-error {
+  border: 1px solid #e0a3a3;
+  background: #fdeeee;
+  color: #a02c2c;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 12px 0;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+:root[data-mode="dark"] .form-error {
+  background: #3d2222;
+  border-color: #7a3a3a;
+  color: #f3b0b0;
+}
+.reviewer-modal.wide .table-scroll {
+  width: 100%;
+  overflow-x: hidden;
+}
+.reviewer-modal.wide .data-table {
+  width: 100%;
+  table-layout: fixed;
+}
+.reviewer-modal.wide .data-table th,
+.reviewer-modal.wide .data-table td {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.review-edit-history {
+  display: grid;
+  gap: 10px;
+}
+.review-record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.review-edit-history-item {
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+.review-edit-history-item > span {
+  color: var(--muted, #6b7a7d);
+  font-size: 12px;
+}
+.review-edit-history-item ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.review-edit-history-item li {
+  margin: 6px 0;
+}
+.review-edit-history-item li > span {
+  margin-left: 6px;
+  overflow-wrap: anywhere;
+}
+.review-edit-history-item pre {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .reviewer-modal.wide {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+  }
+  .reviewer-modal.wide .table-scroll .data-table,
+  .reviewer-modal.wide .table-scroll .data-table tbody {
+    display: block;
+    width: 100%;
+  }
+  .reviewer-modal.wide .table-scroll .data-table thead {
+    display: none;
+  }
+  .reviewer-modal.wide .table-scroll .data-table tbody tr:not(.review-record-expanded) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0 0 10px;
+    padding: 10px;
+    border: 1px solid var(--line, #e6ebec);
+    border-radius: 10px;
+  }
+  .reviewer-modal.wide .table-scroll .data-table tbody td {
+    display: block;
+    min-width: 0;
+    padding: 4px;
+    border: 0;
+  }
+  .reviewer-modal.wide .table-scroll .data-table tbody td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    color: var(--muted, #6b7a7d);
+    font-size: 11px;
+  }
+  .reviewer-modal.wide .table-scroll .data-table tbody tr.review-record-expanded,
+  .reviewer-modal.wide .table-scroll .data-table tbody tr.review-record-expanded td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
+}
+.field-error {
+  color: #b91c1c;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+/* 品管審查進度條（v1.19.0） */
+.progress-track {
+  height: 6px;
+  border-radius: 3px;
+  background: #eef1f1;
+  margin-top: 4px;
+  min-width: 90px;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--color-primary, #0e7c7b);
+}
+/* 表頭篩選列（v1.19.0） */
+.filter-row input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 12px;
+  border: 1px solid #dfe4e4;
+  border-radius: 6px;
+}
+/* 定義列表（檢視彈窗摘要，v1.19.0） */
+.detail-list {
+  margin: 0 0 16px;
+}
+.detail-list > div {
+  display: flex;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid #f0f2f2;
+}
+.detail-list dt {
+  flex: 0 0 110px;
+  color: #8a9699;
+  font-size: 13px;
+}
+.detail-list dd {
+  margin: 0;
+  flex: 1;
+}
+/* 操作按鈕橫排（v1.19.0） */
+.row-actions {
+  display: flex;
+  gap: 8px;
+  white-space: nowrap;
+}
+/* 小徽章（v1.19.0） */
+.badge {
+  display: inline-block;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: #3b5bdb;
+  margin-top: 4px;
+}

@@ -1,0 +1,784 @@
+/* ============ 結果分析頁（v1.13.0） ============ */
+/* v1.30.3：結果分析篩選器兩條橫向（第一條＝主體選擇器、第二條＝年／期間＋查詢） */
+.results-filters {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.results-month-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 150px;
+  color: #51615f;
+  font-size: var(--font-small);
+  font-weight: 700;
+}
+.results-month-picker {
+  position: relative;
+  display: block;
+}
+.results-month-trigger {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: 165px;
+  border: 1px solid #dce4e4;
+  border-radius: 9px;
+  background: #fff;
+  color: #314447;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.results-month-trigger:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  border-color: #6bb3a8;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 10%, transparent);
+}
+.results-month-popover {
+  position: absolute;
+  z-index: 55;
+  top: calc(100% + 7px);
+  left: 0;
+  display: block;
+  width: 260px;
+  padding: 12px;
+  border: 1px solid #dce4e4;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(22, 45, 48, 0.17);
+}
+.results-month-year {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  color: #314447;
+}
+.results-month-year button,
+.results-month-grid button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 34px;
+  min-height: 34px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #48625f;
+  cursor: pointer;
+}
+.results-month-year button:hover,
+.results-month-grid button:hover {
+  background: #edf6f4;
+}
+.results-month-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.results-month-grid button.active {
+  background: var(--teal, #4f8e83);
+  color: #fff;
+  font-weight: 700;
+}
+.results-month-field input {
+  box-sizing: border-box;
+  min-width: 165px;
+  border: 1px solid #dce4e4;
+  border-radius: 9px;
+  background: #fff;
+  color: #314447;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 500;
+  margin: 0;
+}
+.results-month-field input:focus {
+  border-color: #6bb3a8;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 10%, transparent);
+}
+.results-range-separator {
+  align-self: flex-end;
+  padding-bottom: 11px;
+  color: #7b898b;
+}
+.results-range-error {
+  align-self: center;
+  color: #b42318;
+  font-size: var(--font-small);
+}
+.results-filters .field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 150px;
+}
+.results-filters .select-wrap {
+  min-width: 150px;
+}
+/* v1.28 階段 3：查詢按鈕放篩選列最右端（v1.30.3 維持不變，第二條最後面） */
+.results-query-actions {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  margin-left: auto;
+}
+/* v1.30.3：結果匯入頁籤第一條＝組別＋指標橫向一排（僅限結果分析頁，不動其他頁的 .form-stack） */
+.results-page .form-stack {
+  flex-direction: row;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.results-page .form-stack .form-field {
+  flex: 1 1 200px;
+  min-width: 150px;
+}
+.results-data-time {
+  color: #7b898b;
+  font-size: var(--font-small);
+  margin: -8px 0 16px;
+}
+.rag-badge.rag-gray i {
+  background: #9aa5a4;
+}
+.trend-chart .chart-label {
+  font-size: 11px;
+  fill: #8a9493;
+}
+/* v1.59.0：曲線圖 x 軸標籤附註（加審／有加審），藍色 80% 字體 */
+.trend-chart .chart-label-note {
+  font-size: 80%;
+  fill: #2563eb;
+}
+.button-sm {
+  padding: 6px 12px;
+  font-size: var(--font-small);
+}
+.button-block {
+  width: 100%;
+  margin-top: 8px;
+}
+/* 預設（寬螢幕）：顯示表格，隱藏卡片；窄螢幕（≤640px）反之（沿用 .my-review 模式） */
+.results-page .task-cards {
+  display: none;
+}
+@media (max-width: 640px) {
+  .results-page .task-table-wrap {
+    display: none;
+  }
+  .results-page .task-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .results-filters .field-label,
+  .results-filters .select-wrap {
+    min-width: 0;
+    flex: 1 1 45%;
+  }
+  /* v1.30.3：第一條只有主體選擇器一個欄位，窄螢幕改全寬 */
+  .results-filters-main .field-label,
+  .results-filters-main .select-wrap {
+    flex: 1 1 100%;
+  }
+  .results-month-field {
+    min-width: 0;
+    flex: 1 1 42%;
+  }
+  .results-month-field input,
+  .results-month-trigger {
+    min-width: 0;
+    width: 100%;
+  }
+  .results-query-actions {
+    margin-left: 0;
+  }
+}
+:root[data-mode="dark"] .results-month-field {
+  color: #c4cfcd;
+}
+:root[data-mode="dark"] .results-month-field input {
+  border-color: #394744;
+  background: #17201f;
+  color: #e2e8e7;
+}
+:root[data-mode="dark"] .results-month-trigger,
+:root[data-mode="dark"] .results-month-popover {
+  border-color: #394744;
+  background: #17201f;
+  color: #e2e8e7;
+}
+:root[data-mode="dark"] .results-month-year {
+  color: #e2e8e7;
+}
+:root[data-mode="dark"] .results-range-separator {
+  color: #9aa5a4;
+}
+:root[data-mode="dark"] .results-range-error {
+  color: #ff8a83;
+}
+:root[data-mode="dark"] .trend-chart .chart-label {
+  fill: #7d8a89;
+}
+:root[data-mode="dark"] .trend-chart .chart-label-note {
+  fill: #7aa5ff;
+}
+
+/* v1.14.0：審查總覽入口、季度分析、審查員管理 */
+.audit-search {
+  margin: 2px 0 12px;
+}
+.audit-indicator-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.audit-indicator-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  color: var(--ink, #1f2e36);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.audit-indicator-row:hover {
+  border-color: #0f766e;
+}
+.audit-indicator-main {
+  display: grid;
+  gap: 2px;
+}
+.audit-indicator-main b {
+  font-size: 15px;
+}
+.audit-indicator-main small {
+  color: var(--muted, #6b7a7d);
+  font-size: 12px;
+}
+.muted-text {
+  color: var(--muted, #6b7a7d);
+}
+
+.results-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+.results-tabs button {
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--line, #e6ebec);
+  background: var(--surface, #fff);
+  color: var(--muted, #506165);
+  cursor: pointer;
+  font-size: 14px;
+}
+.results-tabs button.active {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #fff;
+}
+
+/* v1.25.0：結果分析矩陣（組別／單位／指標分析） */
+.analysis-table-wrap {
+  overflow-x: auto;
+}
+.analysis-matrix th.rate-col,
+.analysis-matrix td.rate-cell {
+  text-align: center;
+  white-space: nowrap;
+}
+.analysis-matrix td.rate-cell.clickable {
+  cursor: pointer;
+}
+.analysis-matrix td.rate-cell.clickable:hover {
+  background: #eef6f4;
+  text-decoration: underline;
+}
+.data-table td.rate-cell.below {
+  color: #b42318;
+  font-weight: 700;
+}
+:root[data-mode="dark"] .data-table td.rate-cell.below {
+  color: #ff8a83;
+}
+:root[data-mode="dark"] .analysis-matrix td.rate-cell.clickable:hover {
+  background: #22302e;
+}
+/* v1.27.1：下探 L2 轉置矩陣（直向題目、橫向人員）正確率列達閾值標示 */
+.drill-person-rate.pass {
+  font-weight: 600;
+  color: #338675;
+}
+:root[data-mode="dark"] .drill-person-rate.pass {
+  color: #63b89e;
+}
+.data-table td.drill-option-no,
+.data-table td.drill-person-rate.below {
+  color: #b42318;
+  font-weight: 600;
+}
+:root[data-mode="dark"] .data-table td.drill-option-no,
+:root[data-mode="dark"] .data-table td.drill-person-rate.below {
+  color: #ff8a83;
+}
+/* v1.27.0：矩陣下方展開面板（單位分析曲線圖／選項明細） */
+.analysis-below-panel {
+  margin-top: 12px;
+  border: 1px solid var(--line, #e3e9e8);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.analysis-below-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.analysis-below-head h3 {
+  margin: 0;
+  font-size: var(--font-base, 15px);
+}
+.analysis-below-head p {
+  margin: 2px 0 0;
+  color: #8a9493;
+  font-size: var(--font-small, 13px);
+}
+.drill-back {
+  margin-bottom: 8px;
+}
+.analysis-matrix th.ind-col,
+.analysis-matrix td.ind-col {
+  position: sticky;
+  left: 0;
+  background: var(--surface, #fff);
+  min-width: 220px;
+  box-shadow: 1px 0 0 var(--line, #e6ebec);
+}
+.analysis-matrix th.ind-col {
+  z-index: 2;
+}
+.analysis-matrix td.ind-col {
+  z-index: 1;
+}
+.analysis-indicator-sticky {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.analysis-indicator-name {
+  min-width: 0;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.analysis-matrix-detail-row td {
+  color: var(--muted, #52615f);
+  font-size: var(--font-small, 13px);
+}
+.analysis-matrix-subrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-left: 28px;
+  white-space: nowrap;
+}
+.analysis-indicator-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  color: #0f766e;
+  cursor: pointer;
+}
+.icon-button:hover {
+  border-color: #0f766e;
+  background: #f0fdfa;
+}
+.analysis-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 4px 0 16px;
+}
+@media (max-width: 720px) {
+  .analysis-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.score-breakdown {
+  display: grid;
+  gap: 2px;
+}
+.score-breakdown-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  min-height: 42px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line, #e6ebec);
+}
+.score-breakdown-row:last-child {
+  border-bottom: 0;
+}
+.score-breakdown-total {
+  font-weight: 700;
+  background: var(--bg, #f5f8f7);
+  border-radius: 8px;
+}
+.score-breakdown-detail {
+  padding-left: 28px;
+  color: var(--muted, #52615f);
+}
+.score-breakdown-row strong {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* v1.53.0：分組明細列圖示靠右，與數字併排 */
+.score-breakdown-row .analysis-indicator-actions {
+  margin-left: auto;
+}
+/* v1.50.0：可點選下探的數字（摘要卡／分組明細列／選項明細／錯題排行／原因件數） */
+.summary-cell.clickable {
+  cursor: pointer;
+}
+.summary-cell.clickable:hover {
+  border-color: #9dc9bd;
+  background: #f2faf7;
+}
+:root[data-mode="dark"] .summary-cell.clickable:hover {
+  background: #22302e;
+}
+.score-breakdown-row.clickable {
+  cursor: pointer;
+}
+.score-breakdown-row.clickable:hover {
+  background: #eef6f4;
+}
+.score-breakdown-row.clickable:hover span:first-child,
+.score-breakdown-row.clickable:hover strong {
+  text-decoration: underline;
+}
+:root[data-mode="dark"] .score-breakdown-row.clickable:hover {
+  background: #22302e;
+}
+.data-table tbody tr.clickable {
+  cursor: pointer;
+}
+.data-table tbody tr.clickable:hover td {
+  background: #eef6f4;
+}
+:root[data-mode="dark"] .data-table tbody tr.clickable:hover td {
+  background: #22302e;
+}
+:root[data-mode="dark"] .analysis-matrix th.ind-col,
+:root[data-mode="dark"] .analysis-matrix td.ind-col {
+  background: var(--surface, #1b2a2e);
+}
+:root[data-mode="dark"] .icon-button {
+  background: var(--surface, #1b2a2e);
+}
+:root[data-mode="dark"] .icon-button:hover {
+  background: #134e4a;
+}
+
+/* 季度分析 */
+.quarter-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  margin: 4px 0 14px;
+}
+.quarter-control {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted, #6b7a7d);
+}
+.quarter-control select {
+  height: 36px;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: var(--surface, #fff);
+  color: var(--ink, #1f2e36);
+  max-width: 260px;
+}
+.quarter-mode {
+  display: flex;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.quarter-mode button {
+  border: 0;
+  background: transparent;
+  padding: 8px 16px;
+  cursor: pointer;
+  color: var(--muted, #506165);
+  font-size: 14px;
+}
+.quarter-mode button.active {
+  background: #0f766e;
+  color: #fff;
+}
+.quarter-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+}
+.quarter-summary > div {
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 2px;
+  background: var(--surface, #fff);
+}
+.quarter-summary span {
+  font-size: 12px;
+  color: var(--muted, #6b7a7d);
+}
+.quarter-summary strong {
+  font-size: 18px;
+  color: var(--ink, #1f2e36);
+}
+.quarter-empty {
+  color: var(--muted, #6b7a7d);
+  padding: 12px 0;
+}
+.quarter-chart-wrap {
+  margin: 6px 0 4px;
+}
+.quarter-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--muted, #506165);
+  margin-bottom: 6px;
+}
+.quarter-chart-legend i {
+  display: inline-block;
+  width: 12px;
+  height: 4px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.threshold-legend i {
+  background: #dc2626;
+  height: 2px;
+}
+.quarter-chart-scroll {
+  overflow-x: auto;
+}
+.quarter-chart {
+  width: 100%;
+  min-width: 560px;
+  height: auto;
+  display: block;
+}
+.quarter-gridline {
+  stroke: var(--line, #eef2f3);
+  stroke-width: 1;
+}
+.quarter-axis-label {
+  fill: var(--muted, #6b7a7d);
+  font-size: 11px;
+}
+.quarter-threshold-line {
+  stroke: #dc2626;
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+.quarter-detail-heading {
+  margin: 16px 0 8px;
+}
+.quarter-detail-heading h3 {
+  margin: 0 0 2px;
+  font-size: 15px;
+  color: var(--ink, #1f2e36);
+}
+.quarter-detail-heading span {
+  font-size: 12px;
+  color: var(--muted, #6b7a7d);
+}
+.quarter-spark-values {
+  white-space: nowrap;
+}
+.quarter-spark-values span {
+  display: inline-block;
+  margin-right: 8px;
+  font-size: 12px;
+  color: var(--muted, #6b7a7d);
+}
+.quarter-spark-values span.selected {
+  color: var(--ink, #1f2e36);
+  font-weight: 700;
+}
+.quarter-result.met {
+  color: #0f766e;
+  font-weight: 700;
+}
+.quarter-result.below {
+  color: #dc2626;
+  font-weight: 700;
+}
+.quarter-disclaimer {
+  font-size: 12px;
+  color: var(--muted, #6b7a7d);
+  margin-top: 10px;
+}
+
+
+/* 手機審查結果管理摘要卡片；桌機仍使用原本可水平捲動的完整資料表。 */
+.review-results-cards {
+  display: none;
+}
+.review-result-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  color: var(--ink, #20313a);
+}
+.review-result-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.review-result-card-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--target-size, 44px);
+  color: var(--muted, #657477);
+  font-weight: 700;
+}
+.review-result-card-select input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--teal, #0f766e);
+}
+.review-result-card > header > strong {
+  color: var(--teal, #0f766e);
+  font-size: var(--font-title, 20px);
+  font-variant-numeric: tabular-nums;
+}
+.review-result-card h3 {
+  margin: 4px 0 10px;
+  color: var(--ink, #20313a);
+  font-size: var(--font-subtitle, 16px);
+  line-height: 1.45;
+}
+.review-result-card dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  margin: 0;
+}
+.review-result-card dl > div {
+  min-width: 0;
+}
+.review-result-card dt {
+  margin-bottom: 3px;
+  color: var(--muted, #7c8b92);
+  font-size: var(--font-small, 12px);
+}
+.review-result-card dd {
+  margin: 0;
+  color: var(--ink, #20313a);
+  font-size: var(--font-body, 14px);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.review-result-card-detail-toggle {
+  width: 100%;
+  margin-top: 12px;
+}
+.review-result-card-detail {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line, #e6ebec);
+}
+.review-result-card-detail > div {
+  display: grid;
+  gap: 3px;
+  color: var(--muted, #657477);
+  font-size: var(--font-small, 12px);
+  line-height: 1.55;
+}
+.review-result-card-detail > div b {
+  color: var(--ink, #20313a);
+  font-size: var(--font-body, 14px);
+}
+.review-result-card-detail p {
+  margin: 2px 0 0;
+  color: var(--ink, #20313a);
+  font-size: var(--font-body, 14px);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.review-results-empty {
+  padding: 18px 14px;
+  border: 1px dashed var(--line, #e6ebec);
+  border-radius: 10px;
+  color: var(--muted, #7c8b92);
+  text-align: center;
+}
+:root[data-mode="dark"] .review-result-card {
+  border-color: #394744;
+  background: #17201f;
+}
+@media (max-width: 760px) {
+  .review-results-table-wrap {
+    display: none;
+  }
+  .review-results-cards {
+    display: grid;
+    gap: 10px;
+  }
+}
+@media (max-width: 380px) {
+  .review-result-card dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

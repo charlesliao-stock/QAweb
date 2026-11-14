@@ -1,0 +1,48 @@
+/* 全站鍵盤焦點：沿用 token 色彩，避免 focus-visible 被預設 outline:none 隱藏。 */
+:focus-visible {
+  outline: var(--focus-ring, 3px solid #167c72);
+  outline-offset: var(--focus-offset, 2px);
+}
+
+/* 觸控設備最小點選面積；僅觸控指標套用，不改桌機滑鼠版尺寸。 */
+@media (pointer: coarse) {
+  .button,
+  .icon-button,
+  .text-button,
+  .sidebar-handle,
+  .sidebar-close,
+  .nav-item,
+  .notification-trigger,
+  .notification-mark-read,
+  .mobile-bottom-nav button,
+  .admin-tabs button,
+  .tabs .tab,
+  .results-tabs button,
+  .font-size-options button,
+  .reviewer-modal button,
+  .review-question-nav-item,
+  .review-question-stepper button,
+  [role="button"] {
+    min-height: var(--target-size, 44px);
+  }
+
+  .icon-button,
+  .sidebar-handle,
+  .sidebar-close,
+  .mobile-bottom-nav button,
+  .reviewer-modal-head > .button {
+    min-width: var(--target-size, 44px);
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    min-height: var(--target-size, 44px);
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-width: 22px;
+    min-height: 22px;
+  }
+}

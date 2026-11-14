@@ -1,0 +1,66 @@
+
+:root {
+  font-family:
+    "DM Sans",
+    "Noto Sans TC",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  color: #1f2e36;
+  background: #f5f7f8;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --ink: #20313a;
+  --muted: #7c8b92;
+  --line: #e8edef;
+  --teal: #0f766e;
+  --teal-deep: #0d625c;
+  --teal-soft: #e9f5f3;
+  --surface: #fff;
+  --bg: #f5f7f8;
+  /* 主題殼層變數（v1.32.0 資料驅動：由 applyTheme 依主題定義動態寫入；
+     此處為 green-2 預設值，JS 尚未執行時的首屏 fallback） */
+  --radius-btn: 8px;
+  --radius-card: 10px;
+  --lift: 0;
+  --grad: none;
+  --shadow-hover: 0 4px 12px color-mix(in srgb, var(--teal) 12%, transparent);
+  --shadow-card-hover: 0 2px 7px rgba(30, 54, 60, 0.018);
+  --btn-hover-bg: var(--teal-deep);
+  --btn-hover-color: #fff;
+  --row-hover: #fcfdfd;
+  --nav-hover: #f5f8f8;
+  --accent: #4d7f78;
+  --accent-deep: #3d6660;
+  --accent-soft: #edf4f2;
+  --accent2: #4d7f78;
+  --accent2-deep: #3d6660;
+  --accent2-soft: #edf4f2;
+  /* ===== 字體三級（全站統一，2026-11-03）=====
+     標題 20px：頁面大標、卡片主標
+     次標題 16px：區塊小標、欄位標籤
+     內文 14px：一般文字、表單、按鈕
+     個人字體大小三檔（標準/大/特大）改用 body zoom 縮放，不動此處。
+     例外：--font-small 12px 僅用於徽章、輔助說明、表格微文字等小字情境。 */
+  --font-title: 20px;
+  --font-subtitle: 16px;
+  --font-body: 14px;
+  --font-small: 12px;
+  /* 基礎間距尺度：既有版面數值維持不變，後續元件逐步改用這組 token。 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  /* 互動可及性 token：桌機鍵盤焦點與觸控裝置共用明確尺寸基準。 */
+  --target-size: 44px;
+  --focus-color: #167c72;
+  --focus-ring: 3px solid var(--focus-color);
+  --focus-offset: 2px;
+  font-size: var(--font-body);
+}

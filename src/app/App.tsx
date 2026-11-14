@@ -29,6 +29,10 @@ import { loadThemes } from "../lib/themeRegistry";
 import {
   applyTheme,
   applyUiPrefs,
+  FONT_SIZE_LABELS,
+  getFontSize,
+  setFontSize,
+  type FontSizeOption,
 } from "../lib/uiPrefs";
 import { BrandMark } from "../components/ui";
 import { VERSION_LABEL } from "../version";
@@ -316,6 +320,7 @@ function Sidebar({
   const displayName = user?.name ?? "";
   const staffId = user?.staffId ?? "";
   const unitName = user?.unitName || user?.unitCode || "";
+  const [fontSize, setFontSizeChoice] = useState<FontSizeOption>(() => getFontSize());
   const [notifications, setNotifications] = useState<{
     id: string; title: string; message: string; read: boolean; createdAt: unknown;
   }[]>([]);
@@ -450,6 +455,26 @@ function Sidebar({
           })}
         </nav>
         <div className="sidebar-bottom">
+          <div className="sidebar-font-settings">
+            <span>文字大小</span>
+            <div className="font-size-options" role="group" aria-label="文字大小">
+              {(["standard", "large", "xlarge"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  className={fontSize === option ? "selected" : ""}
+                  aria-pressed={fontSize === option}
+                  onClick={() => {
+                    setFontSize(option);
+                    setFontSizeChoice(option);
+                  }}
+                  title={`${FONT_SIZE_LABELS[option]}文字`}
+                >
+                  {FONT_SIZE_LABELS[option]}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="profile-row">
             <div className="profile-avatar">
               {displayName.slice(0, 1) || "使"}

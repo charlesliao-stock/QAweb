@@ -2625,7 +2625,7 @@ function ReviewResultManager({
               {busy ? "處理中…" : `永久刪除所選（${selected.length}）`}
             </button>
           </div>
-          <div className="analysis-table-wrap">
+          <div className="analysis-table-wrap review-results-table-wrap">
             <table className="review-results-table">
               <thead>
                 <tr>
@@ -2734,6 +2734,81 @@ function ReviewResultManager({
                 })}
               </tbody>
             </table>
+          </div>
+          <div className="review-results-cards" aria-label="審查紀錄摘要清單">
+            {rows.length === 0 && (
+              <p className="review-results-empty">沒有符合條件的審查紀錄。</p>
+            )}
+            {rows.map((row) => {
+              const noted = row.answers.filter(
+                (answer) => answer.note.trim() !== "" || answer.commonErrors.length > 0,
+              );
+              const mergedNote = mergeNoteParts(
+                row.answers.map((answer, index) => ({
+                  questionNo: index + 1,
+                  note: answer.note,
+                })),
+              );
+              const expanded = expandedId === row.id;
+              return (
+                <article className="review-result-card" key={row.id}>
+                  <header>
+                    <label className="review-result-card-select">
+                      <input
+                        type="checkbox"
+                        aria-label={`選取 ${row.year}/${String(row.month).padStart(2, "0")} ${indicatorName(row.indicatorId)} ${row.reviewedPersonName || "審查結果"}`}
+                        checked={selected.includes(row.id)}
+                        disabled={busy}
+                        onChange={(event) =>
+                          setSelected((current) =>
+                            event.target.checked
+                              ? [...current, row.id]
+                              : current.filter((id) => id !== row.id),
+                          )
+                        }
+                      />
+                      <span>{row.year}/{String(row.month).padStart(2, "0")}</span>
+                    </label>
+                    <strong>{row.rate == null ? "—" : `${row.rate}%`}</strong>
+                  </header>
+                  <h3>{indicatorName(row.indicatorId)}</h3>
+                  <dl>
+                    <div><dt>單位</dt><dd>{unitName(row.unitId)}</dd></div>
+                    <div><dt>審查人員</dt><dd>{staffLabel(row.reviewerEmpNo, row.reviewerName)}</dd></div>
+                    <div><dt>受審人員</dt><dd>{staffLabel(row.reviewedPersonEmpNo, row.reviewedPersonName)}</dd></div>
+                    <div><dt>提交時間</dt><dd>{formatSubmittedAt(row.submittedAt)}</dd></div>
+                  </dl>
+                  {noted.length > 0 && (
+                    <>
+                      <button
+                        type="button"
+                        className="button button-ghost button-sm review-result-card-detail-toggle"
+                        onClick={() => setExpandedId(expanded ? null : row.id)}
+                        aria-expanded={expanded}
+                      >
+                        {expanded ? "收合明細" : `查看明細與備註（${noted.length}）`}
+                      </button>
+                      {expanded && (
+                        <div className="review-result-card-detail">
+                          {noted.map((answer, index) => (
+                            <div key={`${answer.questionId}-${index}`}>
+                              <b>{answer.itemText || `第 ${index + 1} 題`}</b>
+                              <span>
+                                {answer.optionLabel || "—"}
+                                {answer.commonErrors.length > 0
+                                  ? ` · ${answer.commonErrors.join("、")}`
+                                  : ""}
+                              </span>
+                            </div>
+                          ))}
+                          {mergedNote && <p><b>補充說明：</b>{mergedNote}</p>}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </article>
+              );
+            })}
           </div>
         </div>
       )}
