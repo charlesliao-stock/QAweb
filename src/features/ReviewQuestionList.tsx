@@ -7,6 +7,7 @@
  * 兩種模式：edit（審查執行，可作答＋填備註）／view（檢視結果，唯讀＋顯示備註）
  */
 import { useState, type ReactNode } from "react";
+import { Camera } from "lucide-react";
 import {
   groupQuestionsIntoSections,
   optionLabelsOf,
@@ -28,12 +29,17 @@ export type ReviewQuestionListProps =
       onAnswer: (qid: string, idx: number) => void;
       onCommonErrors: (qid: string, values: string[]) => void;
       onNote: (qid: string, text: string) => void;
+      activeQuestionId?: string;
+      photoCounts?: Record<string, number>;
+      photoUrlsByQuestion?: Record<string, string[]>;
     }
   | {
       mode: "view";
       questions: AuditQuestion[];
       showGroups: boolean;
       answers: ReviewAnswer[];
+      activeQuestionId?: string;
+      photoCounts?: Record<string, number>;
     };
 
 function QuestionRow({
@@ -46,6 +52,9 @@ function QuestionRow({
   optionsNode,
   noteNode,
   missing,
+  active,
+  photoCount = 0,
+  photoNode,
 }: {
   rowId?: string;
   /** 全域題號；0＝不顯示編號 */
@@ -57,13 +66,17 @@ function QuestionRow({
   optionsNode: ReactNode;
   noteNode: ReactNode;
   missing?: boolean;
+  active?: boolean;
+  photoCount?: number;
+  photoNode?: ReactNode;
 }) {
   const hasGuidance = guidance.trim() !== "";
   const label = `${num > 0 ? `${num}. ` : ""}${itemText}`;
   return (
-    <div className="review-qrow" id={rowId}>
+    <div className={`review-qrow${active ? " is-active" : ""}${missing ? " is-unanswered" : " is-answered"}`} id={rowId}>
       <div className="q-main">
         <div className="q-text">
+          {num > 0 && <span className="review-q-number" aria-hidden="true"><span>{num}</span>{photoCount > 0 && <Camera size={14} aria-label={`第 ${num} 題已有照片`} />}</span>}
           {hasGuidance ? (
             <button
               type="button"
@@ -94,6 +107,7 @@ function QuestionRow({
           <p style={{ whiteSpace: "pre-wrap" }}>{guidance}</p>
         </div>
       ) : null}
+      {photoNode}
     </div>
   );
 }
@@ -114,6 +128,9 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
       onAnswer,
       onCommonErrors,
       onNote,
+      activeQuestionId,
+      photoCounts = {},
+      photoUrlsByQuestion = {},
     } = props;
     const numById = new Map(questions.map((q, i) => [q.id, i + 1]));
     const sections = groupQuestionsIntoSections(questions, showGroups);
@@ -133,6 +150,32 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                     key={q.id}
                     rowId={`req-q-${q.id}`}
                     num={num}
+                    active={q.id === activeQuestionId}
+                    photoCount={photoCounts[q.id] ?? 0}
+                    photoNode={q.id === activeQuestionId ? (
+                      <div className="review-photo-optional">
+                        <div className="review-photo-heading">
+                          <Camera size={15} />
+                          <b>照片佐證</b>
+                          <span>選填</span>
+                        </div>
+                        {(photoUrlsByQuestion[q.id] ?? []).length > 0 ? (
+                          <div className="review-photo-links">
+                            {(photoUrlsByQuestion[q.id] ?? []).map((url, index) => (
+                              <a key={`${url}-${index}`} href={url} target="_blank" rel="noreferrer">
+                                查看照片 {index + 1}
+                              </a>
+                            ))}
+                          </div>
+                        ) : (
+                          <p>尚未附照片，不影響答題完成。</p>
+                        )}
+                        <button type="button" className="button button-outline" disabled title="照片上傳尚未串接">
+                          <Camera size={15} /> 拍照／選取照片
+                        </button>
+                        <small>照片上傳功能尚待 Cloud Storage 串接與啟用。</small>
+                      </div>
+                    ) : null}
                     itemText={q.itemText || `（第 ${num} 題）`}
                     guidance={q.guidance}
                     open={!!openGuidance[q.id]}
@@ -218,7 +261,7 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
     );
   }
 
-  const { questions, showGroups, answers } = props;
+  const { questions, showGroups, answers, activeQuestionId, photoCounts = {} } = props;
   const sections = resolveReviewViewSections(questions, answers, showGroups);
   return (
     <>
@@ -232,6 +275,8 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
               <QuestionRow
                 key={r.questionId}
                 num={r.num}
+                active={r.questionId === activeQuestionId}
+                photoCount={photoCounts[r.questionId] ?? r.photoUrls.length}
                 itemText={r.itemText}
                 guidance={r.guidance}
                 open={!!openGuidance[r.questionId]}
@@ -254,6 +299,22 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                   </div>
                 }
                 noteNode={<span className="q-note-text">{r.note || "—"}</span>}
+                photoNode={
+                  r.photoUrls.length > 0 ? (
+                    <div className="review-photo-links">
+                      {r.photoUrls.map((url, index) => (
+                        <a
+                          key={`${url}-${index}`}
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          查看照片 {index + 1}
+                        </a>
+                      ))}
+                    </div>
+                  ) : null
+                }
               />
             ))}
           </section>

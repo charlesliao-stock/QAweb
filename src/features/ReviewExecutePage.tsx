@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, Pencil } from "lucide-react";
+import { ArrowLeft, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, ListChecks, Pencil } from "lucide-react";
 import {
   collection,
   doc,
@@ -230,6 +230,8 @@ export function ReviewExecutePage({
   /** 需要受審人員資料（v1.17）：false 時隱藏「職編」欄位；缺值視為 true（相容舊資料） */
   const [requireReviewee, setRequireReviewee] = useState(true);
   const [questions, setQuestions] = useState<AuditQuestion[]>([]);
+  const [activeQuestionId, setActiveQuestionId] = useState("");
+  const [questionNavigationOpen, setQuestionNavigationOpen] = useState(false);
   const [auditItems, setAuditItems] = useState<string[]>([]);
   const [selectedAuditItem, setSelectedAuditItem] = useState("");
   const [task, setTask] = useState<TaskFull | null>(null);
@@ -259,6 +261,8 @@ export function ReviewExecutePage({
   const [bedNo, setBedNo] = useState("");
   /** questionId → 備註（v1.15.0：選填） */
   const [notes, setNotes] = useState<Record<string, string>>({});
+  /** questionId → 選用照片 URL（照片上傳須啟用 Cloud Storage） */
+  const [photoUrlsByQuestion, setPhotoUrlsByQuestion] = useState<Record<string, string[]>>({});
   /** questionId → 已勾選常見錯誤（不影響評分） */
   const [commonErrorAnswers, setCommonErrorAnswers] = useState<
     Record<string, string[]>
@@ -294,6 +298,12 @@ export function ReviewExecutePage({
       answeredCount: selections.length,
     };
   }, [questions, answers]);
+  const currentQuestionId = questions.some((question) => question.id === activeQuestionId)
+    ? activeQuestionId
+    : questions[0]?.id ?? "";
+  const activeQuestionIndex = questions.findIndex((question) => question.id === currentQuestionId);
+  const answeredCount = liveScore.answeredCount;
+  const attachedPhotoCounts = useMemo(() => Object.fromEntries(Object.entries(photoUrlsByQuestion).map(([questionId, urls]) => [questionId, urls.length])), [photoUrlsByQuestion]);
 
   async function assertUniqueReviewee(
     empNo: string,
@@ -559,6 +569,7 @@ export function ReviewExecutePage({
     const next: Record<string, number> = {};
     const nextNotes: Record<string, string> = {};
     const nextCommonErrors: Record<string, string[]> = {};
+    const nextPhotoUrls: Record<string, string[]> = {};
     rec.answers.forEach((a) => {
       const q = qs.find((x) => x.id === a.questionId);
       if (!q) return;
@@ -575,10 +586,14 @@ export function ReviewExecutePage({
       if (a.note) nextNotes[a.questionId] = a.note;
       if (Array.isArray(a.commonErrors) && a.commonErrors.length > 0)
         nextCommonErrors[a.questionId] = a.commonErrors;
+      if (Array.isArray(a.photoUrls) && a.photoUrls.length > 0)
+        nextPhotoUrls[a.questionId] = a.photoUrls.filter((url): url is string => typeof url === "string");
     });
     setAnswers(next);
+    setActiveQuestionId(qs.find((question) => next[question.id] == null)?.id ?? qs[0]?.id ?? "");
     setNotes(nextNotes);
     setCommonErrorAnswers(nextCommonErrors);
+    setPhotoUrlsByQuestion(nextPhotoUrls);
     setSelectedAuditItem(rec.auditItem ?? "");
     setReviewDate(rec.reviewDate || todayStr());
     setReviewerEmpNo(rec.reviewerEmpNo);
@@ -928,6 +943,7 @@ export function ReviewExecutePage({
           excluded: label === "不適用",
           ...((commonErrorAnswers[q.id] ?? []).length ? { commonErrors: commonErrorAnswers[q.id] } : {}),
           ...(note ? { note } : {}),
+          ...(photoUrlsByQuestion[q.id]?.length ? { photoUrls: photoUrlsByQuestion[q.id] } : {}),
         }];
       });
       const score = computeOptionSetScore(answerList.map((a) => ({ score: a.score, excluded: !!a.excluded })));
@@ -1031,6 +1047,8 @@ export function ReviewExecutePage({
       setAnswers({});
       setNotes({});
       setCommonErrorAnswers({});
+      setPhotoUrlsByQuestion({});
+      setActiveQuestionId(questions[0]?.id ?? "");
       setPersonEmpNo("");
       setPersonName("");
       setBedNo("");
@@ -1082,9 +1100,9 @@ export function ReviewExecutePage({
     const firstMissing = questions.find((q) => answers[q.id] == null);
     if (firstMissing) {
       onAction(`第 ${questions.indexOf(firstMissing) + 1} 題尚未作答`);
-      document
-        .getElementById(`req-q-${firstMissing.id}`)
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setActiveQuestionId(firstMissing.id);
+      setQuestionNavigationOpen(false);
+      window.setTimeout(() => document.getElementById(`req-q-${firstMissing.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
       return;
     }
     if (!reviewerEmpNo.trim()) {
@@ -1121,6 +1139,7 @@ export function ReviewExecutePage({
             ? { commonErrors: commonErrorAnswers[q.id] }
             : {}),
           ...(note ? { note } : {}),
+          ...(photoUrlsByQuestion[q.id]?.length ? { photoUrls: photoUrlsByQuestion[q.id] } : {}),
         };
       });
       const { totalScore, maxScore, rate } = computeOptionSetScore(
@@ -1421,6 +1440,8 @@ export function ReviewExecutePage({
         setAnswers({}); // 清空答案，保留日期／審查人員，繼續下一件
         setCommonErrorAnswers({});
         setNotes({});
+        setPhotoUrlsByQuestion({});
+        setActiveQuestionId(questions[0]?.id ?? "");
         setPersonEmpNo("");
         setPersonName("");
         setPersonQuery("");
@@ -1842,61 +1863,224 @@ export function ReviewExecutePage({
             />
           ) : (
             <>
-              {/* 題目：一個組別一個方框；題目左、選項中、備註右；指引可收合（v1.24） */}
-              <ReviewQuestionList
-                mode="edit"
-                questions={questions}
-                showGroups={showQuestionGroups}
-                answers={answers}
-                commonErrorAnswers={commonErrorAnswers}
-                notes={notes}
-                onAnswer={chooseAnswer}
-                onCommonErrors={(qid, values) =>
-                  setCommonErrorAnswers((prev) => ({ ...prev, [qid]: values }))
-                }
-                onNote={(qid, text) =>
-                  setNotes((prev) => ({ ...prev, [qid]: text }))
-                }
-              />
-
-              <p className="settings-note" aria-live="polite">
-                {editingId ? "修改後即時正確率" : "目前已答題正確率"}：
-                {liveScore.rate == null ? "—" : `${liveScore.rate}%`}
-                {`（已答 ${liveScore.answeredCount}/${questions.length} 題；不適用不計入分母）`}
-              </p>
-
-              <div className="form-actions" style={{ marginBottom: 24 }}>
-                {!editingId && (
-                  <button
-                    className="button button-outline"
-                    disabled={submitting}
-                    onClick={() => void handleSaveDraft()}
+              <div className="review-workspace-layout">
+                <QuestionNavigator
+                  questions={questions}
+                  answers={answers}
+                  photoCounts={attachedPhotoCounts}
+                  activeQuestionId={currentQuestionId}
+                  answeredCount={answeredCount}
+                  mobileOpen={questionNavigationOpen}
+                  onMobileOpenChange={setQuestionNavigationOpen}
+                  onSelect={(questionId) => {
+                    setActiveQuestionId(questionId);
+                    setQuestionNavigationOpen(false);
+                    window.setTimeout(
+                      () =>
+                        document
+                          .getElementById(`req-q-${questionId}`)
+                          ?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+                      0,
+                    );
+                  }}
+                />
+                <div className="review-workspace-main">
+                  <ReviewQuestionList
+                    mode="edit"
+                    questions={questions}
+                    showGroups={showQuestionGroups}
+                    answers={answers}
+                    commonErrorAnswers={commonErrorAnswers}
+                    notes={notes}
+                    activeQuestionId={currentQuestionId}
+                    photoCounts={attachedPhotoCounts}
+                    photoUrlsByQuestion={photoUrlsByQuestion}
+                    onAnswer={chooseAnswer}
+                    onCommonErrors={(qid, values) =>
+                      setCommonErrorAnswers((prev) => ({ ...prev, [qid]: values }))
+                    }
+                    onNote={(qid, text) =>
+                      setNotes((prev) => ({ ...prev, [qid]: text }))
+                    }
+                  />
+                  <div className="review-question-stepper" aria-label="題目導覽">
+                    <button
+                      type="button"
+                      className="button button-outline"
+                      disabled={activeQuestionIndex <= 0}
+                      onClick={() =>
+                        setActiveQuestionId(
+                          questions[activeQuestionIndex - 1]?.id ?? "",
+                        )
+                      }
+                    >
+                      <ChevronLeft size={17} />上一題
+                    </button>
+                    <span>第 {Math.max(activeQuestionIndex + 1, 1)} / {questions.length} 題</span>
+                    <button
+                      type="button"
+                      className="button button-primary"
+                      disabled={
+                        activeQuestionIndex < 0 ||
+                        activeQuestionIndex >= questions.length - 1
+                      }
+                      onClick={() =>
+                        setActiveQuestionId(
+                          questions[activeQuestionIndex + 1]?.id ?? "",
+                        )
+                      }
+                    >
+                      下一題<ChevronRight size={17} />
+                    </button>
+                  </div>
+                  <p className="settings-note review-live-score" aria-live="polite">
+                    {editingId ? "修改後即時正確率" : "目前已答題正確率"}：
+                    {liveScore.rate == null ? "—" : `${liveScore.rate}%`}
+                    {`（已答 ${liveScore.answeredCount}/${questions.length} 題；不適用不計入分母）`}
+                  </p>
+                  <div
+                    className="form-actions review-submit-actions"
+                    style={{ marginBottom: 24 }}
                   >
-                    {submitting ? "暫存中…" : editingDraftId ? "更新暫存" : "暫存不送出"}
-                  </button>
-                )}
-                <button
-                  className="button button-primary"
-                  disabled={submitting}
-                  onClick={handleSubmit}
-                >
-                <Check size={15} />{" "}
-                  {submitting
-                    ? "送出中…"
-                    : editingId
-                      ? "更新審查結果"
-                      : editingDraftId
-                        ? "提交審查結果"
-                        : `送出第 ${nextCaseSeq(records.length + drafts.length)} 件`}
-                </button>
-                <button className="button button-ghost" onClick={onBack}>
-                  取消返回
-                </button>
+                    {!editingId && (
+                      <button
+                        className="button button-outline"
+                        disabled={submitting}
+                        onClick={() => void handleSaveDraft()}
+                      >
+                        {submitting
+                          ? "暫存中…"
+                          : editingDraftId
+                            ? "更新暫存"
+                            : "暫存不送出"}
+                      </button>
+                    )}
+                    <button
+                      className="button button-primary"
+                      disabled={submitting}
+                      onClick={handleSubmit}
+                    >
+                      <Check size={15} />{" "}
+                      {submitting
+                        ? "送出中…"
+                        : editingId
+                          ? "更新審查結果"
+                          : editingDraftId
+                            ? "提交審查結果"
+                            : `送出第 ${nextCaseSeq(records.length + drafts.length)} 件`}
+                    </button>
+                    <button className="button button-ghost" onClick={onBack}>
+                      取消返回
+                    </button>
+                  </div>
+                </div>
               </div>
             </>
           )}
         </>
       )}
+    </div>
+  );
+}
+
+
+function QuestionNavigator({
+  questions,
+  answers,
+  photoCounts,
+  activeQuestionId,
+  answeredCount,
+  mobileOpen,
+  onMobileOpenChange,
+  onSelect,
+}: {
+  questions: AuditQuestion[];
+  answers: Record<string, number>;
+  photoCounts: Record<string, number>;
+  activeQuestionId: string;
+  answeredCount: number;
+  mobileOpen: boolean;
+  onMobileOpenChange: (open: boolean) => void;
+  onSelect: (questionId: string) => void;
+}) {
+  const items = questions.map((question, index) => ({
+    question,
+    index,
+    answered: answers[question.id] != null,
+    photoCount: photoCounts[question.id] ?? 0,
+  }));
+  const list = (compact: boolean) => (
+    <div
+      className={
+        compact ? "review-question-nav-grid" : "review-question-nav-list"
+      }
+    >
+      {items.map(({ question, index, answered, photoCount }) => (
+        <button
+          key={question.id}
+          type="button"
+          className={`review-question-nav-item${
+            question.id === activeQuestionId ? " active" : ""
+          }${answered ? " answered" : " unanswered"}`}
+          aria-current={question.id === activeQuestionId ? "step" : undefined}
+          onClick={() => onSelect(question.id)}
+        >
+          <span className="review-nav-number">
+            {index + 1}
+            {photoCount > 0 && (
+              <Camera size={13} aria-label={`第 ${index + 1} 題已有照片`} />
+            )}
+          </span>
+          <span className="review-nav-label">
+            {question.itemText || `第 ${index + 1} 題`}
+          </span>
+          <span
+            className="review-nav-state"
+            aria-label={answered ? "已作答" : "尚未作答"}
+          >
+            {answered ? (
+              <Check size={14} />
+            ) : (
+              <span className="review-nav-empty-dot" />
+            )}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="review-question-navigator">
+      <details
+        className="review-question-mobile-nav"
+        open={mobileOpen}
+        onToggle={(event) => onMobileOpenChange(event.currentTarget.open)}
+      >
+        <summary>
+          <ListChecks size={17} />
+          <b>題號導覽</b>
+          <span>已答 {answeredCount}/{questions.length} 題</span>
+          <ChevronDown size={16} className="review-nav-chevron" />
+        </summary>
+        {list(true)}
+      </details>
+      <aside className="review-question-sidebar" aria-label="固定題目清單">
+        <header>
+          <b>題目清單</b>
+          <span>{answeredCount}/{questions.length} 題</span>
+        </header>
+        <div className="review-sidebar-progress">
+          <i
+            style={{
+              width: `${questions.length ? Math.round((answeredCount / questions.length) * 100) : 0}%`,
+            }}
+          />
+        </div>
+        {list(false)}
+        <small className="review-nav-legend">
+          <Check size={12} /> 已答　<Camera size={12} /> 已附照片
+        </small>
+      </aside>
     </div>
   );
 }

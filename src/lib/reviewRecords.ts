@@ -18,6 +18,8 @@ export interface ReviewAnswer {
   note?: string;
   /** 此題勾選的常見錯誤（可複選；不影響分數） */
   commonErrors?: string[];
+  /** 此題選用的照片佐證 URL；不存在時表示未附照片，不影響答題完成 */
+  photoUrls?: string[];
 }
 
 export interface ReviewRecord {
@@ -104,6 +106,8 @@ export interface ReviewViewRow {
   optionLabel: string;
   /** 每題備註（選填；快照的 note） */
   note: string;
+  /** 選用照片佐證 */
+  photoUrls: string[];
   guidance: string;
   groupId: string | null;
   groupName: string;
@@ -138,6 +142,7 @@ export function resolveReviewViewSections(
       itemText: a.itemText,
       optionLabel: a.optionLabel,
       note: (a.note ?? "").trim(),
+      photoUrls: Array.isArray(a.photoUrls) ? a.photoUrls : [],
       guidance: q?.guidance ?? "",
       groupId: showGroups ? (q?.groupId ?? null) : null,
       groupName: showGroups && q?.groupId ? q.groupName || "未命名分組" : "",
