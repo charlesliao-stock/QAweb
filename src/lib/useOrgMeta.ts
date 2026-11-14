@@ -3,9 +3,8 @@
  * 對照表，供各頁的身分辨識使用（角色身分由層級＋名稱關鍵字推導，v1.57.0 A3）。
  * 走參考資料共用快取（getCachedRefCollection），同頁重複掛載只讀一次。
  */
+import { loadRefCollection } from "./refLoad";
 import { useEffect, useState } from "react";
-import { collection } from "./db";
-import { getFirebaseDb } from "./firebase";
 import {
   buildRoleMetaMap,
   buildTitleMetaById,
@@ -17,7 +16,6 @@ import {
   type TitleMetaMap,
 } from "./orgMeta";
 import { getCachedRefCollection } from "./refCache";
-import { getDocsCacheFirst } from "./cacheFirst";
 
 export interface OrgMeta {
   roleMeta: RoleMetaMap;
@@ -39,14 +37,9 @@ export function useOrgMeta(): OrgMeta {
     let cancelled = false;
     (async () => {
       try {
-        const db = getFirebaseDb();
         const [rSnap, tSnap] = await Promise.all([
-          getCachedRefCollection("roles", () =>
-            getDocsCacheFirst(collection(db, "roles")),
-          ),
-          getCachedRefCollection("titles", () =>
-            getDocsCacheFirst(collection(db, "titles")),
-          ),
+          loadRefCollection("roles"),
+          loadRefCollection("titles"),
         ]);
         if (cancelled) return;
         const roles: RoleMetaInput[] = rSnap.docs.map((d) => {

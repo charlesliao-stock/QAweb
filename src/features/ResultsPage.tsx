@@ -11,6 +11,7 @@
  * 權限：can("resultQuery")；資料範圍：管理員全部、審查員只看負責單位、
  * 一般人員只看自己單位（沿用舊頁規則）。
  */
+import { loadRefCollection } from "../lib/refLoad";
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown,
@@ -107,7 +108,6 @@ import {
   setCachedYear,
   type ResultsCacheScope,
 } from "../lib/resultsCache";
-import { getCachedRefCollection } from "../lib/refCache";
 import { getDocsCacheFirst } from "../lib/cacheFirst";
 import {
   dbIndexedQueryApi,
@@ -497,15 +497,9 @@ export function ResultsPage({
       try {
         const db = getFirebaseDb();
         const [isnap, gsnap, usnap, ssnap] = await Promise.all([
-          getCachedRefCollection("indicators", () =>
-            getDocsCacheFirst(collection(db, "indicators")),
-          ),
-          getCachedRefCollection("groups", () =>
-            getDocsCacheFirst(collection(db, "groups")),
-          ),
-          getCachedRefCollection("units", () =>
-            getDocsCacheFirst(collection(db, "units")),
-          ),
+          loadRefCollection("indicators"),
+          loadRefCollection("groups"),
+          loadRefCollection("units"),
           // v1.59.0：臨時排程自審旗標（曲線圖加審標註排除自審任務用）
           getDocsCacheFirst(collection(db, "indicatorSchedules")),
         ]);
@@ -3714,17 +3708,10 @@ function ResultImportPanel({
   useEffect(() => {
     (async () => {
       try {
-        const db = getFirebaseDb();
         const [gSnap, uSnap, sSnap] = await Promise.all([
-          getCachedRefCollection("groups", () =>
-            getDocsCacheFirst(collection(db, "groups")),
-          ),
-          getCachedRefCollection("units", () =>
-            getDocsCacheFirst(collection(db, "units")),
-          ),
-          getCachedRefCollection("users", () =>
-            getDocsFromServer(collection(db, "users")),
-          ),
+          loadRefCollection("groups"),
+          loadRefCollection("units"),
+          loadRefCollection("users"),
         ]);
         setGroups(
           gSnap.docs

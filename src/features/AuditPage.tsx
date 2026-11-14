@@ -24,6 +24,7 @@
  * （審查員＝被指派單位、護理長＝自審本人單位、召集人／執行幹事＝所屬群組
  * 整列、管理員／高階主管＝全部）。執行頁 assignedUnitIds 限縮不動。
  */
+import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -44,12 +45,8 @@ import {
   where,
 } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
-import {
-  getCachedRef,
-  getCachedRefCollection,
-  SYSTEM_CONFIG_KEY,
-} from "../lib/refCache";
-import { getDocCacheFirst, getDocsCacheFirst } from "../lib/cacheFirst";
+import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
+import { getDocCacheFirst } from "../lib/cacheFirst";
 import { fetchAllPaged } from "../lib/pagedQuery";
 import {
   EmptyState,
@@ -276,15 +273,9 @@ export function AuditPage({
         const today = new Date();
         const [iSnap, gSnap, uSnap, sSnap, aSnap, meSnap, sysSnap, myTaskPage] =
           await Promise.all([
-            getCachedRefCollection("indicators", () =>
-              getDocsCacheFirst(query(collection(db, "indicators"), limit(500))),
-            ),
-            getCachedRefCollection("groups", () =>
-              getDocsCacheFirst(query(collection(db, "groups"), limit(200))),
-            ),
-            getCachedRefCollection("units", () =>
-              getDocsCacheFirst(query(collection(db, "units"), limit(2000))),
-            ),
+            loadRefCollection("indicators"),
+            loadRefCollection("groups"),
+            loadRefCollection("units"),
             getDocs(query(collection(db, "indicatorSchedules"), limit(500))),
             getDocs(query(collection(db, "indicatorAssignments"), limit(500))),
             getDoc(doc(db, "users", staffId)),

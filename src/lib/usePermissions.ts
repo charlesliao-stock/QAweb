@@ -1,8 +1,5 @@
+import { loadRefCollection } from "./refLoad";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { collection } from "./db";
-import { getFirebaseDb } from "./firebase";
-import { getCachedRefCollection } from "./refCache";
-import { getDocsCacheFirst } from "./cacheFirst";
 import { useAuth } from "./auth";
 import {
   ADMIN_ONLY_PERM_KEYS,
@@ -42,12 +39,8 @@ export function usePermissions() {
     }
     setReady(false);
     Promise.all([
-      getCachedRefCollection("permissionTemplates", () =>
-        getDocsCacheFirst(collection(getFirebaseDb(), "permissionTemplates")),
-      ),
-      getCachedRefCollection("units", () =>
-        getDocsCacheFirst(collection(getFirebaseDb(), "units")),
-      ),
+      loadRefCollection("permissionTemplates"),
+      loadRefCollection("units"),
     ])
       .then(([templateSnapshot, unitSnapshot]) => {
         if (cancelled) return;

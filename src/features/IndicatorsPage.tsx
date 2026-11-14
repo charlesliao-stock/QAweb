@@ -1,3 +1,4 @@
+import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
 import {
   Fragment,
@@ -19,22 +20,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import {
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  getDocsFromServer,
-  limit,
-  orderBy,
-  query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  where,
-  writeBatch,
-} from "../lib/db";
+import { collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "../lib/db";
 import {
   EmptyState,
   FilterPanel,
@@ -45,8 +31,6 @@ import {
   type SortState,
 } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
-import { getCachedRefCollection } from "../lib/refCache";
-import { getDocsCacheFirst } from "../lib/cacheFirst";
 import { useAuth } from "../lib/auth";
 import { staffLabel } from "../lib/mask";
 import { logAudit } from "../lib/audit";
@@ -856,9 +840,7 @@ export function IndicatorsPage({
 
   const loadMeta = useCallback(async () => {
     try {
-      const gsnap = await getCachedRefCollection("groups", () =>
-        getDocsCacheFirst(collection(getFirebaseDb(), "groups")),
-      );
+      const gsnap = await loadRefCollection("groups");
       const gm = new Map<string, string>();
       gsnap.docs.forEach((d) => {
         const n = d.data().name;
@@ -869,9 +851,7 @@ export function IndicatorsPage({
       /* 群組讀取失敗時下拉為空，表單會提示 */
     }
     try {
-      const usnap = await getCachedRefCollection("users", () =>
-        getDocsFromServer(collection(getFirebaseDb(), "users")),
-      );
+      const usnap = await loadRefCollection("users");
       const sm = new Map<string, StaffOption>();
       usnap.docs.forEach((d) => {
         const data = d.data();
@@ -891,9 +871,7 @@ export function IndicatorsPage({
   const loadList = useCallback(async () => {
     setLoading(true);
     try {
-      const snap = await getCachedRefCollection("indicators", () =>
-        getDocsCacheFirst(collection(getFirebaseDb(), "indicators")),
-      );
+      const snap = await loadRefCollection("indicators");
       const list: IndicatorRow[] = snap.docs.map((d) => {
         const data = d.data();
         const groupId = typeof data.groupId === "string" ? data.groupId : "";

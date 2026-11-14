@@ -1,3 +1,4 @@
+import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, ListChecks, Pencil, ScanLine } from "lucide-react";
@@ -16,7 +17,6 @@ import {
 } from "../lib/db";
 import { EmptyState, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
-import { getCachedRefCollection } from "../lib/refCache";
 import { useAuth } from "../lib/auth";
 import { isReviewerAccessActive } from "../lib/reviewerValidity";
 import { staffLabel } from "../lib/mask";
@@ -617,9 +617,7 @@ export function ReviewExecutePage({
         const db = getFirebaseDb();
         // 人員清單（審查人員／受審人員搜尋用）
         try {
-          const psnap = await getCachedRefCollection("users", () =>
-            getDocsFromServer(collection(db, "users")),
-          );
+          const psnap = await loadRefCollection("users");
           const list: PersonOption[] = [];
           psnap.docs.forEach((d) => {
             const data = d.data() as Record<string, unknown>;

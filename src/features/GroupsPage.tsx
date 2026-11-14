@@ -1,3 +1,4 @@
+import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -40,7 +41,6 @@ import {
 } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
-import { getDocsCacheFirst } from "../lib/cacheFirst";
 import { useAuth } from "../lib/auth";
 import { maskName } from "../lib/mask";
 import { syncReviewerDoc, backfillReviewerDocs } from "../lib/reviewerSync";
@@ -971,9 +971,7 @@ export function GroupsPage({
     setRolesLoading(true);
     setRolesLoadError("");
     try {
-      const snap = await getCachedRefCollection("roles", () =>
-        getDocsCacheFirst(collection(getFirebaseDb(), "roles")),
-      );
+      const snap = await loadRefCollection("roles");
       const meta = buildRoleMetaMap(
         snap.docs.map((d) => {
           const data = d.data() as Record<string, unknown>;
@@ -1016,14 +1014,9 @@ export function GroupsPage({
     setMasterLoading(true);
     setMasterLoadError("");
     try {
-      const db = getFirebaseDb();
       const [gsnap, usnap] = await Promise.all([
-        getCachedRefCollection("groups", () =>
-          getDocsCacheFirst(collection(db, "groups")),
-        ),
-        getCachedRefCollection("units", () =>
-          getDocsCacheFirst(collection(db, "units")),
-        ),
+        loadRefCollection("groups"),
+        loadRefCollection("units"),
       ]);
       const groupList = gsnap.docs
         .map((d) => ({
@@ -1036,9 +1029,7 @@ export function GroupsPage({
       // 各單位人數（非管理員無 users 查詢權限，顯示「—」）
       const counts = new Map<string, number>();
       try {
-        const usersSnap = await getCachedRefCollection("users", () =>
-          getDocsFromServer(collection(getFirebaseDb(), "users")),
-        );
+        const usersSnap = await loadRefCollection("users");
         usersSnap.docs.forEach((d) => {
           const uc = d.data().unitCode;
           if (typeof uc === "string" && uc) {
@@ -1124,10 +1115,7 @@ export function GroupsPage({
     setTitlesLoading(true);
     setTitlesLoadError("");
     try {
-      const db = getFirebaseDb();
-      const snap = await getCachedRefCollection("titles", () =>
-        getDocsCacheFirst(collection(db, "titles")),
-      );
+      const snap = await loadRefCollection("titles");
       const list = snap.docs
         .map((d) => {
           const data = d.data();
@@ -1163,9 +1151,7 @@ export function GroupsPage({
       const legacyTitleCounts = new Map<string, number>();
       let usersReadable = false;
       try {
-        const usnap = await getCachedRefCollection("users", () =>
-          getDocsFromServer(collection(getFirebaseDb(), "users")),
-        );
+        const usnap = await loadRefCollection("users");
         usersReadable = true;
         usnap.docs.forEach((d) => {
           const data = d.data();
@@ -1202,9 +1188,7 @@ export function GroupsPage({
     setUsersLoading(true);
     setUsersLoadError("");
     try {
-      const snap = await getCachedRefCollection("users", () =>
-        getDocsFromServer(collection(getFirebaseDb(), "users")),
-      );
+      const snap = await loadRefCollection("users");
       usersLoadedRef.current = true;
       const list: UserRow[] = snap.docs
         .map((d) => {

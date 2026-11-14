@@ -1,3 +1,4 @@
+import { loadRefCollection } from "./refLoad";
 import { getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
 import {
@@ -7,20 +8,7 @@ import {
   persistentMultipleTabManager,
   type Firestore,
 } from "firebase/firestore";
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  getDocsFromServer,
-  limit,
-  query,
-  serverTimestamp,
-  where,
-  writeBatch,
-} from "./db";
-import { getCachedRefCollection } from "./refCache";
-import { getDocsCacheFirst } from "./cacheFirst";
+import { collection, doc, getDoc, getDocs, limit, query, serverTimestamp, where, writeBatch } from "./db";
 import { fetchAllPaged } from "./pagedQuery";
 import {
   deriveGroupIds,
@@ -246,9 +234,7 @@ export async function readReviewRecords(
         ...new Set([...profile.groupIds, profile.groupId].filter(Boolean)),
       ];
       if (groupIds.length) {
-        const unitSnap = await getCachedRefCollection("units", () =>
-          getDocsCacheFirst(query(collection(db, "units"), limit(2000))),
-        );
+        const unitSnap = await loadRefCollection("units");
         const ids = new Set<string>();
         unitSnap.docs.forEach((u) => {
           const data = u.data() as Record<string, unknown>;
@@ -378,15 +364,10 @@ export async function readIndicatorYearSchedule(
 export async function readFirebaseUsersForReviewerManagement(): Promise<
   FirebaseUserRow[]
 > {
-  const db = getFirebaseDb();
-  const snapshot = await getCachedRefCollection("users", () =>
-    getDocsFromServer(query(collection(db, "users"), limit(1000))),
-  );
+  const snapshot = await loadRefCollection("users");
   let groupByUnit = new Map<string, string>();
   try {
-    const units = await getCachedRefCollection("units", () =>
-      getDocsCacheFirst(query(collection(db, "units"), limit(2000))),
-    );
+    const units = await loadRefCollection("units");
     groupByUnit = new Map(
       units.docs.flatMap((unit) => {
         const data = unit.data() as Record<string, unknown>;
@@ -435,10 +416,7 @@ export async function readFirebaseUsersForReviewerManagement(): Promise<
 export async function readFirebaseGroupsForReviewerManagement(): Promise<
   FirebaseGroupOption[]
 > {
-  const db = getFirebaseDb();
-  const snapshot = await getCachedRefCollection("groups", () =>
-    getDocsCacheFirst(query(collection(db, "groups"), limit(500))),
-  );
+  const snapshot = await loadRefCollection("groups");
   return snapshot.docs
     .map((document) => ({
       id: document.id,
@@ -469,7 +447,7 @@ export async function grantReviewerRole(
   const normalizedGroupId = groupId.trim();
   if (!normalizedGroupId) throw new Error("請先選擇授予群組。");
   const db = getFirebaseDb();
-  const reviewerRoleName = await resolveReviewerRoleName(db);
+  const reviewerRoleName = await resolveReviewerRoleName();
   const userRef = doc(db, "users", normalizedStaffId);
   const userSnap = await getDoc(userRef);
   if (!userSnap.exists()) throw new Error("找不到該人員資料。");
@@ -512,7 +490,7 @@ export async function grantReviewerRole(
   await batch.commit();
   // v1.51.0：授予審查員角色後同步審查員名單（同一寫入開關已在函式入口檢查）
   try {
-    const roleMeta = await loadRoleMetaMap(db);
+    const roleMeta = await loadRoleMetaMap();
     await syncReviewerDoc(db, normalizedStaffId, roles, roleMeta);
   } catch {
     // 連動失敗不阻擋授予流程；名單可由管理員以「補建審查員名單」補建
@@ -521,8 +499,8 @@ export async function grantReviewerRole(
 }
 
 /** 讀取 roles 集合建角色 meta 表（授予流程與審查員名單連動共用）。 */
-async function loadRoleMetaMap(db: Firestore): Promise<RoleMetaMap> {
-  const snap = await getDocs(collection(db, "roles"));
+async function loadRoleMetaMap(): Promise<RoleMetaMap> {
+  const snap = await loadRefCollection("roles");
   return buildRoleMetaMap(
     snap.docs.map((d) => {
       const v = d.data() as Record<string, unknown>;
@@ -535,9 +513,9 @@ async function loadRoleMetaMap(db: Firestore): Promise<RoleMetaMap> {
 }
 
 /** 由 roles 集合找出審查員類別的角色名稱（名稱排序第一個）；無則退回舊名稱。 */
-async function resolveReviewerRoleName(db: Firestore): Promise<string> {
+async function resolveReviewerRoleName(): Promise<string> {
   try {
-    const meta = await loadRoleMetaMap(db);
+    const meta = await loadRoleMetaMap();
     const names = reviewerRoleNames(meta).sort((a, b) =>
       a.localeCompare(b, "zh-Hant"),
     );

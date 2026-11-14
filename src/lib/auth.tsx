@@ -1,3 +1,4 @@
+import { loadRefCollection } from "./refLoad";
 import {
   createContext,
   useCallback,
@@ -14,7 +15,7 @@ import {
   updatePassword,
   type User as FirebaseUser,
 } from "firebase/auth";
-import { collection, doc, getDoc, getDocs, updateDoc } from "./db";
+import { doc, getDoc, updateDoc } from "./db";
 import { getFirebaseAuth, getFirebaseDb } from "./firebase";
 import { isDemoMode, setDemoMode } from "./demoMode";
 import { clearRefCache } from "./refCache";
@@ -138,7 +139,7 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
   // 讀取失敗時退回舊名稱推導，不阻擋登入）
   let roleMeta;
   try {
-    const roleSnap = await getDocs(collection(db, "roles"));
+    const roleSnap = await loadRefCollection("roles");
     roleMeta = buildRoleMetaMap(
       roleSnap.docs.map((d) => {
         const v = d.data() as Record<string, unknown>;

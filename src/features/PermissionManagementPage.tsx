@@ -1,3 +1,4 @@
+import { loadRefCollection } from "../lib/refLoad";
 import { useCallback, useEffect, useRef, useState} from "react";
 import { RefreshCw} from "lucide-react";
 import { EmptyState, PageHeading, SectionTitle} from "../components/ui";
@@ -398,9 +399,9 @@ titleResult,
 roleLevelResult,
 titleLevelResult,
 ] = await Promise.allSettled([
-getDocsFromServer(collection(db, "permissionTemplates")),
-getDocsFromServer(collection(db, "roles")),
-getDocsFromServer(collection(db, "titles")),
+loadRefCollection("permissionTemplates"),
+loadRefCollection("roles"),
+loadRefCollection("titles"),
 getDocsFromServer(collection(db, "roleLevels")),
 getDocsFromServer(collection(db, "titleLevels")),
 ]);

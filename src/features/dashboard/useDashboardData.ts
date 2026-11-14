@@ -11,6 +11,7 @@
  * 絕不讓儀表板掛掉。
  * 載入時自動校正任務狀態（完成→done；逾期→locked；其餘→pending，沿用 v1.12.2 模式）。
  */
+import { loadRefCollection } from "../../lib/refLoad";
 import { useCallback, useEffect, useState } from "react";
 import {
   collection,
@@ -23,8 +24,6 @@ import {
   writeBatch,
 } from "../../lib/db";
 import { getFirebaseDb } from "../../lib/firebase";
-import { getCachedRefCollection } from "../../lib/refCache";
-import { getDocsCacheFirst } from "../../lib/cacheFirst";
 import { correctTaskStatus } from "../../lib/reviewProgress";
 import {
   markCorrectionWritten,
@@ -212,15 +211,9 @@ export function useDashboardData(): DashboardData {
         const db = getFirebaseDb();
         const today = todayStr();
         const [isnap, gsnap, usnap, monthTsnap, nextTsnap, lockedTsnap, monthRsnap, alertRsnap, usnap2] = await Promise.all([
-          getCachedRefCollection("indicators", () =>
-            getDocsCacheFirst(collection(db, "indicators")),
-          ),
-          getCachedRefCollection("groups", () =>
-            getDocsCacheFirst(collection(db, "groups")),
-          ),
-          getCachedRefCollection("units", () =>
-            getDocsCacheFirst(collection(db, "units")),
-          ),
+          loadRefCollection("indicators"),
+          loadRefCollection("groups"),
+          loadRefCollection("units"),
           // v1.28 階段 2：任務只拉本月（年＋月兩個等號，不需複合索引）
           getDocs(
             query(

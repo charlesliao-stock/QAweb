@@ -5,6 +5,7 @@
  * 排程讀寫一律走 src/lib/scheduling.ts 的新模型（indicatorSchedules），
  * 稽核由 lib 內自動寫入。
  */
+import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
@@ -21,17 +22,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  getDocsFromServer,
-  query,
-  serverTimestamp,
-  setDoc,
-  where,
-} from "../lib/db";
+import { collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, where } from "../lib/db";
 import {
   EmptyState,
   FilterPanel,
@@ -42,12 +33,8 @@ import {
   useTableSort,
 } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
-import {
-  getCachedRef,
-  getCachedRefCollection,
-  SYSTEM_CONFIG_KEY,
-} from "../lib/refCache";
-import { getDocCacheFirst, getDocsCacheFirst } from "../lib/cacheFirst";
+import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
+import { getDocCacheFirst } from "../lib/cacheFirst";
 import { indicatorCodeOf, effectiveThreshold } from "../lib/indicators";
 import { buildTaskIndex } from "../lib/taskIndex";
 import { usePermissions } from "../lib/usePermissions";
@@ -409,19 +396,11 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
       const db = getFirebaseDb();
       const [isnap, gsnap, asnap, usnap, unsnap, rsnap, scheds] =
         await Promise.all([
-          getCachedRefCollection("indicators", () =>
-            getDocsCacheFirst(collection(db, "indicators")),
-          ),
-          getCachedRefCollection("groups", () =>
-            getDocsCacheFirst(collection(db, "groups")),
-          ),
+          loadRefCollection("indicators"),
+          loadRefCollection("groups"),
           getDocs(collection(db, "indicatorAssignments")),
-          getCachedRefCollection("units", () =>
-            getDocsCacheFirst(collection(db, "units")),
-          ),
-          getCachedRefCollection("users", () =>
-            getDocsFromServer(collection(db, "users")),
-          ),
+          loadRefCollection("units"),
+          loadRefCollection("users"),
           getDocs(collection(db, "reviewReviewers")),
           listSchedules(db),
         ]);
