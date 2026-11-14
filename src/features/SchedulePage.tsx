@@ -348,6 +348,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
   // 篩選（v1.18）：年份／年別（鎖定系統統計週期）／組別／關鍵字／顯示加審
   // v1.20：組別旁新增指標下拉（依組別連動）
   const [filterYear, setFilterYear] = useState(() => new Date().getFullYear());
+  const [taskReloadTick, setTaskReloadTick] = useState(0);
   const [statsCycle, setStatsCycle] = useState<"year" | "academic">("year");
   const [showTemp, setShowTemp] = useState(false);
   const [filterGroup, setFilterGroup] = useState("");
@@ -492,22 +493,8 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
       );
       setReviewersByGroup(rbm);
 
-      // 任務索引（v1.28 階段 6 B5）：一次拉全部 reviewTasks、前端按 indicatorId 分組，
-      // 取代每支指標一次查詢（N+1 → 1）。不加年份 where：排程頁可切換檢視年份
-      //（filterYear）且臨時排程可屬任何年份；全量單查與改前讀取文件數相同。
-      // 分組規則見 src/lib/taskIndex.ts（純函式，測試逐筆對照改前演算法）。
-      let idx = new Map<string, Map<string, { pending: number; done: number }>>();
-      try {
-        const tsnap = await getDocs(collection(db, "reviewTasks"));
-        idx = buildTaskIndex(
-          tsnap.docs as unknown as Array<{
-            data: () => Record<string, unknown>;
-          }>,
-        );
-      } catch {
-        /* 任務索引讀取失敗：索引留空，任務數顯示為 0，不影響其他資料 */
-      }
-      setTaskIndex(idx);
+      // 任務索引改由 loadTaskIndex 依檢視年度讀取；操作後重載時一併刷新。
+      setTaskReloadTick((t) => t + 1);
     } catch (error) {
       onAction(`讀取排程資料失敗：${toErrorMessage(error)}`);
     } finally {
@@ -518,6 +505,39 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // 任務索引（v1.28 階段 6 B5 起）：前端按 indicatorId 分組取代 N+1 查詢。
+  // 只讀「檢視年度」的任務（年度＝該年；學年度 8 月～隔年 7 月，故讀 Y 與 Y+1 兩個
+  // 日曆年），不再整個集合全掃。year 單欄位 in 查詢，免複合索引。
+  // 臨時排程若屬其他年度，切換到該年度檢視時才會有任務數。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const db = getFirebaseDb();
+        const tsnap = await getDocs(
+          query(
+            collection(db, "reviewTasks"),
+            where("year", "in", [filterYear, filterYear + 1]),
+          ),
+        );
+        if (cancelled) return;
+        setTaskIndex(
+          buildTaskIndex(
+            tsnap.docs as unknown as Array<{
+              data: () => Record<string, unknown>;
+            }>,
+          ),
+        );
+      } catch {
+        /* 任務索引讀取失敗：索引留空，任務數顯示為 0，不影響其他資料 */
+        if (!cancelled) setTaskIndex(new Map());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [filterYear, taskReloadTick]);
 
   // v1.18：年別鎖定系統統計週期；一列＝一支啟用指標＋當期；臨時排程另列
   const cycle: "year" | "academic" = statsCycle;

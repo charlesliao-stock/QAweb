@@ -1,3 +1,4 @@
+import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowRightLeft, Search, X } from "lucide-react";
@@ -100,8 +101,8 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
       const db = getFirebaseDb();
       const [meSnap, groupSnap, unitSnap] = await Promise.all([
         getDoc(doc(db, "users", user.staffId)),
-        getDocs(query(collection(db, "groups"))),
-        getDocs(query(collection(db, "units"))),
+        loadRefCollection("groups"),
+        loadRefCollection("units"),
       ]);
       const roleNames = user.roles ?? [];
       const admin = roleNames.includes("系統管理員");
@@ -152,15 +153,17 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
     try {
       const db = getFirebaseDb();
       const staffId = staffSearch.trim();
-      const [taskSnap, indicatorSnap] = staffId
-        ? await Promise.all([
-            getDocs(query(collection(db, "reviewTasks"), where("reviewerId", "==", staffId))),
-            getDocs(query(collection(db, "indicators"))),
-          ])
-        : await Promise.all([
-            getDocs(query(collection(db, "reviewTasks"))),
-            getDocs(query(collection(db, "indicators"))),
-          ]);
+      // 只讀「未完成」任務：有職編時以該審查員為條件；否則用 status != done
+      // （單欄位不等式，免複合索引），不再整個集合全掃。已完成任務本來就不可交接。
+      // 指標走參考資料快取，不重複計費。
+      const [taskSnap, indicatorSnap] = await Promise.all([
+        getDocs(
+          staffId
+            ? query(collection(db, "reviewTasks"), where("reviewerId", "==", staffId))
+            : query(collection(db, "reviewTasks"), where("status", "!=", "done")),
+        ),
+        loadRefCollection("indicators"),
+      ]);
       const unitById = new Map(units.map((u) => [u.id, u]));
       const groupName = new Map(groups.map((g) => [g.id, g.name]));
       const indById = new Map(
