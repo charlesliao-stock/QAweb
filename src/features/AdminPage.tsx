@@ -3,8 +3,10 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ClipboardCheck,
   Database,
   Eye,
+  Gauge,
   Pencil,
   Plus,
   RotateCcw,
@@ -12,6 +14,7 @@ import {
   SlidersHorizontal,
   Trash2,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import {
   collection,
@@ -56,6 +59,7 @@ import {
 } from "../lib/themeRegistry";
 import { isHexColor, validateThemeContrast } from "../lib/colorContrast";
 import { usePermissions } from "../lib/usePermissions";
+import { CapaPage } from "./CapaPage";
 import {
   clearMaintenanceCache,
   DEFAULT_QUOTA_SETTINGS,
@@ -1530,15 +1534,28 @@ function QuotaControlSection({
   );
 }
 
+type AdminTab = "parameters" | "quota" | "themes" | "audit" | "capa" | "audit-policy";
+
 export function AdminPage({
   onAction,
 }: {
   onAction: (message: string) => void;
 }) {
-  const { can } = usePermissions();
+  const { can, isAdmin } = usePermissions();
   const canManageRoles = can("manageRoles");
   // 主題在模板管理區變更後遞增，觸發 SystemInitSection 重讀參數（顯示目前主題）
   const [themeTick, setThemeTick] = useState(0);
+  const [activeTab, setActiveTab] = useState<AdminTab>("parameters");
+  const tabs: { id: AdminTab; label: string; icon: LucideIcon }[] = [
+    { id: "parameters", label: "系統參數", icon: SlidersHorizontal },
+    ...(canManageRoles ? [{ id: "quota" as const, label: "流量控管", icon: Gauge }, { id: "themes" as const, label: "主題模板", icon: Eye }] : []),
+    { id: "audit", label: "稽核軌跡", icon: ShieldCheck },
+    ...(isAdmin ? [{ id: "capa" as const, label: "CAPA 管理", icon: ClipboardCheck }] : []),
+    { id: "audit-policy", label: "稽核政策", icon: Check },
+  ];
+  useEffect(() => {
+    if (!tabs.some((tab) => tab.id === activeTab)) setActiveTab("parameters");
+  }, [activeTab, canManageRoles, isAdmin]);
   return (
     <>
       <PageHeading
@@ -1546,11 +1563,7 @@ export function AdminPage({
         action={
           <button
             className="button button-outline"
-            onClick={() =>
-              document
-                .getElementById("system-init")
-                ?.scrollIntoView({ behavior: "smooth", block: "start" })
-            }
+            onClick={() => setActiveTab("parameters")}
           >
             <SlidersHorizontal size={15} />
             系統參數
@@ -1564,42 +1577,44 @@ export function AdminPage({
           角色可由系統管理員動態建立，不需修改程式；正式授權以系統管理員設定為準。
         </span>
       </div>
-      <SystemInitSection
-        onAction={onAction}
-        canManageRoles={canManageRoles}
-        themeTick={themeTick}
-      />
-      {canManageRoles && <QuotaControlSection onAction={onAction} />}
-      {canManageRoles && (
-        <TemplateManagementSection
-          onAction={onAction}
-          onThemeChanged={() => setThemeTick((t) => t + 1)}
-        />
-      )}
-      <AuditLogSection canManageRoles={canManageRoles} />
-      <div className="admin-settings-grid">
-        <section className="panel settings-panel">
-          <SectionTitle title="稽核軌跡" note="不可關閉的必要紀錄" />
-          <div className="audit-logs">
-            {[
-              "登入、登出與失敗",
-              "角色與權限變更",
-              "資料修改前後內容",
-              "結果、照片與匯出查閱",
-            ].map((line) => (
-              <div key={line}>
-                <span className="log-check">
-                  <Check size={13} />
-                </span>
-                <span>{line}</span>
-                <span className="log-required">必開</span>
+      <div className="admin-tabs" role="tablist" aria-label="系統管理項目">
+        {tabs.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === id}
+            aria-controls={`admin-panel-${id}`}
+            className={activeTab === id ? "active" : ""}
+            onClick={() => setActiveTab(id)}
+          >
+            <Icon size={15} /> {label}
+          </button>
+        ))}
+      </div>
+      <div className="admin-tab-content" id={`admin-panel-${activeTab}`} role="tabpanel">
+        {activeTab === "parameters" && <SystemInitSection onAction={onAction} canManageRoles={canManageRoles} themeTick={themeTick} />}
+        {activeTab === "quota" && canManageRoles && <QuotaControlSection onAction={onAction} />}
+        {activeTab === "themes" && canManageRoles && <TemplateManagementSection onAction={onAction} onThemeChanged={() => setThemeTick((t) => t + 1)} />}
+        {activeTab === "audit" && <AuditLogSection canManageRoles={canManageRoles} />}
+        {activeTab === "capa" && isAdmin && <CapaPage onAction={onAction} managementOnly />}
+        {activeTab === "audit-policy" && (
+          <div className="admin-settings-grid">
+            <section className="panel settings-panel">
+              <SectionTitle title="稽核軌跡" note="不可關閉的必要紀錄" />
+              <div className="audit-logs">
+                {["登入、登出與失敗", "角色與權限變更", "資料修改前後內容", "結果、照片與匯出查閱"].map((line) => (
+                  <div key={line}>
+                    <span className="log-check"><Check size={13} /></span>
+                    <span>{line}</span>
+                    <span className="log-required">必開</span>
+                  </div>
+                ))}
               </div>
-            ))}
+              <p className="settings-note">審查資料與稽核紀錄保存 3 年（可於系統參數調整）。</p>
+            </section>
           </div>
-          <p className="settings-note">
-            審查資料與稽核紀錄保存 3 年（可於系統參數調整）。
-          </p>
-        </section>
+        )}
       </div>
     </>
   );

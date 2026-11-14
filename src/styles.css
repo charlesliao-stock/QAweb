@@ -2647,6 +2647,45 @@ button:disabled {
 .admin-alert b {
   color: #447a72;
 }
+.admin-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 14px 0 16px;
+  overflow-x: auto;
+  border-bottom: 1px solid #e7eeee;
+  scrollbar-width: thin;
+}
+.admin-tabs button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 13px;
+  color: #718084;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font: inherit;
+  font-size: var(--font-small);
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.admin-tabs button:hover {
+  color: var(--teal-deep);
+  background: #f5faf9;
+}
+.admin-tabs button.active {
+  color: var(--teal-deep);
+  border-bottom-color: var(--teal);
+}
+.admin-tabs button:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: -2px;
+}
+.admin-tab-content {
+  min-width: 0;
+}
 .permission-panel {
   padding-top: 17px;
   margin-bottom: 14px;
