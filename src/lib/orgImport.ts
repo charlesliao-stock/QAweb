@@ -299,7 +299,7 @@ export function validateUnitRows(
 export const USER_TEMPLATE_HEADERS = [
   "職編",
   "姓名",
-  "單位",
+  "單位代號",
   "職稱",
   "群組1",
   "角色1",
@@ -312,6 +312,7 @@ export function userTemplateRows(): string[][] {
     USER_TEMPLATE_HEADERS,
     ["A12345", "王小明", "9A", "護理師", "病房組", "品管組審查員", "", ""],
     ["B67890", "李小華", "9B", "副護理長", "病房組", "單位執行幹事", "加護組", "單位審查員"],
+    ["C24680", "陳小美", "ICU", "護理師", "加護組", "單位審查員", "", ""],
   ];
 }
 

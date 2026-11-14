@@ -2240,3 +2240,149 @@
     max-width: none;
   }
 }
+
+
+/* 跨清單共用的資料狀態與人員長表單模式。 */
+.async-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 88px;
+  padding: 18px 20px;
+  color: var(--muted, #657571);
+  font-size: var(--font-body, 14px);
+}
+.async-state-spinner {
+  flex: none;
+  color: var(--teal, #0f766e);
+  animation: async-state-spin 1s linear infinite;
+}
+.async-state-error {
+  border-color: color-mix(in srgb, var(--danger, #b42318) 28%, var(--line, #dfe8e6));
+  color: var(--danger, #b42318);
+}
+.async-state-copy {
+  flex: 1;
+  min-width: 0;
+}
+.async-state-copy b {
+  display: block;
+}
+.async-state-copy p {
+  margin: 4px 0 0;
+  color: var(--muted, #657571);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.async-state > .button {
+  flex: none;
+}
+@keyframes async-state-spin {
+  to { transform: rotate(360deg); }
+}
+.batch-toolbar .batch-sample-note {
+  flex-basis: 100%;
+  margin: 0;
+  line-height: 1.55;
+}
+.user-long-form {
+  display: grid;
+  gap: 14px;
+}
+.user-form-step-nav {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line, #dfe8e6);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+}
+.user-form-step-nav button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink, #20313a);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.user-form-step-nav button:hover {
+  border-color: var(--line, #dfe8e6);
+  background: var(--surface-soft, #f5f8f7);
+}
+.user-form-step {
+  min-width: 0;
+  scroll-margin-top: 70px;
+}
+.user-form-step:focus {
+  outline: none;
+}
+.form-error-summary {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+}
+.form-error-summary:focus {
+  outline: var(--focus-ring, 3px solid #167c72);
+  outline-offset: var(--focus-offset, 2px);
+}
+.form-field .select-wrap,
+.form-field .text-input {
+  min-width: 0;
+}
+.check-row {
+  min-height: 44px;
+  line-height: 1.5;
+}
+@media (max-width: 720px) {
+  .user-form-step-nav {
+    top: 0;
+    margin: 0 -2px;
+  }
+  .user-form-step-nav button {
+    flex: 1;
+    padding: 8px 10px;
+    text-align: center;
+  }
+  .form-actions {
+    flex-wrap: wrap;
+  }
+  .form-actions > .button {
+    min-height: 44px;
+  }
+}
+@media (max-width: 480px) {
+  .async-state {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    padding: 14px;
+  }
+  .async-state > .button {
+    width: 100%;
+    justify-content: center;
+  }
+  .user-form-step-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .user-form-step-nav button {
+    min-width: 0;
+    padding-inline: 6px;
+    font-size: var(--font-body, 14px);
+  }
+  .form-actions > .button {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .async-state-spinner {
+    animation: none;
+  }
+}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { Check, Inbox, X } from "lucide-react";
+import { AlertCircle, Check, Inbox, LoaderCircle, RefreshCw, X } from "lucide-react";
 import type { PageId, Rag } from "../types";
 
 export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
@@ -220,6 +220,40 @@ export function EmptyState({
         <b>{title}</b>
         {description && <p>{description}</p>}
       </div>
+    </section>
+  );
+}
+
+export function LoadingState({ label = "資料載入中…" }: { label?: string }) {
+  return (
+    <section className="async-state panel" role="status" aria-live="polite">
+      <LoaderCircle className="async-state-spinner" size={22} aria-hidden="true" />
+      <span>{label}</span>
+    </section>
+  );
+}
+
+export function ErrorState({
+  title = "資料載入失敗",
+  description,
+  onRetry,
+}: {
+  title?: string;
+  description?: string;
+  onRetry?: () => void;
+}) {
+  return (
+    <section className="async-state async-state-error panel" role="alert">
+      <AlertCircle size={22} aria-hidden="true" />
+      <div className="async-state-copy">
+        <b>{title}</b>
+        {description && <p>{description}</p>}
+      </div>
+      {onRetry && (
+        <button type="button" className="button button-outline" onClick={onRetry}>
+          <RefreshCw size={15} aria-hidden="true" /> 重試
+        </button>
+      )}
     </section>
   );
 }

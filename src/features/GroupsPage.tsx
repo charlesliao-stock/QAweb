@@ -25,7 +25,7 @@ import {
   writeBatch,
   type WriteBatch,
 } from "../lib/db";
-import { EmptyState, Modal, PageHeading, SectionTitle } from "../components/ui";
+import { EmptyState, ErrorState, LoadingState, Modal, PageHeading, SectionTitle } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
 import { getDocsCacheFirst } from "../lib/cacheFirst";
@@ -302,6 +302,7 @@ function BatchImporter({
   header,
   validateRows,
   importRows,
+  sampleNote,
   postImportNote,
   onDone,
   onAction,
@@ -312,6 +313,7 @@ function BatchImporter({
   validateRows: (rows: string[][]) => Promise<PreviewRow[]>;
   /** 回傳摘要字串時以該字串為匯入結果訊息（新增／更新筆數） */
   importRows: (rows: PreviewRow[]) => Promise<string | void>;
+  sampleNote?: string;
   postImportNote?: string;
   onDone: () => void | Promise<void>;
   onAction: (message: string) => void;
@@ -420,6 +422,7 @@ function BatchImporter({
         <Upload size={14} />
         批次上傳
       </button>
+      {sampleNote && <p className="settings-note batch-sample-note">{sampleNote}</p>}
       <input
         ref={fileRef}
         type="file"
@@ -506,6 +509,9 @@ function MemberChecklist({
   title,
   note,
   emptyText = "尚無成員。",
+  idLabel = "職編／代號",
+  nameLabel = "姓名／名稱",
+  columns = [],
   items,
   checked,
   onToggle,
@@ -517,7 +523,10 @@ function MemberChecklist({
   title: string;
   note?: string;
   emptyText?: string;
-  items: { id: string; label: string; sub?: string }[];
+  idLabel?: string;
+  nameLabel?: string;
+  columns?: { key: string; label: string }[];
+  items: { id: string; label: string; sub?: string; fields?: Record<string, string> }[];
   checked: string[];
   onToggle: (id: string, next: boolean) => void;
   onToggleAll: (next: boolean) => void;
@@ -546,8 +555,9 @@ function MemberChecklist({
                       aria-label="全選"
                     />
                   </th>
-                  <th>職編／代號</th>
-                  <th>姓名／名稱</th>
+                  <th>{idLabel}</th>
+                  <th>{nameLabel}</th>
+                  {columns.map((column) => <th key={column.key}>{column.label}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -564,7 +574,10 @@ function MemberChecklist({
                     <td>
                       <b>{it.id}</b>
                     </td>
-                    <td>{it.sub ? `${it.label}（${it.sub}）` : it.label}</td>
+                    <td>{it.label}{it.sub ? `（${it.sub}）` : ""}</td>
+                    {columns.map((column) => (
+                      <td key={column.key}>{it.fields?.[column.key] || "—"}</td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
@@ -645,6 +658,7 @@ export function GroupsPage({
   // ---- 群組 ----
   const [groups, setGroups] = useState<GroupRow[]>([]);
   const [masterLoading, setMasterLoading] = useState(true);
+  const [masterLoadError, setMasterLoadError] = useState("");
   const [groupView, setGroupView] = useState<
     { kind: "list" } | { kind: "create" } | { kind: "edit"; id: string }
   >({ kind: "list" });
@@ -664,6 +678,7 @@ export function GroupsPage({
   // ---- 職稱 ----
   const [titles, setTitles] = useState<TitleRow[]>([]);
   const [titlesLoading, setTitlesLoading] = useState(true);
+  const [titlesLoadError, setTitlesLoadError] = useState("");
   const [titleView, setTitleView] = useState<
     { kind: "list" } | { kind: "create" } | { kind: "edit"; id: string }
   >({ kind: "list" });
@@ -675,6 +690,7 @@ export function GroupsPage({
   const [titleLevels, setTitleLevels] = useState<OrgLevel[]>([]);
   const [roleLevels, setRoleLevels] = useState<OrgLevel[]>([]);
   const [levelsLoading, setLevelsLoading] = useState(true);
+  const [levelsLoadError, setLevelsLoadError] = useState("");
   const [levelEdit, setLevelEdit] = useState<{
     target: "title" | "role";
     id: string;
@@ -689,11 +705,16 @@ export function GroupsPage({
   // ---- 人員 ----
   const [users, setUsers] = useState<UserRow[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [usersLoadError, setUsersLoadError] = useState("");
   const [userView, setUserView] = useState<
     { kind: "list" } | { kind: "create" } | { kind: "edit"; staffId: string }
   >({ kind: "list" });
   const [userForm, setUserForm] = useState<UserForm>(emptyUserForm());
   const [userError, setUserError] = useState("");
+  const userErrorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (userError) userErrorRef.current?.focus();
+  }, [userError]);
   /** 群組＋角色加入區（v1.52.0 分工表式）：群組下拉＋角色勾選＋加入／更新 */
   const [membershipAddGroupId, setMembershipAddGroupId] = useState("");
   const [membershipAddRoles, setMembershipAddRoles] = useState<string[]>([]);
@@ -710,6 +731,10 @@ export function GroupsPage({
 
   const groupNameOf = (groupId: string): string =>
     groups.find((g) => g.id === groupId)?.name ?? groupId;
+  const unitLabelOf = (unitCode: string): string => {
+    const unit = units.find((item) => item.code === unitCode);
+    return unit ? `${unit.code}${unit.name ? ` ${unit.name}` : ""}` : unitCode;
+  };
   const [userSaving, setUserSaving] = useState(false);
   // v1.51.0：一次性補建審查員名單（管理員手動觸發）
   const [backfilling, setBackfilling] = useState(false);
@@ -717,6 +742,7 @@ export function GroupsPage({
 
   // ---- 角色（v1.39.0：一名一檔，只寫名稱；建立後請至權限管理設定權限） ----
   const [rolesLoading, setRolesLoading] = useState(true);
+  const [rolesLoadError, setRolesLoadError] = useState("");
   const [roleCreateOpen, setRoleCreateOpen] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
   /** v1.55.0：新角色所屬層級（空＝未分層級）；v1.57.0 A3：身分由名稱關鍵字、範圍由層級推導，不再選類別／範圍 */
@@ -923,6 +949,7 @@ export function GroupsPage({
 
   const loadRoles = useCallback(async () => {
     setRolesLoading(true);
+    setRolesLoadError("");
     try {
       const snap = await getCachedRefCollection("roles", () =>
         getDocsCacheFirst(collection(getFirebaseDb(), "roles")),
@@ -950,8 +977,9 @@ export function GroupsPage({
           };
         }),
       );
-    } catch {
+    } catch (error) {
       setRoleOptions([]);
+      setRolesLoadError(toErrorMessage(error));
     } finally {
       setRolesLoading(false);
     }
@@ -966,6 +994,7 @@ export function GroupsPage({
   /** 群組＋單位一起載入（單位需對應群組名稱、人數） */
   const loadMaster = useCallback(async () => {
     setMasterLoading(true);
+    setMasterLoadError("");
     try {
       const db = getFirebaseDb();
       const [gsnap, usnap] = await Promise.all([
@@ -1033,7 +1062,9 @@ export function GroupsPage({
       );
       setUnits(unitList);
     } catch (error) {
-      onAction(`讀取群組／單位清單失敗：${toErrorMessage(error)}`);
+      const message = toErrorMessage(error);
+      setMasterLoadError(message);
+      onAction(`讀取群組／單位清單失敗：${message}`);
     } finally {
       setMasterLoading(false);
     }
@@ -1042,6 +1073,7 @@ export function GroupsPage({
   /** 層級清單（v1.55.0）：titleLevels／roleLevels 各讀一次 */
   const loadLevels = useCallback(async () => {
     setLevelsLoading(true);
+    setLevelsLoadError("");
     try {
       const db = getFirebaseDb();
       const [tSnap, rSnap] = await Promise.all([
@@ -1060,7 +1092,9 @@ export function GroupsPage({
       setTitleLevels(sortedLevels(read(tSnap)));
       setRoleLevels(sortedLevels(read(rSnap)));
     } catch (error) {
-      onAction(`讀取層級清單失敗：${toErrorMessage(error)}`);
+      const message = toErrorMessage(error);
+      setLevelsLoadError(message);
+      onAction(`讀取層級清單失敗：${message}`);
     } finally {
       setLevelsLoading(false);
     }
@@ -1068,6 +1102,7 @@ export function GroupsPage({
 
   const loadTitles = useCallback(async () => {
     setTitlesLoading(true);
+    setTitlesLoadError("");
     try {
       const db = getFirebaseDb();
       const snap = await getCachedRefCollection("titles", () =>
@@ -1135,7 +1170,9 @@ export function GroupsPage({
         })),
       );
     } catch (error) {
-      onAction(`讀取職稱清單失敗：${toErrorMessage(error)}`);
+      const message = toErrorMessage(error);
+      setTitlesLoadError(message);
+      onAction(`讀取職稱清單失敗：${message}`);
     } finally {
       setTitlesLoading(false);
     }
@@ -1143,6 +1180,7 @@ export function GroupsPage({
 
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
+    setUsersLoadError("");
     try {
       const snap = await getCachedRefCollection("users", () =>
         getDocsFromServer(collection(getFirebaseDb(), "users")),
@@ -1177,7 +1215,9 @@ export function GroupsPage({
         .sort((a, b) => a.staffId.localeCompare(b.staffId, "zh-Hant"));
       setUsers(list);
     } catch (error) {
-      onAction(`讀取人員清單失敗：${toErrorMessage(error)}`);
+      const message = toErrorMessage(error);
+      setUsersLoadError(message);
+      onAction(`讀取人員清單失敗：${message}`);
     } finally {
       setUsersLoading(false);
     }
@@ -3857,6 +3897,7 @@ export function GroupsPage({
             header={USER_HEADER}
             validateRows={validateUserRows}
             importRows={importUserRows}
+            sampleNote="範例：單位代號填入單位主檔的代號；職稱填現有職稱名稱；群組與角色須按欄位成對填寫，可填兩組。"
             postImportNote="提醒：匯入的人員仍需到 Firebase Console → Authentication 手動建立登入帳號（email 格式為「職編@nurseboard.internal」，初始密碼請設為該員職編，首次登入須更改）。"
             onDone={loadUsers}
             onAction={onAction}
@@ -3879,9 +3920,9 @@ export function GroupsPage({
 
       {tab === "groups" ? (
         masterLoading ? (
-          <section className="panel">
-            <p className="settings-note">讀取中…</p>
-          </section>
+          <LoadingState label="群組與單位資料載入中…" />
+        ) : masterLoadError ? (
+          <ErrorState title="群組與單位資料載入失敗" description={masterLoadError} onRetry={loadMaster} />
         ) : groups.length === 0 ? (
           <EmptyState
             title="尚無群組"
@@ -4022,9 +4063,9 @@ export function GroupsPage({
         )
       ) : tab === "units" ? (
         masterLoading ? (
-          <section className="panel">
-            <p className="settings-note">讀取中…</p>
-          </section>
+          <LoadingState label="單位資料載入中…" />
+        ) : masterLoadError ? (
+          <ErrorState title="單位資料載入失敗" description={masterLoadError} onRetry={loadMaster} />
         ) : !unitsSearched ? (
           <EmptyState
             title="尚未查詢"
@@ -4032,8 +4073,8 @@ export function GroupsPage({
           />
         ) : units.length === 0 ? (
           <EmptyState
-            title="尚無單位"
-            description="使用右上角「新增單位」或「批次上傳」建立單位（例如：9A病房，歸屬病房組）。"
+            title={appliedUnitGroupFilter || appliedUnitSearch ? "沒有符合篩選條件的單位" : "尚無單位"}
+            description={appliedUnitGroupFilter || appliedUnitSearch ? "請調整群組或單位關鍵字後重新查詢。" : "使用右上角「新增單位」或「批次上傳」建立單位（例如：9A病房，歸屬病房組）。"}
           />
         ) : (
           <section className="panel data-panel">
@@ -4184,9 +4225,13 @@ export function GroupsPage({
         )
       ) : tab === "titles" ? (
         titlesLoading || levelsLoading ? (
-          <section className="panel">
-            <p className="settings-note">讀取中…</p>
-          </section>
+          <LoadingState label="職稱與層級資料載入中…" />
+        ) : titlesLoadError || levelsLoadError ? (
+          <ErrorState
+            title="職稱資料載入失敗"
+            description={titlesLoadError || levelsLoadError}
+            onRetry={() => { void Promise.all([loadTitles(), loadLevels()]); }}
+          />
         ) : titles.length === 0 ? (
           <EmptyState
             title="尚無職稱"
@@ -4210,10 +4255,16 @@ export function GroupsPage({
                 <MemberChecklist
                   title={`職稱「${managingTitle.name}」的成員`}
                   note="加入即轉任此職稱（一人一職稱）；移除即清除職稱"
+                  idLabel="職編"
+                  nameLabel="姓名"
+                  columns={[
+                    { key: "unit", label: "單位" },
+                    { key: "title", label: "職稱" },
+                  ]}
                   items={titleMembers.map((u) => ({
                     id: u.staffId,
                     label: maskName(u.name),
-                    sub: u.unitCode || undefined,
+                    fields: { unit: unitLabelOf(u.unitCode), title: u.title || managingTitle.name },
                   }))}
                   checked={titleMemberChecked}
                   onToggle={(id, next) =>
@@ -4334,9 +4385,9 @@ export function GroupsPage({
         </section>
       ) : tab === "users" ? (
         usersLoading ? (
-          <section className="panel">
-            <p className="settings-note">讀取中…</p>
-          </section>
+          <LoadingState label="人員資料載入中…" />
+        ) : usersLoadError ? (
+          <ErrorState title="人員資料載入失敗" description={usersLoadError} onRetry={loadUsers} />
         ) : !usersSearched ? (
           <EmptyState
             title="尚未查詢"
@@ -4346,6 +4397,11 @@ export function GroupsPage({
           <EmptyState
             title="尚無人員"
             description="使用右上角「新增人員」或「批次上傳」建立人員資料，職編即為登入帳號。"
+          />
+        ) : visibleUsers.length === 0 ? (
+          <EmptyState
+            title="沒有符合篩選條件的人員"
+            description="請調整單位或職編／姓名關鍵字，再按「查詢」。"
           />
         ) : (
           <section className="panel data-panel">
@@ -4363,9 +4419,7 @@ export function GroupsPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleUsers.length === 0 ? (
-                    <tr><td colSpan={7} className="muted-text">沒有符合篩選條件的人員</td></tr>
-                  ) : visibleUsers.map((row) => (
+                  {visibleUsers.map((row) => (
                     <tr key={row.staffId}>
                       <td>
                         <b>{row.staffId}</b>
@@ -4472,10 +4526,26 @@ export function GroupsPage({
             <MemberChecklist
               title={`角色「${managingRole.name}」的成員`}
               note="勾選＋全選可批次移除（同時從 memberships 移除該角色）"
+              idLabel="職編"
+              nameLabel="姓名"
+              columns={[
+                { key: "unitGroup", label: "單位／群組" },
+                { key: "role", label: "角色" },
+              ]}
               items={roleMembers.map((u) => ({
                 id: u.staffId,
                 label: maskName(u.name),
-                sub: u.unitCode || undefined,
+                fields: {
+                  unitGroup: [
+                    unitLabelOf(u.unitCode),
+                    [...new Set(
+                      u.memberships
+                        .filter((membership) => membership.roles.includes(managingRole.name))
+                        .map((membership) => groupNameOf(membership.groupId)),
+                    )].join("、"),
+                  ].filter(Boolean).join("／"),
+                  role: managingRole.name,
+                },
               }))}
               checked={roleMemberChecked}
               onToggle={(id, next) =>
@@ -4606,9 +4676,13 @@ export function GroupsPage({
             </div>
           </section>
         ) : rolesLoading || levelsLoading ? (
-          <section className="panel">
-            <p className="settings-note">讀取中…</p>
-          </section>
+          <LoadingState label="角色與層級資料載入中…" />
+        ) : rolesLoadError || levelsLoadError ? (
+          <ErrorState
+            title="角色資料載入失敗"
+            description={rolesLoadError || levelsLoadError}
+            onRetry={() => { void Promise.all([loadRoles(), loadLevels()]); }}
+          />
         ) : roleRows.length === 0 ? (
           <EmptyState
             title="尚無角色"
@@ -4857,12 +4931,32 @@ export function GroupsPage({
           }}
           wide
         >
-        {userError && <div className="login-error">{userError}</div>}
-        <div className="form-grid">
+        <div className="user-long-form">
+          {userError && (
+            <div ref={userErrorRef} className="login-error form-error-summary" role="alert" tabIndex={-1}>
+              <b>請修正以下問題</b>
+              <span>{userError}</span>
+            </div>
+          )}
+          <nav className="user-form-step-nav" aria-label="人員表單區段">
+            <button type="button" onClick={() => document.getElementById("user-form-basic")?.scrollIntoView({ behavior: "smooth", block: "start" })}>1. 基本資料</button>
+            <button type="button" onClick={() => document.getElementById("user-form-roles")?.scrollIntoView({ behavior: "smooth", block: "start" })}>2. 群組與角色</button>
+          </nav>
+          {(masterLoadError || titlesLoadError || rolesLoadError || levelsLoadError) && (
+            <ErrorState
+              title="人員表單參考資料載入失敗"
+              description={[masterLoadError, titlesLoadError, rolesLoadError, levelsLoadError].filter(Boolean).join("；")}
+              onRetry={() => { void Promise.all([loadMaster(), loadTitles(), loadRoles(), loadLevels()]); }}
+            />
+          )}
+          <section id="user-form-basic" className="user-form-step" tabIndex={-1}>
+            <SectionTitle title="基本資料" note="* 為必填欄位；可用上方區段導覽快速移動。" />
+            <div className="form-grid">
           <div className="form-field">
             <label className="field-label">職編 *</label>
             <input
               className="text-input"
+              aria-required="true"
               value={userForm.staffId}
               disabled={isUserEditing}
               placeholder="例如 A12345（即登入帳號）"
@@ -4875,6 +4969,7 @@ export function GroupsPage({
             <label className="field-label">姓名 *</label>
             <input
               className="text-input"
+              aria-required="true"
               value={userForm.name}
               placeholder="例如 王小明"
               onChange={(e) =>
@@ -4895,7 +4990,7 @@ export function GroupsPage({
                 <option value="">— 未指定 —</option>
                 {units.map((u) => (
                   <option key={u.code} value={u.code}>
-                    {u.code}
+                    {u.name ? `${u.code}｜${u.name}` : u.code}
                   </option>
                 ))}
               </select>
@@ -5095,8 +5190,10 @@ export function GroupsPage({
               <p className="settings-note">帳號與初始密碼統一為職編：登入帳號為「職編@nurseboard.internal」，在 Firebase Console 建立使用者時初始密碼請設為該員職編；首次登入須更改密碼。</p>
             </div>
           )}
-        </div>
+            </div>
+          </section>
 
+          <section id="user-form-roles" className="user-form-step" tabIndex={-1}>
         <SectionTitle
           title="群組＋角色"
           note="上方加入、下方列表；每個群組的角色與權限各自隔離，加入後即顯示於列表，按「儲存修改」才生效。"
@@ -5313,6 +5410,8 @@ export function GroupsPage({
           >
             取消
           </button>
+        </div>
+          </section>
         </div>
         </Modal>
       )}
