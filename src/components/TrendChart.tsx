@@ -37,6 +37,9 @@ export function TrendChart({
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
+  const [highlightBelow, setHighlightBelow] = useState(true);
+  const [showThreshold, setShowThreshold] = useState(true);
+  const [showCapaPlaceholder, setShowCapaPlaceholder] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   if (values.length === 0) {
     return (
@@ -61,7 +64,7 @@ export function TrendChart({
   const tipText = (i: number) =>
     tooltips[i] ??
     (labels[i] ? `${labels[i]}：${values[i]}%` : `${values[i]}%`);
-  const thY = threshold != null ? yOf(threshold) : null;
+  const thY = showThreshold && threshold != null ? yOf(threshold) : null;
   /** 提示框跟滑鼠：取滑鼠在容器內的座標，水平夾在容器內避免溢出。 */
   const handleMouseMove = (event: React.MouseEvent) => {
     const rect = wrapRef.current?.getBoundingClientRect();
@@ -75,6 +78,21 @@ export function TrendChart({
   };
   return (
     <div className="trend-chart-wrap">
+      <div className="chart-options" aria-label="曲線圖顯示選項">
+        <label className="check-row">
+          <input type="checkbox" checked={highlightBelow} onChange={(event) => setHighlightBelow(event.target.checked)} />
+          低於閾值呈現紅色
+        </label>
+        <label className="check-row">
+          <input type="checkbox" checked={showThreshold} onChange={(event) => setShowThreshold(event.target.checked)} />
+          顯示閾值線
+        </label>
+        <label className="check-row">
+          <input type="checkbox" checked={showCapaPlaceholder} onChange={(event) => setShowCapaPlaceholder(event.target.checked)} />
+          顯示未達閾值月份的改善措施
+        </label>
+      </div>
+      {showCapaPlaceholder && <p className="settings-note" role="status">改善措施顯示功能已保留，待 CAPA 功能完成後串接。</p>}
       <div className="chart-legend">
         <span>
           <i className="legend-line" />
@@ -84,7 +102,7 @@ export function TrendChart({
       <div className="chart-svg-wrap" ref={wrapRef}>
         <svg
           className="trend-chart"
-          viewBox="0 0 600 200"
+          viewBox="0 0 600 218"
           preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="趨勢圖"
@@ -164,7 +182,7 @@ export function TrendChart({
                   `chart-dot${index === n - 1 ? " latest" : ""}` +
                   (onPointClick ? " clickable" : "") +
                   // v1.59.0：未達閾值（rate < 閾值，沿用 isPassing 口徑；閾值 null／≤0 不標）
-                  (threshold != null && !isPassing(values[index], threshold)
+                  (highlightBelow && threshold != null && !isPassing(values[index], threshold)
                     ? " below"
                     : "")
                 }
@@ -183,12 +201,14 @@ export function TrendChart({
                   className="chart-label"
                 >
                   {lb}
-                  {notes[index] ? (
-                    <tspan className="chart-label-note">{notes[index]}</tspan>
-                  ) : null}
                 </text>
               ),
           )}
+          {labels.map((_, index) => notes[index] && index < n ? (
+            <text key={`note-${index}`} x={xOf(index)} y={207} textAnchor="middle" className="chart-label-note">
+              {notes[index] === "（加審）" ? "(加審)" : notes[index]}
+            </text>
+          ) : null)}
         </svg>
         {hover != null && tipPos != null && (
           <div
