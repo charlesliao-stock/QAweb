@@ -1,7 +1,7 @@
 {
   "name": "nursing-quality-demo",
   "private": true,
-  "version": "1.60.3",
+  "version": "1.60.4",
   "type": "module",
   "packageManager": "pnpm@11.25.0",
   "scripts": {
@@ -10,6 +10,7 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
+    "@zxing/browser": "^0.2.1",
     "firebase": "^11.1.0",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",

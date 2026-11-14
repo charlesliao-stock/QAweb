@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, ListChecks, Pencil } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, ListChecks, Pencil, ScanLine } from "lucide-react";
 import {
   collection,
   doc,
@@ -26,6 +26,11 @@ import {
   type AuditQuestion,
 } from "../lib/indicators";
 import { ReviewQuestionList } from "./ReviewQuestionList";
+const BarcodeScannerDialog = lazy(() =>
+  import("./BarcodeScannerDialog").then((module) => ({
+    default: module.BarcodeScannerDialog,
+  })),
+);
 import {
   computeOptionSetScore,
   type ReviewAnswer,
@@ -254,6 +259,7 @@ export function ReviewExecutePage({
   const [personName, setPersonName] = useState("");
   const [personQuery, setPersonQuery] = useState("");
   const [showPersonSugg, setShowPersonSugg] = useState(false);
+  const [personBarcodeOpen, setPersonBarcodeOpen] = useState(false);
   /** 受審人員重複警示（v1.47.0：選取時即時查該區間已有紀錄，僅警告） */
   const [personDupWarn, setPersonDupWarn] = useState<string | null>(null);
   const personDupSeq = useRef(0);
@@ -802,6 +808,30 @@ export function ReviewExecutePage({
     setPersonQuery("");
     setShowPersonSugg(false);
     void checkPersonDuplicate(u.staffId);
+  }
+
+  function handlePersonBarcode(value: string) {
+    const scannedId = value.trim();
+    setPersonBarcodeOpen(false);
+    if (!scannedId) return;
+
+    const normalizedId = scannedId.toLocaleLowerCase();
+    const exactMatch = usersList.find(
+      (user) => user.staffId.trim().toLocaleLowerCase() === normalizedId,
+    );
+    const unitId = task?.unitId ?? "";
+    if (exactMatch && (unitId === "" || exactMatch.unitCode === unitId)) {
+      selectPerson(exactMatch);
+      return;
+    }
+
+    setPersonQuery(scannedId);
+    setShowPersonSugg(true);
+    onAction(
+      exactMatch
+        ? `掃描到職編 ${scannedId}，但該人員不屬於此審查的受審單位。`
+        : `已讀取職編 ${scannedId}，請確認搜尋結果並選取受審人員。`,
+    );
   }
 
   /**
@@ -1767,22 +1797,33 @@ export function ReviewExecutePage({
                     </p>
                   ) : (
                     <>
-                      <input
-                        type="text"
-                        className="text-input"
-                        placeholder={
-                          task.unitId === ""
-                            ? "輸入職編或姓名搜尋（全院）"
-                            : `輸入職編或姓名搜尋（${task.unitId}同單位）`
-                        }
-                        value={personQuery}
-                        onChange={(e) => {
-                          setPersonQuery(e.target.value);
-                          setShowPersonSugg(true);
-                        }}
-                        onFocus={() => setShowPersonSugg(true)}
-                        aria-label="受審人員搜尋"
-                      />
+                      <div className="employee-id-input-row">
+                        <input
+                          type="text"
+                          className="text-input"
+                          placeholder={
+                            task.unitId === ""
+                              ? "輸入職編或姓名搜尋（全院）"
+                              : `輸入職編或姓名搜尋（${task.unitId}同單位）`
+                          }
+                          value={personQuery}
+                          onChange={(e) => {
+                            setPersonQuery(e.target.value);
+                            setShowPersonSugg(true);
+                          }}
+                          onFocus={() => setShowPersonSugg(true)}
+                          aria-label="受審人員職編或姓名"
+                        />
+                        <button
+                          type="button"
+                          className="button button-outline employee-barcode-trigger"
+                          onClick={() => setPersonBarcodeOpen(true)}
+                          aria-label="掃描受審人員職編條碼或 QR Code"
+                        >
+                          <ScanLine size={17} />
+                          <span>掃描職編</span>
+                        </button>
+                      </div>
                       {showPersonSugg && personSugg.length > 0 && (
                         <ul className="sugg-list">
                           {personSugg.map((u) => (
@@ -1978,6 +2019,20 @@ export function ReviewExecutePage({
             </>
           )}
         </>
+      )}
+      {personBarcodeOpen && (
+        <Suspense
+          fallback={
+            <div className="reviewer-modal-backdrop employee-barcode-backdrop" role="status">
+              <div className="employee-barcode-loading">載入條碼掃描器…</div>
+            </div>
+          }
+        >
+          <BarcodeScannerDialog
+            onDetected={handlePersonBarcode}
+            onClose={() => setPersonBarcodeOpen(false)}
+          />
+        </Suspense>
       )}
     </div>
   );

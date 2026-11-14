@@ -6109,3 +6109,21 @@ body {
 :root[data-mode="dark"] .review-photo-optional>p,:root[data-mode="dark"] .review-photo-optional>small{color:#a6b4b0}
 :root[data-mode="dark"] .review-photo-links a{color:#77c4b9}
 @media(max-width:640px){.review-photo-optional{grid-template-columns:minmax(0,1fr);gap:8px}.review-photo-optional>.button{grid-column:1;grid-row:auto;justify-content:center;min-height:46px}}
+
+/* 受審人員職編條碼／QR 掃描 */
+.employee-id-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:stretch}
+.employee-barcode-trigger{display:inline-flex;min-height:46px;align-items:center;justify-content:center;gap:7px;white-space:nowrap}
+.employee-barcode-backdrop{z-index:90}
+.employee-barcode-dialog{width:min(520px,100%);padding:18px;border:1px solid var(--line,#dfe8e6);border-radius:16px;background:var(--surface,#fff);box-shadow:0 18px 60px rgba(10,30,30,.24)}
+.employee-barcode-dialog .reviewer-modal-head{align-items:flex-start}
+.employee-barcode-dialog .reviewer-modal-head>button{flex:none;min-width:42px;min-height:42px;align-items:center;justify-content:center}
+.employee-barcode-video-wrap{position:relative;overflow:hidden;width:100%;aspect-ratio:4/3;border-radius:12px;background:#111}
+.employee-barcode-video-wrap video{display:block;width:100%;height:100%;object-fit:cover}
+.employee-barcode-frame{position:absolute;inset:20% 12%;border:2px solid #75dbc1;border-radius:14px;box-shadow:0 0 0 999px rgba(0,0,0,.18);pointer-events:none}
+.employee-barcode-hint,.employee-barcode-error{display:flex;align-items:center;gap:7px;min-height:36px;margin:10px 0;color:var(--muted,#657571);font-size:13px}
+.employee-barcode-error{color:var(--danger,#b42318)}
+.employee-barcode-actions{display:flex;justify-content:flex-end;margin-top:8px}
+.employee-barcode-actions .button{min-height:44px}
+@media(max-width:640px){.employee-id-input-row{grid-template-columns:minmax(0,1fr)}.employee-barcode-trigger{width:100%;min-height:48px}.employee-barcode-dialog{padding:14px}.employee-barcode-actions .button{width:100%;justify-content:center}}
+
+.employee-barcode-loading{padding:24px 30px;border:1px solid var(--line,#dfe8e6);border-radius:12px;background:var(--surface,#fff);color:var(--ink,#20313a);font-size:14px}
