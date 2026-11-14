@@ -314,9 +314,12 @@ export function ReviewExecutePage({
     if (!task || !empNo.trim()) return;
     const db = getFirebaseDb();
     const intervalId = reviewIntervalIdentity(task);
+    // 只查「同指標＋同受審人員」：兩個等號條件由 Firestore 合併單欄位索引，免複合索引；
+    // 下方比對本來就要求職編相同，結果與全指標讀回再過濾完全一致，但讀取量不再隨指標紀錄總數成長。
+    const reviewee = empNo.trim();
     const [recordSnap, draftSnap] = await Promise.all([
-      getDocs(query(collection(db, "reviewRecords"), where("indicatorId", "==", task.indicatorId))),
-      getDocs(query(collection(db, "reviewDrafts"), where("indicatorId", "==", task.indicatorId))),
+      getDocs(query(collection(db, "reviewRecords"), where("indicatorId", "==", task.indicatorId), where("reviewedPersonEmpNo", "==", reviewee))),
+      getDocs(query(collection(db, "reviewDrafts"), where("indicatorId", "==", task.indicatorId), where("reviewedPersonEmpNo", "==", reviewee))),
     ]);
     // v1.47.0：區間比對改為「紀錄月份落在任務區間內」（月份重疊），而非
     // 區間身分字串相等——匯入紀錄無區間快照欄位，舊寫法讓季／半年／年

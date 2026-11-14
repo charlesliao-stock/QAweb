@@ -186,6 +186,9 @@ function parseRecord(
   };
 }
 
+/** false＝不讀任何 Firestore 資料（儀表板顯示空狀態，版面不變） */
+const DASHBOARD_READS_ENABLED = false;
+
 export function useDashboardData(): DashboardData {
   const win = dashboardMonthWindow(new Date());
   const { curYear, curMonth, nextYear, nextMonth } = win;
@@ -203,6 +206,12 @@ export function useDashboardData(): DashboardData {
   const reload = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
+    // 儀表板讀取暫時停用（降低 Firestore 讀取量）：版面維持原樣，資料為空狀態。
+    // 恢復時把 DASHBOARD_READS_ENABLED 改回 true 即可。
+    if (!DASHBOARD_READS_ENABLED) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
       setLoading(true);
