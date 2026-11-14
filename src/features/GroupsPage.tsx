@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ChevronDown,
-  ChevronUp,
   Download,
   Pencil,
   Plus,
@@ -25,7 +27,16 @@ import {
   writeBatch,
   type WriteBatch,
 } from "../lib/db";
-import { EmptyState, ErrorState, LoadingState, Modal, PageHeading, SectionTitle } from "../components/ui";
+import {
+  EmptyState,
+  ErrorState,
+  FilterPanel,
+  ListPanelHead,
+  LoadingState,
+  Modal,
+  PageHeading,
+  SectionTitle,
+} from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRefCollection } from "../lib/refCache";
 import { getDocsCacheFirst } from "../lib/cacheFirst";
@@ -147,11 +158,24 @@ function SortHeader({
   onSort: (key: string) => void;
 }) {
   return (
-    <th>
+    <th
+      aria-sort={
+        activeKey === sortKey
+          ? direction === 1
+            ? "ascending"
+            : "descending"
+          : "none"
+      }
+    >
       <button type="button" className="th-sort" onClick={() => onSort(sortKey)}>
         {label}
-        {activeKey === sortKey &&
-          (direction === 1 ? <ChevronDown size={13} /> : <ChevronUp size={13} />)}
+        {activeKey !== sortKey ? (
+          <ArrowUpDown size={14} aria-hidden="true" />
+        ) : direction === 1 ? (
+          <ArrowUp size={14} aria-hidden="true" />
+        ) : (
+          <ArrowDown size={14} aria-hidden="true" />
+        )}
       </button>
     </th>
   );
@@ -3769,7 +3793,24 @@ export function GroupsPage({
       </div>
 
       {tab === "users" && userView.kind === "list" && isAdmin && (
-        <div className="org-filter-row" role="search">
+        <FilterPanel
+          actions={
+            (userUnitFilter || userSearch) && (
+              <button
+                type="button"
+                className="button button-outline button-sm"
+                onClick={() => {
+                  setUserUnitFilter("");
+                  setUserSearch("");
+                  setAppliedUserUnitFilter("");
+                  setAppliedUserSearch("");
+                }}
+              >
+                清除篩選
+              </button>
+            )
+          }
+        >
           <div className="select-wrap">
             <select
               value={userUnitFilter}
@@ -3810,10 +3851,27 @@ export function GroupsPage({
           >
             {backfilling ? "補建中…" : "補建審查員名單"}
           </button>
-        </div>
+        </FilterPanel>
       )}
       {tab === "units" && unitView.kind === "list" && (
-        <div className="org-filter-row" role="search">
+        <FilterPanel
+          actions={
+            (unitGroupFilter || unitSearch) && (
+              <button
+                type="button"
+                className="button button-outline button-sm"
+                onClick={() => {
+                  setUnitGroupFilter("");
+                  setUnitSearch("");
+                  setAppliedUnitGroupFilter("");
+                  setAppliedUnitSearch("");
+                }}
+              >
+                清除篩選
+              </button>
+            )
+          }
+        >
           <div className="select-wrap">
             <select
               value={unitGroupFilter}
@@ -3846,7 +3904,7 @@ export function GroupsPage({
           >
             查詢
           </button>
-        </div>
+        </FilterPanel>
       )}
 
       {/* 批次上傳工具列（僅清單檢視） */}
@@ -3929,7 +3987,8 @@ export function GroupsPage({
             description="使用右上角「新增群組」或「批次上傳」建立群組（例如：病房組、加護組）。"
           />
         ) : (
-          <section className="panel data-panel">
+          <section className="panel data-panel list-panel">
+            <ListPanelHead title="群組清單" count={groups.length} />
             <div className="table-scroll">
               <table className="permission-table">
                 <thead>
@@ -4077,7 +4136,8 @@ export function GroupsPage({
             description={appliedUnitGroupFilter || appliedUnitSearch ? "請調整群組或單位關鍵字後重新查詢。" : "使用右上角「新增單位」或「批次上傳」建立單位（例如：9A病房，歸屬病房組）。"}
           />
         ) : (
-          <section className="panel data-panel">
+          <section className="panel data-panel list-panel">
+            <ListPanelHead title="單位清單" count={visibleUnits.length} />
             <div className="table-scroll">
               <table className="permission-table">
                 <thead>
@@ -4404,7 +4464,8 @@ export function GroupsPage({
             description="請調整單位或職編／姓名關鍵字，再按「查詢」。"
           />
         ) : (
-          <section className="panel data-panel">
+          <section className="panel data-panel list-panel">
+            <ListPanelHead title="人員清單" count={visibleUsers.length} />
             <div className="table-scroll">
               <table className="permission-table">
                 <thead>

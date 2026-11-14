@@ -683,3 +683,30 @@ th[aria-sort="descending"] .th-sort .lucide {
 .filter-panel .select-wrap {
   min-width: 160px;
 }
+
+/* 結果分析頁：篩選區塊內沿用原有欄位寬度，並維持捲動時固定在頂端 */
+.results-page .filter-panel-body .field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 150px;
+  margin-bottom: 0;
+}
+.results-page .filter-panel-body .select-wrap {
+  min-width: 150px;
+}
+.results-page .results-sticky-filter {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+}
+@media (max-width: 720px) {
+  .results-page .filter-panel-body .field-label,
+  .results-page .filter-panel-body .select-wrap {
+    min-width: 0;
+    flex: 1 1 45%;
+  }
+  .results-page .results-sticky-filter {
+    position: static;
+  }
+}

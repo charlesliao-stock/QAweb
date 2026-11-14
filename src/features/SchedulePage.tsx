@@ -31,7 +31,15 @@ import {
   setDoc,
   where,
 } from "../lib/db";
-import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
+import {
+  EmptyState,
+  FilterPanel,
+  ListPanel,
+  PageHeading,
+  SectionTitle,
+  SortableTh,
+  useTableSort,
+} from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import {
   getCachedRef,
@@ -619,6 +627,24 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     showTemp,
   ]);
 
+  const {
+    sortedRows,
+    sort: rowSort,
+    toggleSort: toggleRowSort,
+  } = useTableSort<
+    RowItem,
+    "group" | "year" | "code" | "name" | "updated"
+  >(rows, {
+    group: (r) => r.groupName,
+    year: (r) => `${r.category === "temp" ? "z" : r.category}${r.period}`,
+    code: (r) => r.code,
+    name: (r) => r.name,
+    updated: (r) => {
+      const t = r.schedule?.updatedAt as unknown as { toMillis?: () => number } | null | undefined;
+      return t && typeof t.toMillis === "function" ? t.toMillis() : null;
+    },
+  });
+
   /** 各指標的加審筆數：加審按鈕下方顯示用（v1.59.0：只計 temp 且非自審；自審不計） */
   const tempCountByIndicator = useMemo(() => {
     const m = new Map<string, number>();
@@ -746,8 +772,23 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             ) : undefined
           }
         />
-        <section className="panel">
-          <div className="filter-bar">
+        <FilterPanel
+          actions={
+            (filterGroup || filterIndicator || filterKeyword) && (
+              <button
+                type="button"
+                className="button button-outline"
+                onClick={() => {
+                  setFilterGroup("");
+                  setFilterIndicator("");
+                  setFilterKeyword("");
+                }}
+              >
+                清除篩選
+              </button>
+            )
+          }
+        >
             <div className="form-field" style={{ maxWidth: 170 }}>
               <label className="field-label">年份</label>
               <div className="select-wrap">
@@ -842,12 +883,11 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                 onChange={(e) => setFilterKeyword(e.target.value)}
               />
             </div>
-          </div>
-          <p className="settings-note">
-            年別跟隨系統管理「統計週期」設定（年度＝1–12 月；學年度＝8 月制，8
-            月～隔年 7 月）。清單只列出已啟用的指標。
-          </p>
-        </section>
+        </FilterPanel>
+        <p className="settings-note">
+          年別跟隨系統管理「統計週期」設定（年度＝1–12 月；學年度＝8 月制，8
+          月～隔年 7 月）。清單只列出已啟用的指標。
+        </p>
 
         {loading ? (
           <section className="panel">
@@ -859,23 +899,22 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             description="請先到「指標管理」建立指標，再回來設定排程。"
           />
         ) : (
-          <section className="panel data-panel">
-            <div className="table-scroll">
+          <ListPanel title="排程清單" count={rows.length}>
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>組別</th>
-                    <th>年別</th>
-                    <th>指標編號</th>
-                    <th>指標名稱</th>
+                    <SortableTh label="組別" sortKey="group" sort={rowSort} onSort={toggleRowSort} />
+                    <SortableTh label="年別" sortKey="year" sort={rowSort} onSort={toggleRowSort} />
+                    <SortableTh label="指標編號" sortKey="code" sort={rowSort} onSort={toggleRowSort} />
+                    <SortableTh label="指標名稱" sortKey="name" sort={rowSort} onSort={toggleRowSort} />
                     <th>排程/單位設定</th>
                     <th>審查員/單位設定</th>
                     <th>操作</th>
-                    <th>最後編輯</th>
+                    <SortableTh label="最後編輯" sortKey="updated" sort={rowSort} onSort={toggleRowSort} />
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r) => {
+                  {sortedRows.map((r) => {
                     const sched = r.schedule;
                     const schedDone = schedulePillState(sched) === "done";
                     const asg = assignments.get(r.indicatorId);
@@ -1127,8 +1166,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                   })}
                 </tbody>
               </table>
-            </div>
-          </section>
+          </ListPanel>
         )}
 
         {addAuditRow && (

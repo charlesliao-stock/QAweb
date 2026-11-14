@@ -353,19 +353,47 @@ export function FilterPanel({
   title = "篩選條件",
   children,
   actions,
+  className,
 }: {
   title?: string;
   children: ReactNode;
   actions?: ReactNode;
+  className?: string;
 }) {
   return (
-    <section className="panel filter-panel" aria-label={title}>
+    <section
+      className={`panel filter-panel${className ? ` ${className}` : ""}`}
+      aria-label={title}
+    >
       <div className="filter-panel-head">
         <h2>{title}</h2>
         {actions && <div className="filter-panel-actions">{actions}</div>}
       </div>
       <div className="filter-panel-body">{children}</div>
     </section>
+  );
+}
+
+/** 列表區塊標題列（標題＋筆數＋右側操作）。需要自訂內容結構時可單獨使用。 */
+export function ListPanelHead({
+  title,
+  count,
+  actions,
+}: {
+  title: string;
+  count?: number;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="list-panel-head">
+      <div>
+        <h2>{title}</h2>
+        {count !== undefined && (
+          <span className="list-panel-count">共 {count} 筆</span>
+        )}
+      </div>
+      {actions && <div className="list-panel-actions">{actions}</div>}
+    </div>
   );
 }
 
@@ -383,15 +411,7 @@ export function ListPanel({
 }) {
   return (
     <section className="panel data-panel list-panel" aria-label={title}>
-      <div className="list-panel-head">
-        <div>
-          <h2>{title}</h2>
-          {count !== undefined && (
-            <span className="list-panel-count">共 {count} 筆</span>
-          )}
-        </div>
-        {actions && <div className="list-panel-actions">{actions}</div>}
-      </div>
+      <ListPanelHead title={title} count={count} actions={actions} />
       <div className="table-scroll">{children}</div>
     </section>
   );

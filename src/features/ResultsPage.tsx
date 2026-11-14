@@ -60,7 +60,16 @@ import {
   type ResultImportRowResult,
 } from "../lib/import";
 import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
-import { EmptyState, PageHeading, SectionTitle, SummaryCell } from "../components/ui";
+import {
+  EmptyState,
+  FilterPanel,
+  ListPanel,
+  PageHeading,
+  SectionTitle,
+  SortableTh,
+  SummaryCell,
+  useTableSort,
+} from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
 import {
   calendarYearsOf,
@@ -1447,7 +1456,7 @@ export function ResultsPage({
       </div>
 
       {tab !== "import" && tab !== "manage" && (
-        <div className="results-filters results-analysis-filters">
+        <FilterPanel className="results-sticky-filter">
           {tab === "group" && (
             <>
               <SelectField
@@ -1608,7 +1617,7 @@ export function ResultsPage({
               起始年月不可晚於結束年月。
             </span>
           )}
-        </div>
+        </FilterPanel>
       )}
       {tab === "manage" && isAdmin && (
         <ReviewResultManager
@@ -2360,6 +2369,23 @@ function ReviewResultManager({
   const indicatorName = (id: string) =>
     indicators.find((indicator) => indicator.id === id)?.name ?? id;
 
+  const {
+    sortedRows: sortedResults,
+    sort: resultSort,
+    toggleSort: toggleResultSort,
+  } = useTableSort<
+    ManagedResult,
+    "date" | "unit" | "indicator" | "reviewer" | "reviewed" | "rate" | "submitted"
+  >(rows, {
+    date: (r) => r.year * 100 + r.month,
+    unit: (r) => unitName(r.unitId),
+    indicator: (r) => indicatorName(r.indicatorId),
+    reviewer: (r) => r.reviewerEmpNo,
+    reviewed: (r) => r.reviewedPersonEmpNo,
+    rate: (r) => r.rate,
+    submitted: (r) => submittedMillis(r.submittedAt),
+  });
+
   const queryResults = async () => {
     if (busy || !start || !end || start > end) return;
     setBusy(true);
@@ -2528,7 +2554,7 @@ function ReviewResultManager({
 
   return (
     <section className="review-results-manager">
-      <div className="results-filters">
+      <FilterPanel>
         <SelectField
           label="組別"
           value={groupId}
@@ -2594,18 +2620,21 @@ function ReviewResultManager({
             查詢
           </button>
         </div>
-      </div>
+      </FilterPanel>
       {error && (
         <p className="results-range-error" role="alert">
           {error}
         </p>
       )}
       {queried && (
-        <div className="panel">
-          <div className="review-results-actions">
-            <strong>
-              查得 {rows.length} 筆{selected.length > 0 && `・已選 ${selected.length} 筆`}
-            </strong>
+        <ListPanel
+          title="審查結果"
+          count={rows.length}
+          actions={
+            <>
+            {selected.length > 0 && (
+              <span className="list-panel-count">已選 {selected.length} 筆</span>
+            )}
             <button
               type="button"
               className="button button-outline"
@@ -2624,24 +2653,26 @@ function ReviewResultManager({
             >
               {busy ? "處理中…" : `永久刪除所選（${selected.length}）`}
             </button>
-          </div>
+            </>
+          }
+        >
           <div className="analysis-table-wrap review-results-table-wrap">
             <table className="review-results-table">
               <thead>
                 <tr>
                   <th>選取</th>
-                  <th>結果日期</th>
-                  <th>單位</th>
-                  <th>指標</th>
-                  <th>審查人員</th>
-                  <th>被審人員</th>
-                  <th>正確率</th>
-                  <th>提交時間</th>
+                  <SortableTh label="結果日期" sortKey="date" sort={resultSort} onSort={toggleResultSort} />
+                  <SortableTh label="單位" sortKey="unit" sort={resultSort} onSort={toggleResultSort} />
+                  <SortableTh label="指標" sortKey="indicator" sort={resultSort} onSort={toggleResultSort} />
+                  <SortableTh label="審查人員" sortKey="reviewer" sort={resultSort} onSort={toggleResultSort} />
+                  <SortableTh label="被審人員" sortKey="reviewed" sort={resultSort} onSort={toggleResultSort} />
+                  <SortableTh label="正確率" sortKey="rate" sort={resultSort} onSort={toggleResultSort} />
+                  <SortableTh label="提交時間" sortKey="submitted" sort={resultSort} onSort={toggleResultSort} />
                   <th>明細</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => {
+                {sortedResults.map((row) => {
                   const noted = row.answers.filter(
                     (a) => a.note.trim() !== "" || a.commonErrors.length > 0,
                   );
@@ -2739,7 +2770,7 @@ function ReviewResultManager({
             {rows.length === 0 && (
               <p className="review-results-empty">沒有符合條件的審查紀錄。</p>
             )}
-            {rows.map((row) => {
+            {sortedResults.map((row) => {
               const noted = row.answers.filter(
                 (answer) => answer.note.trim() !== "" || answer.commonErrors.length > 0,
               );
@@ -2810,7 +2841,7 @@ function ReviewResultManager({
               );
             })}
           </div>
-        </div>
+        </ListPanel>
       )}
       {!queried && (
         <EmptyState
@@ -2820,6 +2851,13 @@ function ReviewResultManager({
       )}
     </section>
   );
+}
+
+function submittedMillis(value: unknown): number | null {
+  if (!value || typeof value !== "object") return null;
+  const t = value as { toDate?: () => Date; seconds?: number };
+  if (typeof t.toDate === "function") return t.toDate().getTime();
+  return typeof t.seconds === "number" ? t.seconds * 1000 : null;
 }
 
 function formatSubmittedAt(value: unknown): string {

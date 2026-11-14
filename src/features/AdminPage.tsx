@@ -30,7 +30,15 @@ import {
   updateDoc,
   writeBatch,
 } from "../lib/db";
-import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
+import {
+  EmptyState,
+  FilterPanel,
+  ListPanel,
+  PageHeading,
+  SectionTitle,
+  SortableTh,
+  useTableSort,
+} from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import {
   getCachedRef,
@@ -1187,127 +1195,141 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
     [rows, keyword, dateFilter],
   );
 
-  return (
-    <section className="panel data-panel">
-      <div className="panel-inset">
-      <SectionTitle
-        title="稽核軌跡紀錄"
-        note="最近 50 筆，僅系統管理員可查閱"
-        action={
-          canManageRoles ? (
-            <button
-              className="text-button"
-              onClick={() => setOpen((o) => !o)}
-              aria-expanded={open}
-            >
-              {open ? "收合" : "展開"}{" "}
-              <ChevronRight
-                size={14}
-                style={{
-                  transform: open ? "rotate(90deg)" : undefined,
-                  verticalAlign: "-2px",
-                }}
-              />
-            </button>
-          ) : undefined
-        }
+  const {
+    sortedRows: sortedAudit,
+    sort: auditSort,
+    toggleSort: toggleAuditSort,
+  } = useTableSort<AuditRow, "time" | "actor" | "action" | "target" | "detail">(
+    filtered,
+    {
+      time: (r) => r.dateKey,
+      actor: (r) => r.actorLabel,
+      action: (r) => r.action,
+      target: (r) => r.target,
+      detail: (r) => r.detail,
+    },
+  );
+
+  const toggleButton = (
+    <button
+      className="text-button"
+      onClick={() => setOpen((o) => !o)}
+      aria-expanded={open}
+    >
+      {open ? "收合" : "展開"}{" "}
+      <ChevronRight
+        size={14}
+        style={{
+          transform: open ? "rotate(90deg)" : undefined,
+          verticalAlign: "-2px",
+        }}
       />
-      </div>
-      {!canManageRoles ? (
+    </button>
+  );
+
+  // 未展開／無權限／讀取中：維持單一摺疊面板
+  if (!canManageRoles || !open || rows === null) {
+    return (
+      <section className="panel data-panel">
         <div className="panel-inset">
-          <p className="settings-note">稽核軌跡僅開放系統管理員查閱。</p>
+          <SectionTitle
+            title="稽核軌跡紀錄"
+            note="最近 50 筆，僅系統管理員可查閱"
+            action={canManageRoles ? toggleButton : undefined}
+          />
         </div>
-      ) : !open ? (
         <div className="panel-inset">
           <p className="settings-note">
-            平時隱藏，需要時點右上「展開」查看，可關鍵字搜尋與日期篩選。
+            {!canManageRoles
+              ? "稽核軌跡僅開放系統管理員查閱。"
+              : !open
+                ? "平時隱藏，需要時點右上「展開」查看，可關鍵字搜尋與日期篩選。"
+                : "讀取中…"}
           </p>
         </div>
-      ) : rows === null ? (
-        <div className="panel-inset">
-          <p className="settings-note">讀取中…</p>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <FilterPanel
+        actions={
+          (keyword.trim() || dateFilter) && (
+            <button
+              type="button"
+              className="button button-outline"
+              onClick={() => {
+                setKeyword("");
+                setDateFilter("");
+              }}
+            >
+              清除篩選
+            </button>
+          )
+        }
+      >
+        <div className="form-field">
+          <label className="field-label">關鍵字搜尋</label>
+          <input
+            className="text-input"
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            placeholder="人員／動作／對象／說明"
+          />
         </div>
-      ) : (
-        <>
-          <div className="panel-inset">
-          <div className="form-grid" style={{ marginBottom: 12 }}>
-            <div className="form-field">
-              <label className="field-label">關鍵字搜尋</label>
-              <input
-                className="text-input"
-                value={keyword}
-                onChange={(e) => setKeyword(e.target.value)}
-                placeholder="人員／動作／對象／說明"
-              />
-            </div>
-            <div className="form-field">
-              <label className="field-label">日期篩選</label>
-              <input
-                className="text-input"
-                type="date"
-                value={dateFilter}
-                onChange={(e) => setDateFilter(e.target.value)}
-              />
-            </div>
-          </div>
-          </div>
-          {filtered.length === 0 ? (
-            <EmptyState
-              title={rows.length === 0 ? "尚無稽核紀錄" : "沒有符合的紀錄"}
-              description={
-                rows.length === 0
-                  ? "建立、編輯或停用指標後，系統會自動寫入操作紀錄。"
-                  : "請調整關鍵字或日期條件。"
-              }
-            />
-          ) : (
-            <div className="table-scroll">
-              <table className="permission-table">
-                <thead>
-                  <tr>
-                    <th>時間</th>
-                    <th>人員</th>
-                    <th>動作</th>
-                    <th>對象</th>
-                    <th>說明</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((r) => (
-                    <tr key={r.id}>
-                      <td>{r.timeText}</td>
-                      <td>{r.actorLabel}</td>
-                      <td>
-                        <b>{r.action}</b>
-                      </td>
-                      <td>{r.target || "—"}</td>
-                      <td>{r.detail || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {(keyword.trim() || dateFilter) && (
-            <div className="panel-inset">
-              <p className="settings-note">
-                篩選結果 {filtered.length}／{rows.length} 筆
-                <button
-                  className="text-button"
-                  style={{ marginLeft: 8 }}
-                  onClick={() => {
-                    setKeyword("");
-                    setDateFilter("");
-                  }}
-                >
-                  <X size={13} /> 清除篩選
-                </button>
-              </p>
-            </div>
-          )}
-        </>
-      )}
-    </section>
+        <div className="form-field">
+          <label className="field-label">日期篩選</label>
+          <input
+            className="text-input"
+            type="date"
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value)}
+          />
+        </div>
+      </FilterPanel>
+      <ListPanel
+        title="稽核軌跡紀錄"
+        count={filtered.length}
+        actions={toggleButton}
+      >
+        {filtered.length === 0 ? (
+          <EmptyState
+            title={rows.length === 0 ? "尚無稽核紀錄" : "沒有符合的紀錄"}
+            description={
+              rows.length === 0
+                ? "建立、編輯或停用指標後，系統會自動寫入操作紀錄。"
+                : "請調整關鍵字或日期條件。"
+            }
+          />
+        ) : (
+          <table className="permission-table">
+            <thead>
+              <tr>
+                <SortableTh label="時間" sortKey="time" sort={auditSort} onSort={toggleAuditSort} />
+                <SortableTh label="人員" sortKey="actor" sort={auditSort} onSort={toggleAuditSort} />
+                <SortableTh label="動作" sortKey="action" sort={auditSort} onSort={toggleAuditSort} />
+                <SortableTh label="對象" sortKey="target" sort={auditSort} onSort={toggleAuditSort} />
+                <SortableTh label="說明" sortKey="detail" sort={auditSort} onSort={toggleAuditSort} />
+              </tr>
+            </thead>
+            <tbody>
+              {sortedAudit.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.timeText}</td>
+                  <td>{r.actorLabel}</td>
+                  <td>
+                    <b>{r.action}</b>
+                  </td>
+                  <td>{r.target || "—"}</td>
+                  <td>{r.detail || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </ListPanel>
+    </>
   );
 }
 
