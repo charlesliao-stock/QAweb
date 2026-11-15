@@ -387,22 +387,22 @@ export function unitScoringBreakdownRows(
     }
     for (const section of sections) {
       for (const unitRecords of byUnit.values()) {
-        // B 法：單位分母只計該分組有適用題的人次；全不適用者不計入分母。
-        // 該單位期間至少一筆有該分組有效作答才計入分母。
-        const applicable = unitRecords.filter((record) => {
-          const { yes, no } = sectionCounts(record, section.ids);
-          return yes + no > 0;
-        });
-        if (applicable.length === 0) continue;
+        // 單位正確率＝該單位全部被審人次中達標的比例；該分組全部「不適用」的人次視為答對（達標），
+        // 仍計入分母。單位達標＝單位正確率 ≥ 閾值。
+        if (unitRecords.length === 0) continue;
         const row = totals.get(section.key)!;
         row.valid += 1;
         let pass = 0;
-        for (const record of applicable) {
+        for (const record of unitRecords) {
           const { yes, no } = sectionCounts(record, section.ids);
-          const rate = yes + no > 0 ? round1((yes / (yes + no)) * 100) : null;
+          if (yes + no === 0) {
+            pass += 1;
+            continue;
+          }
+          const rate = round1((yes / (yes + no)) * 100);
           if (isPassing(rate, thresholdOf(record))) pass += 1;
         }
-        if (isUnitPassing(round1((pass / applicable.length) * 100), threshold)) row.pass += 1;
+        if (isUnitPassing(round1((pass / unitRecords.length) * 100), threshold)) row.pass += 1;
       }
     }
   }
@@ -596,6 +596,34 @@ export function sectionPassRateOf(
     const { yes, no } = sectionCountsOf(record, idSet);
     const rate = yes + no > 0 ? round1((yes / (yes + no)) * 100) : null;
     if (isPassing(rate, th)) pass += 1;
+  }
+  return {
+    pass,
+    total: records.length,
+    rate: records.length > 0 ? round1((pass / records.length) * 100) : null,
+  };
+}
+
+/**
+ * 單位模式下探 L1 的分組／逐題正確率：與矩陣單位模式分組子列同口徑——
+ * 分母＝該單位全部被審人次；該分組／該題全部「不適用」的人次視為答對（達標）。
+ */
+export function sectionUnitPassRateOf(
+  records: AnalysisRecord[],
+  ids: string[],
+  threshold: number,
+): PassRate {
+  const idSet = new Set(ids);
+  let pass = 0;
+  for (const record of records) {
+    const { yes, no } = sectionCountsOf(record, idSet);
+    if (yes + no === 0) {
+      pass += 1;
+      continue;
+    }
+    const th =
+      typeof record.thresholdAtSchedule === "number" ? record.thresholdAtSchedule : threshold;
+    if (isPassing(round1((yes / (yes + no)) * 100), th)) pass += 1;
   }
   return {
     pass,

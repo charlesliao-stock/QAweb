@@ -389,17 +389,18 @@ export function unitScoringRowsFromCells(
     let valid = 0;
     for (const col of columns) {
       for (const cs of pooledByUnit(cellsInMonths(cells, col.months)).values()) {
-        let applicable = 0;
+        // 單位正確率＝全部人次中達標比例；該分組全部「不適用」的人次（total − applicable）視為答對
+        let persons = 0;
         let p = 0;
         for (const c of cs) {
           const s = c.sections[sec.key];
           if (!s) continue;
-          applicable += s.applicable;
-          p += s.pass;
+          persons += c.total;
+          p += s.pass + (c.total - s.applicable);
         }
-        if (applicable === 0) continue;
+        if (persons === 0) continue;
         valid += 1;
-        if (isUnitPassing(round1((p / applicable) * 100), threshold)) pass += 1;
+        if (isUnitPassing(round1((p / persons) * 100), threshold)) pass += 1;
       }
     }
     rows.push({

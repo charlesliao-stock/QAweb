@@ -112,6 +112,7 @@ import {
   recordsInMonths,
   resolveDrillSection,
   sectionPassRateOf,
+  sectionUnitPassRateOf,
   transposePersonOptionRows,
   unitPassRate,
   unitPeriodPassRate,
@@ -3947,7 +3948,9 @@ function DrillModal({
         : (() => {
             const recs = recordsForIndex(recordIndex, drill.indicatorId, col.months, unitId);
             return filterIds && filterKind
-              ? sectionPassRateOf(recs, filterIds, filterKind, th)
+              ? drill.mode === "unit"
+                ? sectionUnitPassRateOf(recs, filterIds, th)
+                : sectionPassRateOf(recs, filterIds, filterKind, th)
               : passRateOf(recs, th);
           })();
       map.set(unitId, {
@@ -3956,7 +3959,7 @@ function DrillModal({
       });
     }
     return map;
-  }, [recordIndex, drill.indicatorId, l1Units, l1Summary, col, th, filterIds, filterKind]);
+  }, [recordIndex, drill.indicatorId, drill.mode, l1Units, l1Summary, col, th, filterIds, filterKind]);
   // L2 列：該單位該期間被審人員在各選項的審查結果（l2All 時為全部單位）
   const l2Active = drill.l2UnitId != null || drill.l2All === true;
   const l2Rows = useMemo(() => {
@@ -4089,7 +4092,9 @@ function DrillModal({
                           const recs = recordsForIndex(recordIndex, drill.indicatorId, [{ year: month.year, month: month.month }], unitId);
                           // 與選定月相同的內容：套用同一分組／題目篩選與閾值
                           const hp = filterIds && filterKind
-                            ? sectionPassRateOf(recs, filterIds, filterKind, th)
+                            ? drill.mode === "unit"
+                              ? sectionUnitPassRateOf(recs, filterIds, th)
+                              : sectionPassRateOf(recs, filterIds, filterKind, th)
                             : passRateOf(recs, th);
                           const hCell: CellValue = { ...hp, title: hp.total === 0 ? "無資料" : `達閾值 ${hp.pass}／${hp.total} 人次` };
                           const hClickable = hp.rate != null;
