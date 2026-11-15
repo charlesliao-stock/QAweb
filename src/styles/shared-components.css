@@ -424,7 +424,7 @@ th[aria-sort="descending"] .th-sort .lucide {
 }
 
 /* ===== 篩選器共通規格（v1.75.2）：
- * 下拉固定 150px × 50px；同列的輸入框／按鈕同為 50px 高，維持底部對齊。
+ * 下拉固定 150px × 45px；同列的輸入框／按鈕同為 45px 高，維持底部對齊。
  * [搜尋]按鈕前有放大鏡（見 FilterSearchField）。 */
 .filter-panel .filter-panel-body .select-wrap {
   width: 150px;
@@ -436,7 +436,7 @@ th[aria-sort="descending"] .th-sort .lucide {
 .filter-panel .filter-panel-body select.text-input {
   box-sizing: border-box;
   width: 150px;
-  height: 50px;
+  height: 45px;
   padding-top: 0;
   padding-bottom: 0;
 }
@@ -445,13 +445,13 @@ th[aria-sort="descending"] .th-sort .lucide {
 .filter-panel .filter-panel-body .results-month-trigger,
 .filter-panel .filter-panel-body .results-month-field input {
   box-sizing: border-box;
-  height: 50px;
+  height: 45px;
 }
 .filter-panel .filter-panel-body .button {
-  height: 50px;
+  height: 45px;
 }
 .filter-panel .filter-panel-body .check-row {
-  min-height: 50px;
+  min-height: 45px;
 }
 /* 新增／批次新增等動作鈕：與篩選器同一水平線、向下對齊，靠右 */
 .filter-panel-end {
@@ -475,7 +475,7 @@ th[aria-sort="descending"] .th-sort .lucide {
   }
 }
 
-/* 結果匯入：組別／指標下拉比照篩選器規格（150×50px），同列向下對齊 */
+/* 結果匯入：組別／指標下拉比照篩選器規格（150×45px），同列向下對齊 */
 .results-page .results-import-filters {
   align-items: flex-end;
 }
@@ -491,7 +491,7 @@ th[aria-sort="descending"] .th-sort .lucide {
 .results-page .results-import-filters .select-wrap select {
   box-sizing: border-box;
   width: 150px;
-  height: 50px;
+  height: 45px;
   padding-top: 0;
   padding-bottom: 0;
 }
@@ -504,7 +504,7 @@ th[aria-sort="descending"] .th-sort .lucide {
   }
 }
 .filter-panel .results-range-separator {
-  padding-bottom: 15px;
+  padding-bottom: 12px;
 }
 .results-page .results-import-filters {
   display: flex;
