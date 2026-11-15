@@ -529,3 +529,15 @@ th[aria-sort="descending"] .th-sort .lucide {
 .filter-panel .results-range-separator {
   padding-bottom: 15px;
 }
+.results-page .results-import-filters {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 14px 16px;
+}
+.results-page .results-import-filters .form-field {
+  width: auto;
+  margin-left: 0;
+  margin-right: 0;
+}
