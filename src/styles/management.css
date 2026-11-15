@@ -1452,3 +1452,17 @@
     animation: none;
   }
 }
+
+/* 頁籤上的件數徽章（群組與人員頁籤沿用系統管理頁籤樣式） */
+.admin-tabs button span {
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 17px;
+  padding: 0 4px;
+  color: #7a9090;
+  background: #eef3f2;
+  border-radius: 5px;
+  font-size: var(--font-small);
+  font-weight: 600;
+}

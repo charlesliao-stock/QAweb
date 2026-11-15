@@ -417,7 +417,7 @@ export function ResultsPage({
   const [loading, setLoading] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
   /**
-   * 已生效的查詢條件（null＝尚未查詢，顯示空白頁）。
+   * 已生效的查詢條件（null＝尚未搜尋，顯示空白頁）。
    * 篩選器一變只改 live 值，不觸發查詢；按「查詢」才把當下條件生效。
    */
   const [applied, setApplied] = useState<{
@@ -2130,7 +2130,8 @@ export function ResultsPage({
               onClick={handleQuery}
               disabled={loading || !rangeValid}
             >
-              查詢
+              <Search size={16} />
+              搜尋
             </button>
           </div>
           {!rangeValid && (
@@ -2199,8 +2200,8 @@ export function ResultsPage({
         <>
           {!applied ? (
             <EmptyState
-              title="尚未查詢"
-              description="請先選擇期間，再按「查詢」開始分析。只想匯入結果，可直接切換至「結果匯入」頁籤，不需查詢。"
+              title="尚未搜尋"
+              description="請先選擇期間，再按「搜尋」開始分析。只想匯入結果，可直接切換至「結果匯入」頁籤，不需查詢。"
             />
           ) : loading ? (
             <EmptyState title="載入中" description="正在讀取審查紀錄…" />
@@ -2256,8 +2257,8 @@ export function ResultsPage({
         <>
           {!applied ? (
             <EmptyState
-              title="尚未查詢"
-              description="請先選擇期間，再按「查詢」開始分析。只想匯入結果，可直接切換至「結果匯入」頁籤，不需查詢。"
+              title="尚未搜尋"
+              description="請先選擇期間，再按「搜尋」開始分析。只想匯入結果，可直接切換至「結果匯入」頁籤，不需查詢。"
             />
           ) : loading ? (
             <EmptyState title="載入中" description="正在讀取審查紀錄…" />
@@ -2427,8 +2428,8 @@ export function ResultsPage({
         <>
           {!applied ? (
             <EmptyState
-              title="尚未查詢"
-              description="請先選擇期間，再按「查詢」開始分析。只想匯入結果，可直接切換至「結果匯入」頁籤，不需查詢。"
+              title="尚未搜尋"
+              description="請先選擇期間，再按「搜尋」開始分析。只想匯入結果，可直接切換至「結果匯入」頁籤，不需查詢。"
             />
           ) : loading ? (
             <EmptyState title="載入中" description="正在讀取審查紀錄…" />
@@ -2722,7 +2723,7 @@ export function ResultsPage({
           user={user ? { staffId: user.staffId, name: user.name } : null}
           onAction={onAction}
           onDone={(years) => {
-            // 尚未查詢：不觸發重拉，否則匯入完又把整年紀錄拉回來、閘門白做。
+            // 尚未搜尋：不觸發重拉，否則匯入完又把整年紀錄拉回來、閘門白做。
             // 已查過：只失效匯入年份的快取，下次 effect 只補查該年。
             if (!applied) return;
             invalidateCachedYears("reviewRecords", years, cacheScope);
@@ -3121,7 +3122,7 @@ function ReviewResultManager({
             onClick={queryResults}
           >
             <Search size={16} />
-            查詢
+            搜尋
           </button>
         }
       >
@@ -3405,8 +3406,8 @@ function ReviewResultManager({
       )}
       {!queried && (
         <EmptyState
-          title="尚未查詢"
-          description="設定篩選條件後按「查詢」讀取審查結果。"
+          title="尚未搜尋"
+          description="設定篩選條件後按「搜尋」讀取審查結果。"
         />
       )}
     </section>

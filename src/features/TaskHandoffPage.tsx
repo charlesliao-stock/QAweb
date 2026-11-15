@@ -68,7 +68,7 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
   const [managerGroupIds, setManagerGroupIds] = useState<string[]>([]);
   const [refLoading, setRefLoading] = useState(true);
 
-  // 原審查員：被動查詢（進頁不載入任務，按「查詢」才搜尋）
+  // 原審查員：被動查詢（進頁不載入任務，按「搜尋」才載入）
   const [groupFilter, setGroupFilter] = useState("");
   const [unitFilter, setUnitFilter] = useState("");
   const [staffSearch, setStaffSearch] = useState("");
@@ -147,7 +147,7 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
   const availableUnits = useMemo(() => units.filter((u) => (!groupFilter || u.groupId === groupFilter)), [units, groupFilter]);
   const selected = useMemo(() => selectHandoffTasks(tasks, selectedTasks), [tasks, selectedTasks]);
 
-  // 按「查詢」才搜尋：職編與群組／單位下拉擇一使用，有填職編時以職編精確比對為準。
+  // 按「搜尋」才載入：職編與群組／單位下拉擇一使用，有填職編時以職編精確比對為準。
   const runSearch = useCallback(async () => {
     if (!user) return;
     setSearching(true);
@@ -334,7 +334,7 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
   return (
     <>
       <PageHeading page="handoff" />
-      <SectionTitle title="任務交接" note="進頁不自動載入資料；請先查詢未完成任務。只交接已分配未完成的部分，交接立即生效，已完成任務不會轉派。" />
+      <SectionTitle title="任務交接" note="進頁不自動載入資料；請先搜尋未完成任務。只交接已分配未完成的部分，交接立即生效，已完成任務不會轉派。" />
       <FilterPanel title="原審查員">
           <label className="form-field"><span className="field-label">群組</span><select className="text-input" value={groupFilter} onChange={(e) => { setGroupFilter(e.target.value); setUnitFilter(""); }}><option value="">全部可管理群組</option>{availableGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</select></label>
           <label className="form-field"><span className="field-label">單位</span><select className="text-input" value={unitFilter} onChange={(e) => setUnitFilter(e.target.value)}><option value="">全部單位</option>{availableUnits.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
@@ -343,7 +343,7 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
       <p className="settings-note">群組／單位下拉與職編搜尋擇一使用；有填職編時以職編精確比對為準，群組／單位篩選不套用。</p>
       <ListPanel title="未完成任務" count={searched ? tasks.length : undefined}>
         {!searched ? (
-          <EmptyState title="尚未查詢" description="請選擇群組／單位，或輸入原審查員職編，再按「查詢」。" />
+          <EmptyState title="尚未搜尋" description="請選擇群組／單位，或輸入原審查員職編，再按「搜尋」。" />
         ) : tasks.length === 0 ? (
           <EmptyState title="沒有符合條件的未完成任務" description="請調整群組、單位或原審查員職編後再查詢；已完成任務不會顯示。" />
         ) : (

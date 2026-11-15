@@ -19,7 +19,6 @@ import {
   Copy,
   Eye,
   Plus,
-  Search,
   Trash2,
   X,
 } from "lucide-react";
@@ -799,30 +798,19 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
         />
         <FilterPanel
           actions={
-            <>
+            (filterGroup || filterIndicator || filterKeyword) && (
               <button
                 type="button"
-                className="button button-primary"
-                onClick={() => void loadData()}
-                disabled={loading}
+                className="button button-outline"
+                onClick={() => {
+                  setFilterGroup("");
+                  setFilterIndicator("");
+                  setFilterKeyword("");
+                }}
               >
-                <Search size={16} />
-                查詢
+                清除篩選
               </button>
-              {(filterGroup || filterIndicator || filterKeyword) && (
-                <button
-                  type="button"
-                  className="button button-outline"
-                  onClick={() => {
-                    setFilterGroup("");
-                    setFilterIndicator("");
-                    setFilterKeyword("");
-                  }}
-                >
-                  清除篩選
-                </button>
-              )}
-            </>
+            )
           }
         >
             <div className="form-field" style={{ maxWidth: 170 }}>

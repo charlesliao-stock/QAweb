@@ -16,7 +16,6 @@ import {
   Download,
   Pencil,
   Plus,
-  Search,
   Trash2,
   Upload,
   X,
@@ -1650,40 +1649,18 @@ export function IndicatorsPage({
       {view.kind === "list" && (
         <FilterPanel
           actions={
-            <>
+            (groupFilter || searchKw) && (
               <button
                 type="button"
-                className="button button-primary"
-                onClick={() => void loadList()}
-                disabled={loading}
-              >
-                <Search size={16} />
-                查詢
-              </button>
-              {(groupFilter || searchKw) && (
-                <button
-                  type="button"
-                  className="button button-outline"
-                  onClick={() => {
-                    setGroupFilter("");
-                    setSearchKw("");
-                  }}
-                >
-                  清除篩選
-                </button>
-              )}
-              <button className="button button-primary" onClick={openCreate}>
-                <Plus size={16} />
-                新增指標
-              </button>
-              <button
                 className="button button-outline"
-                onClick={() => setBatchOpen(true)}
+                onClick={() => {
+                  setGroupFilter("");
+                  setSearchKw("");
+                }}
               >
-                <Plus size={16} />
-                批次新增
+                清除篩選
               </button>
-            </>
+            )
           }
         >
           <div className="form-field" style={{ maxWidth: 200 }}>
@@ -1714,6 +1691,19 @@ export function IndicatorsPage({
             onSearch={() => void loadList()}
             disabled={loading}
           />
+          <div className="filter-panel-end">
+            <button className="button button-primary" onClick={openCreate}>
+              <Plus size={16} />
+              新增指標
+            </button>
+            <button
+              className="button button-outline"
+              onClick={() => setBatchOpen(true)}
+            >
+              <Plus size={16} />
+              批次新增
+            </button>
+          </div>
         </FilterPanel>
       )}
 

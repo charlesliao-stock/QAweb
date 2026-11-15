@@ -644,7 +644,7 @@ export function GroupsPage({
   const [userSearch, setUserSearch] = useState("");
   const [unitGroupFilter, setUnitGroupFilter] = useState("");
   const [unitSearch, setUnitSearch] = useState("");
-  /** v1.57.0 A1／A2：清單只在按「查詢」後顯示；輸入框改篩選條件不即時過濾，按查詢才套用 */
+  /** v1.57.0 A1／A2：清單只在按「搜尋」後顯示；輸入框改篩選條件不即時過濾，按搜尋才套用 */
   const [appliedUserUnitFilter, setAppliedUserUnitFilter] = useState("");
   const [appliedUserSearch, setAppliedUserSearch] = useState("");
   const [usersSearched, setUsersSearched] = useState(false);
@@ -3739,33 +3739,43 @@ export function GroupsPage({
     <>
       <PageHeading page="groups" action={headingAction} />
 
-      <div className="tabs" style={{ marginBottom: 12 }}>
+      <div className="admin-tabs" role="tablist" aria-label="群組與人員分類">
         <button
-          className={`tab${tab === "users" ? " active" : ""}`}
+          role="tab"
+          aria-selected={tab === "users"}
+          className={tab === "users" ? "active" : ""}
           onClick={() => setTab("users")}
         >
           人員{isAdmin && <span>{users.length}</span>}
         </button>
         <button
-          className={`tab${tab === "units" ? " active" : ""}`}
+          role="tab"
+          aria-selected={tab === "units"}
+          className={tab === "units" ? "active" : ""}
           onClick={() => setTab("units")}
         >
           單位<span>{units.length}</span>
         </button>
         <button
-          className={`tab${tab === "roles" ? " active" : ""}`}
+          role="tab"
+          aria-selected={tab === "roles"}
+          className={tab === "roles" ? "active" : ""}
           onClick={() => setTab("roles")}
         >
           角色<span>{roleOptions.length}</span>
         </button>
         <button
-          className={`tab${tab === "titles" ? " active" : ""}`}
+          role="tab"
+          aria-selected={tab === "titles"}
+          className={tab === "titles" ? "active" : ""}
           onClick={() => setTab("titles")}
         >
           職稱<span>{titles.length}</span>
         </button>
         <button
-          className={`tab${tab === "groups" ? " active" : ""}`}
+          role="tab"
+          aria-selected={tab === "groups"}
+          className={tab === "groups" ? "active" : ""}
           onClick={() => setTab("groups")}
         >
           群組<span>{groups.length}</span>
@@ -4101,13 +4111,13 @@ export function GroupsPage({
           <ErrorState title="單位資料載入失敗" description={masterLoadError} onRetry={loadMaster} />
         ) : !unitsSearched ? (
           <EmptyState
-            title="尚未查詢"
-            description="請設定篩選條件後按「查詢」，即可列出符合條件的單位。"
+            title="尚未搜尋"
+            description="請設定篩選條件後按「搜尋」，即可列出符合條件的單位。"
           />
         ) : units.length === 0 ? (
           <EmptyState
             title={appliedUnitGroupFilter || appliedUnitSearch ? "沒有符合篩選條件的單位" : "尚無單位"}
-            description={appliedUnitGroupFilter || appliedUnitSearch ? "請調整群組或單位關鍵字後重新查詢。" : "使用右上角「新增單位」或「批次上傳」建立單位（例如：9A病房，歸屬病房組）。"}
+            description={appliedUnitGroupFilter || appliedUnitSearch ? "請調整群組或單位關鍵字後重新搜尋。" : "使用右上角「新增單位」或「批次上傳」建立單位（例如：9A病房，歸屬病房組）。"}
           />
         ) : (
           <section className="panel data-panel list-panel">
@@ -4424,8 +4434,8 @@ export function GroupsPage({
           <ErrorState title="人員資料載入失敗" description={usersLoadError} onRetry={loadUsers} />
         ) : !usersSearched ? (
           <EmptyState
-            title="尚未查詢"
-            description="請設定篩選條件後按「查詢」，即可列出符合條件的人員。"
+            title="尚未搜尋"
+            description="請設定篩選條件後按「搜尋」，即可列出符合條件的人員。"
           />
         ) : users.length === 0 ? (
           <EmptyState
@@ -4435,7 +4445,7 @@ export function GroupsPage({
         ) : visibleUsers.length === 0 ? (
           <EmptyState
             title="沒有符合篩選條件的人員"
-            description="請調整單位或職編／姓名關鍵字，再按「查詢」。"
+            description="請調整單位或職編／姓名關鍵字，再按「搜尋」。"
           />
         ) : (
           <section className="panel data-panel list-panel">

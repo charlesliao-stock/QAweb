@@ -8,6 +8,7 @@ import {
   Inbox,
   LoaderCircle,
   RefreshCw,
+  Search,
   X,
 } from "lucide-react";
 import type { PageId } from "../types";
@@ -383,6 +384,7 @@ export function FilterSearchField({
           onClick={onSearch}
           disabled={disabled}
         >
+          <Search size={16} />
           搜尋
         </button>
       </div>
