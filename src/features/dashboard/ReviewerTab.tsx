@@ -256,7 +256,7 @@ export function ReviewerTab({
               <p className="settings-note" style={{ marginBottom: 8 }}>
                 已鎖定（{lockedTasks.length} 筆）：點「審查」進入可填寫原因申請解鎖。
               </p>
-              <div className="table-scroll">
+              <div className="table-scroll dashboard-responsive-table">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -269,12 +269,12 @@ export function ReviewerTab({
                   <tbody>
                     {lockedTasks.map((t) => (
                       <tr key={t.id}>
-                        <td>
+                        <td data-label="指標名稱">
                           {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                         </td>
-                        <td>{displayUnitCode(t.unitId)}</td>
-                        <td>{taskProgressLabel(t)}</td>
-                        <td>
+                        <td data-label="審查單位">{displayUnitCode(t.unitId)}</td>
+                        <td data-label="完成／應審件數">{taskProgressLabel(t)}</td>
+                        <td data-label="操作">
                           <button
                             className="text-button"
                             onClick={() =>
@@ -317,7 +317,7 @@ export function ReviewerTab({
         {upcomingTasks.length === 0 ? (
           <p className="settings-note">次月尚無排定任務。</p>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll dashboard-responsive-table">
             <table className="data-table">
               <thead>
                 <tr>
@@ -330,12 +330,12 @@ export function ReviewerTab({
               <tbody>
                 {upcomingTasks.map((t) => (
                   <tr key={t.id}>
-                    <td>
+                    <td data-label="指標名稱">
                       {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                     </td>
-                    <td>{displayUnitCode(t.unitId)}</td>
-                    <td>{t.caseCount ?? "未設定"}</td>
-                    <td>{t.deadline}</td>
+                    <td data-label="審查單位">{displayUnitCode(t.unitId)}</td>
+                    <td data-label="應審件數">{t.caseCount ?? "未設定"}</td>
+                    <td data-label="截止日期">{t.deadline}</td>
                   </tr>
                 ))}
               </tbody>

@@ -229,7 +229,7 @@ export function DirectorTab({
           <SectionTitle
             title={`全院品質戰情總覽（${curYear}/${String(curMonth).padStart(2, "0")}）`}
           />
-        <div className="table-scroll">
+        <div className="table-scroll dashboard-responsive-table">
           <table className="data-table">
             <thead>
               <tr>
@@ -240,19 +240,19 @@ export function DirectorTab({
             </thead>
             <tbody>
               <tr>
-                <td>
+                <td data-label="全院查核完成率">
                   <b>{totalRate != null ? `${totalRate}%` : "—"}</b>
                   <span className="muted-text">
                     （{doneTasks}/{totalTasks} 任務）
                   </span>
                 </td>
-                <td>
+                <td data-label="綜合達標率（單位≧90%）">
                   <b>{unitPassRate != null ? `${unitPassRate}%` : "—"}</b>
                   <span className="muted-text">
                     （{passUnits}/{byUnit.size} 單位）
                   </span>
                 </td>
-                <td>
+                <td data-label="當月受審總人次">
                   <b>{totalCases}</b>
                 </td>
               </tr>

@@ -121,3 +121,9 @@
 - [x] 一般使用者登入後僅顯示一個依既有身分優先序決定的儀表板，不能自行切換；系統管理者可預覽不同角色／職稱畫面並可明確返回管理者視角，預覽不得變更實際登入身分、資料範圍或任何頁面／操作權限。
 - [x] 護理長、督導、主任儀表板提供可由管理者控制的「CAPA 待結案核准」摘要；只顯示待審件數、不暴露案件識別資料，且不因預覽而改變 CAPA 存取權限。
 - [x] `package.json`、`src/version.ts` 同步升至 1.69.0，建置成功；本次未獲發布要求，不推送或部署。
+
+
+## 本次儀表板行動版修正（2026-11-15；預定版號 1.70.0）
+- [x] 七種角色／職稱儀表板在手機與平板使用清楚的響應式卡片與內容排序；管理員預覽控制可操作，表格／圖表不造成整頁水平溢位，桌機布局及角色資料、權限不變。
+- [x] 依使用者補充保留 v1.69.0 已良好的手機審查表；`ReviewExecutePage.tsx`、`review.css` 與 `responsive-overrides.css` 均與基準相同，原本逐題、相機及必答行為不變。
+- [x] `package.json` 與 `src/version.ts` 同步升至 1.70.0；正式 production build 與 dashboard visibility 測試通過；使用者已授權推送 `firebase-mvp`，完成後確認既有 Hosting／Firestore Rules／indexes workflow 結果（Storage Rules 不部署）。

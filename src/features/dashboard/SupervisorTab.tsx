@@ -160,7 +160,7 @@ export function SupervisorTab({
         {unitRows.length === 0 ? (
           <p className="settings-note">轄區內尚無單位。</p>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll dashboard-unit-progress-table">
             <table className="data-table">
               <thead>
                 <tr>
@@ -221,7 +221,7 @@ export function SupervisorTab({
         )}
       </section>
 
-      <div className="task-cards">
+      <div className="task-cards dashboard-unit-progress-cards">
         {unitRows.map((r) => (
           <div key={r.unit.id} className="task-card">
             <div className="task-card-top">

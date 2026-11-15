@@ -62,7 +62,7 @@ export function NurseTab({
         {trend.length === 0 ? (
           <p className="settings-note">尚無受審紀錄。</p>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll dashboard-responsive-table">
             <table className="data-table">
               <thead>
                 <tr>
@@ -75,10 +75,10 @@ export function NurseTab({
               <tbody>
                 {trend.map((r) => (
                   <tr key={r.id}>
-                    <td>{r.reviewDate || "—"}</td>
-                    <td>{data.indicatorMap.get(r.indicatorId) ?? r.indicatorId}</td>
-                    <td>{r.rate != null ? `${r.rate}%` : "—"}</td>
-                    <td style={{ minWidth: 120 }}>
+                  <td data-label="審查日期">{r.reviewDate || "—"}</td>
+                  <td data-label="指標名稱">{data.indicatorMap.get(r.indicatorId) ?? r.indicatorId}</td>
+                  <td data-label="正確率">{r.rate != null ? `${r.rate}%` : "—"}</td>
+                  <td data-label="正確率進度" style={{ minWidth: 120 }}>
                       <div
                         style={{
                           height: 8,

@@ -174,7 +174,7 @@ export function DashboardPage({
     : `以下為您唯一的${VARIANT_LABELS[active]}儀表板；頁面與資料權限仍依系統實際授權。`;
 
   return (
-    <>
+    <div className="dashboard-page" data-dashboard-variant={active}>
       <PageHeading
         page="dashboard"
         action={
@@ -250,6 +250,6 @@ export function DashboardPage({
           {active === "director" && <DirectorTab data={data} sections={sections} />}
         </>
       )}
-    </>
+    </div>
   );
 }

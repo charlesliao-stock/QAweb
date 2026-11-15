@@ -147,7 +147,7 @@ export function HeadNurseTab({
         {nextAudits.length === 0 ? (
           <p className="settings-note">次月本單位尚無排定審查。</p>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll dashboard-responsive-table">
             <table className="data-table">
               <thead>
                 <tr>
@@ -159,11 +159,11 @@ export function HeadNurseTab({
               <tbody>
                 {nextAudits.map((t) => (
                   <tr key={t.id}>
-                    <td>
+                    <td data-label="指標名稱">
                       {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                     </td>
-                    <td>{t.caseCount ?? "未設定"}</td>
-                    <td>{t.deadline}</td>
+                    <td data-label="應審件數">{t.caseCount ?? "未設定"}</td>
+                    <td data-label="截止日期">{t.deadline}</td>
                   </tr>
                 ))}
               </tbody>
@@ -180,7 +180,7 @@ export function HeadNurseTab({
             title={`本單位 vs 全院基準（${curYear}/${String(curMonth).padStart(2, "0")}）`}
             note="僅顯示全院平均，不顯示其他單位數值"
           />
-        <div className="table-scroll">
+        <div className="table-scroll dashboard-responsive-table">
           <table className="data-table">
             <thead>
               <tr>
@@ -192,10 +192,10 @@ export function HeadNurseTab({
             </thead>
             <tbody>
               <tr>
-                <td>本月</td>
-                <td>{myAvg != null ? `${myAvg}%` : "—"}</td>
-                <td>{allAvg != null ? `${allAvg}%` : "—"}</td>
-                <td>
+                <td data-label="期間">本月</td>
+                <td data-label="本單位平均正確率">{myAvg != null ? `${myAvg}%` : "—"}</td>
+                <td data-label="全院人員平均符合率">{allAvg != null ? `${allAvg}%` : "—"}</td>
+                <td data-label="全院單位達標率">
                   {pass.rate != null
                     ? `${pass.rate}%（${pass.pass}/${pass.total} 單位）`
                     : "—"}
