@@ -144,3 +144,31 @@ export function nextLevelOrder(levels: OrgLevel[]): number {
 export function levelIdByName(levels: OrgLevel[], name: string): string {
   return levels.find((l) => l.name === name)?.id ?? "";
 }
+
+/** 排序用層級序號：對不上任何層級者排最後（Infinity） */
+export function levelRank(levels: OrgLevel[], levelId: string | undefined): number {
+  const idx = sortedLevels(levels).findIndex((l) => l.id === levelId);
+  return idx >= 0 ? idx : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * 依層級順序排序（層級 order → 次級排序鍵 → 名稱）。
+ * 無層級者排最後。純函式，不改動輸入陣列。
+ */
+export function sortByLevel<T extends { name: string; levelId?: string }>(
+  items: T[],
+  levels: OrgLevel[],
+  secondary?: (item: T) => number,
+): T[] {
+  const sorted = sortedLevels(levels);
+  const rank = (id: string | undefined) => {
+    const idx = sorted.findIndex((l) => l.id === id);
+    return idx >= 0 ? idx : Number.MAX_SAFE_INTEGER;
+  };
+  return [...items].sort(
+    (a, b) =>
+      rank(a.levelId) - rank(b.levelId) ||
+      (secondary ? secondary(a) - secondary(b) : 0) ||
+      a.name.localeCompare(b.name, "zh-Hant"),
+  );
+}

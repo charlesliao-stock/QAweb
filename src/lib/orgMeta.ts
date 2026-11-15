@@ -48,6 +48,8 @@ export interface RoleMeta {
 export interface TitleMetaInput {
   id?: unknown;
   name: string;
+  /** 所屬層級 id（空＝未分層級）。 */
+  levelId?: unknown;
   isUnitHead?: unknown;
   isDistrictHead?: unknown;
   isHospitalHead?: unknown;

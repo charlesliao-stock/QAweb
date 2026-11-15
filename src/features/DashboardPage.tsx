@@ -7,9 +7,11 @@ import { getFirebaseDb } from "../lib/firebase";
 import { doc } from "../lib/db";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
 import { getDocCacheFirst } from "../lib/cacheFirst";
+import { sortByLevel } from "../lib/orgLevels";
 import {
   getDashboardVariants,
   VARIANT_LABELS,
+  VARIANT_ORDER,
   type DashboardVariant,
 } from "../lib/dashboardVariant";
 import {
@@ -61,11 +63,23 @@ export function DashboardPage({
   const [adminSections, setAdminSections] = useState<Partial<DashboardSections>>({});
   const [sectionOverrides, setSectionOverrides] = useState<DashboardSectionOverrides>(EMPTY_OVERRIDES);
   const isAdmin = (user?.roles ?? []).includes("系統管理員");
+  // 預覽下拉：依層級順序排列（層級 order → 儀表板優先序 → 名稱），無層級者排最後
   const roleOptions = useMemo(
-    () => orgMeta.roleTargets.filter((target) => target.name !== "系統管理員"),
-    [orgMeta.roleTargets],
+    () => sortByLevel(
+      orgMeta.roleTargets.filter((target) => target.name !== "系統管理員"),
+      orgMeta.roleLevels,
+      (target) => VARIANT_ORDER.indexOf(dashboardVariantForRole(target.name, orgMeta.roleMeta)),
+    ),
+    [orgMeta.roleTargets, orgMeta.roleLevels, orgMeta.roleMeta],
   );
-  const titleOptions = orgMeta.titleTargets;
+  const titleOptions = useMemo(
+    () => sortByLevel(
+      orgMeta.titleTargets,
+      orgMeta.titleLevels,
+      (target) => VARIANT_ORDER.indexOf(dashboardVariantForTitle(target.flags)),
+    ),
+    [orgMeta.titleTargets, orgMeta.titleLevels],
+  );
 
   useEffect(() => {
     let cancelled = false;

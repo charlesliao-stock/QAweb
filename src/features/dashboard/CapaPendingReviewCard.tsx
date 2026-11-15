@@ -4,7 +4,7 @@ import { useAuth } from "../../lib/auth";
 import { usePermissions } from "../../lib/usePermissions";
 import type { DashboardVariant } from "../../lib/dashboardVariant";
 import { countCapaPendingReview } from "../../lib/dashboardVisibility";
-import { loadCapaCases } from "../capa/store";
+import { loadCapaPendingApprovalCases } from "../capa/store";
 
 export function CapaPendingReviewCard({ variant }: { variant: Extract<DashboardVariant, "headNurse" | "supervisor" | "director"> }) {
   const { user } = useAuth();
@@ -26,7 +26,7 @@ export function CapaPendingReviewCard({ variant }: { variant: Extract<DashboardV
     setFailed(false);
     if (!ready || !allowed || (unitCodes !== null && unitCodes.length === 0)) return () => { cancelled = true; };
     setLoading(true);
-    void loadCapaCases()
+    void loadCapaPendingApprovalCases()
       .then((cases) => {
         if (cancelled) return;
         const scoped = unitCodes === null

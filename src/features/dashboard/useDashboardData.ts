@@ -187,7 +187,27 @@ function parseRecord(
 }
 
 /** false＝不讀任何 Firestore 資料（儀表板顯示空狀態，版面不變） */
-const DASHBOARD_READS_ENABLED = false;
+const DASHBOARD_READS_ENABLED = true;
+
+/**
+ * Spark 配額保護：同一分頁、同一月份的儀表板資料在 TTL 內直接重用，
+ * 不重複讀 Firestore（切頁再回來、角色預覽切換都不再計費）。
+ * reload()（審查執行頁返回後）會略過快取、強制重讀。
+ */
+const DASHBOARD_CACHE_TTL_MS = 5 * 60 * 1000;
+interface DashboardSnapshot {
+  key: string;
+  at: number;
+  indicators: DashIndicator[];
+  groups: DashGroup[];
+  units: DashUnit[];
+  tasks: DashTask[];
+  records: DashRecord[];
+  unlockPending: DashUnlock[];
+  correctionSkipped: boolean;
+}
+let dashboardCache: DashboardSnapshot | null = null;
+let forceNextRead = false;
 
 export function useDashboardData(): DashboardData {
   const win = dashboardMonthWindow(new Date());
@@ -203,7 +223,10 @@ export function useDashboardData(): DashboardData {
   const [correctionFailed, setCorrectionFailed] = useState(false);
   const [tick, setTick] = useState(0);
 
-  const reload = useCallback(() => setTick((t) => t + 1), []);
+  const reload = useCallback(() => {
+    forceNextRead = true;
+    setTick((t) => t + 1);
+  }, []);
 
   useEffect(() => {
     // 儀表板讀取暫時停用（降低 Firestore 讀取量）：版面維持原樣，資料為空狀態。
@@ -213,6 +236,25 @@ export function useDashboardData(): DashboardData {
       return;
     }
     let cancelled = false;
+    const cacheKey = `${curYear}-${curMonth}`;
+    const hit = dashboardCache;
+    if (
+      !forceNextRead &&
+      hit &&
+      hit.key === cacheKey &&
+      Date.now() - hit.at < DASHBOARD_CACHE_TTL_MS
+    ) {
+      setIndicators(hit.indicators);
+      setGroups(hit.groups);
+      setUnits(hit.units);
+      setTasks(hit.tasks);
+      setRecords(hit.records);
+      setUnlockPending(hit.unlockPending);
+      setCorrectionSkipped(hit.correctionSkipped);
+      setLoading(false);
+      return;
+    }
+    forceNextRead = false;
     (async () => {
       setLoading(true);
       setCorrectionFailed(false); // 每輪載入重新計算寫入失敗狀態
@@ -548,6 +590,17 @@ export function useDashboardData(): DashboardData {
           },
         );
         if (cancelled) return;
+        dashboardCache = {
+          key: cacheKey,
+          at: Date.now(),
+          indicators: inds,
+          groups: grps,
+          units: uns,
+          tasks: list,
+          records: recs,
+          unlockPending: ups,
+          correctionSkipped: skipped,
+        };
         setIndicators(inds);
         setGroups(grps);
         setUnits(uns);

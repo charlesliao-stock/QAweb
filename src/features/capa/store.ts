@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, serverTimestamp, setDoc } from "../../lib/db";
+import { collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, where } from "../../lib/db";
 import { getFirebaseDb } from "../../lib/firebase";
 import { isDemoMode } from "../../lib/demoMode";
 import { logAudit } from "../../lib/audit";
@@ -34,6 +34,16 @@ export async function loadCapaCases(): Promise<CapaCase[]> {
   await seedDemoIfNeeded();
   const snapshot = await getDocs(collection(db(), CASES));
   return dataRows<CapaCase>(snapshot).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/**
+ * 儀表板「待結案核准」專用：只讀 stage＝結案核准 的案件（單欄位等號，免複合索引），
+ * 不再整個 capa 集合全讀，降低 Spark 讀取量。
+ */
+export async function loadCapaPendingApprovalCases(): Promise<CapaCase[]> {
+  await seedDemoIfNeeded();
+  const snapshot = await getDocs(query(collection(db(), CASES), where("stage", "==", "結案核准")));
+  return dataRows<CapaCase>(snapshot);
 }
 
 export async function loadCapaSettings(): Promise<CapaSettings> {
