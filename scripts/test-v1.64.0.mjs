@@ -139,3 +139,19 @@ console.log(`OK ${checks} checks`);
   assert.ok(sm.cells.every((c) => c.indicatorVersions.length >= 1));
   console.log("OK threshold checks");
 }
+
+// 封存提醒：區間結束滿一個月（結束月＋1 個月的月底之後）才逾期
+if (process.env.SUMMARY_LIB_DIR) {
+  const R = createRequire(join(process.env.SUMMARY_LIB_DIR, "x.js"))("./archiveReminder.js");
+  const sched = { indicatorId: "I", category: "year", period: "2026", months: [1, 4, 7, 10],
+    frequency: 4, intervalMonths: 3, refYear: null };
+  assert.equal(R.archiveDueDate({ year: 2026, month: 3 }), "2026-04-30");
+  const at = (y, m, d) => R.unarchivedOverdue([sched], new Set(), new Date(y, m - 1, d), 10);
+  assert.equal(at(2026, 4, 20).length, 0);          // Q1 已結束(過 4/10)但未滿一個月
+  assert.equal(at(2026, 5, 1).length, 1);           // 5/1 > 4/30 → Q1 逾期
+  assert.equal(at(2026, 5, 1)[0].label, "2026/1-3");
+  const done = new Set([R.endedIntervalsOf(sched, new Date(2026, 6, 20), 10)[0].archiveId]);
+  assert.equal(R.unarchivedOverdue([sched], done, new Date(2026, 6, 20), 10).length, 0); // Q1 已封存；Q2 剛結束未滿一個月
+  assert.equal(R.unarchivedOverdue([sched], done, new Date(2026, 7, 1), 10).length, 1);  // 8/1 > 7/31 → Q2 逾期
+  console.log("OK reminder checks");
+}

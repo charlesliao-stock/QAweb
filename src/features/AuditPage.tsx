@@ -65,7 +65,7 @@ import {
   type ArchiveTarget,
   type StoredSummary,
 } from "../lib/summaryStore";
-import { summaryDocId } from "../lib/reviewSummary";
+import { endedIntervalsOf } from "../lib/archiveReminder";
 import {
   approveEditRequest,
   loadPendingEditRequests,
@@ -188,7 +188,8 @@ interface ActiveRow {
   unitNameOf: (code: string) => string;
   /** v1.64.0：可封存摘要（系統管理員，或所屬群組的召集人／執行幹事） */
   canArchive: boolean;
-  archiveTarget: ArchiveTarget;
+  /** v1.65.1：該排程「已結束」的每個區間（可封存；overdue＝結束滿一個月仍未封存要提醒） */
+  endedTargets: { id: string; label: string; overdue: boolean; target: ArchiveTarget }[];
 }
 
 type SortKey = "group" | "code" | "name" | "interval" | "person" | "unit";
@@ -760,15 +761,24 @@ export function AuditPage({
               (isConvener &&
                 !!ind.groupId &&
                 myConvenerGroupIds.includes(ind.groupId)),
-            archiveTarget: {
-              indicatorId: s.indicatorId,
-              category: s.category,
-              period: s.period,
-              start: iv.start,
-              end: iv.end,
-              monthKeys: keys,
-              unitIds: s.unitIds,
-            },
+            endedTargets: endedIntervalsOf(
+              { ...schedLike(s), indicatorId: s.indicatorId },
+              today,
+              deadlineDay,
+            ).map((e) => ({
+              id: e.archiveId,
+              label: e.label,
+              overdue: e.overdue,
+              target: {
+                indicatorId: s.indicatorId,
+                category: s.category,
+                period: s.period,
+                start: e.interval.start,
+                end: e.interval.end,
+                monthKeys: new Set(e.interval.allMonths.map(ymKey)),
+                unitIds: s.unitIds,
+              },
+            })),
           });
         }
         try {
@@ -1043,27 +1053,34 @@ export function AuditPage({
     <SortableTh label={label} sortKey={k} sort={tableSort} onSort={toggleSort} />
   );
 
+  const rowKeyOf = (r: ActiveRow) =>
+    `${r.indicatorId}|${r.sched.category}|${r.sched.period}`;
+
   async function handleArchive(row: ActiveRow) {
     if (!user) return;
-    const t = row.archiveTarget;
-    const id = summaryDocId(t.indicatorId, t.category, t.period, t.start);
-    const exists = summaries.has(id);
+    const missing = row.endedTargets.filter((e) => !summaries.has(e.id));
+    const list = missing.length > 0 ? missing : row.endedTargets;
+    if (list.length === 0) return;
     if (
       !window.confirm(
-        exists
-          ? `重新封存「${row.indicatorName}・${row.intervalLabel}」的摘要？將以目前審查紀錄覆寫舊摘要。`
-          : `封存「${row.indicatorName}・${row.intervalLabel}」的摘要？之後結果分析會先讀摘要；封存後補改紀錄需經審核。`,
+        missing.length > 0
+          ? `封存「${row.indicatorName}」尚未封存的 ${list.length} 個已結束區間（${list.map((e) => e.label).join("、")}）？之後結果分析會先讀摘要；封存後補改紀錄需經審核。`
+          : `重新封存「${row.indicatorName}」全部 ${list.length} 個已結束區間？將以目前審查紀錄覆寫舊摘要。`,
       )
     )
       return;
-    setArchivingId(id);
+    setArchivingId(rowKeyOf(row));
     try {
-      const saved = await archiveInterval(getFirebaseDb(), t, {
-        id: user.staffId,
-        name: user.name ?? user.staffId,
-      });
-      setSummaries((prev) => new Map(prev).set(id, saved));
-      onAction(`已封存摘要：${row.indicatorName}・${row.intervalLabel}（${saved.recordCount} 筆）`);
+      let count = 0;
+      for (const e of list) {
+        const saved = await archiveInterval(getFirebaseDb(), e.target, {
+          id: user.staffId,
+          name: user.name ?? user.staffId,
+        });
+        setSummaries((prev) => new Map(prev).set(e.id, saved));
+        count += saved.recordCount;
+      }
+      onAction(`已封存摘要：${row.indicatorName}（${list.length} 個區間，${count} 筆紀錄）`);
     } catch (e) {
       onAction(`封存摘要失敗：${toErrorMessage(e)}`);
     } finally {
@@ -1073,17 +1090,13 @@ export function AuditPage({
 
   async function rearchiveById(archiveId: string) {
     if (!user) return;
-    const row = rows.find(
-      (r) =>
-        summaryDocId(
-          r.archiveTarget.indicatorId,
-          r.archiveTarget.category,
-          r.archiveTarget.period,
-          r.archiveTarget.start,
-        ) === archiveId,
-    );
-    if (!row) throw new Error("找不到對應的區間");
-    const saved = await archiveInterval(getFirebaseDb(), row.archiveTarget, {
+    let found: ActiveRow["endedTargets"][number] | undefined;
+    for (const r of rows) {
+      found = r.endedTargets.find((e) => e.id === archiveId);
+      if (found) break;
+    }
+    if (!found) throw new Error("找不到對應的區間");
+    const saved = await archiveInterval(getFirebaseDb(), found.target, {
       id: user.staffId,
       name: user.name ?? user.staffId,
     });
@@ -1265,6 +1278,25 @@ export function AuditPage({
           本人任務未完整載入（分頁中斷），加審／自審排程可能未全列出；請重新整理後再確認。
         </p>
       )}
+      {(() => {
+        const due = rows.filter(
+          (r) =>
+            r.canArchive &&
+            r.endedTargets.some((e) => e.overdue && !summaries.has(e.id)),
+        );
+        if (due.length === 0) return null;
+        const n = due.reduce(
+          (c, r) => c + r.endedTargets.filter((e) => e.overdue && !summaries.has(e.id)).length,
+          0,
+        );
+        const names = [...new Set(due.map((r) => r.indicatorName))];
+        return (
+          <p className="settings-note" style={{ color: "#b3372f", fontWeight: 600 }}>
+            有 {n} 個審查區間已結束超過一個月仍未封存（{names.slice(0, 5).join("、")}
+            {names.length > 5 ? `…等 ${names.length} 支指標` : ""}）。請盡快封存，否則會影響指標查詢結果。
+          </p>
+        );
+      })()}
       {pendingReqs.length > 0 && (
         <p className="settings-note" style={{ color: "#b3372f", fontWeight: 600 }}>
           有 {pendingReqs.length} 筆封存後的審查結果修改待審核{" "}
@@ -1429,7 +1461,7 @@ export function AuditPage({
                           >
                             <Eye size={14} /> 檢視
                           </button>
-                          {r.state === "ended" && r.canArchive && (
+                          {r.canArchive && r.endedTargets.length > 0 && (
                             <button
                               type="button"
                               className="text-button"
@@ -1437,47 +1469,32 @@ export function AuditPage({
                               onClick={() => handleArchive(r)}
                             >
                               <Archive size={14} />{" "}
-                              {archivingId ===
-                              summaryDocId(
-                                r.archiveTarget.indicatorId,
-                                r.archiveTarget.category,
-                                r.archiveTarget.period,
-                                r.archiveTarget.start,
-                              )
+                              {archivingId === rowKeyOf(r)
                                 ? "封存中…"
-                                : summaries.has(
-                                      summaryDocId(
-                                        r.archiveTarget.indicatorId,
-                                        r.archiveTarget.category,
-                                        r.archiveTarget.period,
-                                        r.archiveTarget.start,
-                                      ),
-                                    )
+                                : r.endedTargets.every((e) => summaries.has(e.id))
                                   ? "重新封存"
                                   : "封存摘要"}
                             </button>
                           )}
-                          {r.state === "ended" &&
+                          {r.endedTargets.length > 0 &&
                             (() => {
-                              const sm = summaries.get(
-                                summaryDocId(
-                                  r.archiveTarget.indicatorId,
-                                  r.archiveTarget.category,
-                                  r.archiveTarget.period,
-                                  r.archiveTarget.start,
-                                ),
+                              const done = r.endedTargets.filter((e) => summaries.has(e.id)).length;
+                              const overdue = r.endedTargets.some(
+                                (e) => e.overdue && !summaries.has(e.id),
                               );
-                              return sm ? (
-                                <span className="muted-text">
-                                  已封存
-                                  {sm.generatedAtMs
-                                    ? `（${new Date(sm.generatedAtMs).toLocaleDateString("zh-TW")}）`
-                                    : ""}
-                                  {pendingReqs.some((q) => q.archiveIds.includes(sm.id))
-                                    ? "・有待審修改"
-                                    : ""}
+                              const pend = pendingReqs.some((q) =>
+                                r.endedTargets.some((e) => q.archiveIds.includes(e.id)),
+                              );
+                              return (
+                                <span
+                                  className="muted-text"
+                                  style={overdue ? { color: "#b3372f", fontWeight: 600 } : undefined}
+                                >
+                                  已封存 {done}/{r.endedTargets.length}
+                                  {overdue ? "・逾期未封存" : ""}
+                                  {pend ? "・有待審修改" : ""}
                                 </span>
-                              ) : null;
+                              );
                             })()}
                           {r.state === "active" && !r.complete && (
                             <button

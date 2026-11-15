@@ -36,6 +36,9 @@ import {
   writeBatch,
 } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
+import { unarchivedOverdue } from "../lib/archiveReminder";
+import { listSchedules } from "../lib/scheduling";
+import { loadAllSummaries } from "../lib/summaryStore";
 import { useAuth } from "../lib/auth";
 import { usePermissions } from "../lib/usePermissions";
 import {
@@ -437,6 +440,37 @@ export function ResultsPage({
   const [selIndicator, setSelIndicator] = useState("");
   const [indUnit, setIndUnit] = useState<UnitMode>("unit");
   const [errorUnit, setErrorUnit] = useState("all");
+  // v1.65.1：已結束超過一個月仍未封存的區間（結果分析提示「尚待確認封存」）
+  const [archiveCtx, setArchiveCtx] = useState<{
+    schedules: Awaited<ReturnType<typeof listSchedules>>;
+    archiveIds: Set<string>;
+    deadlineDay: number;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const db = getFirebaseDb();
+        const [schedules, summaries, cfg] = await Promise.all([
+          listSchedules(db),
+          loadAllSummaries(db),
+          getDoc(doc(db, "systemParams", "config")),
+        ]);
+        const dd = (cfg.data() as Record<string, unknown> | undefined)?.supplementDeadlineDay;
+        if (!cancelled)
+          setArchiveCtx({
+            schedules,
+            archiveIds: new Set(summaries.keys()),
+            deadlineDay: typeof dd === "number" && dd >= 1 && dd <= 31 ? dd : 10,
+          });
+      } catch {
+        // 讀不到就不顯示封存提示
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // Modal
   const [chartModal, setChartModal] = useState<ChartModalData | null>(null);
   const [docModal, setDocModal] = useState<DocModalData | null>(null);
@@ -1066,6 +1100,19 @@ export function ResultsPage({
     return `${display(from)} ~ ${display(to)}・單位：${label}`;
   }, [applied, startMonth, endMonth, interval]);
 
+  /** v1.65.1：分析範圍內、已結束超過一個月仍未封存的區間（尚待確認封存） */
+  const unconfirmed = useMemo(() => {
+    if (!archiveCtx) return [];
+    const monthKeys = new Set(allMonths.map((m) => `${m.year}-${m.month}`));
+    if (monthKeys.size === 0) return [];
+    return unarchivedOverdue(
+      archiveCtx.schedules.filter((s) => indOf.has(s.indicatorId) && (!selIndicator || tab !== "indicator" || s.indicatorId === selIndicator)),
+      archiveCtx.archiveIds,
+      new Date(),
+      archiveCtx.deadlineDay,
+    ).filter((e) => e.interval.allMonths.some((m) => monthKeys.has(`${m.year}-${m.month}`)));
+  }, [archiveCtx, allMonths, indOf, selIndicator, tab]);
+
   /** 單格達閾值率（人次＝合併；單位＝達閾值單位數／總審查單位數） */
   function cellValue(
     indicatorId: string,
@@ -1446,6 +1493,16 @@ export function ResultsPage({
           </button>
         ) : undefined}
       />
+
+      {unconfirmed.length > 0 && (
+        <p className="settings-note" style={{ color: "#b3372f", fontWeight: 600 }}>
+          尚待確認封存：以下審查區間已結束超過一個月，結果尚待召集人／執行幹事確認封存，數字可能再變動：
+          {[...new Set(unconfirmed.map((e) => `${indOf.get(e.indicatorId)?.name ?? e.indicatorId}（${e.label}）`))]
+            .slice(0, 8)
+            .join("、")}
+          {unconfirmed.length > 8 ? `…等 ${unconfirmed.length} 個區間` : ""}
+        </p>
+      )}
 
       <div className="results-tabs" role="tablist" aria-label="結果分析檢視">
         {(
