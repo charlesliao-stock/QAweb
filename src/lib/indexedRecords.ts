@@ -113,3 +113,49 @@ export async function fetchYearDocs(
   );
   return { docs: snap.docs, fellBack: false, usedIndicatorFilter: false };
 }
+
+/**
+ * v1.66.0：只讀「指定月份」的原始紀錄（結果分析摘要模式：已封存月份讀摘要，
+ * 只對未封存月份讀原始紀錄）。複合索引 (indicatorId, year, month)。
+ * month in 上限 30 個值，超過自動分批。索引未就緒時退回 indicatorId＋year
+ * 查詢＋前端依月份過濾（結果相同，只是多讀）。
+ */
+export async function fetchIndicatorMonths(
+  api: IndexedQueryApi,
+  collectionRef: any,
+  opts: { indicatorId: string; year: number; months: number[] },
+): Promise<IndexedYearFetch> {
+  const { indicatorId, year } = opts;
+  const months = [...new Set(opts.months)];
+  if (months.length === 0) {
+    return { docs: [], fellBack: false, usedIndicatorFilter: true };
+  }
+  try {
+    const docs: IndexedDoc[] = [];
+    for (let i = 0; i < months.length; i += 30) {
+      const chunk = months.slice(i, i + 30);
+      const snap = await api.getDocs(
+        api.query(
+          collectionRef,
+          api.where("indicatorId", "==", indicatorId),
+          api.where("year", "==", year),
+          api.where("month", "in", chunk),
+        ),
+      );
+      docs.push(...snap.docs);
+    }
+    return { docs, fellBack: false, usedIndicatorFilter: true };
+  } catch (error) {
+    if (!isIndexMissingError(error)) throw error;
+    const fetched = await fetchYearDocs(api, collectionRef, {
+      indicatorId,
+      year,
+    });
+    const want = new Set(months);
+    const docs = fetched.docs.filter((d) => {
+      const raw = d.data() as Record<string, unknown>;
+      return want.has(Number(raw.month));
+    });
+    return { docs, fellBack: true, usedIndicatorFilter: true };
+  }
+}

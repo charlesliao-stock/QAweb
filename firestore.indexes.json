@@ -104,6 +104,24 @@
       "queryScope": "COLLECTION"
     },
     {
+      "collectionGroup": "reviewRecords",
+      "fields": [
+        {
+          "fieldPath": "indicatorId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "year",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "month",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    },
+    {
       "collectionGroup": "reviewTasks",
       "fields": [
         {

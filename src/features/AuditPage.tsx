@@ -1587,7 +1587,7 @@ export function AuditPage({
                           >
                             <Eye size={14} /> 檢視
                           </button>
-                          {r.canArchive && r.endedTargets.length > 0 && (
+                          {r.canArchive && r.state === "ended" && r.endedTargets.length > 0 && (
                             <button
                               type="button"
                               className="text-button"
