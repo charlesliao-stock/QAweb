@@ -676,58 +676,94 @@ export function ResultsPage({
    * v1.66.0：指標分析摘要模式。該指標有可用封存摘要的月份讀摘要格（每月只採
    * 一份摘要，避免重疊區間重複計），其餘月份才讀原始紀錄。審查員範圍不走摘要。
    */
-  const selIndicatorOpt = useMemo(
-    () => indicators.find((i) => i.id === selIndicator),
-    [indicators, selIndicator],
-  );
-  const summaryPlan = useMemo(() => {
-    if (tab !== "indicator" || !selIndicator || !applied || rawFull) return null;
-    if (scope.kind === "reviewer" || !archiveCtx || !selIndicatorOpt) return null;
-    const owner = new Map<string, string>();
-    const list = [...archiveCtx.summaries.values()]
-      .filter(
-        (sm) =>
-          sm.indicatorId === selIndicator &&
-          isSummaryUsable(sm, selIndicatorOpt.threshold),
-      )
-      .sort((a, b) => a.id.localeCompare(b.id));
-    for (const sm of list) {
-      let y = sm.start.year;
-      let m = sm.start.month;
-      while (y * 12 + m <= sm.end.year * 12 + sm.end.month) {
-        const k = `${y}-${m}`;
-        if (!owner.has(k)) owner.set(k, sm.id);
-        m += 1;
-        if (m > 12) {
-          m = 1;
-          y += 1;
-        }
-      }
-    }
+  /** 本頁籤要載入的指標（審查員範圍或尚未載入封存資訊時為空＝沿用舊讀法） */
+  const planTargets = useMemo<string[]>(() => {
+    if (!applied || rawFull || scope.kind === "reviewer" || !archiveCtx) return [];
+    if (tab === "indicator") return selIndicator ? [selIndicator] : [];
+    if (tab === "group")
+      return indicators.filter((i) => i.groupId === selGroup).map((i) => i.id);
+    if (tab === "unit")
+      return indicators
+        .filter(
+          (i) =>
+            (selGroupU === "all" || i.groupId === selGroupU) &&
+            (selIndU === "all" || i.id === selIndU),
+        )
+        .map((i) => i.id);
+    return [];
+  }, [tab, selIndicator, selGroup, selGroupU, selIndU, applied, rawFull, scope.kind, archiveCtx, indicators]);
+  const summaryPlans = useMemo(() => {
+    const out = new Map<
+      string,
+      { coveredKeys: string[]; uncovered: { year: number; month: number }[]; archivedCells: ArchiveCell[] }
+    >();
+    if (planTargets.length === 0 || !archiveCtx) return out;
     const wantedList: string[] = allMonths.map((x) => `${x.year}-${x.month}`);
     const wanted = new Set<string>(wantedList);
-    const coveredKeys: string[] = wantedList.filter((k, i) => wantedList.indexOf(k) === i && owner.has(k));
-    if (coveredKeys.length === 0) return null;
-    const uncovered = allMonths.filter((x) => !owner.has(`${x.year}-${x.month}`));
-    const archivedCells: ArchiveCell[] = [];
-    for (const sm of list)
-      for (const c of sm.cells) {
-        const k = `${c.year}-${c.month}`;
-        if (!wanted.has(k) || owner.get(k) !== sm.id) continue;
-        if (scope.kind === "staff" && !visibleUnitCodes.has(c.unitId)) continue;
-        archivedCells.push(c);
+    for (const id of planTargets) {
+      const opt = indicators.find((i) => i.id === id);
+      if (!opt) continue;
+      const owner = new Map<string, string>();
+      const list = [...archiveCtx.summaries.values()]
+        .filter((sm) => sm.indicatorId === id && isSummaryUsable(sm, opt.threshold))
+        .sort((a, b) => a.id.localeCompare(b.id));
+      for (const sm of list) {
+        let y = sm.start.year;
+        let m = sm.start.month;
+        while (y * 12 + m <= sm.end.year * 12 + sm.end.month) {
+          const k = `${y}-${m}`;
+          if (!owner.has(k)) owner.set(k, sm.id);
+          m += 1;
+          if (m > 12) {
+            m = 1;
+            y += 1;
+          }
+        }
       }
-    return {
-      coveredKeys,
-      uncovered,
-      archivedCells,
-      key: `${selIndicator}|${coveredKeys.sort().join(",")}`,
-    };
-  }, [tab, selIndicator, applied, rawFull, scope.kind, archiveCtx, selIndicatorOpt, allMonths, visibleUnitCodes]);
+      const coveredKeys: string[] = wantedList.filter(
+        (k, i) => wantedList.indexOf(k) === i && owner.has(k),
+      );
+      if (coveredKeys.length === 0) continue;
+      const archivedCells: ArchiveCell[] = [];
+      for (const sm of list)
+        for (const c of sm.cells) {
+          const k = `${c.year}-${c.month}`;
+          if (!wanted.has(k) || owner.get(k) !== sm.id) continue;
+          if (scope.kind === "staff" && !visibleUnitCodes.has(c.unitId)) continue;
+          archivedCells.push(c);
+        }
+      out.set(id, {
+        coveredKeys,
+        uncovered: allMonths.filter((x) => !owner.has(`${x.year}-${x.month}`)),
+        archivedCells,
+      });
+    }
+    return out;
+  }, [planTargets, archiveCtx, indicators, allMonths, scope.kind, visibleUnitCodes]);
+  const perIndMode = summaryPlans.size > 0;
+  const plansKey = useMemo(
+    () =>
+      perIndMode
+        ? `${tab}|${planTargets.join(",")}|${[...summaryPlans]
+            .map(([id, p]) => `${id}:${[...p.coveredKeys].sort().join(",")}`)
+            .join(";")}`
+        : "",
+    [perIndMode, tab, planTargets, summaryPlans],
+  );
+  /** 指標分析頁用（單一指標） */
+  const summaryPlan = tab === "indicator" && selIndicator ? summaryPlans.get(selIndicator) ?? null : null;
+  /** 需要原始紀錄的操作（選項明細、下探、原因詞庫）：先載入全部原始紀錄，請使用者再點一次。 */
+  function requireRaw(indicatorId?: string): boolean {
+    if (!perIndMode) return false;
+    if (indicatorId && !summaryPlans.has(indicatorId)) return false;
+    setRawHint("此操作需原始紀錄，已開始載入，載入完成後請再點一次。");
+    setRawFull(true);
+    return true;
+  }
   useEffect(() => {
     setRawFull(false);
     setRawHint("");
-  }, [selIndicator, applied, tab]);
+  }, [selIndicator, selGroup, selGroupU, selIndU, applied, tab]);
 
   // 審查紀錄（查詢閘門＋按年份快取）：
   // 未按「查詢」不觸發（applied 為 null）；已查過的年份直接吃記憶體快取，
@@ -735,7 +771,7 @@ export function ResultsPage({
   // 快取鍵含權限範圍（見 resultsCache），不同範圍不共用。
   useEffect(() => {
     if (!applied || tab === "manage" || tab === "import") return;
-    if (tab === "indicator" && singleIndicatorId && scope.kind !== "reviewer" && !archiveReady) {
+    if ((tab === "indicator" || tab === "group" || tab === "unit") && scope.kind !== "reviewer" && !archiveReady) {
       setLoading(true);
       return;
     }
@@ -748,7 +784,7 @@ export function ResultsPage({
         // v1.28 階段 7（B7）：單一指標限縮時改走 indicatorId＋year 複合索引
         // 查詢；索引未就緒時 fetchYearDocs 自動退回舊查詢＋前端過濾。
         const indFilter = singleIndicatorId ?? undefined;
-        const planNow = summaryPlan;
+        const perInd = summaryPlans.size > 0;
         let rlSummary: AnalysisRecord[] | null = null;
         let recCached: CachedYears<AnalysisRecord> = {
           hits: new Map(),
@@ -757,23 +793,27 @@ export function ResultsPage({
         };
         const recFresh = new Map<number, AnalysisRecord[]>();
         let fellBack = false;
-        if (planNow && indFilter) {
-          // 摘要模式：只讀未封存月份的原始紀錄（不寫年份快取，避免半份資料被當整年）
-          const byYear = new Map<number, number[]>();
-          for (const m of planNow.uncovered) {
-            const arr = byYear.get(m.year) ?? [];
-            arr.push(m.month);
-            byYear.set(m.year, arr);
+        if (perInd) {
+          // 摘要模式：每支指標只讀未封存月份的原始紀錄（不寫年份快取，避免半份資料被當整年）
+          const jobs: Promise<Awaited<ReturnType<typeof fetchIndicatorMonths>>>[] = [];
+          for (const id of planTargets) {
+            const months = summaryPlans.get(id)?.uncovered ?? allMonths;
+            const byYear = new Map<number, number[]>();
+            for (const m of months) {
+              const arr = byYear.get(m.year) ?? [];
+              arr.push(m.month);
+              byYear.set(m.year, arr);
+            }
+            for (const [y, ms] of byYear)
+              jobs.push(
+                fetchIndicatorMonths(dbIndexedQueryApi, collection(db, "reviewRecords"), {
+                  indicatorId: id,
+                  year: y,
+                  months: ms,
+                }),
+              );
           }
-          const got = await Promise.all(
-            [...byYear].map(([y, ms]) =>
-              fetchIndicatorMonths(dbIndexedQueryApi, collection(db, "reviewRecords"), {
-                indicatorId: indFilter,
-                year: y,
-                months: ms,
-              }),
-            ),
-          );
+          const got = await Promise.all(jobs);
           rlSummary = [];
           got.forEach((snap) => {
             if (snap.fellBack) fellBack = true;
@@ -864,14 +904,16 @@ export function ResultsPage({
           schedulePeriod?: string;
         }[] = [];
         let taskFetchedAt: number | null = null;
-        if (planNow && indFilter) {
-          // 摘要模式：任務表只讀該指標（不寫年份快取）
+        if (perInd) {
+          // 摘要模式：任務表只讀本頁籤的指標（不寫年份快取）
           const tsn = await Promise.all(
-            years.map((y) =>
-              fetchYearDocs(dbIndexedQueryApi, collection(db, "reviewTasks"), {
-                indicatorId: indFilter,
-                year: y,
-              }),
+            planTargets.flatMap((id) =>
+              years.map((y) =>
+                fetchYearDocs(dbIndexedQueryApi, collection(db, "reviewTasks"), {
+                  indicatorId: id,
+                  year: y,
+                }),
+              ),
             ),
           );
           tsn.forEach((snap) => {
@@ -991,7 +1033,7 @@ export function ResultsPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appliedYearsKey, reloadNonce, archiveReady, summaryPlan?.key ?? "", rawFull, scope.kind, scope.kind === "reviewer" ? scope.staffId : "", scope.kind === "staff" ? scope.unitCode : "", tab, singleIndicatorId, isNurseLeader, visibleUnitCodes]);
+  }, [appliedYearsKey, reloadNonce, archiveReady, plansKey, rawFull, scope.kind, scope.kind === "reviewer" ? scope.staffId : "", scope.kind === "staff" ? scope.unitCode : "", tab, singleIndicatorId, isNurseLeader, visibleUnitCodes]);
 
   /** 每次查詢皆失效所選年份，避免再次查詢命中過期快取。 */
   function handleQuery() {
@@ -1036,6 +1078,14 @@ export function ResultsPage({
     col: AnalysisPeriodColumn,
     unitId?: string,
   ) => {
+    const hcs = cellsOfInd(indicatorId, col.months, unitId);
+    if (hcs) {
+      const extra = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
+      return (
+        extra.some((record) => Boolean(record.taskId && tempTaskIds.has(record.taskId))) ||
+        columnTempNote(pseudoRecs(indicatorId, hcs), tempTaskKeys, col.months.length) != null
+      );
+    }
     const periodRecords = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
     return periodRecords.some((record) => Boolean(record.taskId && tempTaskIds.has(record.taskId))) ||
       columnTempNote(periodRecords, tempTaskKeys, col.months.length) != null;
@@ -1064,6 +1114,40 @@ export function ResultsPage({
     () => buildRecordIndex(scopedRecords),
     [scopedRecords],
   );
+
+  /** v1.66.0：有封存摘要的指標＝已封存月份的摘要格＋其餘月份原始紀錄現算的格 */
+  const hybridByInd = useMemo(() => {
+    const out = new Map<string, ArchiveCell[]>();
+    for (const [id, plan] of summaryPlans) {
+      const opt = indicators.find((i) => i.id === id);
+      if (!opt) continue;
+      const rawCells = buildReviewSummary({
+        indicatorId: id,
+        scheduleCategory: "",
+        schedulePeriod: "",
+        start: { year: 0, month: 0 },
+        end: { year: 0, month: 0 },
+        records: recordsForIndex(recordIndex, id, allMonths),
+        questions: opt.questions,
+        threshold: opt.threshold,
+      }).cells;
+      out.set(id, [...plan.archivedCells, ...rawCells]);
+    }
+    return out;
+  }, [summaryPlans, indicators, recordIndex, allMonths]);
+  /** 指定指標（摘要模式）在期間欄／單位內的格；非摘要指標回 null */
+  function cellsOfInd(
+    indicatorId: string,
+    months: { year: number; month: number }[],
+    unitId?: string,
+  ): ArchiveCell[] | null {
+    const hc = hybridByInd.get(indicatorId);
+    if (!hc) return null;
+    const cs = cellsInMonths(hc, months);
+    return unitId === undefined ? cs : cs.filter((c) => c.unitId === unitId);
+  }
+  const pseudoRecs = (indicatorId: string, cs: ArchiveCell[]) =>
+    cs.map((c) => ({ indicatorId, year: c.year, month: c.month, unitId: c.unitId }));
 
   const scopedUnitCodes = useMemo(() => {
     if (scope.kind === "admin") return new Set(units.map((u) => u.code));
@@ -1153,12 +1237,15 @@ export function ResultsPage({
       scopedRecords.filter((r) => r.unitId === selUnitCode),
       allMonths,
     );
-    const ids = [...new Set(periodRecs.map((r) => r.indicatorId))];
+    const idSet = new Set<string>(periodRecs.map((r) => r.indicatorId));
+    for (const [id, plan] of summaryPlans)
+      if (plan.archivedCells.some((c) => c.unitId === selUnitCode)) idSet.add(id);
+    const ids = [...idSet];
     return ids
       .map((id) => indOf.get(id))
       .filter((i): i is IndicatorOpt => i != null)
       .sort((a, b) => a.code.localeCompare(b.code, "zh-Hant"));
-  }, [scopedRecords, selUnitCode, allMonths, indOf]);
+  }, [scopedRecords, selUnitCode, allMonths, indOf, summaryPlans]);
   const unitIndicators = useMemo(
     () =>
       unitIndicatorsBase.filter(
@@ -1196,23 +1283,26 @@ export function ResultsPage({
   const visibleColumns = useMemo(() => {
     if (!hideEmptyMonths) return appliedColumns;
     const hasRecords = (col: AnalysisPeriodColumn): boolean => {
+      const inArchived = (ids: string[], unitId?: string) =>
+        ids.some((id) =>
+          (summaryPlans.get(id)?.archivedCells ?? []).some(
+            (c) =>
+              (unitId === undefined || c.unitId === unitId) &&
+              col.months.some((m) => m.year === c.year && m.month === c.month),
+          ),
+        );
       if (tab === "unit") {
+        const ids = unitIndicators.map((ind) => ind.id);
         return (
-          columnRecordCount(
-            recordIndex,
-            unitIndicators.map((ind) => ind.id),
-            col.months,
-            selUnitCode,
-          ) > 0
+          columnRecordCount(recordIndex, ids, col.months, selUnitCode) > 0 ||
+          inArchived(ids, selUnitCode)
         );
       }
       if (tab === "indicator") {
         return (
           selIndicator !== "" &&
           (columnRecordCount(recordIndex, [selIndicator], col.months) > 0 ||
-            (summaryPlan?.archivedCells ?? []).some((c) =>
-              col.months.some((m) => m.year === c.year && m.month === c.month),
-            ))
+            inArchived([selIndicator]))
         );
       }
       return (
@@ -1220,7 +1310,7 @@ export function ResultsPage({
           recordIndex,
           groupIndicators.map((ind) => ind.id),
           col.months,
-        ) > 0
+        ) > 0 || inArchived(groupIndicators.map((ind) => ind.id))
       );
     };
     return appliedColumns.filter(hasRecords);
@@ -1233,7 +1323,7 @@ export function ResultsPage({
     unitIndicators,
     selIndicator,
     selUnitCode,
-    summaryPlan,
+    summaryPlans,
   ]);
 
   // 期間說明文字（modal 副標共用；顯示已生效的查詢條件）
@@ -1275,6 +1365,15 @@ export function ResultsPage({
   ): CellValue {
     const ind = indOf.get(indicatorId);
     const th = ind?.threshold ?? 0;
+    const hcs = cellsOfInd(indicatorId, col.months, unitId);
+    if (hcs) {
+      if (mode === "unit") {
+        const ur = unitPassRateFromCells(hcs, th);
+        return { ...ur, title: ur.rate == null ? "無資料" : `達閾值 ${ur.pass}／${ur.total} 單位` };
+      }
+      const pr = passRateFromCells(hcs);
+      return { ...pr, title: pr.total === 0 ? "無資料" : `達閾值 ${pr.pass}／${pr.total} 人次` };
+    }
     // A3：查表取該指標該期間欄（可再限單位）的紀錄，不再全量 filter。
     const recs = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
     if (mode === "unit") {
@@ -1307,13 +1406,15 @@ export function ResultsPage({
       cells: Record<string, PassRate>;
     }>();
     for (const column of columns) {
-      const periodRecords = recordsForIndex(
-        recordIndex,
-        indicator.id,
-        column.months,
-        unitId,
-      );
-      const rows = mode === "unit"
+      const hcs = cellsOfInd(indicator.id, column.months, unitId);
+      const periodRecords = hcs
+        ? []
+        : recordsForIndex(recordIndex, indicator.id, column.months, unitId);
+      const rows = hcs
+        ? mode === "unit"
+          ? unitScoringRowsFromCells(hcs, indicator.questions, [column], indicator.threshold)
+          : personScoringRowsFromCells(hcs, indicator.questions)
+        : mode === "unit"
         ? unitScoringBreakdownRows(periodRecords, indicator.questions, [column], indicator.threshold)
         : personScoringBreakdownRows(periodRecords, indicator.questions, indicator.threshold);
       for (const row of rows.slice(1)) {
@@ -1345,16 +1446,21 @@ export function ResultsPage({
     for (const col of appliedColumns) {
       const c = cellValue(indicatorId, col, unitId, mode);
       if (c.rate != null) {
-        const colRecs = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
+        const hcs = cellsOfInd(indicatorId, col.months, unitId);
+        const colRecs = hcs ? [] : recordsForIndex(recordIndex, indicatorId, col.months, unitId);
         const note = columnTempNote(
-          colRecs,
+          hcs ? pseudoRecs(indicatorId, hcs) : colRecs,
           tempTaskKeys,
           col.months.length,
         );
         // v1.64.0：人次模式逐筆用排程快照閾值，曲線逐欄畫當時閾值；
         // 單位模式單位層判定本來就用現行指標閾值，維持單一水平線。
         thresholds.push(
-          mode === "person" ? columnThresholdOf(colRecs, curTh) : curTh > 0 ? curTh : null,
+          mode === "person"
+            ? hcs
+              ? columnThresholdFromCells(hcs, curTh)
+              : columnThresholdOf(colRecs, curTh)
+            : curTh > 0 ? curTh : null,
         );
         values.push(c.rate);
         labels.push(col.label);
@@ -1406,12 +1512,25 @@ export function ResultsPage({
     const thresholds: (number | null)[] = [];
     if (!ind) return { values, labels, tips, cols, notes, thresholds };
     for (const col of appliedColumns) {
-      const recs = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
-      const pr = sectionCellValue(ind, col, recs, mode, sectionKey);
+      const hcs = cellsOfInd(indicatorId, col.months, unitId);
+      const recs = hcs ? [] : recordsForIndex(recordIndex, indicatorId, col.months, unitId);
+      let pr: PassRate;
+      if (hcs) {
+        const rows =
+          mode === "unit"
+            ? unitScoringRowsFromCells(hcs, ind.questions, [col], ind.threshold)
+            : personScoringRowsFromCells(hcs, ind.questions);
+        const row = rows.find((r) => r.key === sectionKey);
+        pr = row ? { pass: row.yes, total: row.valid, rate: row.rate } : { pass: 0, total: 0, rate: null };
+      } else pr = sectionCellValue(ind, col, recs, mode, sectionKey);
       if (pr.rate != null) {
-        const note = columnTempNote(recs, tempTaskKeys, col.months.length);
+        const note = columnTempNote(hcs ? pseudoRecs(indicatorId, hcs) : recs, tempTaskKeys, col.months.length);
         thresholds.push(
-          mode === "person" ? columnThresholdOf(recs, ind.threshold) : ind.threshold > 0 ? ind.threshold : null,
+          mode === "person"
+            ? hcs
+              ? columnThresholdFromCells(hcs, ind.threshold)
+              : columnThresholdOf(recs, ind.threshold)
+            : ind.threshold > 0 ? ind.threshold : null,
         );
         values.push(pr.rate);
         labels.push(col.label);
@@ -1443,11 +1562,7 @@ export function ResultsPage({
     scopeLabel: string,
     section?: SectionRef,
   ) {
-    if (summaryPlan) {
-      setRawHint("此操作需原始紀錄，已開始載入，載入完成後請再點一次。");
-      setRawFull(true);
-      return;
-    }
+    if (requireRaw(indicatorId)) return;
     const ind = indOf.get(indicatorId);
     if (!ind) return;
     const { values, labels, tips, cols, notes, thresholds } = section
@@ -1492,11 +1607,6 @@ export function ResultsPage({
       l2All?: boolean;
     },
   ) {
-    if (summaryPlan) {
-      setRawHint("此操作需原始紀錄，已開始載入，載入完成後請再點一次。");
-      setRawFull(true);
-      return;
-    }
     if (!canOpenDrill({ isNurseLeader, scopeUnitId, visibleUnitCodes })) return;
     if (!extra?.l2All) {
       const cell = cellValue(indicatorId, col, scopeUnitId, mode);
@@ -1528,11 +1638,7 @@ export function ResultsPage({
     mode: UnitMode,
     section?: SectionRef,
   ) {
-    if (summaryPlan) {
-      setRawHint("此操作需原始紀錄，已開始載入，載入完成後請再點一次。");
-      setRawFull(true);
-      return;
-    }
+    if (requireRaw(indicatorId)) return;
     const ind = indOf.get(indicatorId);
     if (!ind) return;
     // A3：查表取該指標全部期間的紀錄（可再限單位）。
@@ -1573,21 +1679,7 @@ export function ResultsPage({
     return recordsForIndex(recordIndex, selIndicator, allMonths);
   }, [recordIndex, selIndicator, allMonths]);
   const indSel = indOf.get(selIndicator);
-  /** v1.66.0：摘要模式的全部格＝已封存月份的摘要格＋未封存月份原始紀錄現算的格 */
-  const hybridCells = useMemo(() => {
-    if (!summaryPlan || !indSel) return null;
-    const rawCells = buildReviewSummary({
-      indicatorId: indSel.id,
-      scheduleCategory: "",
-      schedulePeriod: "",
-      start: { year: 0, month: 0 },
-      end: { year: 0, month: 0 },
-      records: indRecs,
-      questions: indSel.questions,
-      threshold: indSel.threshold,
-    }).cells;
-    return [...summaryPlan.archivedCells, ...rawCells];
-  }, [summaryPlan, indSel, indRecs]);
+  const hybridCells = (selIndicator ? hybridByInd.get(selIndicator) : undefined) ?? null;
   const indSummary = useMemo(() => {
     if (!indSel) return null;
     const th = indSel.threshold;
@@ -1726,6 +1818,15 @@ export function ResultsPage({
         ) : undefined}
       />
 
+      {tab !== "import" && tab !== "manage" && applied && (perIndMode || rawHint) && (
+        <p className="settings-note" role="status">
+          {perIndMode
+            ? tab === "indicator" && summaryPlan
+              ? `資料來源：${summaryPlan.coveredKeys.length} 個月讀取封存摘要，${summaryPlan.uncovered.length} 個月讀取原始紀錄（未封存／進行中）。`
+              : `資料來源：${summaryPlans.size} 支指標已封存的月份讀取摘要，其餘月份讀取原始紀錄；選項明細、下探與原因詞庫需載入原始紀錄。`
+            : rawHint}
+        </p>
+      )}
       {unconfirmed.length > 0 && (
         <p className="settings-note" style={{ color: "#b3372f", fontWeight: 600 }}>
           尚待確認封存：以下審查區間已結束超過一個月，結果尚待召集人／執行幹事確認封存，數字可能再變動：
@@ -1962,7 +2063,16 @@ export function ResultsPage({
           </p>
         )}
 
-      {tab !== "import" && tab !== "manage" && applied && !loading && causeCountRows.length > 0 && (
+      {tab !== "import" && tab !== "manage" && applied && !loading && perIndMode && (
+        <p className="settings-note">
+          原因詞庫統計需讀取原始紀錄（封存摘要不含原因詞）。
+          <button type="button" className="text-button" onClick={() => { setRawHint("已載入原始紀錄。"); setRawFull(true); }}>
+            載入原始紀錄
+          </button>
+          後顯示。
+        </p>
+      )}
+      {tab !== "import" && tab !== "manage" && applied && !loading && !perIndMode && causeCountRows.length > 0 && (
         <section className="panel results-cause-summary">
           <SectionTitle title="原因詞庫件數" note="依目前使用者可見資料及已查詢期間統計；只計入題目原因詞庫中已勾選的項目。點選列下探到勾選該原因的個人審查結果。" />
           <div className="table-scroll"><table className="data-table"><thead><tr><th>原因詞庫項目</th><th>勾選件數</th></tr></thead><tbody>{causeCountRows.map((row) => <tr key={row.cause} className="clickable" title="點選下探到勾選該原因的個人審查結果" onClick={() => setCauseDrill(row.cause)}><td>{row.cause}</td><td>{row.count}</td></tr>)}</tbody></table></div>
@@ -2071,6 +2181,7 @@ export function ResultsPage({
                   )
                 }
                 onDoc={(id) =>
+                  requireRaw(id) ||
                   setUnitPanel((p) =>
                     p?.kind === "doc" && p.indicatorId === id
                       ? null
@@ -2092,6 +2203,7 @@ export function ResultsPage({
                   )
                 }
                 onDetailDoc={(id, detailKey, detailLabel) =>
+                  requireRaw(id) ||
                   setUnitPanel((p) =>
                     p?.kind === "doc" &&
                     p.indicatorId === id &&
@@ -2295,13 +2407,6 @@ export function ResultsPage({
                   </>
                 )}
               </div>
-              {(summaryPlan || rawHint) && (
-                <p className="settings-note" role="status">
-                  {summaryPlan
-                    ? `資料來源：${summaryPlan.coveredKeys.length} 個月讀取封存摘要，${summaryPlan.uncovered.length} 個月讀取原始紀錄（未封存／進行中）。`
-                    : rawHint}
-                </p>
-              )}
               {indSummary.total > 0 && (
                 <p className="settings-note" role="status">
                   {isNurseLeader ? "目前僅顯示本單位資料，無法提供全院彙總。" : "明細中的閾值快照優先於指標現行閾值。"}錯題排行依完全相同題目文字跨版本彙總，僅作排行、不代表版本等價或趨勢合併。
