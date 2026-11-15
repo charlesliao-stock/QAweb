@@ -17,6 +17,7 @@ import {
 } from "../../lib/dashboardSections";
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
+import { CapaPendingReviewCard } from "./CapaPendingReviewCard";
 
 export function HeadNurseTab({
   data,
@@ -106,6 +107,7 @@ export function HeadNurseTab({
 
   return (
     <>
+      {sections.capaPendingReview && <CapaPendingReviewCard variant="headNurse" />}
       {sections.alert48h && (
         <section className="panel" style={{ borderColor: "#e0a3a3" }}>
           <SectionTitle title="即時缺失通報（48 小時內）" note="紅字警示：審查員勾選不符合的細項" />

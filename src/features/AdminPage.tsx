@@ -68,6 +68,7 @@ import {
 import { isHexColor, validateThemeContrast } from "../lib/colorContrast";
 import { usePermissions } from "../lib/usePermissions";
 import { CapaPage } from "./CapaPage";
+import { DashboardVisibilitySection } from "./DashboardVisibilitySection";
 import {
   clearMaintenanceCache,
   DEFAULT_QUOTA_SETTINGS,
@@ -1635,7 +1636,7 @@ function QuotaUsageBars({
   );
 }
 
-type AdminTab = "parameters" | "quota" | "themes" | "audit" | "capa" | "audit-policy";
+type AdminTab = "parameters" | "quota" | "themes" | "audit" | "capa" | "audit-policy" | "dashboard-visibility";
 
 export function AdminPage({
   onAction,
@@ -1649,6 +1650,7 @@ export function AdminPage({
   const [activeTab, setActiveTab] = useState<AdminTab>("parameters");
   const tabs: { id: AdminTab; label: string; icon: LucideIcon }[] = [
     { id: "parameters", label: "系統參數", icon: SlidersHorizontal },
+    ...(isAdmin ? [{ id: "dashboard-visibility" as const, label: "儀表板顯示", icon: Eye }] : []),
     ...(canManageRoles ? [{ id: "quota" as const, label: "流量控管", icon: Gauge }, { id: "themes" as const, label: "主題模板", icon: Eye }] : []),
     { id: "audit", label: "稽核軌跡", icon: ShieldCheck },
     ...(isAdmin ? [{ id: "capa" as const, label: "CAPA 管理", icon: ClipboardCheck }] : []),
@@ -1695,6 +1697,7 @@ export function AdminPage({
       </div>
       <div className="admin-tab-content" id={`admin-panel-${activeTab}`} role="tabpanel">
         {activeTab === "parameters" && <SystemInitSection onAction={onAction} canManageRoles={canManageRoles} themeTick={themeTick} />}
+        {activeTab === "dashboard-visibility" && (isAdmin ? <DashboardVisibilitySection onAction={onAction} /> : <p className="settings-note">此設定僅供系統管理員使用。</p>)}
         {activeTab === "quota" && canManageRoles && <QuotaControlSection onAction={onAction} />}
         {activeTab === "themes" && canManageRoles && <TemplateManagementSection onAction={onAction} onThemeChanged={() => setThemeTick((t) => t + 1)} />}
         {activeTab === "audit" && <AuditLogSection canManageRoles={canManageRoles} />}

@@ -13,6 +13,7 @@ import { avgRateOf } from "../../lib/resultAnalysis";
 import { displayUnitCode } from "../../lib/mask";
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
+import { CapaPendingReviewCard } from "./CapaPendingReviewCard";
 
 /** 簡易 SVG 雷達圖：axes 軸、series 系列（值 0–100） */
 function RadarChart({
@@ -222,6 +223,7 @@ export function DirectorTab({
 
   return (
     <>
+      {sections.capaPendingReview && <CapaPendingReviewCard variant="director" />}
       {sections.overview && (
         <section className="panel">
           <SectionTitle

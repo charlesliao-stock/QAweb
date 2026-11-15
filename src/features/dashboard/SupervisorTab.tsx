@@ -19,6 +19,7 @@ import {
 } from "../../lib/dashboardSections";
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
+import { CapaPendingReviewCard } from "./CapaPendingReviewCard";
 
 function ymOf(year: number, month: number): string {
   return `${year}-${String(month).padStart(2, "0")}`;
@@ -130,6 +131,7 @@ export function SupervisorTab({
 
   return (
     <>
+      {sections.capaPendingReview && <CapaPendingReviewCard variant="supervisor" />}
       {/* v1.28 階段 2：近 3 個月趨勢警訊改去「結果分析」看，程式保留、旗標關閉 */}
       {sections.trendAlerts ? (
         alerts.length > 0 && (
