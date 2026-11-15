@@ -66,6 +66,7 @@ import {
   type StoredSummary,
 } from "../lib/summaryStore";
 import { endedIntervalsOf } from "../lib/archiveReminder";
+import { SUMMARY_SCHEMA_VERSION, summaryDocId } from "../lib/reviewSummary";
 import {
   approveEditRequest,
   loadPendingEditRequests,
@@ -188,6 +189,8 @@ interface ActiveRow {
   unitNameOf: (code: string) => string;
   /** v1.64.0：可封存摘要（系統管理員，或所屬群組的召集人／執行幹事） */
   canArchive: boolean;
+  /** v1.65.2：進度取自封存摘要（records 為空，按「檢視」時才讀原始紀錄） */
+  summarized: boolean;
   /** v1.65.1：該排程「已結束」的每個區間（可封存；overdue＝結束滿一個月仍未封存要提醒） */
   endedTargets: { id: string; label: string; overdue: boolean; target: ArchiveTarget }[];
 }
@@ -197,6 +200,38 @@ type SortKey = "group" | "code" | "name" | "interval" | "person" | "unit";
 function fmtPct(p: number | null): string {
   return p == null ? "—" : `${p}%`;
 }
+
+/** reviewRecords 文件 → 清單用紀錄列（無指標或年月不明回 null） */
+function toRecordRow(id: string, v: Record<string, unknown>): RecordRow | null {
+  const iid = typeof v.indicatorId === "string" ? v.indicatorId : "";
+  if (!iid) return null;
+  const ym = recordYearMonth(v);
+  if (!ym) return null;
+  const rate =
+    typeof v.rate === "number" && Number.isFinite(v.rate) ? v.rate : null;
+  return {
+    id,
+    taskId: typeof v.taskId === "string" ? v.taskId : id,
+    indicatorId: iid,
+    unitId: typeof v.unitId === "string" ? v.unitId : "",
+    year: ym.year,
+    month: ym.month,
+    reviewDate: typeof v.reviewDate === "string" ? v.reviewDate : "",
+    reviewerEmpNo: typeof v.reviewerEmpNo === "string" ? v.reviewerEmpNo : "",
+    reviewerName: typeof v.reviewerName === "string" ? v.reviewerName : "",
+    reviewedPersonEmpNo:
+      typeof v.reviewedPersonEmpNo === "string" ? v.reviewedPersonEmpNo : "",
+    reviewedPersonName:
+      typeof v.reviewedPersonName === "string" ? v.reviewedPersonName : "",
+    auditItem: typeof v.auditItem === "string" ? v.auditItem : "",
+    rate,
+    quotaGroupId: typeof v.quotaGroupId === "string" ? v.quotaGroupId : "",
+    source: typeof v.source === "string" ? v.source : "",
+  };
+}
+
+/** v1.65.2：本次啟動（頁面載入）已比對過有效排程變動的使用者，每位只比對一次 */
+const scheduleChangeChecked = new Set<string>();
 
 function schedLike(s: IndicatorSchedule) {
   return {
@@ -289,7 +324,13 @@ export function AuditPage({
   /** v1.64.1：封存後修改待審申請（僅管理者範圍內可見者） */
   const [pendingReqs, setPendingReqs] = useState<EditRequest[]>([]);
   const [reqModalOpen, setReqModalOpen] = useState(false);
+  const [viewLoadingKey, setViewLoadingKey] = useState<string | null>(null);
   const [reqBusyId, setReqBusyId] = useState<string | null>(null);
+  /** v1.65.2：自上次進入品管審查後，有效排程的新增／取消 */
+  const [scheduleChanges, setScheduleChanges] = useState<{
+    added: string[];
+    removed: string[];
+  } | null>(null);
   const [executing, setExecuting] = useState<ExecuteTarget | null>(null);
   const [editableGroupIds, setEditableGroupIds] = useState<string[]>([]);
 
@@ -580,6 +621,33 @@ export function AuditPage({
 
         // 下游沿用 classified（已分類＋已過濾的可見列）。
         const classified = cands;
+
+        // v1.65.2：使用者第一次啟動品管審查時，以剛讀到的「有效排程」和上次進入
+        // 時記下的清單比對，提示新增／取消的排程；比對後更新記錄。
+        // 第一次使用（沒有舊記錄）只記錄、不提示。
+        if (!scheduleChangeChecked.has(staffId)) {
+          scheduleChangeChecked.add(staffId);
+          try {
+            const storeKey = `qaweb:audit-schedules:${staffId}`;
+            const current = classified.map((c) => ({
+              id: scheduleDocId(c.sched.indicatorId, c.sched.category, c.sched.period),
+              label: `${indicators.get(c.sched.indicatorId)?.name ?? c.sched.indicatorId}・${c.sched.periodLabel}`,
+            }));
+            const raw = window.localStorage.getItem(storeKey);
+            if (raw) {
+              const prev = JSON.parse(raw) as { id: string; label: string }[];
+              const prevIds = new Set(prev.map((x) => x.id));
+              const curIds = new Set(current.map((x) => x.id));
+              const added = current.filter((x) => !prevIds.has(x.id)).map((x) => x.label);
+              const removed = prev.filter((x) => !curIds.has(x.id)).map((x) => x.label);
+              if ((added.length > 0 || removed.length > 0) && !cancelled)
+                setScheduleChanges({ added, removed });
+            }
+            window.localStorage.setItem(storeKey, JSON.stringify(current));
+          } catch {
+            // 瀏覽器不允許儲存時略過比對
+          }
+        }
         if (cancelled) return;
 
         // ---- 審查紀錄（v1.28 階段 6 B6）：單一查詢＋游標分頁，前端按指標分組 ----
@@ -593,6 +661,20 @@ export function AuditPage({
         // 8 月起為今年、之前為去年。進行中／待完成的列照樣依其區間起始年往前補讀
         // （補審期限內仍可能在上一年度）；「已結束」的列只在使用者切到「已結束」
         // 進度時才補讀歷史年份（historyLoaded），避免每次進頁都拉近四年全部紀錄。
+        // v1.65.2：先讀封存摘要；「已結束」且有可用摘要的列直接用摘要算進度，
+        // 不必為它補讀歷史年份的原始紀錄（讀不到摘要就維持原行為）。
+        let summEarly = new Map<string, StoredSummary>();
+        try {
+          summEarly = await loadAllSummaries(db);
+        } catch {
+          /* 讀不到摘要：退回讀原始紀錄 */
+        }
+        const summaryFor = (c: { sched: IndicatorSchedule; interval: ReviewInterval }) => {
+          const sm = summEarly.get(
+            summaryDocId(c.sched.indicatorId, c.sched.category, c.sched.period, c.interval.start),
+          );
+          return sm && sm.schemaVersion === SUMMARY_SCHEMA_VERSION ? sm : undefined;
+        };
         const sysCfg = sysSnap.data() as Record<string, unknown> | undefined;
         const academic = sysCfg?.statsCycle === "academic";
         let minYear =
@@ -600,7 +682,7 @@ export function AuditPage({
             ? today.getFullYear() - 1
             : today.getFullYear();
         for (const c of classified) {
-          if (historyLoaded || c.state !== "ended") {
+          if (c.state !== "ended" || (historyLoaded && !summaryFor(c))) {
             minYear = Math.min(minYear, c.interval.start.year);
           }
         }
@@ -615,43 +697,9 @@ export function AuditPage({
           recordsTruncated = truncated;
           docs.forEach((d) => {
             const v = d.data() as Record<string, unknown>;
-            const iid =
-              typeof v.indicatorId === "string" ? v.indicatorId : "";
-            if (!iid) return;
-            const ym = recordYearMonth(v);
-            if (!ym) return;
-            const rate =
-              typeof v.rate === "number" && Number.isFinite(v.rate)
-                ? v.rate
-                : null;
-            const row: RecordRow = {
-              id: d.id,
-              taskId: typeof v.taskId === "string" ? v.taskId : d.id,
-              indicatorId: iid,
-              unitId: typeof v.unitId === "string" ? v.unitId : "",
-              year: ym.year,
-              month: ym.month,
-              reviewDate:
-                typeof v.reviewDate === "string" ? v.reviewDate : "",
-              reviewerEmpNo:
-                typeof v.reviewerEmpNo === "string" ? v.reviewerEmpNo : "",
-              reviewerName:
-                typeof v.reviewerName === "string" ? v.reviewerName : "",
-              reviewedPersonEmpNo:
-                typeof v.reviewedPersonEmpNo === "string"
-                  ? v.reviewedPersonEmpNo
-                  : "",
-              reviewedPersonName:
-                typeof v.reviewedPersonName === "string"
-                  ? v.reviewedPersonName
-                  : "",
-              auditItem:
-                typeof v.auditItem === "string" ? v.auditItem : "",
-              rate,
-              quotaGroupId:
-                typeof v.quotaGroupId === "string" ? v.quotaGroupId : "",
-              source: typeof v.source === "string" ? v.source : "",
-            };
+            const row = toRecordRow(d.id, v);
+            if (!row) return;
+            const iid = row.indicatorId;
             const list = recordsByIndicator.get(iid) ?? [];
             list.push(row);
             recordsByIndicator.set(iid, list);
@@ -697,13 +745,24 @@ export function AuditPage({
               )
             : intervalRecords;
           const reviewMonthCount = iv.reviewMonths.length;
+          const sm = state === "ended" ? summaryFor({ sched: s, interval: iv }) : undefined;
+          const summarized = !!sm;
+          const progressRecords = sm
+            ? sm.cells.flatMap((c) =>
+                Array.from({ length: c.total }, () => ({
+                  unitId: c.unitId,
+                  year: c.year,
+                  month: c.month,
+                })),
+              )
+            : inRecords;
           const progress = computeIntervalProgress({
             // v1.51.0：不限單位視為一個虛擬單位（總人次＝件數、總單位＝1）
             unitCount: s.unlimitedUnits ? 1 : s.unitIds.length,
             caseCount: s.caseCount,
             reviewMonthCount,
             category: s.category,
-            records: inRecords,
+            records: progressRecords,
             intervalMonthKeys: keys,
           });
           // v1.46.0：進行中 100% 的列照樣顯示（審查按鈕另外藏起），不再整列跳過
@@ -749,7 +808,8 @@ export function AuditPage({
             assignedUnitIds: assigned,
             modalUnitIds,
             monthOptions,
-            records: [...inRecords].sort(
+            summarized,
+            records: (summarized ? [] : [...inRecords]).sort(
               (a, b) =>
                 a.year - b.year ||
                 a.month - b.month ||
@@ -781,12 +841,7 @@ export function AuditPage({
             })),
           });
         }
-        try {
-          const sm = await loadAllSummaries(db);
-          if (!cancelled) setSummaries(sm);
-        } catch {
-          // 讀不到封存摘要不影響清單（仍可用原始紀錄）
-        }
+        if (!cancelled) setSummaries(summEarly);
         try {
           if (isAdmin || isConvener) {
             const reqs = await loadPendingEditRequests(db);
@@ -1053,6 +1108,55 @@ export function AuditPage({
     <SortableTh label={label} sortKey={k} sort={tableSort} onSort={toggleSort} />
   );
 
+  /** v1.65.2：進度取自摘要的列，按「檢視」時才讀該區間的原始紀錄 */
+  async function openView(r: ActiveRow) {
+    if (!r.summarized) {
+      setViewRow(r);
+      return;
+    }
+    setViewLoadingKey(rowKeyOf(r));
+    try {
+      const { docs, truncated } = await fetchAllPaged(
+        collection(getFirebaseDb(), "reviewRecords"),
+        [where("indicatorId", "==", r.indicatorId)],
+        undefined,
+        { orderByField: "indicatorId" },
+      );
+      if (truncated) throw new Error("審查紀錄未完整載入（分頁中斷），請稍後重試");
+      const keys = new Set(r.interval.allMonths.map(ymKey));
+      const periodic = r.sched.category === "year" || r.sched.category === "academic";
+      const scheduled = new Set(r.sched.unitIds);
+      const recs: RecordRow[] = [];
+      docs.forEach((d) => {
+        const row = toRecordRow(d.id, d.data() as Record<string, unknown>);
+        if (!row || !keys.has(ymKey({ year: row.year, month: row.month }))) return;
+        if (periodic) {
+          if (scheduled.size > 0 && !scheduled.has(row.unitId)) return;
+          const expected = periodicQuotaGroupId({
+            indicatorId: r.indicatorId,
+            unitId: row.unitId === "" ? "NA" : row.unitId,
+            category: r.sched.category as "year" | "academic",
+            period: r.sched.period,
+            start: r.interval.start,
+          });
+          if (row.source !== "import" && row.quotaGroupId !== expected) return;
+        }
+        recs.push(row);
+      });
+      recs.sort(
+        (a, b) =>
+          a.year - b.year ||
+          a.month - b.month ||
+          a.unitId.localeCompare(b.unitId, "zh-Hant"),
+      );
+      setViewRow({ ...r, records: recs });
+    } catch (e) {
+      onAction(`讀取審查紀錄失敗：${toErrorMessage(e)}`);
+    } finally {
+      setViewLoadingKey(null);
+    }
+  }
+
   const rowKeyOf = (r: ActiveRow) =>
     `${r.indicatorId}|${r.sched.category}|${r.sched.period}`;
 
@@ -1278,6 +1382,19 @@ export function AuditPage({
           本人任務未完整載入（分頁中斷），加審／自審排程可能未全列出；請重新整理後再確認。
         </p>
       )}
+      {scheduleChanges && (
+        <p className="settings-note" style={{ fontWeight: 600 }}>
+          自上次進入後，有效排程有變動：
+          {scheduleChanges.added.length > 0 &&
+            `新增 ${scheduleChanges.added.length} 個（${scheduleChanges.added.slice(0, 5).join("、")}${scheduleChanges.added.length > 5 ? "…" : ""}）`}
+          {scheduleChanges.added.length > 0 && scheduleChanges.removed.length > 0 && "；"}
+          {scheduleChanges.removed.length > 0 &&
+            `取消／移除 ${scheduleChanges.removed.length} 個（${scheduleChanges.removed.slice(0, 5).join("、")}${scheduleChanges.removed.length > 5 ? "…" : ""}）`}{" "}
+          <button type="button" className="text-button" onClick={() => setScheduleChanges(null)}>
+            知道了
+          </button>
+        </p>
+      )}
       {(() => {
         const due = rows.filter(
           (r) =>
@@ -1457,7 +1574,8 @@ export function AuditPage({
                           <button
                             type="button"
                             className="text-button"
-                            onClick={() => setViewRow(r)}
+                            disabled={viewLoadingKey !== null}
+                            onClick={() => openView(r)}
                           >
                             <Eye size={14} /> 檢視
                           </button>
