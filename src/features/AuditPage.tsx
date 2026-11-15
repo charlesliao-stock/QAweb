@@ -748,7 +748,15 @@ export function AuditPage({
           const sm = state === "ended" ? summaryFor({ sched: s, interval: iv }) : undefined;
           const summarized = !!sm;
           const progressRecords = sm
-            ? sm.cells.flatMap((c) =>
+            ? sm.cells
+                // 摘要存全部紀錄；進度只算排程單位（週期排程；匯入紀錄也併入）
+                .filter(
+                  (c) =>
+                    periodicCategory === null ||
+                    scheduledUnitIds.size === 0 ||
+                    scheduledUnitIds.has(c.unitId),
+                )
+                .flatMap((c) =>
                 Array.from({ length: c.total }, () => ({
                   unitId: c.unitId,
                   year: c.year,

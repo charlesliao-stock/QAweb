@@ -16,7 +16,6 @@ import {
 import { fetchAllPaged } from "./pagedQuery";
 import { writeAuditLog } from "./audit";
 import { effectiveThreshold, normalizeQuestions } from "./indicators";
-import { periodicQuotaGroupId } from "./scheduling";
 import type { AnalysisRecord } from "./analysisRates";
 import {
   buildReviewSummary,
@@ -145,27 +144,14 @@ export async function archiveInterval(
   );
   if (truncated) throw new Error("審查紀錄未完整載入（分頁中斷），已停止封存；請稍後重試");
 
-  const periodic = target.category === "year" || target.category === "academic";
-  const scheduled = new Set(target.unitIds);
+  // 摘要存「該指標、該區間月份的全部紀錄」（含匯入、非排程單位），與結果分析
+  // 口徑一致；品管審查進度在讀取端依排程單位過濾格子，不另存。
+  // 注意：年度與加審區間月份重疊時，兩份摘要內容重複，讀取端同一指標同一月份
+  // 只能採用其中一份，不可相加。
   const records: AnalysisRecord[] = [];
   docs.forEach((d: any) => {
-    const v = d.data() as Record<string, unknown>;
-    const rec = recordDocToAnalysis(d.id, v);
-    if (!target.monthKeys.has(`${rec.year}-${rec.month}`)) return;
-    if (periodic) {
-      if (scheduled.size > 0 && !scheduled.has(rec.unitId)) return;
-      const source = typeof v.source === "string" ? v.source : "";
-      const qg = typeof v.quotaGroupId === "string" ? v.quotaGroupId : "";
-      const expected = periodicQuotaGroupId({
-        indicatorId: target.indicatorId,
-        unitId: rec.unitId === "" ? "NA" : rec.unitId,
-        category: target.category as "year" | "academic",
-        period: target.period,
-        start: target.start,
-      });
-      if (source !== "import" && qg !== expected) return;
-    }
-    records.push(rec);
+    const rec = recordDocToAnalysis(d.id, d.data() as Record<string, unknown>);
+    if (target.monthKeys.has(`${rec.year}-${rec.month}`)) records.push(rec);
   });
 
   const summary = buildReviewSummary({
