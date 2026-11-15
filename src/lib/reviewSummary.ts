@@ -187,7 +187,7 @@ export function buildReviewSummary(opts: {
       const seen = new Set<string>();
       for (const a of r.answers) {
         if (known.has(a.questionId)) continue;
-        const key = `${a.questionId}\u0000${a.itemText}`;
+        const key = `${a.questionId}::${a.itemText}`;
         if (seen.has(key)) continue;
         seen.add(key);
         const ids = new Set([a.questionId]);

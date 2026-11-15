@@ -77,7 +77,7 @@ export function TrendChart({
   const useStep = stepped && distinctTh.size > 1;
   const baseTh = useStep ? null : [...distinctTh][0] ?? threshold;
   const thY = showThreshold && baseTh != null ? yOf(baseTh) : null;
-  /** 階梯線：每點左右各延伸半格，換閾值處畫垂直連線 */
+  /** 分段水平線：每點左右各延伸半格；相同閾值連成一段，閾值不同則不連線 */
   const stepPath = (() => {
     if (!useStep) return "";
     const half = single ? 265 : step / 2;
@@ -92,7 +92,8 @@ export function TrendChart({
       const y = yOf(t);
       const xl = i === 0 ? 35 : xOf(i) - half;
       const xr = i === n - 1 ? 565 : xOf(i) + half;
-      d += prevY == null ? `M${xl},${y}` : prevY !== y ? ` L${xl},${y}` : "";
+      // 同閾值才連線；閾值不同就另起一段（不畫垂直連線）
+      d += prevY !== y ? ` M${xl},${y}` : "";
       d += ` L${xr},${y}`;
       prevY = y;
     }

@@ -28,6 +28,7 @@ import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
 import { useEffect, useMemo, useState } from "react";
 import {
+  Archive,
   ChevronDown,
   ClipboardCheck,
   Eye,
@@ -58,6 +59,13 @@ import {
   type SortState,
 } from "../components/ui";
 import { useAuth } from "../lib/auth";
+import {
+  archiveInterval,
+  loadAllSummaries,
+  type ArchiveTarget,
+  type StoredSummary,
+} from "../lib/summaryStore";
+import { summaryDocId } from "../lib/reviewSummary";
 import { usePermissions } from "../lib/usePermissions";
 import { staffLabel } from "../lib/mask";
 import {
@@ -172,6 +180,9 @@ interface ActiveRow {
   /** 該指標本區間的審查紀錄（檢視用） */
   records: RecordRow[];
   unitNameOf: (code: string) => string;
+  /** v1.64.0：可封存摘要（系統管理員，或所屬群組的召集人／執行幹事） */
+  canArchive: boolean;
+  archiveTarget: ArchiveTarget;
 }
 
 type SortKey = "group" | "code" | "name" | "interval" | "person" | "unit";
@@ -265,6 +276,9 @@ export function AuditPage({
   /** v1.63.1：開窗時載入該排程區間內實際存在的任務（單位＋年月），選項只列有任務者 */
   const [execTaskKeys, setExecTaskKeys] = useState<Set<string> | null>(null);
   const [execBusy, setExecBusy] = useState(false);
+  /** v1.64.0：已封存的區間摘要（文件 ID → 摘要） */
+  const [summaries, setSummaries] = useState<Map<string, StoredSummary>>(new Map());
+  const [archivingId, setArchivingId] = useState<string | null>(null);
   const [executing, setExecuting] = useState<ExecuteTarget | null>(null);
   const [editableGroupIds, setEditableGroupIds] = useState<string[]>([]);
 
@@ -731,7 +745,27 @@ export function AuditPage({
                 a.unitId.localeCompare(b.unitId, "zh-Hant"),
             ),
             unitNameOf,
+            canArchive:
+              isAdmin ||
+              (isConvener &&
+                !!ind.groupId &&
+                myConvenerGroupIds.includes(ind.groupId)),
+            archiveTarget: {
+              indicatorId: s.indicatorId,
+              category: s.category,
+              period: s.period,
+              start: iv.start,
+              end: iv.end,
+              monthKeys: keys,
+              unitIds: s.unitIds,
+            },
           });
+        }
+        try {
+          const sm = await loadAllSummaries(db);
+          if (!cancelled) setSummaries(sm);
+        } catch {
+          // 讀不到封存摘要不影響清單（仍可用原始紀錄）
         }
         setRows(out);
       } catch (e) {
@@ -983,6 +1017,34 @@ export function AuditPage({
   const SortTh = ({ label, k }: { label: string; k: SortKey }) => (
     <SortableTh label={label} sortKey={k} sort={tableSort} onSort={toggleSort} />
   );
+
+  async function handleArchive(row: ActiveRow) {
+    if (!user) return;
+    const t = row.archiveTarget;
+    const id = summaryDocId(t.indicatorId, t.category, t.period, t.start);
+    const exists = summaries.has(id);
+    if (
+      !window.confirm(
+        exists
+          ? `重新封存「${row.indicatorName}・${row.intervalLabel}」的摘要？將以目前審查紀錄覆寫舊摘要。`
+          : `封存「${row.indicatorName}・${row.intervalLabel}」的摘要？之後結果分析會先讀摘要；封存後補改紀錄需經審核。`,
+      )
+    )
+      return;
+    setArchivingId(id);
+    try {
+      const saved = await archiveInterval(getFirebaseDb(), t, {
+        id: user.staffId,
+        name: user.name ?? user.staffId,
+      });
+      setSummaries((prev) => new Map(prev).set(id, saved));
+      onAction(`已封存摘要：${row.indicatorName}・${row.intervalLabel}（${saved.recordCount} 筆）`);
+    } catch (e) {
+      onAction(`封存摘要失敗：${toErrorMessage(e)}`);
+    } finally {
+      setArchivingId(null);
+    }
+  }
 
   function openExec(row: ActiveRow) {
     setExecRow(row);
@@ -1290,6 +1352,54 @@ export function AuditPage({
                           >
                             <Eye size={14} /> 檢視
                           </button>
+                          {r.state === "ended" && r.canArchive && (
+                            <button
+                              type="button"
+                              className="text-button"
+                              disabled={archivingId !== null}
+                              onClick={() => handleArchive(r)}
+                            >
+                              <Archive size={14} />{" "}
+                              {archivingId ===
+                              summaryDocId(
+                                r.archiveTarget.indicatorId,
+                                r.archiveTarget.category,
+                                r.archiveTarget.period,
+                                r.archiveTarget.start,
+                              )
+                                ? "封存中…"
+                                : summaries.has(
+                                      summaryDocId(
+                                        r.archiveTarget.indicatorId,
+                                        r.archiveTarget.category,
+                                        r.archiveTarget.period,
+                                        r.archiveTarget.start,
+                                      ),
+                                    )
+                                  ? "重新封存"
+                                  : "封存摘要"}
+                            </button>
+                          )}
+                          {r.state === "ended" &&
+                            (() => {
+                              const sm = summaries.get(
+                                summaryDocId(
+                                  r.archiveTarget.indicatorId,
+                                  r.archiveTarget.category,
+                                  r.archiveTarget.period,
+                                  r.archiveTarget.start,
+                                ),
+                              );
+                              return sm ? (
+                                <span className="muted-text">
+                                  已封存
+                                  {sm.generatedAtMs
+                                    ? `（${new Date(sm.generatedAtMs).toLocaleDateString("zh-TW")}）`
+                                    : ""}
+                                  {sm.status === "pending_review" ? "・待審核" : ""}
+                                </span>
+                              ) : null;
+                            })()}
                           {r.state === "active" && !r.complete && (
                             <button
                               type="button"

@@ -97,7 +97,7 @@ for (const grouped of [true, false]) {
     }
     assert.deepEqual(S.unitPeriodPassRateFromCells(summary.cells, columns, threshold),
       A.unitPeriodPassRate(records, columns, threshold)); checks++;
-    const norm = (rows) => [...rows].sort((a, b) => a.key.localeCompare(b.key));
+    const norm = (rows) => rows.map((r) => ({ ...r, key: r.key.replace("\u0000", "::") })).sort((a, b) => a.key.localeCompare(b.key));
     assert.deepEqual(norm(S.personScoringRowsFromCells(cells, questions)),
       norm(A.personScoringBreakdownRows(recs, questions, threshold))); checks++;
     assert.deepEqual(S.unitScoringRowsFromCells(summary.cells, questions, columns, threshold),

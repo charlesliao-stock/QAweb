@@ -264,6 +264,25 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // 已結束區間的封存摘要（v1.64.0；與舊的後端預計算 reviewSummaries 分開）：登入者可讀；召集人／執行幹事／管理員可建立與重算
+    //（群組範圍由前端限制，Rules 僅驗證角色）；刪除限管理員。
+    match /reviewArchives/{id} {
+      allow read: if isAuthed();
+      allow create, update: if canManageSchedule();
+      allow delete: if isAdmin();
+    }
+
+    // 封存後修改紀錄的待審申請（v1.64.0）：登入者可建立（申請人須為本人）；
+    // 召集人／執行幹事／管理員審核；刪除限管理員。
+    match /reviewEditRequests/{id} {
+      allow read: if isAuthed();
+      allow create: if isAuthed()
+        && request.resource.data.get('requestedBy', '') == staffId()
+        && request.resource.data.get('status', '') == 'pending';
+      allow update: if canManageSchedule();
+      allow delete: if isAdmin();
+    }
+
     // 尚未送出的逐件暫存：不進正式紀錄／分析；本人或管理員可編輯及刪除。
     match /reviewDrafts/{id} {
       allow read: if isAuthed();
