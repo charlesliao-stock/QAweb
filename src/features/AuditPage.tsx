@@ -259,6 +259,8 @@ export function AuditPage({
   const [execRow, setExecRow] = useState<ActiveRow | null>(null);
   const [execUnit, setExecUnit] = useState("");
   const [execMonth, setExecMonth] = useState("");
+  /** v1.63.1：開窗時載入該排程區間內實際存在的任務（單位＋年月），選項只列有任務者 */
+  const [execTaskKeys, setExecTaskKeys] = useState<Set<string> | null>(null);
   const [execBusy, setExecBusy] = useState(false);
   const [executing, setExecuting] = useState<ExecuteTarget | null>(null);
   const [editableGroupIds, setEditableGroupIds] = useState<string[]>([]);
@@ -967,9 +969,11 @@ export function AuditPage({
 
   function openExec(row: ActiveRow) {
     setExecRow(row);
-    const units =
+    setExecTaskKeys(null);
+    setExecBusy(false);
+    const baseUnits =
       row.assignedUnitIds.length > 0 ? row.assignedUnitIds : row.sched.unitIds;
-    setExecUnit(units[0] ?? "");
+    setExecUnit(baseUnits[0] ?? "");
     const firstReview = row.interval.reviewMonths[0];
     const defMonth =
       (firstReview != null
@@ -978,7 +982,48 @@ export function AuditPage({
           )
         : undefined) ?? row.monthOptions[0];
     setExecMonth(defMonth ? `${defMonth.year}-${defMonth.month}` : "");
-    setExecBusy(false);
+    // v1.63.1：排程清單的受審單位／月份不一定都有已展開的任務（分工表缺單位、
+    // 尚未產生排程等），先查實際任務，避免點「審查」才跳「找不到審查任務」。
+    void (async () => {
+      try {
+        const db = getFirebaseDb();
+        const years = [...new Set(row.monthOptions.map((o) => o.year))];
+        const monthKeys = new Set(
+          row.monthOptions.map((o) => `${o.year}-${o.month}`),
+        );
+        const snap = await getDocs(
+          query(
+            collection(db, "reviewTasks"),
+            where("indicatorId", "==", row.indicatorId),
+            where("year", "in", years.slice(0, 30)),
+            limit(2000),
+          ),
+        );
+        const keys = new Set<string>();
+        snap.docs.forEach((d) => {
+          const v = d.data() as Record<string, unknown>;
+          const ym = `${Number(v.year ?? 0)}-${Number(v.month ?? 0)}`;
+          if (!monthKeys.has(ym)) return;
+          keys.add(`${String(v.unitId ?? "")}|${ym}`);
+        });
+        setExecTaskKeys(keys);
+        const units = baseUnits;
+        const pick = row.sched.unlimitedUnits
+          ? [""]
+          : units.filter((u) =>
+              row.monthOptions.some((o) => keys.has(`${u}|${o.year}-${o.month}`)),
+            );
+        const unit = row.sched.unlimitedUnits ? "" : (pick[0] ?? units[0] ?? "");
+        setExecUnit(unit);
+        const m = row.monthOptions.find((o) =>
+          keys.has(`${unit}|${o.year}-${o.month}`),
+        );
+        if (m) setExecMonth(`${m.year}-${m.month}`);
+      } catch {
+        // 讀不到就維持原行為（開始審查時再檢查）
+        setExecTaskKeys(null);
+      }
+    })();
   }
 
   async function confirmExec() {
@@ -1527,19 +1572,64 @@ export function AuditPage({
                 <div className="select-wrap">
                   <select
                     value={execUnit}
-                    onChange={(e) => setExecUnit(e.target.value)}
+                    onChange={(e) => {
+                      const u = e.target.value;
+                      setExecUnit(u);
+                      if (execTaskKeys) {
+                        const m = execRow.monthOptions.find((o) =>
+                          execTaskKeys.has(`${u}|${o.year}-${o.month}`),
+                        );
+                        if (m) setExecMonth(`${m.year}-${m.month}`);
+                      }
+                    }}
                   >
                     {(execRow.assignedUnitIds.length > 0
                       ? execRow.assignedUnitIds
                       : execRow.sched.unitIds
-                    ).map((c) => (
-                      <option key={c} value={c}>
-                        {execRow.unitNameOf(c)}（{c}）
-                      </option>
-                    ))}
+                    )
+                      .filter(
+                        (c) =>
+                          !execTaskKeys ||
+                          execRow.monthOptions.some((o) =>
+                            execTaskKeys.has(`${c}|${o.year}-${o.month}`),
+                          ),
+                      )
+                      .map((c) => (
+                        <option key={c} value={c}>
+                          {execRow.unitNameOf(c)}（{c}）
+                        </option>
+                      ))}
                   </select>
                 </div>
               )}
+              {execTaskKeys && !execRow.sched.unlimitedUnits && (() => {
+                const base =
+                  execRow.assignedUnitIds.length > 0
+                    ? execRow.assignedUnitIds
+                    : execRow.sched.unitIds;
+                const missing = base.filter(
+                  (c) =>
+                    !execRow.monthOptions.some((o) =>
+                      execTaskKeys.has(`${c}|${o.year}-${o.month}`),
+                    ),
+                );
+                return missing.length > 0 ? (
+                  <p className="settings-note" style={{ color: "#b3372f" }}>
+                    以下單位在本區間尚無審查任務，無法開啟審查表：
+                    {missing.map((c) => execRow.unitNameOf(c)).join("、")}
+                    。請至「品管審查排程」確認審查員／單位分工表含該單位後重新產生排程。
+                  </p>
+                ) : null;
+              })()}
+              {execTaskKeys &&
+                execRow.sched.unlimitedUnits &&
+                !execRow.monthOptions.some((o) =>
+                  execTaskKeys.has(`|${o.year}-${o.month}`),
+                ) && (
+                  <p className="settings-note" style={{ color: "#b3372f" }}>
+                    本區間尚無審查任務，請至「品管審查排程」產生排程。
+                  </p>
+                )}
             </div>
             <div className="form-field">
               <label className="field-label">審查月份</label>
@@ -1548,7 +1638,13 @@ export function AuditPage({
                   value={execMonth}
                   onChange={(e) => setExecMonth(e.target.value)}
                 >
-                  {execRow.monthOptions.map((o) => (
+                  {execRow.monthOptions
+                    .filter(
+                      (o) =>
+                        !execTaskKeys ||
+                        execTaskKeys.has(`${execUnit}|${o.year}-${o.month}`),
+                    )
+                    .map((o) => (
                     <option key={`${o.year}-${o.month}`} value={`${o.year}-${o.month}`}>
                       {o.label}
                     </option>
