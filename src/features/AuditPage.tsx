@@ -66,6 +66,12 @@ import {
   type StoredSummary,
 } from "../lib/summaryStore";
 import { summaryDocId } from "../lib/reviewSummary";
+import {
+  approveEditRequest,
+  loadPendingEditRequests,
+  rejectEditRequest,
+  type EditRequest,
+} from "../lib/editRequests";
 import { usePermissions } from "../lib/usePermissions";
 import { staffLabel } from "../lib/mask";
 import {
@@ -279,6 +285,10 @@ export function AuditPage({
   /** v1.64.0：已封存的區間摘要（文件 ID → 摘要） */
   const [summaries, setSummaries] = useState<Map<string, StoredSummary>>(new Map());
   const [archivingId, setArchivingId] = useState<string | null>(null);
+  /** v1.64.1：封存後修改待審申請（僅管理者範圍內可見者） */
+  const [pendingReqs, setPendingReqs] = useState<EditRequest[]>([]);
+  const [reqModalOpen, setReqModalOpen] = useState(false);
+  const [reqBusyId, setReqBusyId] = useState<string | null>(null);
   const [executing, setExecuting] = useState<ExecuteTarget | null>(null);
   const [editableGroupIds, setEditableGroupIds] = useState<string[]>([]);
 
@@ -767,6 +777,21 @@ export function AuditPage({
         } catch {
           // 讀不到封存摘要不影響清單（仍可用原始紀錄）
         }
+        try {
+          if (isAdmin || isConvener) {
+            const reqs = await loadPendingEditRequests(db);
+            if (!cancelled)
+              setPendingReqs(
+                reqs.filter(
+                  (r) =>
+                    isAdmin ||
+                    (!!r.groupId && myConvenerGroupIds.includes(r.groupId)),
+                ),
+              );
+          } else if (!cancelled) setPendingReqs([]);
+        } catch {
+          // 讀不到待審申請不影響清單
+        }
         setRows(out);
       } catch (e) {
         if (!cancelled) onAction(`讀取品管審查清單失敗：${toErrorMessage(e)}`);
@@ -1046,6 +1071,50 @@ export function AuditPage({
     }
   }
 
+  async function rearchiveById(archiveId: string) {
+    if (!user) return;
+    const row = rows.find(
+      (r) =>
+        summaryDocId(
+          r.archiveTarget.indicatorId,
+          r.archiveTarget.category,
+          r.archiveTarget.period,
+          r.archiveTarget.start,
+        ) === archiveId,
+    );
+    if (!row) throw new Error("找不到對應的區間");
+    const saved = await archiveInterval(getFirebaseDb(), row.archiveTarget, {
+      id: user.staffId,
+      name: user.name ?? user.staffId,
+    });
+    setSummaries((prev) => new Map(prev).set(archiveId, saved));
+  }
+
+  async function handleDecision(req: EditRequest, approve: boolean) {
+    if (!user) return;
+    const actor = { id: user.staffId, name: user.name ?? user.staffId };
+    let note = "";
+    if (!approve) {
+      note = (window.prompt("請填寫駁回原因：") ?? "").trim();
+      if (!note) return;
+    }
+    setReqBusyId(req.id);
+    try {
+      const db = getFirebaseDb();
+      if (approve) await approveEditRequest(db, req, actor, rearchiveById);
+      else await rejectEditRequest(db, req, actor, note);
+      setPendingReqs((prev) => prev.filter((x) => x.id !== req.id));
+      onAction(approve ? "已核准修改並重新封存摘要" : "已駁回修改申請");
+      setDataRefreshKey((k) => k + 1);
+    } catch (e) {
+      onAction(`處理失敗：${toErrorMessage(e)}`);
+      // 核准已套用但重新封存失敗時，申請已不在待審
+      if (approve) setDataRefreshKey((k) => k + 1);
+    } finally {
+      setReqBusyId(null);
+    }
+  }
+
   function openExec(row: ActiveRow) {
     setExecRow(row);
     setExecTaskKeys(null);
@@ -1194,6 +1263,14 @@ export function AuditPage({
           style={{ color: "#b3372f", fontWeight: 600 }}
         >
           本人任務未完整載入（分頁中斷），加審／自審排程可能未全列出；請重新整理後再確認。
+        </p>
+      )}
+      {pendingReqs.length > 0 && (
+        <p className="settings-note" style={{ color: "#b3372f", fontWeight: 600 }}>
+          有 {pendingReqs.length} 筆封存後的審查結果修改待審核{" "}
+          <button type="button" className="text-button" onClick={() => setReqModalOpen(true)}>
+            前往審核
+          </button>
         </p>
       )}
       <FilterPanel
@@ -1396,7 +1473,9 @@ export function AuditPage({
                                   {sm.generatedAtMs
                                     ? `（${new Date(sm.generatedAtMs).toLocaleDateString("zh-TW")}）`
                                     : ""}
-                                  {sm.status === "pending_review" ? "・待審核" : ""}
+                                  {pendingReqs.some((q) => q.archiveIds.includes(sm.id))
+                                    ? "・有待審修改"
+                                    : ""}
                                 </span>
                               ) : null;
                             })()}
@@ -1653,6 +1732,74 @@ export function AuditPage({
                 返回審查明細
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {reqModalOpen && (
+        <div className="reviewer-modal-backdrop" onClick={() => setReqModalOpen(false)}>
+          <div
+            className="reviewer-modal wide panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="封存後修改待審核"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="reviewer-modal-head">
+              <div>
+                <h2>封存後修改待審核</h2>
+                <p>核准後才會套用到審查紀錄，並自動重新封存摘要</p>
+              </div>
+              <button
+                type="button"
+                className="button button-ghost"
+                onClick={() => setReqModalOpen(false)}
+                aria-label="關閉"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {pendingReqs.length === 0 ? (
+              <p className="muted-text">目前沒有待審核的修改。</p>
+            ) : (
+              pendingReqs.map((q) => {
+                const nm = rows.find((r) => r.indicatorId === q.indicatorId);
+                return (
+                  <div key={q.id} className="panel" style={{ marginBottom: 12 }}>
+                    <p>
+                      <b>{nm?.indicatorName ?? q.indicatorId}</b>・
+                      {nm?.unitNameOf(q.unitId) ?? q.unitId}・{q.year}年{q.month}月
+                    </p>
+                    <p className="muted-text">
+                      申請人：{q.requestedByName || q.requestedBy}・原因：{q.reason}
+                    </p>
+                    <p className="muted-text">
+                      異動欄位：{Object.keys(q.changes).join("、") || "—"}
+                      {typeof q.changes.rate !== "undefined" &&
+                        `（正確率 ${String(q.changes.rate.before ?? "—")}% → ${String(q.changes.rate.after ?? "—")}%）`}
+                    </p>
+                    <div className="row-actions">
+                      <button
+                        type="button"
+                        className="button button-primary"
+                        disabled={reqBusyId !== null}
+                        onClick={() => handleDecision(q, true)}
+                      >
+                        {reqBusyId === q.id ? "處理中…" : "核准並重新封存"}
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-outline"
+                        disabled={reqBusyId !== null}
+                        onClick={() => handleDecision(q, false)}
+                      >
+                        駁回
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       )}

@@ -1,5 +1,10 @@
 import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
+import {
+  createEditRequest,
+  findArchiveIdsForRecord,
+  hasPendingEditRequest,
+} from "../lib/editRequests";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, ListChecks, Pencil, ScanLine } from "lucide-react";
 import {
@@ -1221,6 +1226,63 @@ export function ReviewExecutePage({
           const before = previous[key] ?? (key === "answers" ? [] : "");
           if (JSON.stringify(before) !== JSON.stringify(after)) {
             changes[key] = { before, after };
+          }
+        }
+        // v1.64.1：區間已封存摘要 → 修改不直接寫入，改送審核（核准才生效並重新封存）
+        if (Object.keys(changes).length > 0) {
+          const archiveIds = await findArchiveIdsForRecord(
+            db,
+            task.indicatorId,
+            Number(previous.year ?? task.year),
+            Number(previous.month ?? task.month),
+          );
+          if (archiveIds.length > 0) {
+            if (await hasPendingEditRequest(db, editId))
+              throw new Error("此紀錄已有待審核的修改申請，請等待核准或駁回後再修改");
+            const reason = (
+              window.prompt(
+                "此區間的摘要已封存。修改需送召集人／執行幹事／系統管理員審核，核准後才會生效。\n請填寫修改原因：",
+              ) ?? ""
+            ).trim();
+            if (!reason) {
+              onAction("已取消：未填寫修改原因，修改未送出");
+              return;
+            }
+            let groupId = "";
+            try {
+              const indSnap = await getDoc(doc(db, "indicators", task.indicatorId));
+              const g = indSnap.exists() ? (indSnap.data() as Record<string, unknown>).groupId : "";
+              groupId = typeof g === "string" ? g : "";
+            } catch {
+              /* 查不到群組就留空：管理員仍可審核 */
+            }
+            await createEditRequest(db, {
+              recordId: editId,
+              taskId: task.id,
+              indicatorId: task.indicatorId,
+              groupId,
+              unitId: task.unitId,
+              year: Number(previous.year ?? task.year),
+              month: Number(previous.month ?? task.month),
+              archiveIds,
+              reason,
+              requestedBy: staffId,
+              requestedByName: user?.name ?? staffId,
+              changes,
+              nextValues,
+              baseVersion: typeof previous.version === "number" ? previous.version : null,
+              oldUniqueKey: typeof previous.uniqueKey === "string" ? previous.uniqueKey : "",
+              newUniqueKey: uniqueKey,
+              intervalId,
+              personEmpNo: personId,
+            });
+            onAction("此區間已封存：修改已送出審核，核准後才會生效");
+            if (target.mode === "records") {
+              setEditingId(null);
+            } else {
+              onBack();
+            }
+            return;
           }
         }
         const editedAt = new Date().toISOString();
