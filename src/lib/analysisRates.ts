@@ -169,7 +169,7 @@ export interface ScoringBreakdownRow {
 }
 
 /** 分組／逐題的題組定義：有分組按 groupId 分組（未分組題目併為一列），無分組逐題一列。 */
-function scoringSections(questions: AuditQuestion[]): {
+export function scoringSections(questions: AuditQuestion[]): {
   key: string;
   label: string;
   ids: Set<string>;
