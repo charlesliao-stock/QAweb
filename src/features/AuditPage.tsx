@@ -260,6 +260,11 @@ function ProgressCell({
       <div>
         {done}／{total}（{fmtPct(pct)}）
       </div>
+      {total > done && (
+        <div className="muted-text" style={{ fontSize: "0.85em" }}>
+          尚未完成 {total - done}
+        </div>
+      )}
       <div className="progress-track" aria-hidden="true">
         <div className="progress-fill" style={{ width: `${w}%` }} />
       </div>
