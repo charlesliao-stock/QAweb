@@ -4621,7 +4621,7 @@ function ResultImportPanel({
         title="匯入品管審查結果"
         note="先選組別與指標（只列啟用），再選 Excel／CSV 檔匯入。預檢不符（指標代號或題數）即整檔中止；選檔後先顯示預覽／錯誤清單，按「確認匯入」才寫入。匯入的紀錄計入審核進度，不自動建立審查任務。指標有設審核項目時，範本多一欄「審核項目」（必填，須為指標清單內的值）。同一指標、單位、月份、受審人員、審核項目重複匯入以後者覆蓋前者，不會重複建檔。"
       />
-      <div className="form-stack">
+      <div className="form-stack results-import-filters">
         <div className="form-field">
           <label className="field-label">組別</label>
           <div className="select-wrap">

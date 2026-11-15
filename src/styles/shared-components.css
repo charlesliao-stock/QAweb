@@ -450,7 +450,7 @@ th[aria-sort="descending"] .th-sort .lucide {
   width: 150px;
   min-width: 150px;
   max-width: 150px;
-  flex: 0 0 150px;
+  flex: none;
 }
 .filter-panel .filter-panel-body .select-wrap select,
 .filter-panel .filter-panel-body select.text-input {
@@ -496,4 +496,36 @@ th[aria-sort="descending"] .th-sort .lucide {
   .filter-panel-end {
     margin-left: 0;
   }
+}
+
+/* 結果匯入：組別／指標下拉比照篩選器規格（150×50px），同列向下對齊 */
+.results-page .results-import-filters {
+  align-items: flex-end;
+}
+.results-page .results-import-filters .form-field {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.results-page .results-import-filters .select-wrap {
+  width: 150px;
+  min-width: 150px;
+  max-width: 150px;
+}
+.results-page .results-import-filters .select-wrap select {
+  box-sizing: border-box;
+  width: 150px;
+  height: 50px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+@media (max-width: 720px) {
+  .results-page .results-import-filters .form-field,
+  .results-page .results-import-filters .select-wrap,
+  .results-page .results-import-filters .select-wrap select {
+    width: 100%;
+    max-width: none;
+  }
+}
+.filter-panel .results-range-separator {
+  padding-bottom: 15px;
 }
