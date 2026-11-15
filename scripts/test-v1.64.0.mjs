@@ -117,3 +117,25 @@ assert.ok(s2.noSnapshotCount > 0);
 assert.ok(S.isSummaryUsable(s2, 85));
 assert.ok(!S.isSummaryUsable(s2, 90)); checks++;
 console.log(`OK ${checks} checks`);
+
+// 閾值：格閾值／欄閾值（眾數；全無快照退回 fallback；≤0 → null）
+{
+  const recs = [
+    { thresholdAtSchedule: 80 }, { thresholdAtSchedule: 90 }, { thresholdAtSchedule: 90 }, {},
+  ];
+  assert.equal(A.columnThresholdOf(recs, 70), 90);
+  assert.equal(A.columnThresholdOf([{}, {}], 70), 70);
+  assert.equal(A.columnThresholdOf([{}], 0), null);
+  assert.equal(A.columnThresholdOf([{ thresholdAtSchedule: 80 }, { thresholdAtSchedule: 90 }], 70), 90);
+  const qs = makeQuestions(true);
+  const rs = makeRecords(120, true);
+  const sm = S.buildReviewSummary({ indicatorId: "I", scheduleCategory: "year", schedulePeriod: "2026",
+    start: { year: 2026, month: 1 }, end: { year: 2026, month: 6 }, records: rs, questions: qs, threshold: 85 });
+  for (let m = 1; m <= 6; m++) {
+    const months = [{ year: 2026, month: m }];
+    assert.equal(S.columnThresholdFromCells(S.cellsInMonths(sm.cells, months), 85),
+      A.columnThresholdOf(A.recordsInMonths(rs, months), 85));
+  }
+  assert.ok(sm.cells.every((c) => c.indicatorVersions.length >= 1));
+  console.log("OK threshold checks");
+}

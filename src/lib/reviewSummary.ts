@@ -14,6 +14,7 @@
  *   unitPassRate／unitScoringBreakdownRows 相同）。
  */
 import {
+  columnThresholdOf,
   isPassing,
   isUnitPassing,
   round1,
@@ -50,6 +51,12 @@ export interface SummaryCell {
   month: number;
   total: number;
   pass: number;
+  /** 該格紀錄的排程快照閾值（眾數；全無快照為 null）— 曲線圖逐月畫閾值線用 */
+  threshold: number | null;
+  /** 該格各快照閾值的人次（同欄多格相加後取眾數，與逐筆算法一致） */
+  thresholdVotes: { value: number; count: number }[];
+  /** 該格紀錄涉及的指標版本（核對用） */
+  indicatorVersions: string[];
   sections: Record<string, SummarySectionCount>;
   questionsByVersion: {
     indicatorVersion: string;
@@ -139,12 +146,22 @@ export function buildReviewSummary(opts: {
         month: r.month,
         total: 0,
         pass: 0,
+        threshold: null,
+        thresholdVotes: [],
+        indicatorVersions: [],
         sections: {},
         questionsByVersion: [],
       };
       cells.set(ck, cell);
     }
     cell.total += 1;
+    if (typeof r.thresholdAtSchedule === "number") {
+      const tv = cell.thresholdVotes.find((x) => x.value === r.thresholdAtSchedule);
+      if (tv) tv.count += 1;
+      else cell.thresholdVotes.push({ value: r.thresholdAtSchedule, count: 1 });
+    }
+    if (r.indicatorVersion && !cell.indicatorVersions.includes(r.indicatorVersion))
+      cell.indicatorVersions.push(r.indicatorVersion);
     if (isPassing(r.rate, thr(r))) cell.pass += 1;
 
     const bump = (key: string, label: string, rate: number | null, hasApplicable: boolean, hit: boolean) => {
@@ -201,6 +218,16 @@ export function buildReviewSummary(opts: {
     }
   }
 
+  for (const cell of cells.values()) {
+    cell.threshold = columnThresholdOf(
+      records.filter(
+        (r) => r.unitId === cell.unitId && r.year === cell.year && r.month === cell.month,
+      ),
+      0,
+    );
+    cell.indicatorVersions.sort();
+  }
+
   return {
     indicatorId: opts.indicatorId,
     scheduleCategory: opts.scheduleCategory,
@@ -228,6 +255,22 @@ export interface MonthRef {
 export function cellsInMonths(cells: SummaryCell[], months: MonthRef[]): SummaryCell[] {
   const keys = new Set(months.map((m) => `${m.year}-${m.month}`));
   return cells.filter((c) => keys.has(`${c.year}-${c.month}`));
+}
+
+/** 曲線圖用：期間欄閾值（格閾值眾數，以人次加權；無則 fallback；≤0 回 null） */
+export function columnThresholdFromCells(cells: SummaryCell[], fallback: number): number | null {
+  const votes = new Map<number, number>();
+  for (const c of cells)
+    for (const tv of c.thresholdVotes) votes.set(tv.value, (votes.get(tv.value) ?? 0) + tv.count);
+  let best: number | null = null;
+  let bv = 0;
+  for (const [t, v] of votes)
+    if (v > bv || (v === bv && best != null && t > best)) {
+      best = t;
+      bv = v;
+    }
+  const t = best ?? fallback;
+  return t > 0 ? t : null;
 }
 
 function pooledByUnit(cells: SummaryCell[]): Map<string, SummaryCell[]> {

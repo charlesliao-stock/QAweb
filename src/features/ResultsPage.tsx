@@ -84,6 +84,7 @@ import {
   collectConsolidatedRecordNotes,
   optionDetailRows,
   questionErrorRows,
+  columnThresholdOf,
   passRateOf,
   personScoringBreakdownRows,
   personOptionRows,
@@ -170,6 +171,8 @@ interface ChartModalData {
   notes: (string | null)[];
   /** 閾值（紅色虛線）；null 表示不畫 */
   threshold: number | null;
+  /** v1.64.0：逐點閾值（與 values 對齊）；有變動時圖上畫階梯式虛線 */
+  thresholds?: (number | null)[];
   /** v1.50.0：曲線圖上的點可點下探，須帶回指標／單元／期間欄／單位 */
   indicatorId: string;
   mode: UnitMode;
@@ -1131,19 +1134,27 @@ export function ResultsPage({
     indicatorId: string,
     unitId: string | undefined,
     mode: UnitMode,
-  ): { values: number[]; labels: string[]; tips: string[]; cols: AnalysisPeriodColumn[]; notes: (string | null)[] } {
+  ): { values: number[]; labels: string[]; tips: string[]; cols: AnalysisPeriodColumn[]; notes: (string | null)[]; thresholds: (number | null)[] } {
     const values: number[] = [];
     const labels: string[] = [];
     const tips: string[] = [];
     const cols: AnalysisPeriodColumn[] = [];
     const notes: (string | null)[] = [];
+    const thresholds: (number | null)[] = [];
+    const curTh = indOf.get(indicatorId)?.threshold ?? 0;
     for (const col of appliedColumns) {
       const c = cellValue(indicatorId, col, unitId, mode);
       if (c.rate != null) {
+        const colRecs = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
         const note = columnTempNote(
-          recordsForIndex(recordIndex, indicatorId, col.months, unitId),
+          colRecs,
           tempTaskKeys,
           col.months.length,
+        );
+        // v1.64.0：人次模式逐筆用排程快照閾值，曲線逐欄畫當時閾值；
+        // 單位模式單位層判定本來就用現行指標閾值，維持單一水平線。
+        thresholds.push(
+          mode === "person" ? columnThresholdOf(colRecs, curTh) : curTh > 0 ? curTh : null,
         );
         values.push(c.rate);
         labels.push(col.label);
@@ -1152,7 +1163,7 @@ export function ResultsPage({
         notes.push(note);
       }
     }
-    return { values, labels, tips, cols, notes };
+    return { values, labels, tips, cols, notes, thresholds };
   }
 
   /**
@@ -1185,19 +1196,23 @@ export function ResultsPage({
     unitId: string | undefined,
     mode: UnitMode,
     sectionKey: string,
-  ): { values: number[]; labels: string[]; tips: string[]; cols: AnalysisPeriodColumn[]; notes: (string | null)[] } {
+  ): { values: number[]; labels: string[]; tips: string[]; cols: AnalysisPeriodColumn[]; notes: (string | null)[]; thresholds: (number | null)[] } {
     const ind = indOf.get(indicatorId);
     const values: number[] = [];
     const labels: string[] = [];
     const tips: string[] = [];
     const cols: AnalysisPeriodColumn[] = [];
     const notes: (string | null)[] = [];
-    if (!ind) return { values, labels, tips, cols, notes };
+    const thresholds: (number | null)[] = [];
+    if (!ind) return { values, labels, tips, cols, notes, thresholds };
     for (const col of appliedColumns) {
       const recs = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
       const pr = sectionCellValue(ind, col, recs, mode, sectionKey);
       if (pr.rate != null) {
         const note = columnTempNote(recs, tempTaskKeys, col.months.length);
+        thresholds.push(
+          mode === "person" ? columnThresholdOf(recs, ind.threshold) : ind.threshold > 0 ? ind.threshold : null,
+        );
         values.push(pr.rate);
         labels.push(col.label);
         tips.push(`${col.label}${note ?? ""}：${formatPassRate(pr, true)}`);
@@ -1205,7 +1220,7 @@ export function ResultsPage({
         notes.push(note);
       }
     }
-    return { values, labels, tips, cols, notes };
+    return { values, labels, tips, cols, notes, thresholds };
   }
 
   /** v1.53.0：選項明細只留該分組的題目（以題目 id 過濾；歷史分組無現行題目→空列） */
@@ -1230,7 +1245,7 @@ export function ResultsPage({
   ) {
     const ind = indOf.get(indicatorId);
     if (!ind) return;
-    const { values, labels, tips, cols, notes } = section
+    const { values, labels, tips, cols, notes, thresholds } = section
       ? sectionChartSeries(indicatorId, unitId, mode, section.key)
       : chartSeries(indicatorId, unitId, mode);
     setChartModal({
@@ -1244,6 +1259,7 @@ export function ResultsPage({
       labels,
       tips,
       notes,
+      thresholds,
       threshold: ind.threshold > 0 ? ind.threshold : null,
       indicatorId,
       mode,
@@ -1372,6 +1388,11 @@ export function ResultsPage({
       chartLabels: pts.map((point) => point.column.label),
       chartTips: pts.map((point, i) => `${point.column.label}${chartNotes[i] ?? ""}：${formatPassRate(point.pr, true)}`),
       chartNotes,
+      chartThresholds: pts.map((point) =>
+        indUnit === "person"
+          ? columnThresholdOf(recordsInMonths(indRecs, point.column.months), th)
+          : th > 0 ? th : null,
+      ),
       chartCols: pts.map((point) => point.column),
       optionRows,
       // 分組計分只在指標開啟 groupScoring 時顯示（v1.44.0）。
@@ -1830,6 +1851,7 @@ export function ResultsPage({
                             threshold={
                               ind.threshold > 0 ? ind.threshold : null
                             }
+                            thresholds={s.thresholds}
                             legend="達閾值率"
                             onPointClick={(i) =>
                               openDrill(ind.id, s.cols[i], unitUnit, selUnitCode, unitPanel.sectionKey
@@ -2083,6 +2105,7 @@ export function ResultsPage({
                     tooltips={indSummary.chartTips}
                     notes={indSummary.chartNotes}
                     threshold={indSel.threshold > 0 ? indSel.threshold : null}
+                    thresholds={indSummary.chartThresholds}
                     legend="正確率"
                     onPointClick={(i) =>
                       openDrill(selIndicator, indSummary.chartCols[i], indUnit)
@@ -2208,6 +2231,7 @@ export function ResultsPage({
                 tooltips={chartModal.tips}
                 notes={chartModal.notes}
                 threshold={chartModal.threshold}
+                thresholds={chartModal.thresholds}
                 legend="達閾值率"
                 onPointClick={(i) => {
                   const cm = chartModal;

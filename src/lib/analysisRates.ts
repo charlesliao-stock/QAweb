@@ -95,6 +95,32 @@ export function passRateOf(
   };
 }
 
+/**
+ * 曲線圖用：一個期間欄的閾值。取該欄紀錄排程快照閾值的眾數（票數相同取較大者）；
+ * 全無快照（匯入）→ fallback（現行指標閾值）。閾值 ≤0 回 null（不畫線）。
+ */
+export function columnThresholdOf(
+  records: { thresholdAtSchedule?: number }[],
+  fallback: number,
+): number | null {
+  const votes = new Map<number, number>();
+  for (const r of records) {
+    if (typeof r.thresholdAtSchedule === "number") {
+      votes.set(r.thresholdAtSchedule, (votes.get(r.thresholdAtSchedule) ?? 0) + 1);
+    }
+  }
+  let best: number | null = null;
+  let bestVotes = 0;
+  for (const [t, v] of votes) {
+    if (v > bestVotes || (v === bestVotes && best != null && t > best)) {
+      best = t;
+      bestVotes = v;
+    }
+  }
+  const t = best ?? fallback;
+  return t > 0 ? t : null;
+}
+
 /** 單位是否達閾值：該單位率非 null、閾值 > 0 且 ≥ 閾值 */
 export function isUnitPassing(unitRate: number | null, threshold: number): boolean {
   return typeof unitRate === "number" && threshold > 0 && unitRate >= threshold;

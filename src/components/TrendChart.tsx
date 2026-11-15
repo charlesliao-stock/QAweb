@@ -18,6 +18,7 @@ export function TrendChart({
   tooltips = [],
   notes = [],
   threshold = null,
+  thresholds,
   legend = "整體達標率",
   onPointClick,
 }: {
@@ -31,6 +32,9 @@ export function TrendChart({
   notes?: (string | null)[];
   /** 閾值（紅色虛線水平線；null 表示不畫） */
   threshold?: number | null;
+  /** 逐點閾值（與 values 對齊；v1.64.0）：提供時畫階梯式紅色虛線，紅點以各點當時閾值判斷；
+   *  缺值（null）的點沿用 threshold。未提供則維持單一水平線。 */
+  thresholds?: (number | null)[];
   legend?: string;
   /** 點選某點（下探用）；未提供時點不可點 */
   onPointClick?: (index: number) => void;
@@ -64,7 +68,36 @@ export function TrendChart({
   const tipText = (i: number) =>
     tooltips[i] ??
     (labels[i] ? `${labels[i]}：${values[i]}%` : `${values[i]}%`);
-  const thY = showThreshold && threshold != null ? yOf(threshold) : null;
+  const thAt = (i: number): number | null => {
+    const t = thresholds?.[i];
+    return t != null ? t : threshold;
+  };
+  const stepped = !!thresholds && thresholds.some((t, i) => t != null && i < n);
+  const distinctTh = new Set(values.map((_, i) => thAt(i)).filter((t) => t != null));
+  const useStep = stepped && distinctTh.size > 1;
+  const baseTh = useStep ? null : [...distinctTh][0] ?? threshold;
+  const thY = showThreshold && baseTh != null ? yOf(baseTh) : null;
+  /** 階梯線：每點左右各延伸半格，換閾值處畫垂直連線 */
+  const stepPath = (() => {
+    if (!useStep) return "";
+    const half = single ? 265 : step / 2;
+    let d = "";
+    let prevY: number | null = null;
+    for (let i = 0; i < n; i++) {
+      const t = thAt(i);
+      if (t == null) {
+        prevY = null;
+        continue;
+      }
+      const y = yOf(t);
+      const xl = i === 0 ? 35 : xOf(i) - half;
+      const xr = i === n - 1 ? 565 : xOf(i) + half;
+      d += prevY == null ? `M${xl},${y}` : prevY !== y ? ` L${xl},${y}` : "";
+      d += ` L${xr},${y}`;
+      prevY = y;
+    }
+    return d;
+  })();
   /** 提示框跟滑鼠：取滑鼠在容器內的座標，水平夾在容器內避免溢出。 */
   const handleMouseMove = (event: React.MouseEvent) => {
     const rect = wrapRef.current?.getBoundingClientRect();
@@ -126,6 +159,26 @@ export function TrendChart({
               </text>
             </g>
           ))}
+          {useStep && showThreshold && (
+            <g>
+              <path d={stepPath} fill="none" className="chart-threshold" />
+              {values.map((_, i) => {
+                const t = thAt(i);
+                const prev = i > 0 ? thAt(i - 1) : null;
+                if (t == null || (i > 0 && t === prev)) return null;
+                return (
+                  <text
+                    key={`th${i}`}
+                    x={i === 0 ? 40 : xOf(i) - (single ? 0 : step / 2) + 4}
+                    y={yOf(t) - 5}
+                    className="chart-threshold-label"
+                  >
+                    閾值 {t}%
+                  </text>
+                );
+              })}
+            </g>
+          )}
           {thY != null && (
             <g>
               <line
@@ -141,7 +194,7 @@ export function TrendChart({
                 textAnchor="end"
                 className="chart-threshold-label"
               >
-                閾值 {threshold}%
+                閾值 {baseTh}%
               </text>
             </g>
           )}
@@ -182,7 +235,7 @@ export function TrendChart({
                   `chart-dot${index === n - 1 ? " latest" : ""}` +
                   (onPointClick ? " clickable" : "") +
                   // v1.59.0：未達閾值（rate < 閾值，沿用 isPassing 口徑；閾值 null／≤0 不標）
-                  (highlightBelow && threshold != null && !isPassing(values[index], threshold)
+                  (highlightBelow && thAt(index) != null && !isPassing(values[index], thAt(index) as number)
                     ? " below"
                     : "")
                 }
