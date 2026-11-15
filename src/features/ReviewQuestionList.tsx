@@ -34,6 +34,8 @@ export type ReviewQuestionListProps =
       photoCounts?: Record<string, number>;
       photoUrlsByQuestion?: Record<string, string[]>;
       photoCaptureCounts?: Record<string, number>;
+      guidanceInline?: boolean;
+      mobileLayout?: boolean;
     }
   | {
       mode: "view";
@@ -57,6 +59,7 @@ function QuestionRow({
   active,
   photoCount = 0,
   photoNode,
+  guidanceInline = false,
 }: {
   rowId?: string;
   /** 全域題號；0＝不顯示編號 */
@@ -71,8 +74,10 @@ function QuestionRow({
   active?: boolean;
   photoCount?: number;
   photoNode?: ReactNode;
+  guidanceInline?: boolean;
 }) {
   const hasGuidance = guidance.trim() !== "";
+  const guidanceId = rowId ? `${rowId}-guidance` : undefined;
   const label = `${num > 0 ? `${num}. ` : ""}${itemText}`;
   return (
     <div className={`review-qrow${active ? " is-active" : ""}${missing ? " is-unanswered" : " is-answered"}`} id={rowId}>
@@ -85,6 +90,7 @@ function QuestionRow({
               className="q-text-btn"
               onClick={onToggleGuidance}
               aria-expanded={open}
+              aria-controls={guidanceId}
               aria-label={`${label}（指引）`}
             >
               <span className="q-caret" aria-hidden="true">
@@ -101,10 +107,15 @@ function QuestionRow({
             </span>
           ) : null}
         </div>
+        {guidanceInline && hasGuidance && open ? (
+          <div id={guidanceId} className="q-guidance" role="region" aria-label={`第 ${num} 題審核指引`}>
+            <p style={{ whiteSpace: "pre-wrap" }}>{guidance}</p>
+          </div>
+        ) : null}
         <div className="q-options">{optionsNode}</div>
         <div className="q-note">{noteNode}</div>
       </div>
-      {hasGuidance && open ? (
+      {!guidanceInline && hasGuidance && open ? (
         <div className="q-guidance">
           <p style={{ whiteSpace: "pre-wrap" }}>{guidance}</p>
         </div>
@@ -135,6 +146,8 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
       photoCounts = {},
       photoUrlsByQuestion = {},
       photoCaptureCounts = {},
+      guidanceInline = false,
+      mobileLayout = false,
     } = props;
     const numById = new Map(questions.map((q, i) => [q.id, i + 1]));
     const sections = groupQuestionsIntoSections(questions, showGroups);
@@ -157,6 +170,7 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                     active={q.id === activeQuestionId}
                     photoCount={photoCounts[q.id] ?? 0}
                     itemText={q.itemText || `（第 ${num} 題）`}
+                    guidanceInline={guidanceInline}
                     guidance={q.guidance}
                     open={!!openGuidance[q.id]}
                     onToggleGuidance={() => toggleGuidance(q.id)}
@@ -187,6 +201,7 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                                   {positive ? <Check size={17} strokeWidth={2.5} /> : negative ? <X size={17} strokeWidth={2.5} /> : notApplicable ? <Minus size={17} strokeWidth={2.5} /> : null}
                                 </span>
                                 <span>{label}</span>
+                                {notApplicable && <small className="review-option-subtitle">不列入符合率</small>}
                               </label>
                             );
                           })}
@@ -231,15 +246,31 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                     }
                     noteNode={
                       <div className="review-note-entry">
+                        <label className="review-note-label" htmlFor={`review-note-${q.id}`}>
+                          備註 <span>（選填）</span>
+                        </label>
                         <div className="review-note-input-row">
-                          <input
-                            type="text"
-                            className="text-input"
-                            placeholder="備註（選填）"
-                            value={notes[q.id] ?? ""}
-                            onChange={(e) => onNote(q.id, e.target.value)}
-                            aria-label={`第 ${num} 題備註`}
-                          />
+                          {mobileLayout ? (
+                            <textarea
+                              id={`review-note-${q.id}`}
+                              rows={1}
+                              className="text-input review-note-textarea"
+                              placeholder="補充觀察內容（選填）"
+                              value={notes[q.id] ?? ""}
+                              onChange={(e) => onNote(q.id, e.target.value)}
+                              aria-label={`第 ${num} 題備註`}
+                            />
+                          ) : (
+                            <input
+                              id={`review-note-${q.id}`}
+                              type="text"
+                              className="text-input"
+                              placeholder="備註（選填）"
+                              value={notes[q.id] ?? ""}
+                              onChange={(e) => onNote(q.id, e.target.value)}
+                              aria-label={`第 ${num} 題備註`}
+                            />
+                          )}
                           <button
                             type="button"
                             className="review-note-camera"
@@ -248,8 +279,12 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                             title="開啟相機／照片選取器"
                           >
                             <Camera size={18} />
+                            <span className="review-note-camera-label">拍照</span>
                           </button>
                         </div>
+                        <small className="review-note-privacy">
+                          拍照時請避免拍入人臉或病人身分資訊；新拍照片不會保存至審查結果。
+                        </small>
                         {(photoUrlsByQuestion[q.id] ?? []).length > 0 && (
                           <div className="review-note-photo-links">
                             {(photoUrlsByQuestion[q.id] ?? []).map((url, index) => (

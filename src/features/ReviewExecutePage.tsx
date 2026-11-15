@@ -256,6 +256,16 @@ export function ReviewExecutePage({
   const [questions, setQuestions] = useState<AuditQuestion[]>([]);
   const [activeQuestionId, setActiveQuestionId] = useState("");
   const [reviewMobileStep, setReviewMobileStep] = useState<"basic" | "questions">("basic");
+  const [mobileReviewLayout, setMobileReviewLayout] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 1100px)").matches,
+  );
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 1100px)");
+    const syncLayout = () => setMobileReviewLayout(query.matches);
+    syncLayout();
+    query.addEventListener("change", syncLayout);
+    return () => query.removeEventListener("change", syncLayout);
+  }, []);
   const [auditMonth, setAuditMonth] = useState("");
   const [auditMonthOptions, setAuditMonthOptions] = useState<AuditMonthOption[]>([]);
   const [auditMonthError, setAuditMonthError] = useState("");
@@ -319,6 +329,21 @@ export function ReviewExecutePage({
   const doneCount = sharedQuotaTask ? quotaDoneCount : records.length;
   const draftCount = sharedQuotaTask ? quotaDraftCount : drafts.length;
   const usedCount = doneCount + draftCount;
+  const editingRecord = editingId !== null || editingDraftId !== null;
+  const reviewFormActive = !loading && !loadError && !!task && !allDone &&
+    !(target.mode === "records" && !editingRecord) &&
+    !(isTaskComplete(usedCount, task.caseCount) && !editingRecord) &&
+    !(task.status === "locked" && !editingRecord);
+  useEffect(() => {
+    if (!reviewFormActive) return;
+    const root = document.documentElement;
+    const previous = root.getAttribute("data-review-form-active");
+    root.setAttribute("data-review-form-active", "true");
+    return () => {
+      if (previous == null) root.removeAttribute("data-review-form-active");
+      else root.setAttribute("data-review-form-active", previous);
+    };
+  }, [reviewFormActive]);
   const liveScore = useMemo(() => {
     const selections = questions.flatMap((question) => {
       const selectedIndex = answers[question.id];
@@ -1950,13 +1975,14 @@ export function ReviewExecutePage({
             <nav className="review-mobile-steps" aria-label="審查流程步驟">
               <button
                 type="button"
-                className={`review-mobile-step${reviewMobileStep === "basic" ? " active" : ""}`}
+                className={`review-mobile-step${reviewMobileStep === "basic" ? " active" : " complete"}`}
                 aria-current={reviewMobileStep === "basic" ? "step" : undefined}
                 onClick={() => setReviewMobileStep("basic")}
               >
                 <span className="review-mobile-step-number">1</span>
-                <b>基本資料</b>
+                <span className="review-mobile-step-copy"><b>基本資料</b><small>受審資料與排程</small></span>
               </button>
+              <span className="review-mobile-step-connector" aria-hidden="true" />
               <button
                 type="button"
                 className={`review-mobile-step${reviewMobileStep === "questions" ? " active" : ""}`}
@@ -1964,9 +1990,11 @@ export function ReviewExecutePage({
                 onClick={() => setReviewMobileStep("questions")}
               >
                 <span className="review-mobile-step-number">2</span>
-                <b>審查題目</b>
-                <small>{answeredCount}/{questions.length}</small>
+                <span className="review-mobile-step-copy"><b>逐題審查</b><small>已答 {answeredCount}/{questions.length} 題</small></span>
               </button>
+              <span className="review-mobile-step-current" aria-live="polite">
+                {reviewMobileStep === "basic" ? "基本資料" : `第 ${Math.max(activeQuestionIndex + 1, 1)} 題`}
+              </span>
             </nav>
           )}
           <input
@@ -2004,6 +2032,10 @@ export function ReviewExecutePage({
           )}
 
           <section className={`panel review-mobile-page review-mobile-basic${reviewMobileStep === "questions" ? " is-inactive" : ""}`}>
+            <div className="review-mobile-card-heading">
+              <div><ListChecks size={18} /><b>審查基本資料</b></div>
+              <small>確認排程與受審資料後開始逐題審查</small>
+            </div>
             <div className="form-grid">
               <div className="form-field">
                 <label className="field-label">指標名稱</label>
@@ -2253,12 +2285,6 @@ export function ReviewExecutePage({
             </section>
           )}
 
-          <div className="review-mobile-next-wrap">
-            <button type="button" className="button button-primary review-mobile-next" onClick={() => setReviewMobileStep("questions")}>
-              開始逐題審查 <ChevronRight size={17} />
-            </button>
-          </div>
-
           <div className={`review-mobile-page review-mobile-questions${reviewMobileStep === "basic" ? " is-inactive" : ""}`}>
           {questions.length === 0 ? (
             <EmptyState
@@ -2276,13 +2302,12 @@ export function ReviewExecutePage({
                   answeredCount={answeredCount}
                   onSelect={(questionId) => {
                     setActiveQuestionId(questionId);
-                    window.setTimeout(
-                      () =>
-                        document
-                          .getElementById(`req-q-${questionId}`)
-                          ?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
-                      0,
-                    );
+                    if (window.innerWidth > 1100) {
+                      window.setTimeout(
+                        () => document.getElementById(`req-q-${questionId}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+                        0,
+                      );
+                    }
                   }}
                 />
                 <div className="review-workspace-main">
@@ -2300,6 +2325,8 @@ export function ReviewExecutePage({
                     photoCounts={attachedPhotoCounts}
                     photoUrlsByQuestion={photoUrlsByQuestion}
                     photoCaptureCounts={photoCaptureCounts}
+                    guidanceInline={mobileReviewLayout}
+                    mobileLayout={mobileReviewLayout}
                     onTakePhoto={openQuestionCamera}
                     onAnswer={chooseAnswer}
                     onCommonErrors={(qid, values) =>
@@ -2362,7 +2389,7 @@ export function ReviewExecutePage({
                       </button>
                     )}
                     <button
-                      className="button button-primary"
+                      className="button button-primary review-submit-primary"
                       disabled={submitting}
                       onClick={handleSubmit}
                     >
@@ -2384,6 +2411,40 @@ export function ReviewExecutePage({
             </>
           )}
           </div>
+          {!allDone && questions.length > 0 && (
+            <div className="review-mobile-footer" role="group" aria-label="審查操作">
+              <button
+                type="button"
+                className="button button-outline review-mobile-footer-back"
+                aria-label={reviewMobileStep === "basic" ? "返回儀表板" : activeQuestionIndex <= 0 ? "返回基本資料" : "上一題"}
+                onClick={() => {
+                  if (reviewMobileStep === "basic") onBack();
+                  else if (activeQuestionIndex <= 0) setReviewMobileStep("basic");
+                  else setActiveQuestionId(questions[activeQuestionIndex - 1]?.id ?? "");
+                }}
+              >
+                <ChevronLeft size={17} />
+                {reviewMobileStep === "basic" ? "返回" : activeQuestionIndex <= 0 ? "基本資料" : "上一題"}
+              </button>
+              <span className="review-mobile-footer-note" aria-live="polite">
+                {reviewMobileStep === "basic" ? "確認資料後開始逐題審查" : `已回答 ${answeredCount}/${questions.length} 題`}
+              </span>
+              <button
+                type="button"
+                className="button button-primary review-mobile-footer-next"
+                disabled={submitting || (reviewMobileStep === "questions" && activeQuestionIndex < 0)}
+                aria-label={reviewMobileStep === "basic" ? "開始逐題審查" : activeQuestionIndex >= questions.length - 1 ? "送出審查結果" : "前往下一題"}
+                onClick={() => {
+                  if (reviewMobileStep === "basic") setReviewMobileStep("questions");
+                  else if (activeQuestionIndex >= questions.length - 1) void handleSubmit();
+                  else setActiveQuestionId(questions[activeQuestionIndex + 1]?.id ?? "");
+                }}
+              >
+                {reviewMobileStep === "basic" ? "開始審查" : activeQuestionIndex >= questions.length - 1 ? (editingId ? "更新結果" : "完成審查") : "下一題"}
+                {reviewMobileStep === "questions" && activeQuestionIndex >= questions.length - 1 ? <Check size={17} /> : <ChevronRight size={17} />}
+              </button>
+            </div>
+          )}
         </>
       )}
       {personBarcodeOpen && (
@@ -2420,14 +2481,36 @@ function QuestionNavigator({
   answeredCount: number;
   onSelect: (questionId: string) => void;
 }) {
+  const mobileNavRef = useRef<HTMLDivElement | null>(null);
   const items = questions.map((question, index) => ({
     question,
     index,
     answered: answers[question.id] != null,
     photoCount: photoCounts[question.id] ?? 0,
   }));
+  const activeIndex = items.findIndex(({ question }) => question.id === activeQuestionId);
+  useEffect(() => {
+    const scrollActiveIntoView = () => {
+      if (window.innerWidth > 1100) return;
+      const nav = mobileNavRef.current;
+      const active = nav?.querySelector<HTMLElement>(".review-question-nav-item.active");
+      if (!nav || !active) return;
+      const navRect = nav.getBoundingClientRect();
+      const activeRect = active.getBoundingClientRect();
+      const behavior: ScrollBehavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+      if (activeRect.left < navRect.left) {
+        nav.scrollTo({ left: nav.scrollLeft - (navRect.left - activeRect.left), behavior });
+      } else if (activeRect.right > navRect.right) {
+        nav.scrollTo({ left: nav.scrollLeft + (activeRect.right - navRect.right), behavior });
+      }
+    };
+    scrollActiveIntoView();
+    window.addEventListener("resize", scrollActiveIntoView, { passive: true });
+    return () => window.removeEventListener("resize", scrollActiveIntoView);
+  }, [activeQuestionId]);
   const list = (compact: boolean) => (
     <div
+      ref={compact ? mobileNavRef : undefined}
       className={
         compact ? "review-question-nav-grid" : "review-question-nav-list"
       }
@@ -2439,6 +2522,7 @@ function QuestionNavigator({
           className={`review-question-nav-item${
             question.id === activeQuestionId ? " active" : ""
           }${answered ? " answered" : " unanswered"}`}
+          aria-label={`第 ${index + 1} 題，${answered ? "已作答" : "尚未作答"}${photoCount > 0 ? "，有拍照" : ""}`}
           aria-current={question.id === activeQuestionId ? "step" : undefined}
           onClick={() => onSelect(question.id)}
         >
@@ -2472,7 +2556,7 @@ function QuestionNavigator({
         <div className="review-question-mobile-nav-head">
           <ListChecks size={17} />
           <b>題號導覽</b>
-          <span>已答 {answeredCount}/{questions.length} 題</span>
+          <span>第 {Math.max(activeIndex + 1, 1)}/{questions.length} 題・已答 {answeredCount} 題</span>
         </div>
         {list(true)}
       </section>
