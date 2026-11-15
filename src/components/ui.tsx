@@ -348,6 +348,48 @@ export function FilterPanel({
   );
 }
 
+/** 篩選區塊的關鍵字欄位：左上標籤、輸入框固定 200px、[搜尋]按鈕緊接其右，與其他篩選器底部對齊。 */
+export function FilterSearchField({
+  label,
+  placeholder,
+  value,
+  onChange,
+  onSearch,
+  disabled,
+}: {
+  label: string;
+  placeholder?: string;
+  value: string;
+  onChange: (v: string) => void;
+  onSearch: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="form-field filter-search-field">
+      <label className="field-label">{label}</label>
+      <div className="filter-search-group">
+        <input
+          className="text-input filter-search-input"
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onSearch();
+          }}
+        />
+        <button
+          type="button"
+          className="button button-primary"
+          onClick={onSearch}
+          disabled={disabled}
+        >
+          搜尋
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** 列表區塊標題列（標題＋筆數＋右側操作）。需要自訂內容結構時可單獨使用。 */
 export function ListPanelHead({
   title,

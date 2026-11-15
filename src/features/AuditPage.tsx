@@ -53,6 +53,7 @@ import { dbIndexedQueryApi, fetchIndicatorMonths } from "../lib/indexedRecords";
 import {
   EmptyState,
   FilterPanel,
+  FilterSearchField,
   ListPanel,
   PageHeading,
   SectionTitle,
@@ -298,6 +299,7 @@ export function AuditPage({
   const [selProgress, setSelProgress] =
     useState<AuditProgressState>("active");
   const [keyword, setKeyword] = useState("");
+  const [keywordDraft, setKeywordDraft] = useState("");
   // 切到「已結束」才補讀歷史年份紀錄（之後維持已載入，避免來回切換重讀）
   const [historyLoaded, setHistoryLoaded] = useState(false);
   useEffect(() => {
@@ -1468,6 +1470,7 @@ export function AuditPage({
                 setSelGroup("");
                 setSelIndicator("");
                 setKeyword("");
+                setKeywordDraft("");
               }}
             >
               清除篩選
@@ -1535,15 +1538,13 @@ export function AuditPage({
               <ChevronDown size={15} />
             </div>
           </div>
-          <div className="form-field" style={{ maxWidth: 260 }}>
-            <label className="field-label">關鍵字</label>
-            <input
-              className="text-input"
-              placeholder="指標名稱或編號"
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-            />
-          </div>
+          <FilterSearchField
+            label="關鍵字"
+            placeholder="搜尋指標名稱或編號"
+            value={keywordDraft}
+            onChange={setKeywordDraft}
+            onSearch={() => setKeyword(keywordDraft)}
+          />
       </FilterPanel>
       <ListPanel title={progressTitle} count={filtered.length}>
         {progressNote && <p className="settings-note">{progressNote}</p>}

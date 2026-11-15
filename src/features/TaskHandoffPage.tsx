@@ -8,6 +8,7 @@ import { useAuth } from "../lib/auth";
 import {
   EmptyState,
   FilterPanel,
+  FilterSearchField,
   ListPanel,
   PageHeading,
   SectionTitle,
@@ -337,8 +338,7 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
       <FilterPanel title="原審查員">
           <label className="form-field"><span className="field-label">群組</span><select className="text-input" value={groupFilter} onChange={(e) => { setGroupFilter(e.target.value); setUnitFilter(""); }}><option value="">全部可管理群組</option>{availableGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</select></label>
           <label className="form-field"><span className="field-label">單位</span><select className="text-input" value={unitFilter} onChange={(e) => setUnitFilter(e.target.value)}><option value="">全部單位</option>{availableUnits.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
-          <label className="form-field"><span className="field-label">職編搜尋</span><input className="text-input" value={staffSearch} onChange={(e) => setStaffSearch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void runSearch(); }} placeholder="輸入原審查員職編" /></label>
-          <div className="form-field"><span className="field-label">&nbsp;</span><button type="button" className="button button-primary" onClick={() => void runSearch()} disabled={searching || refLoading}><Search size={15} />{searching ? "查詢中…" : "查詢"}</button></div>
+          <FilterSearchField label="職編搜尋" placeholder="輸入原審查員職編" value={staffSearch} onChange={setStaffSearch} onSearch={() => void runSearch()} disabled={searching || refLoading} />
       </FilterPanel>
       <p className="settings-note">群組／單位下拉與職編搜尋擇一使用；有填職編時以職編精確比對為準，群組／單位篩選不套用。</p>
       <ListPanel title="未完成任務" count={searched ? tasks.length : undefined}>

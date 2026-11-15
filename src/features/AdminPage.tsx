@@ -33,6 +33,7 @@ import {
 import {
   EmptyState,
   FilterPanel,
+  FilterSearchField,
   ListPanel,
   PageHeading,
   SectionTitle,
@@ -1141,6 +1142,7 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
   const [rows, setRows] = useState<AuditRow[] | null>(null);
   const [open, setOpen] = useState(false);
   const [keyword, setKeyword] = useState("");
+  const [keywordDraft, setKeywordDraft] = useState("");
   const [dateFilter, setDateFilter] = useState("");
 
   useEffect(() => {
@@ -1265,6 +1267,7 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
               className="button button-outline"
               onClick={() => {
                 setKeyword("");
+                setKeywordDraft("");
                 setDateFilter("");
               }}
             >
@@ -1273,15 +1276,13 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
           )
         }
       >
-        <div className="form-field">
-          <label className="field-label">關鍵字搜尋</label>
-          <input
-            className="text-input"
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-            placeholder="人員／動作／對象／說明"
-          />
-        </div>
+        <FilterSearchField
+          label="關鍵字搜尋"
+          placeholder="人員／動作／對象／說明"
+          value={keywordDraft}
+          onChange={setKeywordDraft}
+          onSearch={() => setKeyword(keywordDraft)}
+        />
         <div className="form-field">
           <label className="field-label">日期篩選</label>
           <input

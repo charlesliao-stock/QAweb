@@ -27,6 +27,7 @@ import { collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, where
 import {
   EmptyState,
   FilterPanel,
+  FilterSearchField,
   ListPanel,
   PageHeading,
   SectionTitle,
@@ -909,15 +910,14 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                 <ChevronDown size={15} />
               </div>
             </div>
-            <div className="form-field" style={{ maxWidth: 260 }}>
-              <label className="field-label">指標關鍵字</label>
-              <input
-                className="text-input"
-                placeholder="指標名稱或編號"
-                value={filterKeyword}
-                onChange={(e) => setFilterKeyword(e.target.value)}
-              />
-            </div>
+            <FilterSearchField
+              label="指標關鍵字"
+              placeholder="搜尋指標名稱或編號"
+              value={filterKeyword}
+              onChange={setFilterKeyword}
+              onSearch={() => void loadData()}
+              disabled={loading}
+            />
         </FilterPanel>
         <p className="settings-note">
           年別跟隨系統管理「統計週期」設定（年度＝1–12 月；學年度＝8 月制，8

@@ -24,6 +24,7 @@
 .capa-count{display:inline-flex;align-items:center;gap:5px;color:#86949a;font-size:11px;font-weight:500}
 .capa-count i{font-style:normal;color:#b3bec1}
 .capa-panel-head small{font-size:10px}
+.capa-search-field{padding:0 12px 8px}.capa-search-field .field-label{display:block;margin-bottom:4px;font-size:11px}.capa-search-row{display:flex;align-items:flex-end;gap:8px}.capa-search-row .capa-search{flex:0 1 200px;width:200px;min-width:0;margin:0}.capa-search-row .button{flex:none;min-height:37px}
 .capa-search{min-height:37px;margin:0 12px 8px;border-radius:8px;background:#fff}
 .capa-search:focus-within{border-color:#77aaa3;box-shadow:0 0 0 3px rgba(15,118,110,.08)}
 .capa-search input{font-size:11px}

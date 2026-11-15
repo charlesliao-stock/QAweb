@@ -25,6 +25,7 @@ import { collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, ser
 import {
   EmptyState,
   FilterPanel,
+  FilterSearchField,
   ListPanel,
   PageHeading,
   SectionTitle,
@@ -1685,32 +1686,33 @@ export function IndicatorsPage({
             </>
           }
         >
-          <div className="select-wrap indicator-filter-group">
-            <select
-              value={groupFilter}
-              aria-label="依組別篩選"
-              onChange={(e) => setGroupFilter(e.target.value)}
-            >
-              <option value="">全部組別</option>
-              {[...groupMap.entries()]
-                .sort((a, b) => a[1].localeCompare(b[1], "zh-Hant"))
-                .map(([id, name]) => (
-                  <option key={id} value={id}>
-                    {name}
-                  </option>
-                ))}
-            </select>
-            <ChevronDown size={15} />
+          <div className="form-field" style={{ maxWidth: 200 }}>
+            <label className="field-label">組別</label>
+            <div className="select-wrap indicator-filter-group">
+              <select
+                value={groupFilter}
+                aria-label="依組別篩選"
+                onChange={(e) => setGroupFilter(e.target.value)}
+              >
+                <option value="">全部組別</option>
+                {[...groupMap.entries()]
+                  .sort((a, b) => a[1].localeCompare(b[1], "zh-Hant"))
+                  .map(([id, name]) => (
+                    <option key={id} value={id}>
+                      {name}
+                    </option>
+                  ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
           </div>
-          <input
-            className="text-input indicator-filter-search"
-            placeholder="搜尋編號／指標名稱"
-            aria-label="依編號或指標名稱篩選"
+          <FilterSearchField
+            label="指標關鍵字"
+            placeholder="搜尋指標名稱或編號"
             value={searchKw}
-            onChange={(e) => setSearchKw(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void loadList();
-            }}
+            onChange={setSearchKw}
+            onSearch={() => void loadList()}
+            disabled={loading}
           />
         </FilterPanel>
       )}

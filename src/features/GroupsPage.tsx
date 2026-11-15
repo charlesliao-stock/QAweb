@@ -33,6 +33,7 @@ import {
   EmptyState,
   ErrorState,
   FilterPanel,
+  FilterSearchField,
   ListPanelHead,
   LoadingState,
   Modal,
@@ -3790,38 +3791,35 @@ export function GroupsPage({
             )
           }
         >
-          <div className="select-wrap">
-            <select
-              value={userUnitFilter}
-              aria-label="依單位篩選人員"
-              onChange={(e) => setUserUnitFilter(e.target.value)}
-            >
-              <option value="">全部單位</option>
-              {units.map((unit) => (
-                <option key={unit.code} value={unit.code}>
-                  {unit.name}（{unit.code}）
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={15} />
+          <div className="form-field" style={{ maxWidth: 240 }}>
+            <label className="field-label">單位</label>
+            <div className="select-wrap">
+              <select
+                value={userUnitFilter}
+                aria-label="依單位篩選人員"
+                onChange={(e) => setUserUnitFilter(e.target.value)}
+              >
+                <option value="">全部單位</option>
+                {units.map((unit) => (
+                  <option key={unit.code} value={unit.code}>
+                    {unit.name}（{unit.code}）
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
           </div>
-          <input
-            className="text-input"
+          <FilterSearchField
+            label="人員關鍵字"
             placeholder="搜尋職編／姓名"
-            aria-label="搜尋職編或姓名"
             value={userSearch}
-            onChange={(e) => setUserSearch(e.target.value)}
-          />
-          <button
-            className="button button-primary button-sm"
-            onClick={() => {
+            onChange={setUserSearch}
+            onSearch={() => {
               setAppliedUserUnitFilter(userUnitFilter);
               setAppliedUserSearch(userSearch);
               setUsersSearched(true);
             }}
-          >
-            查詢
-          </button>
+          />
           <button
             className="button button-outline button-sm"
             disabled={backfilling}
@@ -3851,38 +3849,35 @@ export function GroupsPage({
             )
           }
         >
-          <div className="select-wrap">
-            <select
-              value={unitGroupFilter}
-              aria-label="依組別篩選單位"
-              onChange={(e) => setUnitGroupFilter(e.target.value)}
-            >
-              <option value="">全部組別</option>
-              {groups.map((group) => (
-                <option key={group.id} value={group.id}>
-                  {group.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={15} />
+          <div className="form-field" style={{ maxWidth: 240 }}>
+            <label className="field-label">組別</label>
+            <div className="select-wrap">
+              <select
+                value={unitGroupFilter}
+                aria-label="依組別篩選單位"
+                onChange={(e) => setUnitGroupFilter(e.target.value)}
+              >
+                <option value="">全部組別</option>
+                {groups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </div>
           </div>
-          <input
-            className="text-input"
+          <FilterSearchField
+            label="單位關鍵字"
             placeholder="搜尋單位代號／名稱"
-            aria-label="搜尋單位代號或名稱"
             value={unitSearch}
-            onChange={(e) => setUnitSearch(e.target.value)}
-          />
-          <button
-            className="button button-primary button-sm"
-            onClick={() => {
+            onChange={setUnitSearch}
+            onSearch={() => {
               setAppliedUnitGroupFilter(unitGroupFilter);
               setAppliedUnitSearch(unitSearch);
               setUnitsSearched(true);
             }}
-          >
-            查詢
-          </button>
+          />
         </FilterPanel>
       )}
 

@@ -389,6 +389,32 @@ th[aria-sort="descending"] .th-sort .lucide {
 .filter-panel .select-wrap {
   min-width: 160px;
 }
+/* 關鍵字欄位：輸入框 200px，[搜尋]緊接其右，整排底部對齊 */
+.filter-search-group {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.filter-panel .filter-search-input {
+  width: 200px;
+  min-width: 200px;
+  max-width: 200px;
+}
+.filter-panel-body .field-label {
+  display: block;
+  text-align: left;
+}
+@media (max-width: 720px) {
+  .filter-panel .filter-search-input {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+  .filter-search-group {
+    width: 100%;
+  }
+}
 
 /* 結果分析頁：篩選區塊內沿用原有欄位寬度，並維持捲動時固定在頂端 */
 .results-page .filter-panel-body .field-label {

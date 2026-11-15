@@ -20,6 +20,7 @@ import {
   Download,
   FileText,
   Plus,
+  Search,
   TrendingUp,
   Upload,
   X,
@@ -3111,7 +3112,19 @@ function ReviewResultManager({
 
   return (
     <section className="review-results-manager">
-      <FilterPanel>
+      <FilterPanel
+        actions={
+          <button
+            className="button button-primary"
+            type="button"
+            disabled={busy || start > end}
+            onClick={queryResults}
+          >
+            <Search size={16} />
+            查詢
+          </button>
+        }
+      >
         <SelectField
           label="組別"
           value={groupId}
@@ -3167,16 +3180,6 @@ function ReviewResultManager({
           onChange={setEnd}
           ariaLabel="結束西元年月"
         />
-        <div className="results-query-actions">
-          <button
-            className="button button-primary"
-            type="button"
-            disabled={busy || start > end}
-            onClick={queryResults}
-          >
-            查詢
-          </button>
-        </div>
       </FilterPanel>
       {error && (
         <p className="results-range-error" role="alert">
