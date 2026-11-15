@@ -12,7 +12,7 @@
  * 一般人員只看自己單位（沿用舊頁規則）。
  */
 import { loadRefCollection } from "../lib/refLoad";
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown,
   ChevronLeft,
@@ -230,6 +230,8 @@ interface DrillState {
   /** 單位分析限定該單位；組別／指標分析為 undefined（全部單位） */
   scopeUnitId?: string;
   l2UnitId: string | null;
+  /** v1.73.0：「顯示近 N 次」點歷史月份格子下探時，L2 只看該月（未設＝點選的期間欄） */
+  l2Months?: { year: number; month: number }[];
   /** v1.50.0：直接開 L2 人員層級（全部單位），不經 L1 單位列表 */
   l2All?: boolean;
   /** v1.50.0：分組／逐題篩選（section key：group-…／question-…／historical-…），只顯示該分組／該題的個人結果 */
@@ -1110,10 +1112,123 @@ export function ResultsPage({
    * Map<指標, Map<曆年月, 紀錄[]>>，cellValue／曲線／明細／下探改查表，
    * 不再每格對全部 scopedRecords 做 filter。
    */
+  // v1.73.0：「顯示近 N 次」補讀的歷史月份紀錄（已封存或超出查詢年份者）；
+  // 套用同一權限範圍後併入 recordIndex，換查詢條件（records 變動）即清空。
+  const [historyExtra, setHistoryExtra] = useState<AnalysisRecord[]>([]);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyNote, setHistoryNote] = useState("");
+  const historyFetched = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    historyFetched.current = new Set();
+    setHistoryExtra([]);
+    setHistoryNote("");
+  }, [records]);
+  const scopedHistory = useMemo(() => {
+    if (historyExtra.length === 0) return historyExtra;
+    if (scope.kind === "admin") return historyExtra;
+    if (scope.kind === "staff")
+      return historyExtra.filter((r) => visibleUnitCodes.has(r.unitId));
+    const unitIds = new Set(
+      tasks.filter((t) => t.reviewerId === scope.staffId).map((t) => t.unitId),
+    );
+    return historyExtra.filter((r) => unitIds.has(r.unitId));
+  }, [historyExtra, tasks, scope, visibleUnitCodes]);
   const recordIndex = useMemo(
-    () => buildRecordIndex(scopedRecords),
-    [scopedRecords],
+    () => buildRecordIndex(scopedHistory.length > 0 ? [...scopedRecords, ...scopedHistory] : scopedRecords),
+    [scopedRecords, scopedHistory],
   );
+  const recordIndexRef = useRef(recordIndex);
+  recordIndexRef.current = recordIndex;
+  const archiveCtxRef = useRef(archiveCtx);
+  archiveCtxRef.current = archiveCtx;
+  /**
+   * 「顯示近 N 次」：找出選定期間之前、該指標有資料的前 N 個月（原始紀錄已載入，或封存摘要
+   * 有該月），缺原始紀錄的月份只對該月補讀；不足 N 個月再逐年往前補讀（最多 3 年）。
+   */
+  const ensureHistory = useCallback(async (indicatorId: string, beforeKey: number, n: number): Promise<void> => {
+    setHistoryBusy(true);
+    setHistoryNote("");
+    try {
+      const db = getFirebaseDb();
+      const added: AnalysisRecord[] = [];
+      const toAnalysis = (d: { id: string; data: () => unknown }) => {
+        const v = d.data() as Record<string, unknown>;
+        const rec = recordDocToAnalysis(d.id, v);
+        rec.taskId = typeof v.taskId === "string" ? v.taskId : undefined;
+        return rec;
+      };
+      const knownKeys = () => {
+        const keys = new Set<number>(recordIndexRef.current.get(indicatorId)?.keys() ?? []);
+        for (const k of historyFetched.current) {
+          const [ind, ym] = k.split("|");
+          if (ind === indicatorId && ym.includes("-")) {
+            const [y, m] = ym.split("-").map(Number);
+            keys.add(y * 100 + m);
+          }
+        }
+        for (const sm of archiveCtxRef.current?.summaries.values() ?? []) {
+          if (sm.indicatorId !== indicatorId) continue;
+          for (const c of sm.cells) if (c.total > 0) keys.add(c.year * 100 + c.month);
+        }
+        return keys;
+      };
+      for (let round = 0; round < 4; round++) {
+        const target = [...knownKeys()].filter((k) => k < beforeKey).sort((a, b) => b - a).slice(0, n);
+        const rawKeys = new Set<number>(recordIndexRef.current.get(indicatorId)?.keys() ?? []);
+        const need = target.filter((k) => {
+          if (rawKeys.has(k)) return false;
+          return !historyFetched.current.has(`${indicatorId}|${Math.floor(k / 100)}-${k % 100}`);
+        });
+        if (need.length > 0) {
+          const byYear = new Map<number, number[]>();
+          for (const k of need) {
+            const y = Math.floor(k / 100);
+            byYear.set(y, [...(byYear.get(y) ?? []), k % 100]);
+          }
+          const got = await Promise.all(
+            [...byYear].map(([year, months]) =>
+              fetchIndicatorMonths(dbIndexedQueryApi, collection(db, "reviewRecords"), { indicatorId, year, months }),
+            ),
+          );
+          got.forEach((snap, i) => {
+            const year = [...byYear.keys()][i];
+            for (const m of byYear.get(year) ?? []) historyFetched.current.add(`${indicatorId}|${year}-${m}`);
+            snap.docs.forEach((d) => added.push(toAnalysis(d)));
+          });
+          if (added.length > 0) {
+            const batch = [...added];
+            added.length = 0;
+            setHistoryExtra((prev) => [...prev, ...batch]);
+          }
+          continue;
+        }
+        if (target.length >= n) break;
+        // 已知月份不足 N 個：再往前補讀一年（該指標整年）
+        const earliest = Math.min(beforeKey, ...[...knownKeys()]);
+        const y = Math.floor(earliest / 100) - 1;
+        const yk = `${indicatorId}|${y}`;
+        if (round >= 3 || historyFetched.current.has(yk)) break;
+        historyFetched.current.add(yk);
+        const snap = await fetchYearDocs(dbIndexedQueryApi, collection(db, "reviewRecords"), { indicatorId, year: y });
+        const batch: AnalysisRecord[] = [];
+        snap.docs.forEach((d) => {
+          const rec = toAnalysis(d);
+          const mk = `${indicatorId}|${rec.year}-${rec.month}`;
+          if (historyFetched.current.has(mk) || recordIndexRef.current.get(indicatorId)?.has(rec.year * 100 + rec.month)) return;
+          batch.push(rec);
+        });
+        for (const r of batch) historyFetched.current.add(`${indicatorId}|${r.year}-${r.month}`);
+        if (batch.length === 0) break;
+        setHistoryExtra((prev) => [...prev, ...batch]);
+      }
+      const finalTarget = [...knownKeys()].filter((k) => k < beforeKey).length;
+      if (finalTarget < n) setHistoryNote(`該指標在此之前只找到 ${finalTarget} 次審查資料。`);
+    } catch {
+      setHistoryNote("歷史月份讀取失敗（可能是系統用量額度已滿），稍後再試。");
+    } finally {
+      setHistoryBusy(false);
+    }
+  }, []);
 
   /** v1.66.0：有封存摘要的指標＝已封存月份的摘要格＋其餘月份原始紀錄現算的格 */
   const hybridByInd = useMemo(() => {
@@ -2712,13 +2827,19 @@ export function ResultsPage({
             setDrill({
               ...drill,
               l2UnitId: null,
+              l2Months: undefined,
               l2All: false,
               sectionKey: undefined,
               questionId: undefined,
               optionLabel: undefined,
             })
           }
-          onSelectUnit={(unitId) => setDrill({ ...drill, l2UnitId: unitId })}
+          onSelectUnit={(unitId, month) =>
+            setDrill({ ...drill, l2UnitId: unitId, l2Months: month ? [month] : undefined })
+          }
+          onNeedHistory={ensureHistory}
+          historyBusy={historyBusy}
+          historyNote={historyNote}
           recordIndex={recordIndex}
           indOf={indOf}
           unitNameOf={unitNameOf}
@@ -3594,6 +3715,9 @@ function DrillModal({
   onClose,
   onBackToL1,
   onSelectUnit,
+  onNeedHistory,
+  historyBusy,
+  historyNote,
   recordIndex,
   indOf,
   unitNameOf,
@@ -3601,7 +3725,10 @@ function DrillModal({
   drill: DrillState;
   onClose: () => void;
   onBackToL1: () => void;
-  onSelectUnit: (unitId: string) => void;
+  onSelectUnit: (unitId: string, month?: { year: number; month: number }) => void;
+  onNeedHistory: (indicatorId: string, beforeKey: number, n: number) => Promise<void>;
+  historyBusy: boolean;
+  historyNote: string;
   recordIndex: RecordIndex;
   indOf: Map<string, IndicatorOpt>;
   unitNameOf: Map<string, string>;
@@ -3609,33 +3736,46 @@ function DrillModal({
   const ind = indOf.get(drill.indicatorId);
   const th = ind?.threshold ?? 0;
   const col = drill.column;
+  // v1.73.0：L2 的期間月份——點歷史月份格子時只看該月，否則為選定的期間欄
+  const l2Months = drill.l2Months ?? col.months;
   const [showRecentResults, setShowRecentResults] = useState(false);
   const [recentResultCount, setRecentResultCount] = useState(3);
+  const currentStartKey = useMemo(
+    () => Math.min(...col.months.map(({ year, month }) => year * 100 + month)),
+    [col.months],
+  );
+  // 勾選「顯示近 N 次」時，自動補讀尚未載入的歷史月份（見 ensureHistory）
+  useEffect(() => {
+    if (!showRecentResults) return;
+    void onNeedHistory(drill.indicatorId, currentStartKey, recentResultCount);
+  }, [showRecentResults, drill.indicatorId, currentStartKey, recentResultCount, onNeedHistory]);
+  // 歷史月份：選定期間之前、有資料的前 N 個月，由舊到新排列（選定月在最右）
   const historyMonths = useMemo(() => {
     const byMonth = recordIndex.get(drill.indicatorId);
     if (!byMonth) return [] as { year: number; month: number; key: number; label: string }[];
-    const currentStart = Math.min(...col.months.map(({ year, month }) => year * 100 + month));
+    const currentStart = currentStartKey;
     return [...byMonth.keys()]
-      .filter((key) => key < currentStart)
+      .filter((key) => key < currentStart && (byMonth.get(key)?.length ?? 0) > 0)
       .sort((a, b) => b - a)
       .slice(0, recentResultCount)
+      .reverse()
       .map((key) => {
         const year = Math.floor(key / 100);
         const month = key % 100;
         return { year, month, key, label: `${year}/${String(month).padStart(2, "0")}` };
       });
-  }, [recordIndex, drill.indicatorId, col.months, recentResultCount]);
+  }, [recordIndex, drill.indicatorId, currentStartKey, recentResultCount]);
   // v1.50.0：分組／逐題／選項篩選——只顯示該分組／該題的個人結果
   const section = useMemo(() => {
     if (!drill.sectionKey || !ind) return null;
     const scopeRecs = recordsForIndex(
       recordIndex,
       drill.indicatorId,
-      col.months,
+      [...col.months, ...(drill.l2Months ?? [])],
       drill.scopeUnitId,
     );
     return resolveDrillSection(ind.questions, drill.sectionKey, scopeRecs);
-  }, [recordIndex, drill.indicatorId, drill.sectionKey, drill.scopeUnitId, col, ind]);
+  }, [recordIndex, drill.indicatorId, drill.sectionKey, drill.scopeUnitId, drill.l2Months, col, ind]);
   const filterIds = useMemo(() => {
     if (section) return section.ids;
     if (drill.questionId) return [drill.questionId];
@@ -3670,7 +3810,7 @@ function DrillModal({
     const scopeRecs = recordsForIndex(
       recordIndex,
       drill.indicatorId,
-      col.months,
+      l2Months,
       drill.scopeUnitId,
     );
     const list: AuditQuestion[] = [];
@@ -3695,7 +3835,7 @@ function DrillModal({
       });
     }
     return list;
-  }, [ind, filterIds, recordIndex, drill.indicatorId, drill.scopeUnitId, col]);
+  }, [ind, filterIds, recordIndex, drill.indicatorId, drill.scopeUnitId, l2Months]);
   // L1 列：分母單元的單位（該指標該期間欄內有審查紀錄的單位）
   const l1Units = useMemo(() => {
     // A3：查表取該指標該期間欄的紀錄（可再限單位）。
@@ -3735,7 +3875,7 @@ function DrillModal({
     const recs = recordsForIndex(
       recordIndex,
       drill.indicatorId,
-      col.months,
+      l2Months,
       drill.l2UnitId ?? drill.scopeUnitId,
     );
     const rows = personOptionRows(recs, th);
@@ -3746,7 +3886,7 @@ function DrillModal({
       );
     }
     return rows;
-  }, [recordIndex, drill.indicatorId, drill.l2UnitId, drill.scopeUnitId, col, th, l2Active, drill.optionLabel, drill.questionId]);
+  }, [recordIndex, drill.indicatorId, drill.l2UnitId, drill.scopeUnitId, l2Months, th, l2Active, drill.optionLabel, drill.questionId]);
   // L2 轉置（v1.27.1）：直向＝題目、橫向＝人員（職編/遮罩姓名，v1.40.2），中間＝審查結果
   const l2Matrix = useMemo(
     () =>
@@ -3804,7 +3944,7 @@ function DrillModal({
             <h2>{title}</h2>
             <p>
               {l2Active
-                ? `${col.label}・${l2UnitLabel}・被審人員各選項結果${filterLabel ? `・${filterLabel}` : ""}`
+                ? `${drill.l2Months?.length === 1 ? `${drill.l2Months[0].year}/${String(drill.l2Months[0].month).padStart(2, "0")}` : col.label}・${l2UnitLabel}・被審人員各選項結果${filterLabel ? `・${filterLabel}` : ""}`
                 : `${col.label}・各單位審查結果（點選格子看被審人員）${filterLabel ? `・${filterLabel}` : ""}`}
             </p>
           </div>
@@ -3827,15 +3967,19 @@ function DrillModal({
               </select>
               次的審查結果
             </label>
-            {showRecentResults && <span className="muted-text">歷史結果包含所選查詢年份及前一年度資料。</span>}
+            {showRecentResults && (
+              <span className="muted-text">
+                {historyBusy ? "補讀歷史月份中…" : historyNote || "由舊到新排列，選定月份在最右；點格子可看該月被審人員。"}
+              </span>
+            )}
           </div>
           <div className="analysis-table-wrap">
             <table className="data-table analysis-matrix">
               <thead>
                 <tr>
                   <th className="ind-col">單位</th>
-                  <th className="rate-col">{col.label}</th>
                   {showRecentResults && historyMonths.map((month) => <th key={month.key} className="rate-col">{month.label}</th>)}
+                  <th className="rate-col" style={showRecentResults ? { background: "#eef4ff" } : undefined}>{col.label}</th>
                 </tr>
               </thead>
               <tbody>
@@ -3852,6 +3996,29 @@ function DrillModal({
                         <td className="ind-col">
                           {unitId === "" ? "NA" : `${unitId}・${unitNameOf.get(unitId) ?? ""}`}
                         </td>
+                        {showRecentResults && historyMonths.map((month) => {
+                          const recs = recordsForIndex(recordIndex, drill.indicatorId, [{ year: month.year, month: month.month }], unitId);
+                          // 與選定月相同的內容：套用同一分組／題目篩選與閾值
+                          const hp = filterIds && filterKind
+                            ? sectionPassRateOf(recs, filterIds, filterKind, th)
+                            : passRateOf(recs, th);
+                          const hCell: CellValue = { ...hp, title: hp.total === 0 ? "無資料" : `達閾值 ${hp.pass}／${hp.total} 人次` };
+                          const hClickable = hp.rate != null;
+                          const pick = () => onSelectUnit(unitId, { year: month.year, month: month.month });
+                          return (
+                            <td
+                              key={month.key}
+                              className={`rate-cell${hClickable ? " clickable" : ""}${hp.rate != null && th > 0 && hp.rate < th ? " below" : ""}`}
+                              title={hClickable ? `${hCell.title}（點選看被審人員）` : hCell.title}
+                              onClick={hClickable ? pick : undefined}
+                              role={hClickable ? "button" : undefined}
+                              tabIndex={hClickable ? 0 : undefined}
+                              onKeyDown={hClickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } } : undefined}
+                            >
+                              {hp.total === 0 ? "—" : fmtCell(hCell)}
+                            </td>
+                          );
+                        })}
                         <td
                           className={`rate-cell${clickable ? " clickable" : ""}${cell?.rate != null && th > 0 && cell.rate < th ? " below" : ""}`}
                           title={
@@ -3877,13 +4044,6 @@ function DrillModal({
                         >
                           {cell ? fmtCell(cell) : "—"}
                         </td>
-                        {showRecentResults && historyMonths.map((month) => {
-                          const history = passRateOf(
-                            recordsForIndex(recordIndex, drill.indicatorId, [{ year: month.year, month: month.month }], unitId),
-                            th,
-                          );
-                          return <td key={month.key} className={`rate-cell${history.rate != null && th > 0 && history.rate < th ? " below" : ""}`} title={history.rate != null && th > 0 && history.rate < th ? "未達閾值" : "達閾值"}>{fmtRate(history.rate)}</td>;
-                        })}
                       </tr>
                     );
                   })
