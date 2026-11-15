@@ -13,6 +13,7 @@ import {
   type DashboardSections,
 } from "../../lib/dashboardSections";
 import type { DashboardData } from "./useDashboardData";
+import { pad2 } from "../../lib/ym";
 
 export function NurseTab({
   data,
@@ -133,7 +134,7 @@ export function NurseTab({
       {sections.focusIndicators && (
         <section className="panel">
         <SectionTitle
-          title={`單位本月重點指標（${curYear}/${String(curMonth).padStart(2, "0")}）`}
+          title={`單位本月重點指標（${curYear}/${pad2(curMonth)}）`}
           note={unitCode || "未設定單位"}
         />
         {focusIndicators.length === 0 ? (

@@ -14,6 +14,7 @@ import {
   type ScheduleLike,
 } from "./reviewActive";
 import { summaryDocId } from "./reviewSummary";
+import { pad2 } from "./ym";
 
 export interface EndedIntervalInfo {
   indicatorId: string;
@@ -28,8 +29,7 @@ export interface EndedIntervalInfo {
 }
 
 function ymd(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
 /** 區間結束後滿一個月的最後一天（結束月＋1 個月的月底）；今天晚於它即逾期 */

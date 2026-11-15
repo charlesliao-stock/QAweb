@@ -29,7 +29,8 @@ import {
   PageHeading,
   SectionTitle,
   SortableTh,
-  type SortState,
+  FormSelect,
+  useSortState,
 } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
@@ -806,8 +807,7 @@ export function IndicatorsPage({
   const [queried, setQueried] = useState(false);
   const [searchKw, setSearchKw] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
-  const [sortKey, setSortKey] = useState<IndicatorSortKey>("code");
-  const [sortDir, setSortDir] = useState<1 | -1>(1);
+  const { sortKey, sortDir, toggleSort, tableSort } = useSortState<IndicatorSortKey>("code");
   const [form, setForm] = useState<IndicatorForm>(emptyForm);
   const [formError, setFormError] = useState("");
   const [formTab, setFormTab] = useState<FormTab>("basic");
@@ -921,21 +921,6 @@ export function IndicatorsPage({
       setLoading(false);
     }
   }, [onAction]);
-
-  /** 清單排序切換（沿用審查員頁籤 ▲▼ 模式） */
-  const tableSort: SortState<IndicatorSortKey> = {
-    key: sortKey,
-    direction: sortDir === 1 ? "asc" : "desc",
-  };
-
-  function toggleSort(key: IndicatorSortKey) {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 1 ? -1 : 1));
-    } else {
-      setSortKey(key);
-      setSortDir(1);
-    }
-  }
 
   /** 搜尋（編號＋名稱）＋排序後的清單列 */
   const visibleRows = useMemo(() => {
@@ -1663,26 +1648,21 @@ export function IndicatorsPage({
             )
           }
         >
-          <div className="form-field" style={{ maxWidth: 200 }}>
-            <label className="field-label">組別</label>
-            <div className="select-wrap indicator-filter-group">
-              <select
-                value={groupFilter}
-                aria-label="依組別篩選"
-                onChange={(e) => setGroupFilter(e.target.value)}
-              >
-                <option value="">全部組別</option>
-                {[...groupMap.entries()]
-                  .sort((a, b) => a[1].localeCompare(b[1], "zh-Hant"))
-                  .map(([id, name]) => (
-                    <option key={id} value={id}>
-                      {name}
-                    </option>
-                  ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </div>
+          <FormSelect
+            label="組別"
+            value={groupFilter}
+            aria-label="依組別篩選"
+            onChange={(e) => setGroupFilter(e.target.value)}
+          >
+            <option value="">全部組別</option>
+            {[...groupMap.entries()]
+              .sort((a, b) => a[1].localeCompare(b[1], "zh-Hant"))
+              .map(([id, name]) => (
+                <option key={id} value={id}>
+                  {name}
+                </option>
+              ))}
+          </FormSelect>
           <FilterSearchField
             label="指標關鍵字"
             placeholder="搜尋指標名稱或編號"
@@ -1863,24 +1843,16 @@ export function IndicatorsPage({
             <>
               <SectionTitle title="基本資料" note="六欄皆為必填" />
               <div className="form-stack">
-                <div className="form-field">
-                  <label className="field-label">組別 *</label>
-                  <div className="select-wrap">
-                    <select
-                      value={form.groupId}
+                <FormSelect label="組別 *" value={form.groupId}
                       disabled={isEditing}
-                      onChange={(e) => setField("groupId", e.target.value)}
-                    >
+                      onChange={(e) => setField("groupId", e.target.value)}>
                       <option value="">請選擇組別</option>
                       {[...groupMap.entries()].map(([id, name]) => (
                         <option key={id} value={id}>
                           {name}
                         </option>
                       ))}
-                    </select>
-                    <ChevronDown size={15} />
-                  </div>
-                </div>
+                    </FormSelect>
                 <div className="form-field">
                   <label className="field-label">指標編號 *</label>
                   <input
@@ -2901,7 +2873,7 @@ function BatchAddDialog({
       await commitBatchSave(plan, "replace");
     } catch (error) {
       onAction(
-        `批次新增失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
+        `批次新增失敗：${toErrorMessage(error, "讀寫失敗")}`,
       );
     } finally {
       setSaving(false);
@@ -3172,7 +3144,7 @@ function BatchAddDialog({
     } catch (error) {
       setSaveChoice(null);
       onAction(
-        `批次儲存失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
+        `批次儲存失敗：${toErrorMessage(error, "讀寫失敗")}`,
       );
     } finally {
       setSaving(false);

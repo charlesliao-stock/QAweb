@@ -89,6 +89,7 @@ import {
   SortableTh,
   SummaryCell,
   useTableSort,
+  FormSelect,
 } from "../components/ui";
 import { TrendChart } from "../components/TrendChart";
 import {
@@ -146,6 +147,8 @@ import {
   buildTempTaskKeys,
   columnTempNote,
 } from "../lib/tempChartNote";
+import { pad2, shiftYm, ymKeyOf } from "../lib/ym";
+import { toErrorMessage } from "../lib/errors";
 
 interface IndicatorOpt {
   id: string;
@@ -304,7 +307,7 @@ function ResultMonthPicker({
             setOpen((current) => !current);
           }}
         >
-          {year}年{String(month).padStart(2, "0")}月
+          {year}年{pad2(month)}月
           <ChevronDown size={15} />
         </button>
         {open && (
@@ -333,7 +336,7 @@ function ResultMonthPicker({
                   key={item}
                   className={year === displayYear && month === item ? "active" : ""}
                   onClick={() => {
-                    onChange(`${displayYear}-${String(item).padStart(2, "0")}`);
+                    onChange(`${displayYear}-${pad2(item)}`);
                     setOpen(false);
                   }}
                 >
@@ -442,7 +445,7 @@ export function ResultsPage({
     `${now.getFullYear()}-01`,
   );
   const [endMonth, setEndMonth] = useState(
-    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`,
+    `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`,
   );
   const [interval, setInterval] = useState<AnalysisGranularity>("month");
   /** v1.40.2「未審月份不顯示」：勾選時隱藏該期間欄內零審查的欄位；預設不勾選，全部顯示。純顯示切換，不觸發重新查詢。 */
@@ -717,16 +720,11 @@ export function ResultsPage({
         .filter((sm) => sm.indicatorId === id && sm.schemaVersion === SUMMARY_SCHEMA_VERSION)
         .sort((a, b) => a.id.localeCompare(b.id));
       for (const sm of list) {
-        let y = sm.start.year;
-        let m = sm.start.month;
-        while (y * 12 + m <= sm.end.year * 12 + sm.end.month) {
-          const k = `${y}-${m}`;
+        let cur = { year: sm.start.year, month: sm.start.month };
+        while (cur.year * 12 + cur.month <= sm.end.year * 12 + sm.end.month) {
+          const k = ymKeyOf(cur.year, cur.month);
           if (!owner.has(k)) owner.set(k, sm.id);
-          m += 1;
-          if (m > 12) {
-            m = 1;
-            y += 1;
-          }
+          cur = shiftYm(cur.year, cur.month, 1);
         }
       }
       const coveredKeys: string[] = wantedList.filter(
@@ -2931,7 +2929,7 @@ function ReviewResultManager({
   const [indicatorId, setIndicatorId] = useState("");
   const [start, setStart] = useState(`${now.getFullYear()}-01`);
   const [end, setEnd] = useState(
-    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`,
+    `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`,
   );
   const [rows, setRows] = useState<ManagedResult[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
@@ -3000,7 +2998,7 @@ function ReviewResultManager({
           const value = document.data() as Record<string, unknown>;
           const year = Number(value.year ?? 0);
           const month = Number(value.month ?? 0);
-          const yearMonth = `${year}-${String(month).padStart(2, "0")}`;
+          const yearMonth = `${year}-${pad2(month)}`;
           const recordUnitId = String(value.unitId ?? "");
           const recordIndicatorId = String(value.indicatorId ?? "");
           const recordGroupId =
@@ -3057,7 +3055,7 @@ function ReviewResultManager({
       setRows([]);
       setQueried(true);
       setError(
-        `查詢失敗：${queryError instanceof Error ? queryError.message : String(queryError)}`,
+        `查詢失敗：${toErrorMessage(queryError)}`,
       );
     } finally {
       setBusy(false);
@@ -3128,7 +3126,7 @@ function ReviewResultManager({
       setRows((current) => current.filter((row) => !removed.includes(row.id)));
       setSelected((current) => current.filter((id) => !removed.includes(id)));
       if (removed.length > 0) onDone(years);
-      const message = `刪除部分失敗：已成功刪除 ${removed.length} 筆，尚有 ${ids.length - removed.length} 筆未完成。${deleteError instanceof Error ? deleteError.message : String(deleteError)}`;
+      const message = `刪除部分失敗：已成功刪除 ${removed.length} 筆，尚有 ${ids.length - removed.length} 筆未完成。${toErrorMessage(deleteError)}`;
       setError(message);
       onAction(message);
     } finally {
@@ -3277,7 +3275,7 @@ function ReviewResultManager({
                         <td>
                           <input
                             type="checkbox"
-                            aria-label={`選取 ${row.year}/${String(row.month).padStart(2, "0")} ${indicatorName(row.indicatorId)} ${row.reviewedPersonName || "審查結果"}`}
+                            aria-label={`選取 ${row.year}/${pad2(row.month)} ${indicatorName(row.indicatorId)} ${row.reviewedPersonName || "審查結果"}`}
                             checked={selected.includes(row.id)}
                             disabled={busy}
                             onChange={(event) =>
@@ -3290,7 +3288,7 @@ function ReviewResultManager({
                           />
                         </td>
                         <td>
-                          {row.year}/{String(row.month).padStart(2, "0")}
+                          {row.year}/{pad2(row.month)}
                         </td>
                         <td>{unitName(row.unitId)}</td>
                         <td>{indicatorName(row.indicatorId)}</td>
@@ -3374,7 +3372,7 @@ function ReviewResultManager({
                     <label className="review-result-card-select">
                       <input
                         type="checkbox"
-                        aria-label={`選取 ${row.year}/${String(row.month).padStart(2, "0")} ${indicatorName(row.indicatorId)} ${row.reviewedPersonName || "審查結果"}`}
+                        aria-label={`選取 ${row.year}/${pad2(row.month)} ${indicatorName(row.indicatorId)} ${row.reviewedPersonName || "審查結果"}`}
                         checked={selected.includes(row.id)}
                         disabled={busy}
                         onChange={(event) =>
@@ -3385,7 +3383,7 @@ function ReviewResultManager({
                           )
                         }
                       />
-                      <span>{row.year}/{String(row.month).padStart(2, "0")}</span>
+                      <span>{row.year}/{pad2(row.month)}</span>
                     </label>
                     <strong>{row.rate == null ? "—" : `${row.rate}%`}</strong>
                   </header>
@@ -3724,7 +3722,7 @@ function CauseDrillModal({
                     <tr key={`${entry.record.personEmpNo}-${entry.record.year}-${entry.record.month}-${entry.questionId}-${i}`}>
                       <td>{ind ? `${ind.code}・${ind.name}` : entry.record.indicatorId}</td>
                       <td>{entry.record.unitId === "" ? "NA" : `${entry.record.unitId}・${unitNameOf.get(entry.record.unitId) ?? ""}`}</td>
-                      <td>{entry.record.year}/{String(entry.record.month).padStart(2, "0")}</td>
+                      <td>{entry.record.year}/{pad2(entry.record.month)}</td>
                       <td>{staffLabel(entry.record.personEmpNo, entry.record.personName)}</td>
                       <td>{entry.itemText}</td>
                       <td>{entry.optionLabel}</td>
@@ -3792,7 +3790,7 @@ function DrillModal({
       .map((key) => {
         const year = Math.floor(key / 100);
         const month = key % 100;
-        return { year, month, key, label: `${year}/${String(month).padStart(2, "0")}` };
+        return { year, month, key, label: `${year}/${pad2(month)}` };
       });
   }, [recordIndex, drill.indicatorId, currentStartKey, recentResultCount]);
   // v1.50.0：分組／逐題／選項篩選——只顯示該分組／該題的個人結果
@@ -3942,7 +3940,7 @@ function DrillModal({
         return {
           key: `${row.personEmpNo}-${row.year}-${row.month}-${i}`,
           label: l2Matrix.headers[i] ?? row.personEmpNo,
-          monthLabel: `${row.year}/${String(row.month).padStart(2, "0")}`,
+          monthLabel: `${row.year}/${pad2(row.month)}`,
           bedNo: row.bedNo,
           text,
         };
@@ -3974,7 +3972,7 @@ function DrillModal({
             <h2>{title}</h2>
             <p>
               {l2Active
-                ? `${drill.l2Months?.length === 1 ? `${drill.l2Months[0].year}/${String(drill.l2Months[0].month).padStart(2, "0")}` : col.label}・${l2UnitLabel}・被審人員各選項結果${filterLabel ? `・${filterLabel}` : ""}`
+                ? `${drill.l2Months?.length === 1 ? `${drill.l2Months[0].year}/${pad2(drill.l2Months[0].month)}` : col.label}・${l2UnitLabel}・被審人員各選項結果${filterLabel ? `・${filterLabel}` : ""}`
                 : `${col.label}・各單位審查結果（點選格子看被審人員）${filterLabel ? `・${filterLabel}` : ""}`}
             </p>
           </div>
@@ -4512,7 +4510,7 @@ function ResultImportPanel({
       );
     } catch (error) {
       setErrors([
-        `讀取檔案失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
+        `讀取檔案失敗：${toErrorMessage(error, "讀寫失敗")}`,
       ]);
     } finally {
       setBusy(false);
@@ -4634,7 +4632,7 @@ function ResultImportPanel({
       onDone([...new Set(toWrite.map((r) => r.values!.year))]);
     } catch (error) {
       setErrors([
-        `匯入失敗：${error instanceof Error ? error.message : "讀寫失敗"}`,
+        `匯入失敗：${toErrorMessage(error, "讀寫失敗")}`,
       ]);
     } finally {
       setBusy(false);
@@ -4648,23 +4646,15 @@ function ResultImportPanel({
         note="先選組別與指標（只列啟用），再選 Excel／CSV 檔匯入。預檢不符（指標代號或題數）即整檔中止；選檔後先顯示預覽／錯誤清單，按「確認匯入」才寫入。匯入的紀錄計入審核進度，不自動建立審查任務。指標有設審核項目時，範本多一欄「審核項目」（必填，須為指標清單內的值）。同一指標、單位、月份、受審人員、審核項目重複匯入以後者覆蓋前者，不會重複建檔。"
       />
       <div className="form-stack results-import-filters">
-        <div className="form-field">
-          <label className="field-label">組別</label>
-          <div className="select-wrap">
-            <select
-              value={selGroup}
-              onChange={(e) => handleGroupChange(e.target.value)}
-            >
+        <FormSelect label="組別" value={selGroup}
+              onChange={(e) => handleGroupChange(e.target.value)}>
               <option value="">全部組別</option>
               {groups.map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.name}
                 </option>
               ))}
-            </select>
-            <ChevronDown size={15} />
-          </div>
-        </div>
+            </FormSelect>
         <div className="form-field">
           <label className="field-label">指標（只列啟用）</label>
           <div className="select-wrap">

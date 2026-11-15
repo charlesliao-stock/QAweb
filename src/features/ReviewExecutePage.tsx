@@ -59,6 +59,7 @@ import {
   todayStr,
   type ReviewTask,
 } from "../lib/scheduling";
+import { pad2 } from "../lib/ym";
 
 /**
  * 進入審查表單的方式（v1.11.0）：
@@ -128,7 +129,7 @@ function ymLabel(year: number, month: number): string {
 }
 
 function auditMonthValue(year: number, month: number): string {
-  return `${year}-${String(month).padStart(2, "0")}`;
+  return `${year}-${pad2(month)}`;
 }
 
 function fmtTs(ts: unknown): string {

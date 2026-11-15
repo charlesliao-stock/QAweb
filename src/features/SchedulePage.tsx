@@ -32,6 +32,7 @@ import {
   SectionTitle,
   SortableTh,
   useTableSort,
+  FormSelect,
 } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
@@ -89,10 +90,7 @@ import {
   nextCalendarMonth,
   type BelowThresholdRow,
 } from "../lib/belowThreshold";
-
-function pad2(n: number): string {
-  return String(n).padStart(2, "0");
-}
+import { pad2 } from "../lib/ym";
 
 /** Firestore Timestamp → 本地時間字串；解析失敗回 "—" */
 function fmtTs(ts: unknown): string {
@@ -813,37 +811,21 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             )
           }
         >
-            <div className="form-field" style={{ maxWidth: 170 }}>
-              <label className="field-label">年份</label>
-              <div className="select-wrap">
-                <select
-                  value={filterYear}
-                  onChange={(e) => setFilterYear(Number(e.target.value))}
-                >
+            <FormSelect label="年份" value={filterYear}
+                  onChange={(e) => setFilterYear(Number(e.target.value))}>
                   {YEAR_FILTER_OPTIONS.map((y) => (
                     <option key={y} value={y}>
                       {yearOptionLabel(y)}
                     </option>
                   ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
-            <div className="form-field" style={{ maxWidth: 140 }}>
-              <label className="field-label">年別</label>
-              <div className="select-wrap">
-                <select
-                  value={statsCycle}
+                </FormSelect>
+            <FormSelect label="年別" value={statsCycle}
                   disabled
-                  title="年別跟隨系統管理「統計週期」設定"
-                >
+                  title="年別跟隨系統管理「統計週期」設定">
                   <option value="year">年度</option>
                   <option value="academic">學年度</option>
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
-            <div className="form-field" style={{ maxWidth: 130 }}>
+                </FormSelect>
+            <div className="form-field">
               <label className="field-label">&nbsp;</label>
               <label className="check-row">
                 <input
@@ -854,11 +836,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                 <span>顯示加審</span>
               </label>
             </div>
-            <div className="form-field" style={{ maxWidth: 200 }}>
-              <label className="field-label">組別篩選</label>
-              <div className="select-wrap">
-                <select
-                  value={filterGroup}
+            <FormSelect label="組別篩選" value={filterGroup}
                   onChange={(e) => {
                     const g = e.target.value;
                     setFilterGroup(g);
@@ -869,35 +847,23 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                       );
                       if (!ind || ind.groupId !== g) setFilterIndicator("");
                     }
-                  }}
-                >
+                  }}>
                   <option value="">全部組別</option>
                   {[...groupMap.entries()].map(([id, name]) => (
                     <option key={id} value={id}>
                       {name}
                     </option>
                   ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
-            <div className="form-field" style={{ maxWidth: 260 }}>
-              <label className="field-label">指標篩選</label>
-              <div className="select-wrap">
-                <select
-                  value={filterIndicator}
-                  onChange={(e) => setFilterIndicator(e.target.value)}
-                >
+                </FormSelect>
+            <FormSelect label="指標篩選" value={filterIndicator}
+                  onChange={(e) => setFilterIndicator(e.target.value)}>
                   <option value="">全部指標</option>
                   {indicatorOptions.map((i) => (
                     <option key={i.id} value={i.id}>
                       {i.name}（{i.id}）
                     </option>
                   ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
+                </FormSelect>
             <FilterSearchField
               label="指標關鍵字"
               placeholder="搜尋指標名稱或編號"
@@ -1883,32 +1849,18 @@ function ScheduleEditor({
         ) : (
           <>
             <div className="form-row">
-              <div className="form-field" style={{ maxWidth: 200 }}>
-                <label className="field-label">年份</label>
-                <div className="select-wrap">
-                  <select
-                    value={year}
-                    onChange={(e) => setYear(Number(e.target.value))}
-                  >
+              <FormSelect label="年份" maxWidth={200} value={year}
+                    onChange={(e) => setYear(Number(e.target.value))}>
                     {YEAR_FILTER_OPTIONS.map((y) => (
                       <option key={y} value={y}>
                         {yearOptionLabel(y)}
                       </option>
                     ))}
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
-              </div>
-              <div className="form-field" style={{ maxWidth: 160 }}>
-                <label className="field-label">年別</label>
-                <div className="select-wrap">
-                  <select value={category} disabled>
+                  </FormSelect>
+              <FormSelect label="年別" maxWidth={160} value={category} disabled>
                     <option value="year">年度</option>
                     <option value="academic">學年度</option>
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
-              </div>
+                  </FormSelect>
               <div className="form-field" style={{ maxWidth: 280 }}>
                 <label className="field-label">複製前一期</label>
                 <button
@@ -1955,44 +1907,28 @@ function ScheduleEditor({
             </div>
 
             <div className="form-row">
-              <div className="form-field" style={{ maxWidth: 200 }}>
-                <label className="field-label">審查頻次</label>
-                <div className="select-wrap">
-                  <select
-                    value={frequency}
+              <FormSelect label="審查頻次" maxWidth={200} value={frequency}
                     disabled={!canEdit}
                     onChange={(e) =>
                       handleFrequencyChange(Number(e.target.value) as ReviewFrequency)
-                    }
-                  >
+                    }>
                     {FREQUENCY_OPTIONS.map((f) => (
                       <option key={f} value={f}>
                         {frequencyLabel(f)}
                       </option>
                     ))}
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
-              </div>
-              <div className="form-field" style={{ maxWidth: 200 }}>
-                <label className="field-label">審查區間</label>
-                <div className="select-wrap">
-                  <select
-                    value={interval}
+                  </FormSelect>
+              <FormSelect label="審查區間" maxWidth={200} value={interval}
                     disabled={!canEdit}
                     onChange={(e) =>
                       setInterval(Number(e.target.value) as 1 | 2 | 3)
-                    }
-                  >
+                    }>
                     {INTERVAL_OPTIONS.map((n) => (
                       <option key={n} value={n}>
                         {n}個月
                       </option>
                     ))}
-                  </select>
-                  <ChevronDown size={15} />
-                </div>
-              </div>
+                  </FormSelect>
               <div className="form-field" style={{ maxWidth: 200 }}>
                 <label className="field-label">
                   {unlimited ? "每審查區間件數 *" : "每單位每審查區間件數 *"}
@@ -2828,22 +2764,14 @@ function SelfAuditDialog({
       note="護理長為自己單位建立的臨時自審排程（清單年別欄顯示「自審」標籤）"
       onClose={onClose}
     >
-      <div className="form-field" style={{ maxWidth: 320 }}>
-        <label className="field-label">指標</label>
-        <div className="select-wrap">
-          <select
-            value={indicatorId}
-            onChange={(e) => setIndicatorId(e.target.value)}
-          >
+      <FormSelect label="指標" maxWidth={320} value={indicatorId}
+            onChange={(e) => setIndicatorId(e.target.value)}>
             {activeIndicators.map((i) => (
               <option key={i.id} value={i.id}>
                 {i.name}（{i.id}）
               </option>
             ))}
-          </select>
-          <ChevronDown size={15} />
-        </div>
-      </div>
+          </FormSelect>
 
       <div className="form-field">
         <label className="field-label">受審單位（鎖定）</label>

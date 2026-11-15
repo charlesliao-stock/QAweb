@@ -19,6 +19,7 @@ import {
   periodLabel,
   type CycleCategory,
 } from "./cycle";
+import { pad2, shiftYm } from "./ym";
 
 /** 審查頻次：一年幾次（v1.18 排程設定下拉） */
 export type ReviewFrequency = 2 | 3 | 4;
@@ -337,8 +338,8 @@ export interface ReviewTask {
 
 export function todayStr(): string {
   const d = new Date();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+  const m = pad2(d.getMonth() + 1);
+  const day = pad2(d.getDate());
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
@@ -347,15 +348,10 @@ export function todayStr(): string {
  * day 超過該月天數時取該月最後一日。
  */
 export function deadlineFor(year: number, month: number, day: number): string {
-  let y = year;
-  let m = month + 1;
-  if (m > 12) {
-    m = 1;
-    y += 1;
-  }
+  const { year: y, month: m } = shiftYm(year, month, 1);
   const lastDay = new Date(y, m, 0).getDate();
   const d = Math.min(Math.max(day, 1), lastDay);
-  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  return `${y}-${pad2(m)}-${pad2(d)}`;
 }
 
 export function isOverdue(deadline: string, status: ReviewTaskStatus): boolean {
@@ -855,7 +851,7 @@ export function periodicQuotaGroupId(input: {
     input.indicatorId,
     input.category,
     input.period,
-    `${input.start.year}-${String(input.start.month).padStart(2, "0")}`,
+    `${input.start.year}-${pad2(input.start.month)}`,
     input.unitId,
   ]
     .map(encodeURIComponent)

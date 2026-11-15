@@ -21,6 +21,7 @@ import {
 } from "../lib/dashboardVisibility";
 import { parseDashboardSections, resolveDashboardSections } from "../lib/dashboardSections";
 import { VARIANT_LABELS } from "../lib/dashboardVariant";
+import { toErrorMessage } from "../lib/errors";
 
 export function DashboardVisibilitySection({
   onAction,
@@ -140,7 +141,7 @@ export function DashboardVisibilitySection({
       setSavedMessage("儀表板顯示設定已儲存。");
       onAction("儀表板顯示設定已儲存");
     } catch (cause) {
-      setSaveError(cause instanceof Error ? cause.message : "儲存失敗，請稍後再試。");
+      setSaveError(toErrorMessage(cause, "儲存失敗，請稍後再試。"));
     } finally {
       setSaving(false);
     }

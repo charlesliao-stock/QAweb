@@ -3,6 +3,7 @@
  * 純函式：逐件累計、完成判斷、頁籤分類、鎖定校正，可單元測試。
  */
 import { shouldLockTask, todayStr, type ReviewTaskStatus } from "./scheduling";
+import { pad2 } from "./ym";
 
 /** 應審件數：caseCount 為 null（排程未設定）時視為 1 */
 export function requiredCases(caseCount: number | null): number {
@@ -27,7 +28,7 @@ export function reviewIntervalIdentity(task: {
   const sm = task.scheduleStartMonth ?? task.month;
   const ey = task.scheduleEndYear ?? task.year;
   const em = task.scheduleEndMonth ?? task.month;
-  return `${sy}-${String(sm).padStart(2, "0")}_${ey}-${String(em).padStart(2, "0")}`;
+  return `${sy}-${pad2(sm)}_${ey}-${pad2(em)}`;
 }
 
 export type ReviewIntervalInput = {

@@ -2,9 +2,6 @@ import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDown,
-  ArrowUp,
-  ArrowUpDown,
   ChevronDown,
   Download,
   Pencil,
@@ -39,6 +36,9 @@ import {
   Modal,
   PageHeading,
   SectionTitle,
+  FormSelect,
+  useSortState,
+  SortableTh,
 } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
@@ -143,43 +143,6 @@ interface OptionItem {
   scope?: RoleScope;
   /** v1.55.0：所屬層級 id（空＝未分層級） */
   levelId?: string;
-}
-
-function SortHeader({
-  label,
-  sortKey,
-  activeKey,
-  direction,
-  onSort,
-}: {
-  label: string;
-  sortKey: string;
-  activeKey: string;
-  direction: 1 | -1;
-  onSort: (key: string) => void;
-}) {
-  return (
-    <th
-      aria-sort={
-        activeKey === sortKey
-          ? direction === 1
-            ? "ascending"
-            : "descending"
-          : "none"
-      }
-    >
-      <button type="button" className="th-sort" onClick={() => onSort(sortKey)}>
-        {label}
-        {activeKey !== sortKey ? (
-          <ArrowUpDown size={14} aria-hidden="true" />
-        ) : direction === 1 ? (
-          <ArrowUp size={14} aria-hidden="true" />
-        ) : (
-          <ArrowDown size={14} aria-hidden="true" />
-        )}
-      </button>
-    </th>
-  );
 }
 
 interface GroupForm {
@@ -636,10 +599,7 @@ export function GroupsPage({
   const isAdmin = (user?.roles ?? []).includes("系統管理員");
 
   const [tab, setTab] = useState<Tab>("users");
-  const [sortState, setSortState] = useState<{ key: string; dir: 1 | -1 }>({
-    key: "",
-    dir: 1,
-  });
+  const { sortKey: listSortKey, sortDir: listSortDir, toggleSort, tableSort } = useSortState<string>("");
   const [userUnitFilter, setUserUnitFilter] = useState("");
   const [userSearch, setUserSearch] = useState("");
   const [unitGroupFilter, setUnitGroupFilter] = useState("");
@@ -651,13 +611,6 @@ export function GroupsPage({
   const [appliedUnitGroupFilter, setAppliedUnitGroupFilter] = useState("");
   const [appliedUnitSearch, setAppliedUnitSearch] = useState("");
   const [unitsSearched, setUnitsSearched] = useState(false);
-
-  function toggleListSort(key: string) {
-    setSortState((prev) => ({
-      key,
-      dir: prev.key === key ? (prev.dir === 1 ? -1 : 1) : 1,
-    }));
-  }
 
   function sortedRows<T>(
     items: T[],
@@ -671,7 +624,7 @@ export function GroupsPage({
         typeof av === "number" && typeof bv === "number"
           ? av - bv
           : String(av).localeCompare(String(bv), "zh-Hant", { numeric: true });
-      return sortState.dir * cmp;
+      return listSortDir * cmp;
     });
   }
 
@@ -808,7 +761,7 @@ export function GroupsPage({
           row.name.toLocaleLowerCase().includes(keyword))
       );
     }),
-    sortState.key,
+    listSortKey,
     (row, key) =>
       key === "unit-name"
         ? row.name
@@ -828,7 +781,7 @@ export function GroupsPage({
           row.name.toLocaleLowerCase().includes(keyword))
       );
     }),
-    sortState.key,
+    listSortKey,
     (row, key) =>
       key === "user-name"
         ? row.name
@@ -3369,13 +3322,13 @@ export function GroupsPage({
   // ---- v1.55.0：職稱／角色按層級分組 ----
   const sortedTitleRows = sortedRows(
     titles,
-    sortState.key,
+    listSortKey,
     (row, key) => (key === "title-count" ? (row.userCount ?? -1) : row.name),
   );
   const titleSections = groupByLevel(sortedTitleRows, titleLevels);
   const sortedRoleRows = sortedRows(
     roleRows,
-    sortState.key,
+    listSortKey,
     (row, key) => (key === "role-count" ? (row.memberCount ?? -1) : row.name),
   );
   const roleSections = groupByLevel(sortedRoleRows, roleLevels);
@@ -3522,8 +3475,8 @@ export function GroupsPage({
         <table className="permission-table">
           <thead>
             <tr>
-              <SortHeader label="職稱名稱" sortKey="title-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-              <SortHeader label="使用人數" sortKey="title-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+              <SortableTh label="職稱名稱" sortKey="title-name" sort={tableSort} onSort={toggleSort} />
+              <SortableTh label="使用人數" sortKey="title-count" sort={tableSort} onSort={toggleSort} />
               {isAdmin && <th>操作</th>}
             </tr>
           </thead>
@@ -3581,8 +3534,8 @@ export function GroupsPage({
         <table className="permission-table">
           <thead>
             <tr>
-              <SortHeader label="角色名稱" sortKey="role-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-              <SortHeader label="成員數" sortKey="role-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+              <SortableTh label="角色名稱" sortKey="role-name" sort={tableSort} onSort={toggleSort} />
+              <SortableTh label="成員數" sortKey="role-count" sort={tableSort} onSort={toggleSort} />
               <th>操作</th>
             </tr>
           </thead>
@@ -3801,24 +3754,16 @@ export function GroupsPage({
             )
           }
         >
-          <div className="form-field" style={{ maxWidth: 240 }}>
-            <label className="field-label">單位</label>
-            <div className="select-wrap">
-              <select
-                value={userUnitFilter}
+          <FormSelect label="單位" value={userUnitFilter}
                 aria-label="依單位篩選人員"
-                onChange={(e) => setUserUnitFilter(e.target.value)}
-              >
+                onChange={(e) => setUserUnitFilter(e.target.value)}>
                 <option value="">全部單位</option>
                 {units.map((unit) => (
                   <option key={unit.code} value={unit.code}>
                     {unit.name}（{unit.code}）
                   </option>
                 ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </div>
+              </FormSelect>
           <FilterSearchField
             label="人員關鍵字"
             placeholder="搜尋職編／姓名"
@@ -3859,24 +3804,16 @@ export function GroupsPage({
             )
           }
         >
-          <div className="form-field" style={{ maxWidth: 240 }}>
-            <label className="field-label">組別</label>
-            <div className="select-wrap">
-              <select
-                value={unitGroupFilter}
+          <FormSelect label="組別" value={unitGroupFilter}
                 aria-label="依組別篩選單位"
-                onChange={(e) => setUnitGroupFilter(e.target.value)}
-              >
+                onChange={(e) => setUnitGroupFilter(e.target.value)}>
                 <option value="">全部組別</option>
                 {groups.map((group) => (
                   <option key={group.id} value={group.id}>
                     {group.name}
                   </option>
                 ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </div>
+              </FormSelect>
           <FilterSearchField
             label="單位關鍵字"
             placeholder="搜尋單位代號／名稱"
@@ -3977,13 +3914,13 @@ export function GroupsPage({
               <table className="permission-table">
                 <thead>
                   <tr>
-                    <SortHeader label="群組名稱" sortKey="group-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                    <SortHeader label="所屬單位數" sortKey="group-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    <SortableTh label="群組名稱" sortKey="group-name" sort={tableSort} onSort={toggleSort} />
+                    <SortableTh label="所屬單位數" sortKey="group-count" sort={tableSort} onSort={toggleSort} />
                     {isAdmin && <th>操作</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedRows(groups, sortState.key, (row, key) => key === "group-count" ? row.unitCount : row.name).map((row) => (
+                  {sortedRows(groups, listSortKey, (row, key) => key === "group-count" ? row.unitCount : row.name).map((row) => (
                     <tr key={row.id}>
                       <td>
                         <b>{row.name}</b>
@@ -4126,10 +4063,10 @@ export function GroupsPage({
               <table className="permission-table">
                 <thead>
                   <tr>
-                    <SortHeader label="單位代號" sortKey="unit-code" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                    <SortHeader label="單位名稱" sortKey="unit-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                    <SortHeader label="所屬群組" sortKey="unit-group" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                    <SortHeader label="所屬人員數" sortKey="unit-count" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    <SortableTh label="單位代號" sortKey="unit-code" sort={tableSort} onSort={toggleSort} />
+                    <SortableTh label="單位名稱" sortKey="unit-name" sort={tableSort} onSort={toggleSort} />
+                    <SortableTh label="所屬群組" sortKey="unit-group" sort={tableSort} onSort={toggleSort} />
+                    <SortableTh label="所屬人員數" sortKey="unit-count" sort={tableSort} onSort={toggleSort} />
                     {isAdmin && <th>操作</th>}
                   </tr>
                 </thead>
@@ -4454,12 +4391,12 @@ export function GroupsPage({
               <table className="permission-table">
                 <thead>
                   <tr>
-                    <SortHeader label="職編" sortKey="user-id" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                    <SortHeader label="姓名" sortKey="user-name" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                    <SortHeader label="單位" sortKey="user-unit" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                    <SortHeader label="職稱" sortKey="user-title" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                    <SortHeader label="角色" sortKey="user-role" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
-                    <SortHeader label="狀態" sortKey="user-status" activeKey={sortState.key} direction={sortState.dir} onSort={toggleListSort} />
+                    <SortableTh label="職編" sortKey="user-id" sort={tableSort} onSort={toggleSort} />
+                    <SortableTh label="姓名" sortKey="user-name" sort={tableSort} onSort={toggleSort} />
+                    <SortableTh label="單位" sortKey="user-unit" sort={tableSort} onSort={toggleSort} />
+                    <SortableTh label="職稱" sortKey="user-title" sort={tableSort} onSort={toggleSort} />
+                    <SortableTh label="角色" sortKey="user-role" sort={tableSort} onSort={toggleSort} />
+                    <SortableTh label="狀態" sortKey="user-status" sort={tableSort} onSort={toggleSort} />
                     <th>操作</th>
                   </tr>
                 </thead>
@@ -4539,23 +4476,15 @@ export function GroupsPage({
               />
               <p className="settings-note">身分（審查員／召集人／執行幹事）由名稱關鍵字推導，範圍由層級決定。</p>
             </div>
-            <div className="form-field" style={{ maxWidth: 420 }}>
-              <label className="field-label">層級</label>
-              <div className="select-wrap">
-                <select
-                  value={newRoleLevelId}
-                  onChange={(event) => setNewRoleLevelId(event.target.value)}
-                >
+            <FormSelect label="層級" maxWidth={420} value={newRoleLevelId}
+                  onChange={(event) => setNewRoleLevelId(event.target.value)}>
                   <option value="">— 未分層級 —</option>
                   {roleLevels.map((l) => (
                     <option key={l.id} value={l.id}>
                       {l.name}
                     </option>
                   ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
+                </FormSelect>
             <div className="form-actions">
               <button className="button button-primary" disabled={roleCreateSaving} onClick={handleRoleCreate}>
                 {roleCreateSaving ? "建立中…" : "建立角色"}
@@ -4618,23 +4547,15 @@ export function GroupsPage({
             </div>
             {/* v1.40.3：非單位級角色一律可指定群組加入，不再只對寫死名單顯示群組選單 */}
             {managingRole.scope !== "unit" && (
-                <div className="form-field" style={{ maxWidth: 320 }}>
-                  <label className="field-label">適用群組 *</label>
-                  <div className="select-wrap">
-                    <select
-                      value={roleAddGroupId}
-                      onChange={(e) => setRoleAddGroupId(e.target.value)}
-                    >
+                <FormSelect label="適用群組 *" maxWidth={320} value={roleAddGroupId}
+                      onChange={(e) => setRoleAddGroupId(e.target.value)}>
                       <option value="">請選擇群組</option>
                       {groups.map((g) => (
                         <option key={g.id} value={g.id}>
                           {g.name}
                         </option>
                       ))}
-                    </select>
-                    <ChevronDown size={15} />
-                  </div>
-                </div>
+                    </FormSelect>
               )}
             {managingRole.scope === "unit" && (
               <p className="settings-note">
@@ -4823,25 +4744,17 @@ export function GroupsPage({
                 }
               />
             </div>
-            <div className="form-field">
-              <label className="field-label">所屬群組</label>
-              <div className="select-wrap">
-                <select
-                  value={unitForm.groupId}
+            <FormSelect label="所屬群組" value={unitForm.groupId}
                   onChange={(e) =>
                     setUnitForm((prev) => ({ ...prev, groupId: e.target.value }))
-                  }
-                >
+                  }>
                   <option value="">— 未分類 —</option>
                   {groups.map((g) => (
                     <option key={g.id} value={g.id}>
                       {g.name}
                     </option>
                   ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
+                </FormSelect>
             <div className="form-field">
               <label className="field-label" htmlFor="merged-from-units">合併自舊單位（可複選）</label>
               <select
@@ -4901,25 +4814,17 @@ export function GroupsPage({
                 }
               />
             </div>
-            <div className="form-field">
-              <label className="field-label">層級</label>
-              <div className="select-wrap">
-                <select
-                  value={titleForm.levelId}
+            <FormSelect label="層級" value={titleForm.levelId}
                   onChange={(e) =>
                     setTitleForm((prev) => ({ ...prev, levelId: e.target.value }))
-                  }
-                >
+                  }>
                   <option value="">— 未分層級 —</option>
                   {titleLevels.map((l) => (
                     <option key={l.id} value={l.id}>
                       {l.name}
                     </option>
                   ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
+                </FormSelect>
             <div className="form-field">
               <label className="field-label">主管層級（決定儀表板與結果範圍；不以名稱判斷）</label>
               <div className="form-grid">
@@ -5022,36 +4927,23 @@ export function GroupsPage({
               }
             />
           </div>
-          <div className="form-field">
-            <label className="field-label">單位</label>
-            <div className="select-wrap">
-              <select
-                value={userForm.unitCode}
+          <FormSelect label="單位" value={userForm.unitCode}
                 onChange={(e) => {
                   const nextUnitCode = e.target.value;
                   setUserForm((prev) => ({ ...prev, unitCode: nextUnitCode }));
-                }}
-              >
+                }}>
                 <option value="">— 未指定 —</option>
                 {units.map((u) => (
                   <option key={u.code} value={u.code}>
                     {u.name ? `${u.code}｜${u.name}` : u.code}
                   </option>
                 ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </div>
-          <div className="form-field">
-            <label className="field-label">職稱層級</label>
-            <div className="select-wrap">
-              <select
-                value={userTitleLevelId}
+              </FormSelect>
+          <FormSelect label="職稱層級" value={userTitleLevelId}
                 onChange={(e) => {
                   setUserTitleLevelId(e.target.value);
                   setUserForm((prev) => ({ ...prev, titleId: "", title: "", titleUnitCodes: [] }));
-                }}
-              >
+                }}>
                 <option value="">請選擇層級</option>
                 {titleLevels.map((l) => (
                   <option key={l.id} value={l.id}>
@@ -5059,10 +4951,7 @@ export function GroupsPage({
                   </option>
                 ))}
                 <option value="__ungrouped__">未分層級</option>
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </div>
+              </FormSelect>
           <div className="form-field">
             <label className="field-label">職稱</label>
             <div className="select-wrap">
@@ -5245,39 +5134,26 @@ export function GroupsPage({
         />
         {/* v1.52.0：分工表式——上方加入區＋下方角色列表（每群組一列，可編輯／刪除） */}
         <div className="panel" style={{ padding: 12, marginBottom: 8 }}>
-          <div className="form-field">
-            <label className="field-label">群組</label>
-            <div className="select-wrap">
-              <select
-                value={membershipAddGroupId}
+          <FormSelect label="群組" value={membershipAddGroupId}
                 onChange={(e) => {
                   // v1.51.0：切換群組不得清空已勾角色（加入區群組與角色為獨立 state）
                   setMembershipAddGroupId(e.target.value);
                   setMembershipError("");
-                }}
-              >
+                }}>
                 <option value="">請選擇群組</option>
                 {groups.map((g) => (
                   <option key={g.id} value={g.id}>
                     {g.name}
                   </option>
                 ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </div>
+              </FormSelect>
           {/* v1.57.0 A6：群組→層級→角色三層下拉；選角色後進下方已選列，可多重 */}
           <div className="form-grid">
-            <div className="form-field">
-              <label className="field-label">層級</label>
-              <div className="select-wrap">
-                <select
-                  value={membershipAddLevelId}
+            <FormSelect label="層級" value={membershipAddLevelId}
                   onChange={(e) => {
                     setMembershipAddLevelId(e.target.value);
                     setMembershipAddRoleName("");
-                  }}
-                >
+                  }}>
                   <option value="">請選擇層級</option>
                   {roleLevels.map((l) => (
                     <option key={l.id} value={l.id}>
@@ -5285,15 +5161,8 @@ export function GroupsPage({
                     </option>
                   ))}
                   <option value="__ungrouped__">未分層級</option>
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
-            <div className="form-field">
-              <label className="field-label">角色</label>
-              <div className="select-wrap">
-                <select
-                  value={membershipAddRoleName}
+                </FormSelect>
+            <FormSelect label="角色" value={membershipAddRoleName}
                   disabled={!membershipAddLevelId}
                   onChange={(e) => {
                     const name = e.target.value;
@@ -5303,8 +5172,7 @@ export function GroupsPage({
                       );
                       setMembershipAddRoleName("");
                     }
-                  }}
-                >
+                  }}>
                   <option value="">
                     {membershipAddLevelId ? "請選擇角色" : "請先選擇層級"}
                   </option>
@@ -5321,10 +5189,7 @@ export function GroupsPage({
                         {r.name}
                       </option>
                     ))}
-                </select>
-                <ChevronDown size={15} />
-              </div>
-            </div>
+                </FormSelect>
           </div>
           {membershipAddRoles.length > 0 && (
             <div
@@ -5476,23 +5341,15 @@ export function GroupsPage({
               onChange={(event) => setRoleEditName(event.target.value)}
             />
           </div>
-          <div className="form-field" style={{ maxWidth: 320 }}>
-            <label className="field-label">層級</label>
-            <div className="select-wrap">
-              <select
-                value={roleEditLevelId}
-                onChange={(event) => setRoleEditLevelId(event.target.value)}
-              >
+          <FormSelect label="層級" maxWidth={320} value={roleEditLevelId}
+                onChange={(event) => setRoleEditLevelId(event.target.value)}>
                 <option value="">— 未分層級 —</option>
                 {roleLevels.map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.name}
                   </option>
                 ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </div>
+              </FormSelect>
           <div className="form-actions">
             <button
               className="button button-primary"

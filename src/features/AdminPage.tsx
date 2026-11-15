@@ -39,6 +39,7 @@ import {
   SectionTitle,
   SortableTh,
   useTableSort,
+  FormSelect,
 } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import {
@@ -80,6 +81,7 @@ import {
 } from "../lib/maintenance";
 import { AdminCleanupSection } from "./AdminCleanupSection";
 import { getReadMeter, resetReadMeter, subscribeReadMeter } from "../lib/readMeter";
+import { pad2 } from "../lib/ym";
 
 function formatParamValue(key: keyof SystemParams, value: unknown): string {
   const opts = SYSTEM_PARAM_SELECT_OPTIONS[key];
@@ -997,25 +999,17 @@ function TemplateManagementSection({
               <div className="form-grid">
                 {editingId == null && (
                   <>
-                    <div className="form-field">
-                      <label className="field-label">複製來源</label>
-                      <div className="select-wrap">
-                        <select
-                          value={copyFromId}
+                    <FormSelect label="複製來源" value={copyFromId}
                           onChange={(e) =>
                             handleCopyFromChange(e.target.value)
                           }
-                          aria-label="複製來源"
-                        >
+                          aria-label="複製來源">
                           {(themes ?? []).map((t) => (
                             <option key={t.id} value={t.id}>
                               {t.name}（{t.id}）
                             </option>
                           ))}
-                        </select>
-                        <ChevronDown size={15} />
-                      </div>
-                    </div>
+                        </FormSelect>
                     <div className="form-field">
                       <label className="field-label">模板 id *</label>
                       <input
@@ -1171,10 +1165,10 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
               typeof data.targetId === "string" ? data.targetId : "";
             const y = createdAt ? createdAt.getFullYear() : 0;
             const m = createdAt
-              ? String(createdAt.getMonth() + 1).padStart(2, "0")
+              ? pad2(createdAt.getMonth() + 1)
               : "00";
             const day = createdAt
-              ? String(createdAt.getDate()).padStart(2, "0")
+              ? pad2(createdAt.getDate())
               : "00";
             return {
               id: d.id,

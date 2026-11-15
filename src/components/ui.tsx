@@ -1,10 +1,18 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type SelectHTMLAttributes,
+} from "react";
 import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
   Check,
+  ChevronDown,
   Inbox,
   LoaderCircle,
   RefreshCw,
@@ -392,6 +400,36 @@ export function FilterSearchField({
   );
 }
 
+/** 共用下拉欄位：標籤＋select-wrap＋箭頭。篩選區塊內的尺寸（150×50px）由
+ *  .filter-panel 的樣式統一控制，各頁不需再手寫 select-wrap 結構。
+ *  其餘屬性（value／onChange／disabled／aria-label…）原樣傳給 <select>。 */
+export function FormSelect({
+  label,
+  children,
+  className,
+  maxWidth,
+  ...selectProps
+}: SelectHTMLAttributes<HTMLSelectElement> & {
+  label?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  /** 表單／對話框內限制欄位寬度用；篩選區塊不要傳（下拉固定 150px） */
+  maxWidth?: number;
+}) {
+  return (
+    <div
+      className={`form-field${className ? ` ${className}` : ""}`}
+      style={maxWidth ? { maxWidth } : undefined}
+    >
+      {label ? <label className="field-label">{label}</label> : null}
+      <div className="select-wrap">
+        <select {...selectProps}>{children}</select>
+        <ChevronDown size={15} />
+      </div>
+    </div>
+  );
+}
+
 /** 列表區塊標題列（標題＋筆數＋右側操作）。需要自訂內容結構時可單獨使用。 */
 export function ListPanelHead({
   title,
@@ -487,7 +525,30 @@ export function useTableSort<T, K extends string>(
   return { sortedRows, sort, toggleSort };
 }
 
-/** 可排序表頭；sort 為 useTableSort 回傳的狀態。 */
+/**
+ * 只管「排序欄位＋方向」的狀態（排序比較邏輯由呼叫端自己決定時用，例如
+ * 沿用 lib 內的專用比較函式；通用列表請優先用 useTableSort）。
+ * 點同一欄位切換升／降冪，換欄位則回到升冪。tableSort 可直接傳給 SortableTh。
+ */
+export function useSortState<K extends string>(initialKey: K) {
+  const [state, setState] = useState<{ key: K; dir: 1 | -1 }>({
+    key: initialKey,
+    dir: 1,
+  });
+  const toggleSort = useCallback((key: K) => {
+    setState((prev) => ({
+      key,
+      dir: prev.key === key ? (prev.dir === 1 ? -1 : 1) : 1,
+    }));
+  }, []);
+  const tableSort: SortState<K> = {
+    key: state.key,
+    direction: state.dir === 1 ? "asc" : "desc",
+  };
+  return { sortKey: state.key, sortDir: state.dir, toggleSort, tableSort };
+}
+
+/** 可排序表頭；sort 為 useTableSort／useSortState 回傳的狀態。 */
 export function SortableTh<K extends string>({
   label,
   sortKey,

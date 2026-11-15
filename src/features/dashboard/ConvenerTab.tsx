@@ -11,6 +11,7 @@ import {
 } from "../../lib/dashboardSections";
 import { avgRateOf } from "../../lib/resultAnalysis";
 import type { DashboardData } from "./useDashboardData";
+import { pad2 } from "../../lib/ym";
 
 export function ConvenerTab({
   data,
@@ -98,7 +99,7 @@ export function ConvenerTab({
       {sections.groupPassRate && (
         <section className="panel">
           <SectionTitle
-            title={`本組指標全院達標率（${curYear}/${String(curMonth).padStart(2, "0")}）`}
+            title={`本組指標全院達標率（${curYear}/${pad2(curMonth)}）`}
           />
         {stats.length === 0 ? (
           <p className="settings-note">該組別尚無指標。</p>

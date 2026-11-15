@@ -7,6 +7,7 @@ import { avgRateOf, type RagState, type StatsCycle } from "./resultAnalysis";
 import { requiredCases } from "./reviewProgress";
 import { toCycleKey } from "./cycle";
 import { todayStr } from "./scheduling";
+import { pad2 } from "./ym";
 
 /** 儀表板用的任務列（已含完成數） */
 export interface DashTask {
@@ -378,9 +379,9 @@ export function cycleMonthLabel(
   cycle: StatsCycle,
 ): string {
   if (cycle === "academic") {
-    return `${toCycleKey(year, month, "academic")}-${String(month).padStart(2, "0")}`;
+    return `${toCycleKey(year, month, "academic")}-${pad2(month)}`;
   }
-  return `${year}-${String(month).padStart(2, "0")}`;
+  return `${year}-${pad2(month)}`;
 }
 
 export interface UnitMonth {
@@ -403,7 +404,7 @@ export function unitMonthAvgs(
   const map = new Map<string, (number | null)[]>();
   const labelOf = new Map<string, string>(); // 曆年月 → 輸出標籤
   for (const r of records) {
-    const cal = `${r.year}-${String(r.month).padStart(2, "0")}`;
+    const cal = `${r.year}-${pad2(r.month)}`;
     if (!ymSet.has(cal)) continue;
     if (!labelOf.has(cal))
       labelOf.set(cal, cycleMonthLabel(r.year, r.month, cycle));

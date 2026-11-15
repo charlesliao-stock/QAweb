@@ -5,6 +5,7 @@
  * xlsx 檔案讀取由呼叫端（XLSX 套件）完成後傳入 string[][]。
  */
 import { validateBasicThreshold, type OptionSet } from "./indicators";
+import { pad2 } from "./ym";
 
 /* ================= CSV 解析（RFC4180：引號、逗號、換行） ================= */
 
@@ -69,9 +70,9 @@ export function parseCSV(text: string): string[][] {
  * 避免 UTC 換日），其餘照原樣轉字串。 */
 export function normalizeSheetRows(rows: unknown[][]): string[][] {
   const fmtDate = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(
       d.getDate(),
-    ).padStart(2, "0")}`;
+    )}`;
   return rows
     .map((r) =>
       (Array.isArray(r) ? r : []).map((c) =>

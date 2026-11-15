@@ -16,6 +16,8 @@
  * 本檔零依賴、不碰 DOM、不碰 Firestore，可在 node 直接單元測試。
  */
 
+import { pad2, shiftYm, ymKeyOf } from "./ym";
+
 export interface CalendarYM {
   year: number;
   month: number;
@@ -31,7 +33,7 @@ export interface ReviewInterval {
 }
 
 export function ymKey(ym: CalendarYM): string {
-  return `${ym.year}-${ym.month}`;
+  return ymKeyOf(ym.year, ym.month);
 }
 
 export function cmpYM(a: CalendarYM, b: CalendarYM): number {
@@ -39,10 +41,7 @@ export function cmpYM(a: CalendarYM, b: CalendarYM): number {
 }
 
 export function addMonths(ym: CalendarYM, n: number): CalendarYM {
-  const total = ym.year * 12 + (ym.month - 1) + n;
-  const year = Math.floor(total / 12);
-  const month = (total % 12) + 1;
-  return { year, month };
+  return shiftYm(ym.year, ym.month, n);
 }
 
 function monthRange(start: CalendarYM, end: CalendarYM): CalendarYM[] {
@@ -189,10 +188,6 @@ export function containingInterval(
   return null;
 }
 
-function pad2(n: number): string {
-  return String(n).padStart(2, "0");
-}
-
 /** 本地日期轉 YYYY-MM-DD（字串比對即日期先後） */
 function ymdStr(year: number, month: number, day: number): string {
   return `${year}-${pad2(month)}-${pad2(day)}`;
@@ -210,12 +205,7 @@ export function supplementDeadlineFor(
   end: CalendarYM,
   deadlineDay: number,
 ): string {
-  let y = end.year;
-  let m = end.month + 1;
-  if (m > 12) {
-    m = 1;
-    y += 1;
-  }
+  const { year: y, month: m } = shiftYm(end.year, end.month, 1);
   const d = Math.min(
     Math.max(deadlineDay, 1),
     lastDayOfMonth(y, m),

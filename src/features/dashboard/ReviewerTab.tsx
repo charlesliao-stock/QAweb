@@ -19,6 +19,7 @@ import {
 } from "../../lib/dashboardSections";
 import type { DashboardData } from "./useDashboardData";
 import type { ExecuteTarget } from "../ReviewExecutePage";
+import { pad2 } from "../../lib/ym";
 
 export function ReviewerTab({
   data,
@@ -87,7 +88,7 @@ export function ReviewerTab({
     return d >= 0 && d <= 7;
   });
 
-  const ymTitle = `${curYear}/${String(curMonth).padStart(2, "0")} 我的審查`;
+  const ymTitle = `${curYear}/${pad2(curMonth)} 我的審查`;
 
   const statusPill = (t: (typeof myTasks)[number]) => {
     if (t.status === "locked")
@@ -311,7 +312,7 @@ export function ReviewerTab({
       {sections.nextMonthPreview && (
         <section className="panel">
           <SectionTitle
-            title={`次月預告（${nextYear}/${String(nextMonth).padStart(2, "0")}）`}
+            title={`次月預告（${nextYear}/${pad2(nextMonth)}）`}
             note={`共 ${upcomingTasks.length} 筆任務`}
           />
         {upcomingTasks.length === 0 ? (

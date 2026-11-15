@@ -79,6 +79,7 @@ const SchedulePage = lazy(() =>
   })),
 );
 import type { PageId } from "../types";
+import { toErrorMessage } from "../lib/errors";
 
 type CapaLaunchContext = {
   indicatorId?: string;
@@ -134,7 +135,7 @@ function LoginScreen() {
     try {
       await login(staffId, password);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "登入失敗");
+      setError(toErrorMessage(err, "登入失敗"));
     } finally {
       setBusy(false);
     }
@@ -150,7 +151,7 @@ function LoginScreen() {
     try {
       await changePassword(newPassword);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "密碼變更失敗");
+      setError(toErrorMessage(err, "密碼變更失敗"));
     } finally {
       setBusy(false);
     }

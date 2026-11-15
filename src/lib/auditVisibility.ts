@@ -18,6 +18,8 @@
  * 多重身分取聯集；沒有任何分支貢獻時回 []（fail closed，什麼都不顯示）。
  */
 
+import { ymKeyOf } from "./ym";
+
 /** reviewTasks 一筆本人任務（AuditPage 查詢後轉成的最小形狀） */
 export interface AuditTaskLike {
   indicatorId: string;
@@ -36,9 +38,6 @@ export interface AuditScheduleLike {
   intervalMonthKeys: Set<string>;
 }
 
-export function ymKeyOf(year: number, month: number): string {
-  return `${year}-${month}`;
-}
 
 /**
  * 本人任務按排程分組：排程 key → 該排程下本人被指派的單位集合

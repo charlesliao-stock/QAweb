@@ -29,7 +29,6 @@ import { toErrorMessage } from "../lib/errors";
 import { useEffect, useMemo, useState } from "react";
 import {
   Archive,
-  ChevronDown,
   ClipboardCheck,
   Eye,
   Pencil,
@@ -58,7 +57,8 @@ import {
   PageHeading,
   SectionTitle,
   SortableTh,
-  type SortState,
+  FormSelect,
+  useSortState,
 } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import {
@@ -295,8 +295,7 @@ export function AuditPage({
   const [recordsTruncated, setRecordsTruncated] = useState(false);
   // v1.59.1：本人任務分頁未拉完時顯示可見提示（任務不全＝加審／自審列可能少列）
   const [myTasksTruncated, setMyTasksTruncated] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>("group");
-  const [sortDir, setSortDir] = useState<1 | -1>(1);
+  const { sortKey, sortDir, toggleSort, tableSort } = useSortState<SortKey>("group");
   // v1.20：清單上方篩選區（組別／指標／關鍵字）；表頭篩選列移除
   // v1.46.0：篩選區依序為組別／指標／進度／關鍵字；進度預設進行中
   const [selGroup, setSelGroup] = useState("");
@@ -1137,18 +1136,6 @@ export function AuditPage({
     [viewRow, selectedUnitFilter],
   );
 
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) setSortDir((d) => (d === 1 ? -1 : 1));
-    else {
-      setSortKey(key);
-      setSortDir(1);
-    }
-  }
-
-  const tableSort: SortState<SortKey> = {
-    key: sortKey,
-    direction: sortDir === 1 ? "asc" : "desc",
-  };
   const SortTh = ({ label, k }: { label: string; k: SortKey }) => (
     <SortableTh label={label} sortKey={k} sort={tableSort} onSort={toggleSort} />
   );
@@ -1485,11 +1472,7 @@ export function AuditPage({
           )
         }
       >
-          <div className="form-field" style={{ maxWidth: 200 }}>
-            <label className="field-label">組別</label>
-            <div className="select-wrap">
-              <select
-                value={selGroup}
+          <FormSelect label="組別" value={selGroup}
                 onChange={(e) => {
                   const g = e.target.value;
                   setSelGroup(g);
@@ -1500,51 +1483,31 @@ export function AuditPage({
                     );
                     if (!ok) setSelIndicator("");
                   }
-                }}
-              >
+                }}>
                 <option value="">全部組別</option>
                 {groupOptions.map(([id, name]) => (
                   <option key={id} value={id}>
                     {name}
                   </option>
                 ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </div>
-          <div className="form-field" style={{ maxWidth: 280 }}>
-            <label className="field-label">指標</label>
-            <div className="select-wrap">
-              <select
-                value={selIndicator}
-                onChange={(e) => setSelIndicator(e.target.value)}
-              >
+              </FormSelect>
+          <FormSelect label="指標" value={selIndicator}
+                onChange={(e) => setSelIndicator(e.target.value)}>
                 <option value="">全部指標</option>
                 {indicatorOptions.map(([id, name]) => (
                   <option key={id} value={id}>
                     {name}（{id}）
                   </option>
                 ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </div>
-          <div className="form-field" style={{ maxWidth: 200 }}>
-            <label className="field-label">進度</label>
-            <div className="select-wrap">
-              <select
-                value={selProgress}
+              </FormSelect>
+          <FormSelect label="進度" value={selProgress}
                 onChange={(e) =>
                   setSelProgress(e.target.value as AuditProgressState)
-                }
-              >
+                }>
                 <option value="active">進行中</option>
                 <option value="ended">已結束</option>
                 <option value="pending">待完成</option>
-              </select>
-              <ChevronDown size={15} />
-            </div>
-          </div>
+              </FormSelect>
           <FilterSearchField
             label="關鍵字"
             placeholder="搜尋指標名稱或編號"

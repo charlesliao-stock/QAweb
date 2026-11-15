@@ -14,6 +14,7 @@ import { displayUnitCode } from "../../lib/mask";
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
 import { CapaPendingReviewCard } from "./CapaPendingReviewCard";
+import { pad2 } from "../../lib/ym";
 
 /** 簡易 SVG 雷達圖：axes 軸、series 系列（值 0–100） */
 function RadarChart({
@@ -227,7 +228,7 @@ export function DirectorTab({
       {sections.overview && (
         <section className="panel">
           <SectionTitle
-            title={`全院品質戰情總覽（${curYear}/${String(curMonth).padStart(2, "0")}）`}
+            title={`全院品質戰情總覽（${curYear}/${pad2(curMonth)}）`}
           />
         <div className="table-scroll dashboard-responsive-table">
           <table className="data-table">

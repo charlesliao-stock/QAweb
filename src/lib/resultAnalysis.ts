@@ -12,6 +12,7 @@ import {
   toCycleKey,
   type CycleCategory,
 } from "./cycle";
+import { pad2 } from "./ym";
 
 /** 統計週期（沿用 cycle.ts；報表統計只用年度／學年度） */
 export type StatsCycle = "year" | "academic";
@@ -106,7 +107,7 @@ export function monthlyTrend(
       rate: avg,
       label:
         cycle === "academic"
-          ? `${key}-${String(month).padStart(2, "0")}`
+          ? `${key}-${pad2(month)}`
           : `${month}月`,
     });
   }

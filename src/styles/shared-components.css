@@ -263,26 +263,6 @@
   border-bottom: 1px solid #edf0f1;
 }
 
-.indicator-filter-group {
-  flex: 0 0 180px;
-}
-.indicator-filter-group select {
-  height: 38px;
-  padding: 8px 31px 8px 10px;
-  border-color: #e6ebec;
-  border-radius: 7px;
-  font-size: var(--font-small);
-}
-.indicator-filter-group > svg {
-  right: 9px;
-  width: 14px;
-}
-.indicator-filter-search {
-  flex: 1 1 220px;
-  min-width: 150px;
-  height: 38px;
-}
-
 .table-scroll {
   width: 100%;
   overflow-x: auto;
@@ -472,9 +452,6 @@ th[aria-sort="descending"] .th-sort .lucide {
 }
 .filter-panel .filter-panel-body .check-row {
   min-height: 50px;
-}
-.filter-panel .filter-panel-body > .form-field {
-  max-width: none !important;
 }
 /* 新增／批次新增等動作鈕：與篩選器同一水平線、向下對齊，靠右 */
 .filter-panel-end {

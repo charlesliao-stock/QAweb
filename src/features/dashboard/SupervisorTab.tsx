@@ -20,10 +20,8 @@ import {
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
 import { CapaPendingReviewCard } from "./CapaPendingReviewCard";
+import { ymPadded } from "../../lib/ym";
 
-function ymOf(year: number, month: number): string {
-  return `${year}-${String(month).padStart(2, "0")}`;
-}
 
 export function SupervisorTab({
   data,
@@ -51,7 +49,7 @@ export function SupervisorTab({
     [districtUnits],
   );
 
-  const ym = ymOf(curYear, curMonth);
+  const ym = ymPadded(curYear, curMonth);
   // 各單位本月進度＋品質燈號
   const unitRows = useMemo(() => {
     return districtUnits.map((u) => {
@@ -105,7 +103,7 @@ export function SupervisorTab({
         m += 12;
         y -= 1;
       }
-      return ymOf(y, m);
+      return ymPadded(y, m);
     }).reverse();
     // declineAlerts 吃的 yms 需與 unitMonthAvgs 輸出的 ym 標籤同格式
     const yms = calYms.map((s) => {

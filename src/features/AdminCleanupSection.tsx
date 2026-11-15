@@ -27,6 +27,7 @@ import {
   where,
   writeBatch,
 } from "../lib/db";
+import { toErrorMessage } from "../lib/errors";
 
 type Group = "review" | "schedule" | "org" | "capa";
 
@@ -186,7 +187,7 @@ export function AdminCleanupSection({ onAction }: { onAction: (message: string) 
       setCounts({});
       setConfirmText("");
     } catch (error) {
-      onAction(`資料清理中斷：${error instanceof Error ? error.message : String(error)}（已完成的部分不會復原，可重新預覽後再執行）`);
+      onAction(`資料清理中斷：${toErrorMessage(error)}（已完成的部分不會復原，可重新預覽後再執行）`);
     } finally {
       setBusy(false);
     }
