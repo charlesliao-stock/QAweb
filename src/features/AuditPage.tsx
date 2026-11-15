@@ -65,6 +65,7 @@ import {
   parseIndicatorSchedule,
   periodicQuotaGroupId,
   scheduleDocId,
+  scheduleSetupComplete,
   type IndicatorSchedule,
 } from "../lib/scheduling";
 import {
@@ -118,6 +119,8 @@ interface IndicatorLite {
   code: string;
   name: string;
   groupId: string;
+  /** v1.63.2：指標狀態（只列啟用指標的排程） */
+  status: string;
 }
 
 interface RecordRow {
@@ -314,6 +317,7 @@ export function AuditPage({
             code: indicatorCodeOf(d.id),
             name: typeof v.name === "string" && v.name ? v.name : d.id,
             groupId: typeof v.groupId === "string" ? v.groupId : "",
+            status: typeof v.status === "string" ? v.status : "",
           });
         });
         const groupName = new Map<string, string>();
@@ -454,13 +458,26 @@ export function AuditPage({
           interval: ReviewInterval;
         }[] = [];
         for (const s of schedules) {
-          if (!indicators.get(s.indicatorId)) continue;
+          const indForSched = indicators.get(s.indicatorId);
+          if (!indForSched) continue;
+          // v1.63.2：只列「有效排程」——指標啟用、排程設定完整（單位／月份／件數），
+          // 且週期排程（非自審）至少有一筆審查員／單位分工；未完成設定或
+          // 無分工的殘留排程文件不再出現在品管審查清單。
+          if (indForSched.status !== "啟用") continue;
+          if (!scheduleSetupComplete(s)) continue;
           const cls = classifyScheduleProgress(
             schedLike(s),
             today,
             deadlineDay,
           );
           if (!cls) continue;
+          if (
+            (s.category === "year" || s.category === "academic") &&
+            !s.selfReview &&
+            cls.state !== "ended" &&
+            (reviewerOf.get(s.indicatorId)?.size ?? 0) === 0
+          )
+            continue;
           classifiedAll.push({
             sched: s,
             state: cls.state,
