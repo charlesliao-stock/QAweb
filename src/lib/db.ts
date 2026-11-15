@@ -56,7 +56,7 @@ export async function getDoc(ref: any): Promise<DocumentSnapshot> {
   if (demoOn()) return Promise.resolve(demo.getDoc(ref) as unknown as DocumentSnapshot);
   // v1.41.0 流量控管：維護開啟且非管理員時阻擋（登入 profile 與狀態文件讀取豁免）
   await assertFirestoreAllowed({ path: ref?.path, kind: "read" });
-  const snap = await fsGetDoc(ref);
+  const snap = (await fsGetDoc(ref)) as unknown as DocumentSnapshot;
   recordDocRead(snap);
   return snap;
 }
@@ -65,7 +65,7 @@ export async function getDoc(ref: any): Promise<DocumentSnapshot> {
 export async function getDocFromServer(ref: any): Promise<DocumentSnapshot> {
   if (demoOn()) return Promise.resolve(demo.getDoc(ref) as unknown as DocumentSnapshot);
   await assertFirestoreAllowed({ path: ref?.path, kind: "read" });
-  const snap = await fsGetDocFromServer(ref);
+  const snap = (await fsGetDocFromServer(ref)) as unknown as DocumentSnapshot;
   recordDocRead(snap);
   return snap;
 }
@@ -82,7 +82,7 @@ export async function getDocs(ref: any): Promise<QuerySnapshot> {
   if (demoOn()) return Promise.resolve(demo.getDocs(ref) as unknown as QuerySnapshot);
   // v1.41.0 流量控管：維護開啟且非管理員時阻擋
   await assertFirestoreAllowed({ kind: "read" });
-  const snap = await fsGetDocs(ref);
+  const snap = (await fsGetDocs(ref)) as unknown as QuerySnapshot;
   recordQueryRead(snap);
   return snap;
 }
@@ -92,7 +92,7 @@ export async function getDocsFromServer(ref: any): Promise<QuerySnapshot> {
   if (demoOn()) return Promise.resolve(demo.getDocs(ref) as unknown as QuerySnapshot);
   // v1.41.0 流量控管：維護開啟且非管理員時阻擋
   await assertFirestoreAllowed({ kind: "read" });
-  const snap = await fsGetDocsFromServer(ref);
+  const snap = (await fsGetDocsFromServer(ref)) as unknown as QuerySnapshot;
   recordQueryRead(snap);
   return snap;
 }
