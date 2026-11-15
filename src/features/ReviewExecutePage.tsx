@@ -1,5 +1,6 @@
 import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
+import { commitAndVerify } from "../lib/confirmedCommit";
 import {
   createEditRequest,
   findArchiveIdsForRecord,
@@ -1056,10 +1057,12 @@ export function ReviewExecutePage({
     }
     try {
       const db = getFirebaseDb();
+      // 讀量優化：只查「該指標＋該受審人員」的紀錄（原本整個指標全讀，每選一人讀一次）
       const snap = await getDocs(
         query(
           collection(db, "reviewRecords"),
           where("indicatorId", "==", task.indicatorId),
+          where("reviewedPersonEmpNo", "==", empNo.trim()),
         ),
       );
       const taskKeys = intervalMonthKeys(task);
@@ -1738,34 +1741,47 @@ export function ReviewExecutePage({
           }
         }
         batch.set(recordRef, recordData);
-        await batch.commit();
+        // v1.73.0：逾時提示＋送出後向伺服器讀回確認（見 lib/confirmedCommit）
+        const commitResult = await commitAndVerify(batch, recordRef, {
+          onSlow: () =>
+            onAction("尚未收到伺服器確認儲存（可能網路不穩或系統用量額度已滿），請勿關閉或重新整理此頁面，稍候會自動重試。"),
+        });
         const req = requiredCases(task.caseCount);
         const completedCount = beforeCount + 1;
         if (sharedQuotaTask) {
           setQuotaDoneCount(completedCount);
         }
         const completed = isTaskComplete(completedCount, task.caseCount);
-        if (sharedQuotaTask) {
-          try {
-            await syncPeriodicQuotaTaskStatus(task, completed);
-          } catch {
-            // 審查紀錄已成功儲存，task 狀態會在下次載入時重新同步。
+        // 紀錄已儲存；以下為任務狀態同步與畫面重讀，失敗不得回報成「送出失敗」，
+        // 任務狀態會在下次載入時自動校正。
+        let postSyncFailed = false;
+        try {
+          if (sharedQuotaTask) {
+            try {
+              await syncPeriodicQuotaTaskStatus(task, completed);
+            } catch {
+              // 審查紀錄已成功儲存，task 狀態會在下次載入時重新同步。
+            }
+          } else if (completed) {
+            await updateDoc(doc(db, "reviewTasks", taskId), {
+              status: "done",
+              completedAt: serverTimestamp(),
+            });
           }
-        } else if (completed) {
-          await updateDoc(doc(db, "reviewTasks", taskId), {
-            status: "done",
-            completedAt: serverTimestamp(),
-          });
-        }
-        setAllDone(completed);
-        setRecords(await loadCaseRecords(taskId));
-        const freshDrafts = await loadDraftRecords(taskId);
-        setDrafts(freshDrafts);
-        setEditingDraftId(null);
-        if (sharedQuotaTask) {
-          const updatedQuota = await loadPeriodicQuotaCount(task);
-          setQuotaDoneCount(updatedQuota.count);
-          setQuotaDraftCount(updatedQuota.draftCount);
+          setAllDone(completed);
+          setRecords(await loadCaseRecords(taskId));
+          const freshDrafts = await loadDraftRecords(taskId);
+          setDrafts(freshDrafts);
+          setEditingDraftId(null);
+          if (sharedQuotaTask) {
+            const updatedQuota = await loadPeriodicQuotaCount(task);
+            setQuotaDoneCount(updatedQuota.count);
+            setQuotaDraftCount(updatedQuota.draftCount);
+          }
+        } catch {
+          postSyncFailed = true;
+          setAllDone(completed);
+          setEditingDraftId(null);
         }
         setAnswers({}); // 清空答案，保留日期／審查人員，繼續下一件
         setCommonErrorAnswers({});
@@ -1778,7 +1794,7 @@ export function ReviewExecutePage({
         setPersonQuery("");
         setBedNo("");
         onAction(
-          `已送出第 ${sharedQuotaTask ? completedCount : seq} 件（${sharedQuotaTask ? "本區間合計" : "共需"} ${sharedQuotaTask ? `${completedCount}/` : ""}${req} 件）${rate != null ? `，正確率 ${rate}%` : ""}${Object.values(photoCaptureCounts).some((count) => count > 0) ? "；本次拍照僅作畫面標記，未保存至結果" : ""}`,
+          `${commitResult === "confirmed" ? "已確認儲存，" : "已送出（伺服器已接受，但讀回確認暫時失敗），"}${postSyncFailed ? "進度畫面暫時無法更新，稍後重新整理；" : ""}已送出第 ${sharedQuotaTask ? completedCount : seq} 件（${sharedQuotaTask ? "本區間合計" : "共需"} ${sharedQuotaTask ? `${completedCount}/` : ""}${req} 件）${rate != null ? `，正確率 ${rate}%` : ""}${Object.values(photoCaptureCounts).some((count) => count > 0) ? "；本次拍照僅作畫面標記，未保存至結果" : ""}`,
         );
         window.scrollTo({ top: 0, behavior: "smooth" });
       }

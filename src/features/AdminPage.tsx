@@ -77,6 +77,8 @@ import {
   QUOTAS,
   type SystemStatus,
 } from "../lib/maintenance";
+import { AdminCleanupSection } from "./AdminCleanupSection";
+import { getReadMeter, resetReadMeter, subscribeReadMeter } from "../lib/readMeter";
 
 function formatParamValue(key: keyof SystemParams, value: unknown): string {
   const opts = SYSTEM_PARAM_SELECT_OPTIONS[key];
@@ -1492,6 +1494,7 @@ function QuotaControlSection({
               : ""}
           </p>
           <QuotaUsageBars status={status} warn={Number(warnInput)} stop={Number(stopInput)} />
+          <ReadMeterPanel />
           <div className="form-grid">
             <div className="form-field">
               <label className="field-label">提醒門檻（%）</label>
@@ -1567,6 +1570,39 @@ function QuotaControlSection({
   );
 }
 
+/** 本分頁讀取量實測：重置後操作頁面，即可比對各集合實際讀了多少份文件 */
+function ReadMeterPanel() {
+  const [, force] = useState(0);
+  useEffect(() => subscribeReadMeter(() => force((n) => n + 1)), []);
+  const meter = getReadMeter();
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <p className="settings-note">
+        本分頁讀取實測（自 {new Date(meter.since).toLocaleTimeString("zh-TW", { hour12: false })} 起，共 <b>{meter.total.toLocaleString()}</b> 次伺服器讀取）。
+        比對封存前後：按「重置」→ 開結果分析／審查頁 → 記下數字；封存後重複一次。
+      </p>
+      {meter.rows.length > 0 && (
+        <table className="data-table">
+          <thead>
+            <tr><th>集合</th><th>伺服器讀取（計費）</th><th>快取命中（免費）</th><th>查詢次數</th></tr>
+          </thead>
+          <tbody>
+            {meter.rows.map((r) => (
+              <tr key={r.name}>
+                <td>{r.name}</td>
+                <td>{r.billed.toLocaleString()}</td>
+                <td>{r.cached.toLocaleString()}</td>
+                <td>{r.calls}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <button className="button button-outline" type="button" onClick={resetReadMeter}>重置計數</button>
+    </div>
+  );
+}
+
 /** 當日 Firestore 讀／寫／刪用量條（資料由監測 workflow 寫入 configs/system_status） */
 function QuotaUsageBars({
   status,
@@ -1636,7 +1672,7 @@ function QuotaUsageBars({
   );
 }
 
-type AdminTab = "parameters" | "quota" | "themes" | "audit" | "capa" | "audit-policy" | "dashboard-visibility";
+type AdminTab = "parameters" | "cleanup" | "quota" | "themes" | "audit" | "capa" | "audit-policy" | "dashboard-visibility";
 
 export function AdminPage({
   onAction,
@@ -1653,7 +1689,7 @@ export function AdminPage({
     ...(isAdmin ? [{ id: "dashboard-visibility" as const, label: "儀表板顯示", icon: Eye }] : []),
     ...(canManageRoles ? [{ id: "quota" as const, label: "流量控管", icon: Gauge }, { id: "themes" as const, label: "主題模板", icon: Eye }] : []),
     { id: "audit", label: "稽核軌跡", icon: ShieldCheck },
-    ...(isAdmin ? [{ id: "capa" as const, label: "CAPA 管理", icon: ClipboardCheck }] : []),
+    ...(isAdmin ? [{ id: "capa" as const, label: "CAPA 管理", icon: ClipboardCheck }, { id: "cleanup" as const, label: "資料清理", icon: Trash2 }] : []),
     { id: "audit-policy", label: "稽核政策", icon: Check },
   ];
   useEffect(() => {
@@ -1701,6 +1737,7 @@ export function AdminPage({
         {activeTab === "quota" && canManageRoles && <QuotaControlSection onAction={onAction} />}
         {activeTab === "themes" && canManageRoles && <TemplateManagementSection onAction={onAction} onThemeChanged={() => setThemeTick((t) => t + 1)} />}
         {activeTab === "audit" && <AuditLogSection canManageRoles={canManageRoles} />}
+        {activeTab === "cleanup" && isAdmin && <AdminCleanupSection onAction={onAction} />}
         {activeTab === "capa" && isAdmin && <CapaPage onAction={onAction} managementOnly />}
         {activeTab === "audit-policy" && (
           <div className="admin-settings-grid">

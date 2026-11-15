@@ -11,9 +11,8 @@ import {
   query,
   serverTimestamp,
   setDoc,
-  where,
 } from "./db";
-import { fetchAllPaged } from "./pagedQuery";
+import { dbIndexedQueryApi, fetchIndicatorMonths } from "./indexedRecords";
 import { writeAuditLog } from "./audit";
 import { effectiveThreshold, normalizeQuestions } from "./indicators";
 import type { AnalysisRecord } from "./analysisRates";
@@ -136,24 +135,34 @@ export async function archiveInterval(
   const questions = normalizeQuestions(indData.questions).questions;
   const threshold = effectiveThreshold(indData);
 
-  const { docs, truncated } = await fetchAllPaged(
-    collection(db, "reviewRecords"),
-    [where("indicatorId", "==", target.indicatorId)],
-    undefined,
-    { orderByField: "indicatorId" },
+  // 讀量優化：只讀該區間月份的紀錄（依年份分組 month in），不再整個指標全部年度重讀。
+  // 任何一年讀取失敗即丟錯中止，不寫入不完整的摘要。
+  const monthsByYear = new Map<number, number[]>();
+  for (const key of target.monthKeys) {
+    const [y, m] = key.split("-").map(Number);
+    monthsByYear.set(y, [...(monthsByYear.get(y) ?? []), m]);
+  }
+  const fetched = await Promise.all(
+    [...monthsByYear].map(([year, months]) =>
+      fetchIndicatorMonths(dbIndexedQueryApi, collection(db, "reviewRecords"), {
+        indicatorId: target.indicatorId,
+        year,
+        months,
+      }),
+    ),
   );
-  if (truncated) throw new Error("審查紀錄未完整載入（分頁中斷），已停止封存；請稍後重試");
 
   // 摘要存「該指標、該區間月份的全部紀錄」（含匯入、非排程單位），與結果分析
   // 口徑一致；品管審查進度在讀取端依排程單位過濾格子，不另存。
   // 注意：年度與加審區間月份重疊時，兩份摘要內容重複，讀取端同一指標同一月份
   // 只能採用其中一份，不可相加。
   const records: AnalysisRecord[] = [];
-  docs.forEach((d: any) => {
-    const rec = recordDocToAnalysis(d.id, d.data() as Record<string, unknown>);
-    if (target.monthKeys.has(`${rec.year}-${rec.month}`)) records.push(rec);
-  });
-
+  for (const snap of fetched) {
+    snap.docs.forEach((d: any) => {
+      const rec = recordDocToAnalysis(d.id, d.data() as Record<string, unknown>);
+      if (target.monthKeys.has(`${rec.year}-${rec.month}`)) records.push(rec);
+    });
+  }
   const summary = buildReviewSummary({
     indicatorId: target.indicatorId,
     scheduleCategory: target.category,

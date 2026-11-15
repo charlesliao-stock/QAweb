@@ -11,6 +11,7 @@
 import { isDemoMode } from "./demoMode";
 import { invalidateRefForDocPath } from "./refCache";
 import { assertFirestoreAllowed } from "./maintenance";
+import { recordDocRead, recordQueryRead } from "./readMeter";
 import * as demo from "./demoStore";
 import {
   collection as fsCollection,
@@ -18,6 +19,8 @@ import {
   doc as fsDoc,
   getDoc as fsGetDoc,
   getDocs as fsGetDocs,
+  getCountFromServer as fsGetCountFromServer,
+  getDocFromServer as fsGetDocFromServer,
   getDocsFromServer as fsGetDocsFromServer,
   limit as fsLimit,
   orderBy as fsOrderBy,
@@ -53,14 +56,35 @@ export async function getDoc(ref: any): Promise<DocumentSnapshot> {
   if (demoOn()) return Promise.resolve(demo.getDoc(ref) as unknown as DocumentSnapshot);
   // v1.41.0 流量控管：維護開啟且非管理員時阻擋（登入 profile 與狀態文件讀取豁免）
   await assertFirestoreAllowed({ path: ref?.path, kind: "read" });
-  return fsGetDoc(ref);
+  const snap = await fsGetDoc(ref);
+  recordDocRead(snap);
+  return snap;
+}
+
+/** 直接向伺服器讀單一文件（送出後讀回確認用；不走本機快取）。 */
+export async function getDocFromServer(ref: any): Promise<DocumentSnapshot> {
+  if (demoOn()) return Promise.resolve(demo.getDoc(ref) as unknown as DocumentSnapshot);
+  await assertFirestoreAllowed({ path: ref?.path, kind: "read" });
+  const snap = await fsGetDocFromServer(ref);
+  recordDocRead(snap);
+  return snap;
+}
+
+/** 伺服器端計數（約每 1000 筆計 1 次讀取，遠低於逐筆讀取）；展示模式以筆數代替。 */
+export async function getCount(q: any): Promise<number> {
+  if (demoOn()) return (demo.getDocs(q) as unknown as QuerySnapshot).docs.length;
+  await assertFirestoreAllowed({ kind: "read" });
+  const snap = await fsGetCountFromServer(q);
+  return snap.data().count;
 }
 
 export async function getDocs(ref: any): Promise<QuerySnapshot> {
   if (demoOn()) return Promise.resolve(demo.getDocs(ref) as unknown as QuerySnapshot);
   // v1.41.0 流量控管：維護開啟且非管理員時阻擋
   await assertFirestoreAllowed({ kind: "read" });
-  return fsGetDocs(ref);
+  const snap = await fsGetDocs(ref);
+  recordQueryRead(snap);
+  return snap;
 }
 
 /** 需要完整清單時繞過可能不完整的本機 IndexedDB 查詢快取。 */
@@ -68,7 +92,9 @@ export async function getDocsFromServer(ref: any): Promise<QuerySnapshot> {
   if (demoOn()) return Promise.resolve(demo.getDocs(ref) as unknown as QuerySnapshot);
   // v1.41.0 流量控管：維護開啟且非管理員時阻擋
   await assertFirestoreAllowed({ kind: "read" });
-  return fsGetDocsFromServer(ref);
+  const snap = await fsGetDocsFromServer(ref);
+  recordQueryRead(snap);
+  return snap;
 }
 
 export async function setDoc(ref: any, data: any, options?: any): Promise<void> {

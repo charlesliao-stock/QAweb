@@ -49,6 +49,7 @@ import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
 import { getDocCacheFirst } from "../lib/cacheFirst";
 import { fetchAllPaged } from "../lib/pagedQuery";
+import { dbIndexedQueryApi, fetchIndicatorMonths } from "../lib/indexedRecords";
 import {
   EmptyState,
   FilterPanel,
@@ -694,26 +695,48 @@ export function AuditPage({
         minYear = Math.max(minYear, today.getFullYear() - 3);
         const recordsByIndicator = new Map<string, RecordRow[]>();
         let recordsTruncated = false;
-        try {
-          const { docs, truncated } = await fetchAllPaged(
-            collection(db, "reviewRecords"),
-            [where("year", ">=", minYear)],
-          );
-          recordsTruncated = truncated;
-          docs.forEach((d) => {
-            const v = d.data() as Record<string, unknown>;
-            const row = toRecordRow(d.id, v);
-            if (!row) return;
-            const iid = row.indicatorId;
-            const list = recordsByIndicator.get(iid) ?? [];
-            list.push(row);
-            recordsByIndicator.set(iid, list);
-          });
-        } catch {
-          // 單一查詢失敗：紀錄留空（進度暫顯示為 0），不讓整頁掛掉；
-          // 視為未拉完，畫面顯示可見提示。
-          recordsTruncated = true;
+        // 讀量優化：不再整年全讀。只對「需要算進度」的區間，依（指標，年）以
+        // month in [...] 讀該區間月份的紀錄；已結束且有可用摘要者走摘要、完全不讀。
+        // 年份下限 minYear 沿用原規則（歷史年份仍須切到「已結束」才補讀）。
+        const needMonths = new Map<string, { indicatorId: string; year: number; months: Set<number> }>();
+        for (const c of classified) {
+          if (c.state === "ended" && summaryFor(c)) continue;
+          for (const m of c.interval.allMonths) {
+            if (m.year < minYear) continue;
+            const key = `${c.sched.indicatorId}||${m.year}`;
+            const entry = needMonths.get(key) ?? {
+              indicatorId: c.sched.indicatorId,
+              year: m.year,
+              months: new Set<number>(),
+            };
+            entry.months.add(m.month);
+            needMonths.set(key, entry);
+          }
         }
+        const seenRecordIds = new Set<string>();
+        await Promise.all(
+          [...needMonths.values()].map(async (job) => {
+            try {
+              const snap = await fetchIndicatorMonths(
+                dbIndexedQueryApi,
+                collection(db, "reviewRecords"),
+                { indicatorId: job.indicatorId, year: job.year, months: [...job.months] },
+              );
+              snap.docs.forEach((d) => {
+                if (seenRecordIds.has(d.id)) return;
+                seenRecordIds.add(d.id);
+                const row = toRecordRow(d.id, d.data() as Record<string, unknown>);
+                if (!row) return;
+                const list = recordsByIndicator.get(row.indicatorId) ?? [];
+                list.push(row);
+                recordsByIndicator.set(row.indicatorId, list);
+              });
+            } catch {
+              // 該（指標，年）讀取失敗：進度不可信，視為未拉完，畫面顯示可見提示。
+              recordsTruncated = true;
+            }
+          }),
+        );
         if (cancelled) return;
         if (!cancelled) setRecordsTruncated(recordsTruncated);
 
@@ -1384,7 +1407,7 @@ export function AuditPage({
           className="settings-note"
           style={{ color: "#b3372f", fontWeight: 600 }}
         >
-          審查紀錄未完整載入（分頁中斷），進度可能低估；請重新整理後再確認。
+          審查紀錄讀取失敗或未完整載入（可能是系統用量額度已滿），進度數字不準確、「0」不代表尚未審查；請稍後重新整理再確認。
         </p>
       )}
       {myTasksTruncated && (
