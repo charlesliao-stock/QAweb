@@ -116,6 +116,24 @@ const s2 = S.buildReviewSummary({ indicatorId: "I", scheduleCategory: "year", sc
 assert.ok(s2.noSnapshotCount > 0);
 assert.ok(S.isSummaryUsable(s2, 85));
 assert.ok(!S.isSummaryUsable(s2, 90)); checks++;
+
+// v1.66.0：混合格（1–3 月取封存摘要格、4–6 月由原始紀錄現算）＝全部原始紀錄
+{
+  const questions = makeQuestions(true);
+  const records = makeRecords(300, true);
+  const threshold = 85;
+  const mk = (rs) => S.buildReviewSummary({ indicatorId: "I", scheduleCategory: "", schedulePeriod: "",
+    start: { year: 0, month: 0 }, end: { year: 0, month: 0 }, records: rs, questions, threshold }).cells;
+  const hybrid = [...mk(records.filter((r) => r.month <= 3)), ...mk(records.filter((r) => r.month > 3))];
+  const columns = [{ months: [1, 2, 3].map((m) => ({ year: 2026, month: m })) }, { months: [4, 5, 6].map((m) => ({ year: 2026, month: m })) }];
+  const all = columns.flatMap((c) => c.months);
+  assert.deepEqual(S.passRateFromCells(hybrid), A.passRateOf(records, threshold));
+  assert.deepEqual(S.unitPeriodPassRateFromCells(hybrid, columns, threshold), A.unitPeriodPassRate(records, columns, threshold));
+  assert.deepEqual(S.unitScoringRowsFromCells(hybrid, questions, columns, threshold), A.unitScoringBreakdownRows(records, questions, columns, threshold));
+  assert.equal(S.cellsInMonths(hybrid, all).length, hybrid.length);
+  checks += 4;
+  console.log("OK hybrid checks");
+}
 console.log(`OK ${checks} checks`);
 
 // 閾值：格閾值／欄閾值（眾數；全無快照退回 fallback；≤0 → null）

@@ -38,7 +38,21 @@ import {
 import { getFirebaseDb } from "../lib/firebase";
 import { unarchivedOverdue } from "../lib/archiveReminder";
 import { listSchedules } from "../lib/scheduling";
-import { loadAllSummaries } from "../lib/summaryStore";
+import { loadAllSummaries, recordDocToAnalysis, type StoredSummary } from "../lib/summaryStore";
+import {
+  buildReviewSummary,
+  cellsInMonths,
+  columnThresholdFromCells,
+  isSummaryUsable,
+  passRateFromCells,
+  personScoringRowsFromCells,
+  questionSummariesFromCells,
+  unitPassRateFromCells,
+  unitPeriodPassRateFromCells,
+  unitScoringRowsFromCells,
+  type SummaryCell as ArchiveCell,
+} from "../lib/reviewSummary";
+import { fetchIndicatorMonths } from "../lib/indexedRecords";
 import { useAuth } from "../lib/auth";
 import { usePermissions } from "../lib/usePermissions";
 import {
@@ -87,6 +101,7 @@ import {
   collectConsolidatedRecordNotes,
   optionDetailRows,
   questionErrorRows,
+  questionErrorRowsFromSummaries,
   columnThresholdOf,
   passRateOf,
   personScoringBreakdownRows,
@@ -110,6 +125,7 @@ import {
   invalidateCachedYears,
   mergeYearDocs,
   setCachedYear,
+  type CachedYears,
   type ResultsCacheScope,
 } from "../lib/resultsCache";
 import { getDocsCacheFirst } from "../lib/cacheFirst";
@@ -444,8 +460,14 @@ export function ResultsPage({
   const [archiveCtx, setArchiveCtx] = useState<{
     schedules: Awaited<ReturnType<typeof listSchedules>>;
     archiveIds: Set<string>;
+    summaries: Map<string, StoredSummary>;
     deadlineDay: number;
   } | null>(null);
+  // v1.66.0：封存摘要讀取是否已結束（指標分析要先知道哪些月份有摘要，才決定讀哪些原始紀錄）
+  const [archiveReady, setArchiveReady] = useState(false);
+  // 指標分析：使用者要求載入全部原始紀錄（選項明細、補充說明、下探）
+  const [rawFull, setRawFull] = useState(false);
+  const [rawHint, setRawHint] = useState("");
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -461,10 +483,13 @@ export function ResultsPage({
           setArchiveCtx({
             schedules,
             archiveIds: new Set(summaries.keys()),
+            summaries,
             deadlineDay: typeof dd === "number" && dd >= 1 && dd <= 31 ? dd : 10,
           });
       } catch {
-        // 讀不到就不顯示封存提示
+        // 讀不到就不顯示封存提示；指標分析退回全讀原始紀錄
+      } finally {
+        if (!cancelled) setArchiveReady(true);
       }
     })();
     return () => {
@@ -647,12 +672,73 @@ export function ResultsPage({
     [appliedColumns],
   );
 
+  /**
+   * v1.66.0：指標分析摘要模式。該指標有可用封存摘要的月份讀摘要格（每月只採
+   * 一份摘要，避免重疊區間重複計），其餘月份才讀原始紀錄。審查員範圍不走摘要。
+   */
+  const selIndicatorOpt = useMemo(
+    () => indicators.find((i) => i.id === selIndicator),
+    [indicators, selIndicator],
+  );
+  const summaryPlan = useMemo(() => {
+    if (tab !== "indicator" || !selIndicator || !applied || rawFull) return null;
+    if (scope.kind === "reviewer" || !archiveCtx || !selIndicatorOpt) return null;
+    const owner = new Map<string, string>();
+    const list = [...archiveCtx.summaries.values()]
+      .filter(
+        (sm) =>
+          sm.indicatorId === selIndicator &&
+          isSummaryUsable(sm, selIndicatorOpt.threshold),
+      )
+      .sort((a, b) => a.id.localeCompare(b.id));
+    for (const sm of list) {
+      let y = sm.start.year;
+      let m = sm.start.month;
+      while (y * 12 + m <= sm.end.year * 12 + sm.end.month) {
+        const k = `${y}-${m}`;
+        if (!owner.has(k)) owner.set(k, sm.id);
+        m += 1;
+        if (m > 12) {
+          m = 1;
+          y += 1;
+        }
+      }
+    }
+    const wantedList: string[] = allMonths.map((x) => `${x.year}-${x.month}`);
+    const wanted = new Set<string>(wantedList);
+    const coveredKeys: string[] = wantedList.filter((k, i) => wantedList.indexOf(k) === i && owner.has(k));
+    if (coveredKeys.length === 0) return null;
+    const uncovered = allMonths.filter((x) => !owner.has(`${x.year}-${x.month}`));
+    const archivedCells: ArchiveCell[] = [];
+    for (const sm of list)
+      for (const c of sm.cells) {
+        const k = `${c.year}-${c.month}`;
+        if (!wanted.has(k) || owner.get(k) !== sm.id) continue;
+        if (scope.kind === "staff" && !visibleUnitCodes.has(c.unitId)) continue;
+        archivedCells.push(c);
+      }
+    return {
+      coveredKeys,
+      uncovered,
+      archivedCells,
+      key: `${selIndicator}|${coveredKeys.sort().join(",")}`,
+    };
+  }, [tab, selIndicator, applied, rawFull, scope.kind, archiveCtx, selIndicatorOpt, allMonths, visibleUnitCodes]);
+  useEffect(() => {
+    setRawFull(false);
+    setRawHint("");
+  }, [selIndicator, applied, tab]);
+
   // 審查紀錄（查詢閘門＋按年份快取）：
   // 未按「查詢」不觸發（applied 為 null）；已查過的年份直接吃記憶體快取，
   // 缺的年份才按年發查詢，併回後畫面永遠從合併後的快取渲染。
   // 快取鍵含權限範圍（見 resultsCache），不同範圍不共用。
   useEffect(() => {
     if (!applied || tab === "manage" || tab === "import") return;
+    if (tab === "indicator" && singleIndicatorId && scope.kind !== "reviewer" && !archiveReady) {
+      setLoading(true);
+      return;
+    }
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -662,14 +748,49 @@ export function ResultsPage({
         // v1.28 階段 7（B7）：單一指標限縮時改走 indicatorId＋year 複合索引
         // 查詢；索引未就緒時 fetchYearDocs 自動退回舊查詢＋前端過濾。
         const indFilter = singleIndicatorId ?? undefined;
-        const recCached = getCachedYears<AnalysisRecord>(
+        const planNow = summaryPlan;
+        let rlSummary: AnalysisRecord[] | null = null;
+        let recCached: CachedYears<AnalysisRecord> = {
+          hits: new Map(),
+          missing: [],
+          fetchedAt: null,
+        };
+        const recFresh = new Map<number, AnalysisRecord[]>();
+        let fellBack = false;
+        if (planNow && indFilter) {
+          // 摘要模式：只讀未封存月份的原始紀錄（不寫年份快取，避免半份資料被當整年）
+          const byYear = new Map<number, number[]>();
+          for (const m of planNow.uncovered) {
+            const arr = byYear.get(m.year) ?? [];
+            arr.push(m.month);
+            byYear.set(m.year, arr);
+          }
+          const got = await Promise.all(
+            [...byYear].map(([y, ms]) =>
+              fetchIndicatorMonths(dbIndexedQueryApi, collection(db, "reviewRecords"), {
+                indicatorId: indFilter,
+                year: y,
+                months: ms,
+              }),
+            ),
+          );
+          rlSummary = [];
+          got.forEach((snap) => {
+            if (snap.fellBack) fellBack = true;
+            snap.docs.forEach((d) => {
+              const v = d.data() as Record<string, unknown>;
+              const rec = recordDocToAnalysis(d.id, v);
+              rec.taskId = typeof v.taskId === "string" ? v.taskId : undefined;
+              rlSummary!.push(rec);
+            });
+          });
+        } else {
+        recCached = getCachedYears<AnalysisRecord>(
           "reviewRecords",
           years,
           cacheScope,
           indFilter,
         );
-        const recFresh = new Map<number, AnalysisRecord[]>();
-        let fellBack = false;
         if (recCached.missing.length > 0) {
           const snaps = await Promise.all(
             recCached.missing.map((y) =>
@@ -728,7 +849,8 @@ export function ResultsPage({
             recFresh.set(y, docs);
           });
         }
-        const rl = mergeYearDocs(recCached.hits, recFresh);
+        }
+        const rl = rlSummary ?? mergeYearDocs(recCached.hits, recFresh);
         // v1.59.0：任務表改為全部身分皆載入（原只限審查員範圍過濾用），
         // 曲線圖加審標註需反查 reviewTasks.scheduleCategory。
         let tl: {
@@ -742,7 +864,34 @@ export function ResultsPage({
           schedulePeriod?: string;
         }[] = [];
         let taskFetchedAt: number | null = null;
-        {
+        if (planNow && indFilter) {
+          // 摘要模式：任務表只讀該指標（不寫年份快取）
+          const tsn = await Promise.all(
+            years.map((y) =>
+              fetchYearDocs(dbIndexedQueryApi, collection(db, "reviewTasks"), {
+                indicatorId: indFilter,
+                year: y,
+              }),
+            ),
+          );
+          tsn.forEach((snap) => {
+            snap.docs.forEach((d) => {
+              const v = d.data() as Record<string, unknown>;
+              tl.push({
+                id: d.id,
+                unitId: String(v.unitId ?? ""),
+                reviewerId: String(v.reviewerId ?? ""),
+                indicatorId: String(v.indicatorId ?? ""),
+                year: Number(v.year ?? 0),
+                month: Number(v.month ?? 0),
+                scheduleCategory:
+                  typeof v.scheduleCategory === "string" ? v.scheduleCategory : undefined,
+                schedulePeriod:
+                  typeof v.schedulePeriod === "string" ? v.schedulePeriod : undefined,
+              });
+            });
+          });
+        } else {
           const taskCached = getCachedYears<{
             id: string;
             unitId: string;
@@ -842,7 +991,7 @@ export function ResultsPage({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appliedYearsKey, reloadNonce, scope.kind, scope.kind === "reviewer" ? scope.staffId : "", scope.kind === "staff" ? scope.unitCode : "", tab, singleIndicatorId, isNurseLeader, visibleUnitCodes]);
+  }, [appliedYearsKey, reloadNonce, archiveReady, summaryPlan?.key ?? "", rawFull, scope.kind, scope.kind === "reviewer" ? scope.staffId : "", scope.kind === "staff" ? scope.unitCode : "", tab, singleIndicatorId, isNurseLeader, visibleUnitCodes]);
 
   /** 每次查詢皆失效所選年份，避免再次查詢命中過期快取。 */
   function handleQuery() {
@@ -1060,7 +1209,10 @@ export function ResultsPage({
       if (tab === "indicator") {
         return (
           selIndicator !== "" &&
-          columnRecordCount(recordIndex, [selIndicator], col.months) > 0
+          (columnRecordCount(recordIndex, [selIndicator], col.months) > 0 ||
+            (summaryPlan?.archivedCells ?? []).some((c) =>
+              col.months.some((m) => m.year === c.year && m.month === c.month),
+            ))
         );
       }
       return (
@@ -1081,6 +1233,7 @@ export function ResultsPage({
     unitIndicators,
     selIndicator,
     selUnitCode,
+    summaryPlan,
   ]);
 
   // 期間說明文字（modal 副標共用；顯示已生效的查詢條件）
@@ -1290,6 +1443,11 @@ export function ResultsPage({
     scopeLabel: string,
     section?: SectionRef,
   ) {
+    if (summaryPlan) {
+      setRawHint("此操作需原始紀錄，已開始載入，載入完成後請再點一次。");
+      setRawFull(true);
+      return;
+    }
     const ind = indOf.get(indicatorId);
     if (!ind) return;
     const { values, labels, tips, cols, notes, thresholds } = section
@@ -1334,6 +1492,11 @@ export function ResultsPage({
       l2All?: boolean;
     },
   ) {
+    if (summaryPlan) {
+      setRawHint("此操作需原始紀錄，已開始載入，載入完成後請再點一次。");
+      setRawFull(true);
+      return;
+    }
     if (!canOpenDrill({ isNurseLeader, scopeUnitId, visibleUnitCodes })) return;
     if (!extra?.l2All) {
       const cell = cellValue(indicatorId, col, scopeUnitId, mode);
@@ -1365,6 +1528,11 @@ export function ResultsPage({
     mode: UnitMode,
     section?: SectionRef,
   ) {
+    if (summaryPlan) {
+      setRawHint("此操作需原始紀錄，已開始載入，載入完成後請再點一次。");
+      setRawFull(true);
+      return;
+    }
     const ind = indOf.get(indicatorId);
     if (!ind) return;
     // A3：查表取該指標全部期間的紀錄（可再限單位）。
@@ -1405,9 +1573,67 @@ export function ResultsPage({
     return recordsForIndex(recordIndex, selIndicator, allMonths);
   }, [recordIndex, selIndicator, allMonths]);
   const indSel = indOf.get(selIndicator);
+  /** v1.66.0：摘要模式的全部格＝已封存月份的摘要格＋未封存月份原始紀錄現算的格 */
+  const hybridCells = useMemo(() => {
+    if (!summaryPlan || !indSel) return null;
+    const rawCells = buildReviewSummary({
+      indicatorId: indSel.id,
+      scheduleCategory: "",
+      schedulePeriod: "",
+      start: { year: 0, month: 0 },
+      end: { year: 0, month: 0 },
+      records: indRecs,
+      questions: indSel.questions,
+      threshold: indSel.threshold,
+    }).cells;
+    return [...summaryPlan.archivedCells, ...rawCells];
+  }, [summaryPlan, indSel, indRecs]);
   const indSummary = useMemo(() => {
     if (!indSel) return null;
     const th = indSel.threshold;
+    if (hybridCells) {
+      const cells = hybridCells;
+      const unitPr = unitPeriodPassRateFromCells(cells, appliedColumns, th);
+      const merged = passRateFromCells(cells);
+      const perColumn = appliedColumns.map((column) => {
+        const cs = cellsInMonths(cells, column.months);
+        return {
+          column,
+          cs,
+          pr: indUnit === "unit" ? unitPassRateFromCells(cs, th) : passRateFromCells(cs),
+        };
+      });
+      const pts = perColumn.filter((point) => point.pr.rate != null);
+      const chartNotes = pts.map((point) =>
+        columnTempNote(
+          point.cs.map((c) => ({ indicatorId: indSel.id, year: c.year, month: c.month, unitId: c.unitId })),
+          tempTaskKeys,
+          point.column.months.length,
+        ),
+      );
+      return {
+        unitCount: new Set(cells.map((c) => c.unitId)).size,
+        total: merged.total,
+        unitPr,
+        personPr: merged,
+        ownPersonPr: merged,
+        ownTotal: merged.total,
+        chartValues: pts.map((point) => point.pr.rate as number),
+        chartLabels: pts.map((point) => point.column.label),
+        chartTips: pts.map((point, i) => `${point.column.label}${chartNotes[i] ?? ""}：${formatPassRate(point.pr, true)}`),
+        chartNotes,
+        chartThresholds: pts.map((point) =>
+          indUnit === "person" ? columnThresholdFromCells(point.cs, th) : th > 0 ? th : null,
+        ),
+        chartCols: pts.map((point) => point.column),
+        optionRows: [] as ReturnType<typeof optionDetailRows>,
+        scoringRows: !indSel.groupScoring
+          ? []
+          : indUnit === "unit"
+            ? unitScoringRowsFromCells(cells, indSel.questions, appliedColumns, th)
+            : personScoringRowsFromCells(cells, indSel.questions),
+      };
+    }
     const unitIds = new Set(indRecs.map((record) => record.unitId));
     const unitPr = unitPeriodPassRate(indRecs, appliedColumns, th);
     const merged = passRateOf(indRecs, th);
@@ -1449,26 +1675,32 @@ export function ResultsPage({
           ? unitScoringBreakdownRows(indRecs, indSel.questions, appliedColumns, th)
           : personScoringBreakdownRows(indRecs, indSel.questions, th),
     };
-  }, [indRecs, indSel, indUnit, appliedColumns, tempTaskKeys]);
+  }, [indRecs, indSel, indUnit, appliedColumns, tempTaskKeys, hybridCells]);
 
-  const errorAnalysisRows = questionErrorRows(
-    errorUnit === "all"
-      ? indRecs
-      : indRecs.filter((record) => record.unitId === errorUnitCode),
-  );
+  const errorAnalysisRows = hybridCells
+    ? questionErrorRowsFromSummaries(
+        questionSummariesFromCells(
+          errorUnit === "all" ? hybridCells : hybridCells.filter((c) => c.unitId === errorUnitCode),
+        ),
+      )
+    : questionErrorRows(
+        errorUnit === "all"
+          ? indRecs
+          : indRecs.filter((record) => record.unitId === errorUnitCode),
+      );
 
   /**
    * 指標分析補充說明（v1.43.0）：取即時明細（indRecs）中有備註的紀錄，
    * 每筆彙整為一則（單則為備註原文、多則每則附題號）。只收有備註者。
    */
   const indNotes = useMemo(() => {
-    if (!indSel) return [];
+    if (!indSel || hybridCells) return [];
     const source =
       errorUnit === "all"
         ? indRecs
         : indRecs.filter((record) => record.unitId === errorUnitCode);
     return collectConsolidatedRecordNotes(source, indSel.questions);
-  }, [indRecs, indSel, errorUnit, errorUnitCode]);
+  }, [indRecs, indSel, errorUnit, errorUnitCode, hybridCells]);
   return (
     <div className="results-page">
       <PageHeading
@@ -1985,7 +2217,7 @@ export function ResultsPage({
                   value={String(indSummary.unitCount)}
                   note={isNurseLeader ? "僅顯示本人所屬單位；不列其他單位" : "所選期間內有紀錄的單位"}
                   onClick={
-                    indRecs.length > 0
+                    indSummary.total > 0
                       ? () => openDrill(selIndicator, allPeriodColumn, indUnit)
                       : undefined
                   }
@@ -1997,7 +2229,7 @@ export function ResultsPage({
                       value={String(indSummary.ownTotal)}
                       note="所選期間內本單位總人次數"
                       onClick={
-                        indRecs.length > 0
+                        indSummary.total > 0
                           ? () => openDrill(selIndicator, allPeriodColumn, indUnit, undefined, { l2All: true })
                           : undefined
                       }
@@ -2035,7 +2267,7 @@ export function ResultsPage({
                       value={String(indSummary.total)}
                       note="所選期間內總人次數"
                       onClick={
-                        indRecs.length > 0
+                        indSummary.total > 0
                           ? () => openDrill(selIndicator, allPeriodColumn, indUnit, undefined, { l2All: true })
                           : undefined
                       }
@@ -2063,7 +2295,14 @@ export function ResultsPage({
                   </>
                 )}
               </div>
-              {indRecs.length > 0 && (
+              {(summaryPlan || rawHint) && (
+                <p className="settings-note" role="status">
+                  {summaryPlan
+                    ? `資料來源：${summaryPlan.coveredKeys.length} 個月讀取封存摘要，${summaryPlan.uncovered.length} 個月讀取原始紀錄（未封存／進行中）。`
+                    : rawHint}
+                </p>
+              )}
+              {indSummary.total > 0 && (
                 <p className="settings-note" role="status">
                   {isNurseLeader ? "目前僅顯示本單位資料，無法提供全院彙總。" : "明細中的閾值快照優先於指標現行閾值。"}錯題排行依完全相同題目文字跨版本彙總，僅作排行、不代表版本等價或趨勢合併。
                 </p>
@@ -2175,6 +2414,22 @@ export function ResultsPage({
                   title="指標選項審查明細"
                   note={`${indSel.code}・${indSel.name}・${periodDesc}・共 ${indSummary.total} 人次`}
                 />
+                {summaryPlan ? (
+                  <p className="settings-note">
+                    已封存月份只保留彙總數字。
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => {
+                        setRawHint("已載入原始紀錄。");
+                        setRawFull(true);
+                      }}
+                    >
+                      載入原始紀錄
+                    </button>
+                    後可顯示各選項明細、補充說明並下探。
+                  </p>
+                ) : (
                 <OptionDetailTable
                   rows={indSummary.optionRows}
                   onQuestionClick={(questionId) =>
@@ -2184,6 +2439,7 @@ export function ResultsPage({
                     })
                   }
                 />
+                )}
               </section>
               <section className="panel">
                 <SectionTitle
