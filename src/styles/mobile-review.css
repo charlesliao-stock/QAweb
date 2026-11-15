@@ -880,10 +880,18 @@
 }
 
 @media (max-width: 640px) {
+  .review-execute-page {
+    padding-bottom: calc(82px + env(safe-area-inset-bottom));
+  }
+
   .review-execute-page .review-mobile-steps {
-    grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) 11px minmax(0, 1fr);
     gap: 4px;
     padding: 8px 9px;
+  }
+
+  .review-execute-page .review-mobile-step-current {
+    display: none;
   }
 
   .review-execute-page .review-mobile-step {
@@ -906,7 +914,7 @@
   }
 
   .review-execute-page .review-mobile-step-connector {
-    width: 13px;
+    width: 11px;
   }
 
   .review-execute-page .review-mobile-step-current {
