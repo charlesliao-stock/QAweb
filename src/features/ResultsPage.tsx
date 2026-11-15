@@ -1242,6 +1242,52 @@ export function ResultsPage({
     }
   }, []);
 
+  /**
+   * 下探 L2（再下探）才讀原始紀錄：對尚無原始紀錄的指標月份補讀一次並快取，
+   * 同指標同月份再點別的單位不再讀取。L1（各單位結果）一律優先用封存摘要，不走這裡。
+   */
+  const ensureMonths = useCallback(async (indicatorId: string, months: { year: number; month: number }[]): Promise<void> => {
+    const have = recordIndexRef.current.get(indicatorId);
+    const need = months.filter(
+      ({ year, month }) =>
+        !(have?.get(year * 100 + month)?.length) &&
+        !historyFetched.current.has(`${indicatorId}|${year}-${month}`),
+    );
+    if (need.length === 0) return;
+    setHistoryBusy(true);
+    setHistoryNote("");
+    try {
+      const db = getFirebaseDb();
+      const byYear = new Map<number, number[]>();
+      for (const { year, month } of need) byYear.set(year, [...(byYear.get(year) ?? []), month]);
+      const years = [...byYear.keys()];
+      const got = await Promise.all(
+        years.map((year) =>
+          fetchIndicatorMonths(dbIndexedQueryApi, collection(db, "reviewRecords"), {
+            indicatorId,
+            year,
+            months: byYear.get(year) ?? [],
+          }),
+        ),
+      );
+      const batch: AnalysisRecord[] = [];
+      got.forEach((snap, i) => {
+        for (const m of byYear.get(years[i]) ?? []) historyFetched.current.add(`${indicatorId}|${years[i]}-${m}`);
+        snap.docs.forEach((d) => {
+          const v = d.data() as Record<string, unknown>;
+          const rec = recordDocToAnalysis(d.id, v);
+          rec.taskId = typeof v.taskId === "string" ? v.taskId : undefined;
+          batch.push(rec);
+        });
+      });
+      if (batch.length > 0) setHistoryExtra((prev) => [...prev, ...batch]);
+    } catch {
+      setHistoryNote("原始紀錄讀取失敗（可能是系統用量額度已滿），稍後再試。");
+    } finally {
+      setHistoryBusy(false);
+    }
+  }, []);
+
   /** v1.66.0：有封存摘要的指標＝已封存月份的摘要格＋其餘月份原始紀錄現算的格 */
   const hybridByInd = useMemo(() => {
     const out = new Map<string, ArchiveCell[]>();
@@ -2864,6 +2910,8 @@ export function ResultsPage({
             setDrill({ ...drill, l2UnitId: unitId, l2Months: month ? [month] : undefined })
           }
           onNeedHistory={ensureHistory}
+          onNeedMonths={ensureMonths}
+          summaryCellsFor={cellsOfInd}
           historyBusy={historyBusy}
           historyNote={historyNote}
           recordIndex={recordIndex}
@@ -3744,6 +3792,8 @@ function DrillModal({
   onBackToL1,
   onSelectUnit,
   onNeedHistory,
+  onNeedMonths,
+  summaryCellsFor,
   historyBusy,
   historyNote,
   recordIndex,
@@ -3755,6 +3805,8 @@ function DrillModal({
   onBackToL1: () => void;
   onSelectUnit: (unitId: string, month?: { year: number; month: number }) => void;
   onNeedHistory: (indicatorId: string, beforeKey: number, n: number) => Promise<void>;
+  onNeedMonths: (indicatorId: string, months: { year: number; month: number }[]) => Promise<void>;
+  summaryCellsFor: (indicatorId: string, months: { year: number; month: number }[], unitId?: string) => ArchiveCell[] | null;
   historyBusy: boolean;
   historyNote: string;
   recordIndex: RecordIndex;
@@ -3766,6 +3818,11 @@ function DrillModal({
   const col = drill.column;
   // v1.73.0：L2 的期間月份——點歷史月份格子時只看該月，否則為選定的期間欄
   const l2Months = drill.l2Months ?? col.months;
+  const l2Needs = drill.l2UnitId != null || drill.l2All === true;
+  // 只有「再下探」（L2）或 L1 無摘要可用時，才補讀原始紀錄
+  useEffect(() => {
+    if (l2Needs) void onNeedMonths(drill.indicatorId, l2Months);
+  }, [l2Needs, drill.indicatorId, l2Months, onNeedMonths]);
   const [showRecentResults, setShowRecentResults] = useState(false);
   const [recentResultCount, setRecentResultCount] = useState(3);
   const currentStartKey = useMemo(
@@ -3864,38 +3921,42 @@ function DrillModal({
     }
     return list;
   }, [ind, filterIds, recordIndex, drill.indicatorId, drill.scopeUnitId, l2Months]);
-  // L1 列：分母單元的單位（該指標該期間欄內有審查紀錄的單位）
+  // L1：指標有封存摘要且未做分組／逐題篩選時，直接用摘要格（單位×月份）——不讀原始紀錄。
+  // 有篩選（分組／逐題）或指標無摘要時，才用原始紀錄。
+  const l1Summary = useMemo(
+    () => (filterIds ? null : summaryCellsFor(drill.indicatorId, col.months, drill.scopeUnitId)),
+    [filterIds, summaryCellsFor, drill.indicatorId, col.months, drill.scopeUnitId],
+  );
+  // 分組／逐題篩選下探 L1 摘要不足，才補讀原始紀錄（指標無摘要時原始紀錄本就已載入，no-op）
+  useEffect(() => {
+    if (filterIds) void onNeedMonths(drill.indicatorId, col.months);
+  }, [filterIds, drill.indicatorId, col.months, onNeedMonths]);
   const l1Units = useMemo(() => {
-    // A3：查表取該指標該期間欄的紀錄（可再限單位）。
-    const recs = recordsForIndex(
-      recordIndex,
-      drill.indicatorId,
-      col.months,
-      drill.scopeUnitId,
-    );
+    if (l1Summary) {
+      const ids = new Set(l1Summary.filter((c) => c.total > 0).map((c) => c.unitId));
+      return [...ids].sort((a, b) => a.localeCompare(b, "zh-Hant"));
+    }
+    const recs = recordsForIndex(recordIndex, drill.indicatorId, col.months, drill.scopeUnitId);
     return unitsForDrill(recs, col.months);
-  }, [recordIndex, drill.indicatorId, drill.scopeUnitId, col]);
+  }, [l1Summary, recordIndex, drill.indicatorId, drill.scopeUnitId, col]);
   const l1Cells = useMemo(() => {
     const map = new Map<string, CellValue>();
     for (const unitId of l1Units) {
-      const recs = recordsForIndex(
-        recordIndex,
-        drill.indicatorId,
-        col.months,
-        unitId,
-      );
-      // 篩選時 L1 格顯示該分組／該題的人次正確率，否則為整體正確率
-      const pr =
-        filterIds && filterKind
-          ? sectionPassRateOf(recs, filterIds, filterKind, th)
-          : passRateOf(recs, th);
+      const pr = l1Summary
+        ? passRateFromCells(l1Summary.filter((c) => c.unitId === unitId))
+        : (() => {
+            const recs = recordsForIndex(recordIndex, drill.indicatorId, col.months, unitId);
+            return filterIds && filterKind
+              ? sectionPassRateOf(recs, filterIds, filterKind, th)
+              : passRateOf(recs, th);
+          })();
       map.set(unitId, {
         ...pr,
         title: pr.total === 0 ? "無資料" : `達閾值 ${pr.pass}／${pr.total} 人次`,
       });
     }
     return map;
-  }, [recordIndex, drill.indicatorId, l1Units, col, th, filterIds, filterKind]);
+  }, [recordIndex, drill.indicatorId, l1Units, l1Summary, col, th, filterIds, filterKind]);
   // L2 列：該單位該期間被審人員在各選項的審查結果（l2All 時為全部單位）
   const l2Active = drill.l2UnitId != null || drill.l2All === true;
   const l2Rows = useMemo(() => {
@@ -4013,7 +4074,7 @@ function DrillModal({
               <tbody>
                 {l1Units.length === 0 ? (
                   <tr>
-                    <td colSpan={2 + (showRecentResults ? historyMonths.length : 0)}>無資料</td>
+                    <td colSpan={2 + (showRecentResults ? historyMonths.length : 0)}>{historyBusy ? "讀取中…" : historyNote || "無資料"}</td>
                   </tr>
                 ) : (
                   l1Units.map((unitId) => {
@@ -4092,7 +4153,7 @@ function DrillModal({
               </button>
             </div>
             {l2Rows.length === 0 ? (
-              <EmptyState title="無資料" description="該單位該期間尚無審查紀錄。" />
+              <EmptyState title={historyBusy ? "讀取原始紀錄中…" : "無資料"} description={historyBusy ? "正在讀取該單位被審人員的原始紀錄。" : historyNote || "該單位該期間尚無審查紀錄。"} />
             ) : (
               <>
                 <div className="analysis-table-wrap">
