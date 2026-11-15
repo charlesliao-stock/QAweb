@@ -101,6 +101,19 @@ export function isSummaryUsable(
   );
 }
 
+/** 摘要已過期：口徑版本相同，但含「依當下閾值」的紀錄，且指標閾值已與封存時不同。
+ *  過期摘要仍可顯示（數字為封存當時口徑），畫面須提示重新封存。 */
+export function isSummaryStale(
+  s: Pick<ReviewSummary, "schemaVersion" | "noSnapshotCount" | "thresholdUsed">,
+  currentThreshold: number,
+): boolean {
+  return (
+    s.schemaVersion === SUMMARY_SCHEMA_VERSION &&
+    s.noSnapshotCount > 0 &&
+    s.thresholdUsed !== currentThreshold
+  );
+}
+
 type Counts = { yes: number; no: number };
 function countsOf(record: AnalysisRecord, ids: Set<string>): Counts {
   let yes = 0;

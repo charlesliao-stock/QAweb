@@ -68,7 +68,7 @@ import {
   type StoredSummary,
 } from "../lib/summaryStore";
 import { endedIntervalsOf } from "../lib/archiveReminder";
-import { SUMMARY_SCHEMA_VERSION, summaryDocId } from "../lib/reviewSummary";
+import { SUMMARY_SCHEMA_VERSION, isSummaryStale, summaryDocId } from "../lib/reviewSummary";
 import {
   approveEditRequest,
   loadPendingEditRequests,
@@ -123,6 +123,7 @@ import {
   type ReviewInterval,
 } from "../lib/reviewActive";
 import {
+  effectiveThreshold,
   indicatorCodeOf,
   normalizeQuestions,
   type AuditQuestion,
@@ -138,6 +139,8 @@ interface IndicatorLite {
   groupId: string;
   /** v1.63.2：指標狀態（只列啟用指標的排程） */
   status: string;
+  /** 目前生效閾值（判斷封存摘要是否過期） */
+  threshold: number;
 }
 
 interface RecordRow {
@@ -171,6 +174,8 @@ interface ActiveRow {
   indicatorId: string;
   indicatorCode: string;
   indicatorName: string;
+  /** 指標目前生效閾值 */
+  indicatorThreshold: number;
   groupId: string;
   groupName: string;
   /** v1.46.0：進度三態（進行中／已結束／待完成） */
@@ -392,6 +397,7 @@ export function AuditPage({
             name: typeof v.name === "string" && v.name ? v.name : d.id,
             groupId: typeof v.groupId === "string" ? v.groupId : "",
             status: typeof v.status === "string" ? v.status : "",
+            threshold: effectiveThreshold(v),
           });
         });
         const groupName = new Map<string, string>();
@@ -835,6 +841,7 @@ export function AuditPage({
             indicatorId: s.indicatorId,
             indicatorCode: ind.code,
             indicatorName: ind.name,
+            indicatorThreshold: ind.threshold,
             groupId: ind.groupId,
             groupName: groupName.get(ind.groupId) ?? "未分類",
             state,
@@ -1640,14 +1647,19 @@ export function AuditPage({
                               const pend = pendingReqs.some((q) =>
                                 r.endedTargets.some((e) => q.archiveIds.includes(e.id)),
                               );
+                              const stale = r.endedTargets.some((e) => {
+                                const sm = summaries.get(e.id);
+                                return !!sm && isSummaryStale(sm, r.indicatorThreshold);
+                              });
                               return (
                                 <span
                                   className="muted-text"
-                                  style={overdue ? { color: "#b3372f", fontWeight: 600 } : undefined}
+                                  style={overdue || stale ? { color: "#b3372f", fontWeight: 600 } : undefined}
                                 >
                                   已封存 {done}/{r.endedTargets.length}
                                   {overdue ? "・逾期未封存" : ""}
                                   {pend ? "・有待審修改" : ""}
+                                  {stale ? "・摘要已過期（閾值已變更），請重新封存" : ""}
                                 </span>
                               );
                             })()}

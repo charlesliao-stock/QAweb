@@ -44,7 +44,8 @@ import {
   buildReviewSummary,
   cellsInMonths,
   columnThresholdFromCells,
-  isSummaryUsable,
+  isSummaryStale,
+  SUMMARY_SCHEMA_VERSION,
   passRateFromCells,
   personScoringRowsFromCells,
   questionSummariesFromCells,
@@ -698,7 +699,12 @@ export function ResultsPage({
   const summaryPlans = useMemo(() => {
     const out = new Map<
       string,
-      { coveredKeys: string[]; uncovered: { year: number; month: number }[]; archivedCells: ArchiveCell[] }
+      {
+        coveredKeys: string[];
+        uncovered: { year: number; month: number }[];
+        archivedCells: ArchiveCell[];
+        staleLabels: string[];
+      }
     >();
     if (planTargets.length === 0 || !archiveCtx) return out;
     const wantedList: string[] = allMonths.map((x) => `${x.year}-${x.month}`);
@@ -708,7 +714,7 @@ export function ResultsPage({
       if (!opt) continue;
       const owner = new Map<string, string>();
       const list = [...archiveCtx.summaries.values()]
-        .filter((sm) => sm.indicatorId === id && isSummaryUsable(sm, opt.threshold))
+        .filter((sm) => sm.indicatorId === id && sm.schemaVersion === SUMMARY_SCHEMA_VERSION)
         .sort((a, b) => a.id.localeCompare(b.id));
       for (const sm of list) {
         let y = sm.start.year;
@@ -739,6 +745,13 @@ export function ResultsPage({
         coveredKeys,
         uncovered: allMonths.filter((x) => !owner.has(`${x.year}-${x.month}`)),
         archivedCells,
+        staleLabels: list
+          .filter((sm) => isSummaryStale(sm, opt.threshold))
+          .filter((sm) => [...owner.values()].includes(sm.id))
+          .map(
+            (sm) =>
+              `${opt.name}（${sm.start.year}/${sm.start.month}~${sm.end.year}/${sm.end.month}）`,
+          ),
       });
     }
     return out;
@@ -1459,6 +1472,12 @@ export function ResultsPage({
     return `${display(from)} ~ ${display(to)}・單位：${label}`;
   }, [applied, startMonth, endMonth, interval]);
 
+  /** 本次分析用到、但已過期（閾值變更）的封存摘要 */
+  const staleSummaryLabels = useMemo(
+    () => [...new Set([...summaryPlans.values()].flatMap((p) => p.staleLabels))],
+    [summaryPlans],
+  );
+
   /** v1.65.1：分析範圍內、已結束超過一個月仍未封存的區間（尚待確認封存） */
   const unconfirmed = useMemo(() => {
     if (!archiveCtx) return [];
@@ -1941,6 +1960,13 @@ export function ResultsPage({
               ? `資料來源：${summaryPlan.coveredKeys.length} 個月讀取封存摘要，${summaryPlan.uncovered.length} 個月讀取原始紀錄（未封存／進行中）。`
               : `資料來源：${summaryPlans.size} 支指標已封存的月份讀取摘要，其餘月份讀取原始紀錄；選項明細、下探與原因詞庫需載入原始紀錄。`
             : rawHint}
+        </p>
+      )}
+      {staleSummaryLabels.length > 0 && (
+        <p className="settings-note" style={{ color: "#b3372f", fontWeight: 600 }} role="alert">
+          封存摘要已過期：以下摘要封存後指標閾值已變更，目前顯示的是封存當時的結果，請召集人／執行幹事至品管審查稽核重新封存：
+          {staleSummaryLabels.slice(0, 8).join("、")}
+          {staleSummaryLabels.length > 8 ? `…等 ${staleSummaryLabels.length} 個摘要` : ""}
         </p>
       )}
       {unconfirmed.length > 0 && (
