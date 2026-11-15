@@ -31,6 +31,7 @@ import {
   SortableTh,
   FormSelect,
   useSortState,
+  useCompactLayout,
 } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { useAuth } from "../lib/auth";
@@ -808,6 +809,7 @@ export function IndicatorsPage({
   const [searchKw, setSearchKw] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
   const { sortKey, sortDir, toggleSort, tableSort } = useSortState<IndicatorSortKey>("code");
+  const compact = useCompactLayout();
   const [form, setForm] = useState<IndicatorForm>(emptyForm);
   const [formError, setFormError] = useState("");
   const [formTab, setFormTab] = useState<FormTab>("basic");
@@ -1710,10 +1712,19 @@ export function IndicatorsPage({
               <table className="permission-table">
                 <thead>
                   <tr>
-                    <SortableTh label="編號" sortKey="code" sort={tableSort} onSort={toggleSort} />
-                    <SortableTh label="指標名稱" sortKey="name" sort={tableSort} onSort={toggleSort} />
-                    <SortableTh label="組別" sortKey="group" sort={tableSort} onSort={toggleSort} />
-                    <th>負責人</th>
+                    {compact ? (
+                      <>
+                        <SortableTh label="組別" sortKey="group" sort={tableSort} onSort={toggleSort} />
+                        <SortableTh label="編號／指標名稱" sortKey="code" sort={tableSort} onSort={toggleSort} />
+                      </>
+                    ) : (
+                      <>
+                        <SortableTh label="編號" sortKey="code" sort={tableSort} onSort={toggleSort} />
+                        <SortableTh label="指標名稱" sortKey="name" sort={tableSort} onSort={toggleSort} />
+                        <SortableTh label="組別" sortKey="group" sort={tableSort} onSort={toggleSort} />
+                        <th>負責人</th>
+                      </>
+                    )}
                     <SortableTh label="閾值" sortKey="threshold" sort={tableSort} onSort={toggleSort} />
                     <SortableTh label="狀態" sortKey="status" sort={tableSort} onSort={toggleSort} />
                     <th>操作</th>
@@ -1722,23 +1733,37 @@ export function IndicatorsPage({
                 <tbody>
                   {visibleRows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="muted-text">
+                      <td colSpan={compact ? 4 : 7} className="muted-text">
                         沒有符合篩選條件的指標
                       </td>
                     </tr>
                   ) : (
                     visibleRows.map((row) => (
                       <tr key={row.id}>
-                        <td>
-                          <b>{row.code}</b>
-                        </td>
-                        <td>{row.name}</td>
-                        <td>{groupMap.get(row.groupId) || "—"}</td>
-                        <td>
-                          {row.owners.length > 0
-                            ? row.owners.map(ownerLabel).join("、")
-                            : "—"}
-                        </td>
+                        {compact ? (
+                          <>
+                            <td>{groupMap.get(row.groupId) || "—"}</td>
+                            <td>
+                              <div>
+                                <b>{row.code}</b>
+                              </div>
+                              <div>{row.name}</div>
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td>
+                              <b>{row.code}</b>
+                            </td>
+                            <td>{row.name}</td>
+                            <td>{groupMap.get(row.groupId) || "—"}</td>
+                            <td>
+                              {row.owners.length > 0
+                                ? row.owners.map(ownerLabel).join("、")
+                                : "—"}
+                            </td>
+                          </>
+                        )}
                         <td>
                           {displayThreshold(
                             row.basicThreshold,
@@ -1754,6 +1779,7 @@ export function IndicatorsPage({
                           </span>
                         </td>
                         <td>
+                          <div className={compact ? "row-actions row-actions-vertical" : undefined}>
                           <button
                             className="text-button"
                             onClick={() => openEdit(row.id)}
@@ -1787,6 +1813,7 @@ export function IndicatorsPage({
                               <Trash2 size={13} /> 刪除
                             </button>
                           )}
+                          </div>
                         </td>
                       </tr>
                     ))

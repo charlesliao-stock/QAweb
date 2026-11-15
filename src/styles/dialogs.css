@@ -310,3 +310,12 @@
   color: #3b5bdb;
   margin-top: 4px;
 }
+
+/* 手機／平板：操作按鈕改直向排列 */
+.row-actions.row-actions-vertical {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+  gap: 6px;
+}

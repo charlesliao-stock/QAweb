@@ -548,6 +548,22 @@ export function useSortState<K extends string>(initialKey: K) {
   return { sortKey: state.key, sortDir: state.dir, toggleSort, tableSort };
 }
 
+/** 手機／平板（寬度 ≤ 1024px）：列表改用精簡欄位時使用，會隨視窗大小即時切換。 */
+export const COMPACT_LAYOUT_QUERY = "(max-width: 1024px)";
+export function useCompactLayout(): boolean {
+  const [compact, setCompact] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(COMPACT_LAYOUT_QUERY).matches,
+  );
+  useEffect(() => {
+    const media = window.matchMedia(COMPACT_LAYOUT_QUERY);
+    const onChange = () => setCompact(media.matches);
+    onChange();
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
+  return compact;
+}
+
 /** 可排序表頭；sort 為 useTableSort／useSortState 回傳的狀態。 */
 export function SortableTh<K extends string>({
   label,

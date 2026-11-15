@@ -59,6 +59,7 @@ import {
   SortableTh,
   FormSelect,
   useSortState,
+  useCompactLayout,
 } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import {
@@ -279,6 +280,26 @@ function ProgressCell({
   );
 }
 
+/** 手機／平板的進度：單行「人次 n／m（x%）」，無進度條 */
+function CompactProgress({
+  label,
+  done,
+  total,
+  pct,
+}: {
+  label: string;
+  done: number;
+  total: number | null;
+  pct: number | null;
+}) {
+  return (
+    <div>
+      {label}{" "}
+      {total == null ? "—" : `${done}／${total}（${fmtPct(pct)}）`}
+    </div>
+  );
+}
+
 export function AuditPage({
   onAction,
 }: {
@@ -296,6 +317,7 @@ export function AuditPage({
   // v1.59.1：本人任務分頁未拉完時顯示可見提示（任務不全＝加審／自審列可能少列）
   const [myTasksTruncated, setMyTasksTruncated] = useState(false);
   const { sortKey, sortDir, toggleSort, tableSort } = useSortState<SortKey>("group");
+  const compact = useCompactLayout();
   // v1.20：清單上方篩選區（組別／指標／關鍵字）；表頭篩選列移除
   // v1.46.0：篩選區依序為組別／指標／進度／關鍵字；進度預設進行中
   const [selGroup, setSelGroup] = useState("");
@@ -1534,12 +1556,22 @@ export function AuditPage({
             <table className="data-table">
               <thead>
                 <tr>
-                  <SortTh label="組別" k="group" />
-                  <SortTh label="指標編號" k="code" />
-                  <SortTh label="指標名稱" k="name" />
-                  <SortTh label="審查區間" k="interval" />
-                  <SortTh label="審核進度（人次）" k="person" />
-                  <SortTh label="審核進度（單位次）" k="unit" />
+                  {compact ? (
+                    <>
+                      <SortTh label="組別／編號／指標名稱" k="group" />
+                      <SortTh label="審查區間" k="interval" />
+                      <SortTh label="審核進度" k="person" />
+                    </>
+                  ) : (
+                    <>
+                      <SortTh label="組別" k="group" />
+                      <SortTh label="指標編號" k="code" />
+                      <SortTh label="指標名稱" k="name" />
+                      <SortTh label="審查區間" k="interval" />
+                      <SortTh label="審核進度（人次）" k="person" />
+                      <SortTh label="審核進度（單位次）" k="unit" />
+                    </>
+                  )}
                   <th>操作</th>
                 </tr>
               </thead>
@@ -1548,36 +1580,70 @@ export function AuditPage({
                   <tr
                     key={`${r.indicatorId}__${r.sched.category}__${r.sched.period}`}
                   >
-                    <td>{r.groupName}</td>
-                    <td>
-                      {r.sched.category === "temp" && (
-                        <span className="badge">
-                          {r.sched.selfReview ? "自審" : "加審"}
-                        </span>
-                      )}{" "}
-                      <b>{r.indicatorCode}</b>
-                    </td>
-                    <td>{r.indicatorName}</td>
-                    <td>{r.intervalLabel}</td>
-                    <td>
-                      <ProgressCell
-                        done={r.progress.donePersons}
-                        total={r.progress.totalPersons}
-                        pct={r.progress.personPct}
-                      />
-                    </td>
-                    <td>
-                      <ProgressCell
-                        done={r.progress.doneUnits}
-                        total={r.progress.totalUnits}
-                        pct={r.progress.unitPct}
-                      />
-                    </td>
+                    {compact ? (
+                      <>
+                        <td>
+                          <div>{r.groupName}</div>
+                          <div>
+                            {r.sched.category === "temp" && (
+                              <span className="badge">
+                                {r.sched.selfReview ? "自審" : "加審"}
+                              </span>
+                            )}{" "}
+                            <b>{r.indicatorCode}</b>
+                          </div>
+                          <div>{r.indicatorName}</div>
+                        </td>
+                        <td>{r.intervalLabel}</td>
+                        <td>
+                          <CompactProgress
+                            label="人次"
+                            done={r.progress.donePersons}
+                            total={r.progress.totalPersons}
+                            pct={r.progress.personPct}
+                          />
+                          <CompactProgress
+                            label="單位"
+                            done={r.progress.doneUnits}
+                            total={r.progress.totalUnits}
+                            pct={r.progress.unitPct}
+                          />
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td>{r.groupName}</td>
+                        <td>
+                          {r.sched.category === "temp" && (
+                            <span className="badge">
+                              {r.sched.selfReview ? "自審" : "加審"}
+                            </span>
+                          )}{" "}
+                          <b>{r.indicatorCode}</b>
+                        </td>
+                        <td>{r.indicatorName}</td>
+                        <td>{r.intervalLabel}</td>
+                        <td>
+                          <ProgressCell
+                            done={r.progress.donePersons}
+                            total={r.progress.totalPersons}
+                            pct={r.progress.personPct}
+                          />
+                        </td>
+                        <td>
+                          <ProgressCell
+                            done={r.progress.doneUnits}
+                            total={r.progress.totalUnits}
+                            pct={r.progress.unitPct}
+                          />
+                        </td>
+                      </>
+                    )}
                     <td>
                       {r.state === "pending" ? (
                         <span className="muted-text">—</span>
                       ) : (
-                        <div className="row-actions">
+                        <div className={compact ? "row-actions row-actions-vertical" : "row-actions"}>
                           <button
                             type="button"
                             className="text-button"
@@ -1601,7 +1667,7 @@ export function AuditPage({
                                   : "封存摘要"}
                             </button>
                           )}
-                          {r.endedTargets.length > 0 &&
+                          {!compact && r.endedTargets.length > 0 &&
                             (() => {
                               const done = r.endedTargets.filter((e) => summaries.has(e.id)).length;
                               const overdue = r.endedTargets.some(

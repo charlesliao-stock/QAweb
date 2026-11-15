@@ -33,6 +33,7 @@ import {
   SortableTh,
   useTableSort,
   FormSelect,
+  useCompactLayout,
 } from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
@@ -649,6 +650,8 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     showTemp,
   ]);
 
+  const compact = useCompactLayout();
+
   const {
     sortedRows,
     sort: rowSort,
@@ -898,9 +901,15 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                 <thead>
                   <tr>
                     <SortableTh label="組別" sortKey="group" sort={rowSort} onSort={toggleRowSort} />
-                    <SortableTh label="年別" sortKey="year" sort={rowSort} onSort={toggleRowSort} />
-                    <SortableTh label="指標編號" sortKey="code" sort={rowSort} onSort={toggleRowSort} />
-                    <SortableTh label="指標名稱" sortKey="name" sort={rowSort} onSort={toggleRowSort} />
+                    {compact ? (
+                      <SortableTh label="編號／指標名稱" sortKey="code" sort={rowSort} onSort={toggleRowSort} />
+                    ) : (
+                      <>
+                        <SortableTh label="年別" sortKey="year" sort={rowSort} onSort={toggleRowSort} />
+                        <SortableTh label="指標編號" sortKey="code" sort={rowSort} onSort={toggleRowSort} />
+                        <SortableTh label="指標名稱" sortKey="name" sort={rowSort} onSort={toggleRowSort} />
+                      </>
+                    )}
                     <th>排程/單位設定</th>
                     <th>審查員/單位設定</th>
                     <th>操作</th>
@@ -925,26 +934,48 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                     return (
                       <tr key={r.key}>
                         <td>{r.groupName}</td>
-                        <td>
-                          {isTemp ? (
-                            sched?.selfReview ? (
-                              <span className="status-pill info">自審</span>
-                            ) : (
-                              <span className="status-pill danger">加審</span>
-                            )
-                          ) : (
-                            <>
-                              {categoryLabel(r.category)}
-                              <div className="muted-text">
-                                {periodLabel(r.category, r.period)}
-                              </div>
-                            </>
-                          )}
-                        </td>
-                        <td className="muted-text">{r.code}</td>
-                        <td>
-                          <b>{r.name}</b>
-                        </td>
+                        {compact ? (
+                          <td>
+                            <div className="muted-text">
+                              {isTemp && (
+                                <>
+                                  {sched?.selfReview ? (
+                                    <span className="status-pill info">自審</span>
+                                  ) : (
+                                    <span className="status-pill danger">加審</span>
+                                  )}{" "}
+                                </>
+                              )}
+                              {r.code}
+                            </div>
+                            <div>
+                              <b>{r.name}</b>
+                            </div>
+                          </td>
+                        ) : (
+                          <>
+                            <td>
+                              {isTemp ? (
+                                sched?.selfReview ? (
+                                  <span className="status-pill info">自審</span>
+                                ) : (
+                                  <span className="status-pill danger">加審</span>
+                                )
+                              ) : (
+                                <>
+                                  {categoryLabel(r.category)}
+                                  <div className="muted-text">
+                                    {periodLabel(r.category, r.period)}
+                                  </div>
+                                </>
+                              )}
+                            </td>
+                            <td className="muted-text">{r.code}</td>
+                            <td>
+                              <b>{r.name}</b>
+                            </td>
+                          </>
+                        )}
                         <td>
                           {isTemp ? (
                             <span className={schedDone ? PILL_OK : PILL_NONE}>
