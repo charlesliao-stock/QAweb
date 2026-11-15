@@ -77,7 +77,7 @@ function fromDoc(id: string, d: Record<string, unknown>): EditRequest {
   };
 }
 
-/** 找出涵蓋該紀錄年月的封存摘要文件 ID（可能多份：年度與加審區間重疊） */
+/** 查詢該指標涵蓋指定年月的全部封存摘要（年度與加審區間可能重疊）；不可限制前 200 筆。 */
 export async function findArchiveIdsForRecord(
   db: any,
   indicatorId: string,
@@ -88,7 +88,6 @@ export async function findArchiveIdsForRecord(
     query(
       collection(db, SUMMARY_COLLECTION),
       where("indicatorId", "==", indicatorId),
-      limit(200),
     ),
   );
   const key = year * 100 + month;

@@ -341,3 +341,59 @@ body {
 @media(max-width:640px){.employee-id-input-row{grid-template-columns:minmax(0,1fr)}.employee-barcode-trigger{width:100%;min-height:48px}.employee-barcode-dialog{padding:14px}.employee-barcode-actions .button{width:100%;justify-content:center}}
 
 .employee-barcode-loading{padding:24px 30px;border:1px solid var(--line,#dfe8e6);border-radius:12px;background:var(--surface,#fff);color:var(--ink,#20313a);font-size:14px}
+
+
+/* ---------- v1.68.0 審查流程、備註相機與直達題號導覽 ---------- */
+.review-mobile-steps,.review-mobile-next-wrap{display:none}
+.review-camera-input{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.review-note-entry{display:grid;gap:5px;min-width:0;width:100%}
+.review-note-input-row{display:grid;grid-template-columns:minmax(0,1fr) 42px;gap:6px;align-items:stretch;width:100%}
+.review-note-input-row .text-input{width:100%;min-width:0}
+.review-note-camera{display:inline-flex;min-height:42px;align-items:center;justify-content:center;border:1px solid #cbd9d6;border-radius:8px;background:#f7faf9;color:#32615a;cursor:pointer;touch-action:manipulation}
+.review-note-camera:hover{border-color:#148378;background:#eaf5f3;color:#126b63}
+.review-note-camera:focus-visible,.review-mobile-step:focus-visible,.review-mobile-next:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.review-note-photo-links{display:flex;flex-wrap:wrap;gap:6px;font-size:11px}
+.review-note-photo-links a{color:#08786e;text-decoration:underline}
+.review-note-photo-status{color:#617772;font-size:10px;line-height:1.45}
+.review-option-not-applicable .review-option-icon:not(:empty){color:#65727c;background:#edf1f3}
+.review-field-warning,.review-unit-warning{display:block;margin-top:7px;color:#875600;font-size:12px;line-height:1.5}
+.review-unit-warning{padding:8px 10px;border:1px solid #e8c98c;border-radius:8px;background:#fff8e8}
+.review-photo-notice{margin:2px 0 8px;font-size:11px}
+@media(max-width:1100px){
+  .review-mobile-steps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0 0 12px}
+  .review-mobile-step{display:flex;min-width:0;min-height:52px;align-items:center;gap:8px;padding:8px 11px;border:1px solid #dce6e4;border-radius:10px;background:#fff;color:#52645f;text-align:left;cursor:pointer;touch-action:manipulation}
+  .review-mobile-step.active{border-color:#16877d;background:#eaf5f3;color:#126b63;box-shadow:0 0 0 1px rgba(22,135,125,.1)}
+  .review-mobile-step-number{display:grid;flex:none;width:26px;height:26px;place-items:center;border-radius:50%;background:#edf2f1;font-size:12px;font-weight:750}
+  .review-mobile-step.active .review-mobile-step-number{background:#167e74;color:#fff}
+  .review-mobile-step>b{font-size:13px}
+  .review-mobile-step>small{margin-left:auto;color:#71817e;font-size:11px;font-variant-numeric:tabular-nums}
+  .review-mobile-page.is-inactive{display:none}
+  .review-mobile-next-wrap{display:block;margin:8px 0 14px}
+  .review-mobile-next{display:inline-flex;width:100%;min-height:48px;align-items:center;justify-content:center;gap:6px}
+  .review-question-mobile-nav{display:block;box-sizing:border-box;width:100%;overflow:hidden;border:1px solid #dfe8e6;border-radius:10px;background:#fff}
+  .review-question-mobile-nav-head{display:flex;min-height:42px;align-items:center;gap:8px;padding:6px 10px;color:#38544f}
+  .review-question-mobile-nav-head>b{font-size:12px}
+  .review-question-mobile-nav-head>span{margin-left:auto;color:#758582;font-size:11px;font-variant-numeric:tabular-nums}
+  .review-question-nav-grid{box-sizing:border-box;width:100%;grid-template-columns:repeat(auto-fill,minmax(48px,1fr));border-top:1px solid #edf1f0}
+  .review-workspace-layout,.review-question-navigator,.review-workspace-main,.review-execute-page .review-group-box{box-sizing:border-box;width:100%;max-width:100%;min-width:0}
+  .review-question-sidebar{display:none}
+  .review-photo-notice{margin-top:0}
+}
+@media(max-width:640px){
+  .review-mobile-steps{gap:6px}
+  .review-mobile-step{min-height:50px;padding:7px 8px;gap:6px}
+  .review-mobile-step>b{font-size:12px}
+  .review-question-mobile-nav-head{padding-inline:9px}
+  .review-question-nav-grid{grid-template-columns:repeat(6,minmax(0,1fr));padding:8px}
+  .review-note-input-row{grid-template-columns:minmax(0,1fr) 42px}
+}
+@media(max-width:360px){
+  .review-note-input-row{grid-template-columns:minmax(0,1fr)}
+  .review-note-camera{width:48px;justify-self:end}
+}
+:root[data-mode="dark"] .review-note-camera{border-color:#465856;background:#232d2b;color:#b7ded6}
+:root[data-mode="dark"] .review-note-camera:hover{border-color:#218f83;background:#273c38;color:#a6e0d4}
+:root[data-mode="dark"] .review-note-photo-links a{color:#77c4b9}
+:root[data-mode="dark"] .review-note-photo-status{color:#a6b4b0}
+:root[data-mode="dark"] .review-option-not-applicable .review-option-icon:not(:empty){color:#c2cbd1;background:#344047}
+:root[data-mode="dark"] .review-unit-warning{border-color:#80683d;background:#332b1d;color:#f0d69c}

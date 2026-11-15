@@ -7,7 +7,7 @@
  * 兩種模式：edit（審查執行，可作答＋填備註）／view（檢視結果，唯讀＋顯示備註）
  */
 import { useState, type ReactNode } from "react";
-import { Camera, Check, X } from "lucide-react";
+import { Camera, Check, Minus, X } from "lucide-react";
 import {
   groupQuestionsIntoSections,
   optionLabelsOf,
@@ -29,9 +29,11 @@ export type ReviewQuestionListProps =
       onAnswer: (qid: string, idx: number) => void;
       onCommonErrors: (qid: string, values: string[]) => void;
       onNote: (qid: string, text: string) => void;
+      onTakePhoto: (qid: string) => void;
       activeQuestionId?: string;
       photoCounts?: Record<string, number>;
       photoUrlsByQuestion?: Record<string, string[]>;
+      photoCaptureCounts?: Record<string, number>;
     }
   | {
       mode: "view";
@@ -128,9 +130,11 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
       onAnswer,
       onCommonErrors,
       onNote,
+      onTakePhoto,
       activeQuestionId,
       photoCounts = {},
       photoUrlsByQuestion = {},
+      photoCaptureCounts = {},
     } = props;
     const numById = new Map(questions.map((q, i) => [q.id, i + 1]));
     const sections = groupQuestionsIntoSections(questions, showGroups);
@@ -152,30 +156,6 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                     num={num}
                     active={q.id === activeQuestionId}
                     photoCount={photoCounts[q.id] ?? 0}
-                    photoNode={q.id === activeQuestionId ? (
-                      <div className="review-photo-optional">
-                        <div className="review-photo-heading">
-                          <Camera size={15} />
-                          <b>照片佐證</b>
-                          <span>選填</span>
-                        </div>
-                        {(photoUrlsByQuestion[q.id] ?? []).length > 0 ? (
-                          <div className="review-photo-links">
-                            {(photoUrlsByQuestion[q.id] ?? []).map((url, index) => (
-                              <a key={`${url}-${index}`} href={url} target="_blank" rel="noreferrer">
-                                查看照片 {index + 1}
-                              </a>
-                            ))}
-                          </div>
-                        ) : (
-                          <p>尚未附照片，不影響答題完成。</p>
-                        )}
-                        <button type="button" className="button button-outline" disabled title="照片上傳尚未串接">
-                          <Camera size={15} /> 拍照／選取照片
-                        </button>
-                        <small>照片上傳功能尚待 Cloud Storage 串接與啟用。</small>
-                      </div>
-                    ) : null}
                     itemText={q.itemText || `（第 ${num} 題）`}
                     guidance={q.guidance}
                     open={!!openGuidance[q.id]}
@@ -191,10 +171,11 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                           {optionLabelsOf(q.optionSet).map((label, oi) => {
                             const negative = label === "不符合" || label === "否";
                             const positive = label === "符合" || label === "是";
+                            const notApplicable = label === "不適用";
                             return (
                               <label
                                 key={oi}
-                                className={`check-row${sel === oi ? " checked" : ""}${negative ? " review-option-negative" : ""}`}
+                                className={`check-row${sel === oi ? " checked" : ""}${negative ? " review-option-negative" : ""}${notApplicable ? " review-option-not-applicable" : ""}`}
                               >
                                 <input
                                   type="radio"
@@ -203,7 +184,7 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                                   onChange={() => onAnswer(q.id, oi)}
                                 />
                                 <span className="review-option-icon" aria-hidden="true">
-                                  {positive ? <Check size={17} strokeWidth={2.5} /> : negative ? <X size={17} strokeWidth={2.5} /> : null}
+                                  {positive ? <Check size={17} strokeWidth={2.5} /> : negative ? <X size={17} strokeWidth={2.5} /> : notApplicable ? <Minus size={17} strokeWidth={2.5} /> : null}
                                 </span>
                                 <span>{label}</span>
                               </label>
@@ -249,14 +230,41 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                       </div>
                     }
                     noteNode={
-                      <input
-                        type="text"
-                        className="text-input"
-                        placeholder="備註（選填）"
-                        value={notes[q.id] ?? ""}
-                        onChange={(e) => onNote(q.id, e.target.value)}
-                        aria-label={`第 ${num} 題備註`}
-                      />
+                      <div className="review-note-entry">
+                        <div className="review-note-input-row">
+                          <input
+                            type="text"
+                            className="text-input"
+                            placeholder="備註（選填）"
+                            value={notes[q.id] ?? ""}
+                            onChange={(e) => onNote(q.id, e.target.value)}
+                            aria-label={`第 ${num} 題備註`}
+                          />
+                          <button
+                            type="button"
+                            className="review-note-camera"
+                            onClick={() => onTakePhoto(q.id)}
+                            aria-label={`第 ${num} 題開啟相機`}
+                            title="開啟相機／照片選取器"
+                          >
+                            <Camera size={18} />
+                          </button>
+                        </div>
+                        {(photoUrlsByQuestion[q.id] ?? []).length > 0 && (
+                          <div className="review-note-photo-links">
+                            {(photoUrlsByQuestion[q.id] ?? []).map((url, index) => (
+                              <a key={`${url}-${index}`} href={url} target="_blank" rel="noreferrer">
+                                查看既有照片 {index + 1}
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                        {(photoCaptureCounts[q.id] ?? 0) > 0 && (
+                          <small className="review-note-photo-status" role="status">
+                            已拍 {photoCaptureCounts[q.id]} 張；本次只作畫面標記，不會保存至審查結果
+                          </small>
+                        )}
+                      </div>
                     }
                   />
                 );

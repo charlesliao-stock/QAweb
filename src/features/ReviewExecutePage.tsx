@@ -5,8 +5,8 @@ import {
   findArchiveIdsForRecord,
   hasPendingEditRequest,
 } from "../lib/editRequests";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, ListChecks, Pencil, ScanLine } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { ArrowLeft, Camera, Check, ChevronLeft, ChevronRight, ListChecks, Pencil, ScanLine } from "lucide-react";
 import {
   collection,
   doc,
@@ -72,10 +72,18 @@ interface TaskFull extends ReviewTask {
   id: string;
 }
 
+interface AuditMonthOption {
+  value: string;
+  label: string;
+  active: boolean;
+}
+
 /** 該 task 的單件審查紀錄 */
 interface CaseRecordRow {
   id: string;
   caseSeq: number | null;
+  year: number;
+  month: number;
   reviewDate: string;
   reviewerEmpNo: string;
   reviewerName: string;
@@ -116,6 +124,10 @@ interface UnlockRow {
 
 function ymLabel(year: number, month: number): string {
   return `${year} 年 ${month} 月`;
+}
+
+function auditMonthValue(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, "0")}`;
 }
 
 function fmtTs(ts: unknown): string {
@@ -206,6 +218,12 @@ function taskFromDoc(id: string, data: Record<string, unknown>): TaskFull {
       typeof data.scheduleEndYear === "number" ? data.scheduleEndYear : undefined,
     scheduleEndMonth:
       typeof data.scheduleEndMonth === "number" ? data.scheduleEndMonth : undefined,
+    scheduleCategory:
+      data.scheduleCategory === "year" || data.scheduleCategory === "academic" || data.scheduleCategory === "temp"
+        ? data.scheduleCategory
+        : undefined,
+    schedulePeriod:
+      typeof data.schedulePeriod === "string" ? data.schedulePeriod : undefined,
     deadline: String(data.deadline ?? ""),
     status: st === "done" ? "done" : st === "locked" ? "locked" : "pending",
     completedAt: data.completedAt,
@@ -237,7 +255,12 @@ export function ReviewExecutePage({
   const [requireReviewee, setRequireReviewee] = useState(true);
   const [questions, setQuestions] = useState<AuditQuestion[]>([]);
   const [activeQuestionId, setActiveQuestionId] = useState("");
-  const [questionNavigationOpen, setQuestionNavigationOpen] = useState(false);
+  const [reviewMobileStep, setReviewMobileStep] = useState<"basic" | "questions">("basic");
+  const [auditMonth, setAuditMonth] = useState("");
+  const [auditMonthOptions, setAuditMonthOptions] = useState<AuditMonthOption[]>([]);
+  const [auditMonthError, setAuditMonthError] = useState("");
+  const [assignedScheduleTasks, setAssignedScheduleTasks] = useState<TaskFull[]>([]);
+  const [switchingSchedule, setSwitchingSchedule] = useState(false);
   const [auditItems, setAuditItems] = useState<string[]>([]);
   const [selectedAuditItem, setSelectedAuditItem] = useState("");
   const [task, setTask] = useState<TaskFull | null>(null);
@@ -268,8 +291,12 @@ export function ReviewExecutePage({
   const [bedNo, setBedNo] = useState("");
   /** questionId → 備註（v1.15.0：選填） */
   const [notes, setNotes] = useState<Record<string, string>>({});
-  /** questionId → 選用照片 URL（照片上傳須啟用 Cloud Storage） */
+  /** questionId → 既有紀錄照片 URL；本次新拍照片不會寫入審查結果 */
   const [photoUrlsByQuestion, setPhotoUrlsByQuestion] = useState<Record<string, string[]>>({});
+  /** questionId → 本次畫面內拍照次數（不保存、不上傳） */
+  const [photoCaptureCounts, setPhotoCaptureCounts] = useState<Record<string, number>>({});
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const photoQuestionIdRef = useRef("");
   /** questionId → 已勾選常見錯誤（不影響評分） */
   const [commonErrorAnswers, setCommonErrorAnswers] = useState<
     Record<string, string[]>
@@ -310,7 +337,13 @@ export function ReviewExecutePage({
     : questions[0]?.id ?? "";
   const activeQuestionIndex = questions.findIndex((question) => question.id === currentQuestionId);
   const answeredCount = liveScore.answeredCount;
-  const attachedPhotoCounts = useMemo(() => Object.fromEntries(Object.entries(photoUrlsByQuestion).map(([questionId, urls]) => [questionId, urls.length])), [photoUrlsByQuestion]);
+  const attachedPhotoCounts = useMemo(
+    () => Object.fromEntries(questions.map((question) => [
+      question.id,
+      (photoUrlsByQuestion[question.id]?.length ?? 0) + (photoCaptureCounts[question.id] ?? 0),
+    ])),
+    [questions, photoUrlsByQuestion, photoCaptureCounts],
+  );
 
   async function assertUniqueReviewee(
     empNo: string,
@@ -373,6 +406,8 @@ export function ReviewExecutePage({
         rows.push({
           id: d.id,
           caseSeq: typeof cs === "number" ? cs : null,
+          year: Number(data.year ?? 0),
+          month: Number(data.month ?? 0),
           reviewDate:
             typeof data.reviewDate === "string" ? data.reviewDate : "",
           reviewerEmpNo:
@@ -423,6 +458,8 @@ export function ReviewExecutePage({
         return {
           id: draft.id,
           caseSeq: typeof data.caseSeq === "number" ? data.caseSeq : null,
+          year: Number(data.year ?? 0),
+          month: Number(data.month ?? 0),
           reviewDate: typeof data.reviewDate === "string" ? data.reviewDate : "",
           reviewerEmpNo: typeof data.reviewerEmpNo === "string" ? data.reviewerEmpNo : "",
           reviewerName: typeof data.reviewerName === "string" ? data.reviewerName : "",
@@ -604,7 +641,15 @@ export function ReviewExecutePage({
     setNotes(nextNotes);
     setCommonErrorAnswers(nextCommonErrors);
     setPhotoUrlsByQuestion(nextPhotoUrls);
+    setPhotoCaptureCounts({});
     setSelectedAuditItem(rec.auditItem ?? "");
+    const recordMonth = auditMonthValue(rec.year, rec.month);
+    if (rec.year > 0 && rec.month >= 1 && rec.month <= 12) {
+      setAuditMonth(recordMonth);
+      setAuditMonthOptions((previous) => previous.some((option) => option.value === recordMonth)
+        ? previous
+        : [...previous, { value: recordMonth, label: `${ymLabel(rec.year, rec.month)}（原紀錄月份）`, active: false }]);
+    }
     setReviewDate(rec.reviewDate || todayStr());
     setReviewerEmpNo(rec.reviewerEmpNo);
     setReviewerName(rec.reviewerName);
@@ -684,6 +729,83 @@ export function ReviewExecutePage({
         if (cancelled) return;
         setQuestions(nq.questions);
         setTask(t);
+
+        // 只列出目前登入審查員被指派、且屬於相同指標與排程區間的單位任務。
+        try {
+          if (staffId) {
+            const assignedSnap = await getDocs(query(
+              collection(db, "reviewTasks"),
+              where("reviewerId", "==", staffId),
+            ));
+            const assigned = assignedSnap.docs
+              .map((d) => taskFromDoc(d.id, d.data() as Record<string, unknown>))
+              .filter((candidate) => {
+                if (candidate.id !== t.id && candidate.status !== "pending") return false;
+                if (candidate.indicatorId !== t.indicatorId) return false;
+                const sameWindow = reviewIntervalIdentity(candidate) === reviewIntervalIdentity(t);
+                if (!sameWindow) return false;
+                if (t.scheduleCategory || candidate.scheduleCategory) {
+                  return t.scheduleCategory === candidate.scheduleCategory &&
+                    (t.schedulePeriod ?? "") === (candidate.schedulePeriod ?? "");
+                }
+                return true;
+              });
+            if (!assigned.some((candidate) => candidate.id === t.id)) assigned.unshift(t);
+            if (!cancelled) setAssignedScheduleTasks(assigned);
+          } else if (!cancelled) {
+            setAssignedScheduleTasks([t]);
+          }
+        } catch {
+          if (!cancelled) setAssignedScheduleTasks([t]);
+        }
+
+        // 稽核月份限同一排程區間，並排除已封存月份；之後送出前仍會再次檢查。
+        try {
+          const rangeMonths = [...intervalMonthKeys(t)].map((key) => {
+            const [year, month] = key.split("-").map(Number);
+            return { year, month, value: auditMonthValue(year, month) };
+          }).filter((item) => item.year > 0 && item.month >= 1 && item.month <= 12)
+            .sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
+          const archiveSnap = await getDocs(query(
+            collection(db, "reviewArchives"),
+            where("indicatorId", "==", t.indicatorId),
+          ));
+          const archivedMonths = new Set<string>();
+          archiveSnap.docs.forEach((archive) => {
+            const data = archive.data() as Record<string, unknown>;
+            const start = data.start as { year?: unknown; month?: unknown } | undefined;
+            const end = data.end as { year?: unknown; month?: unknown } | undefined;
+            if (!start || !end || !Number.isSafeInteger(start.year) || !Number.isSafeInteger(start.month) ||
+                !Number.isSafeInteger(end.year) || !Number.isSafeInteger(end.month) ||
+                (start.month as number) < 1 || (start.month as number) > 12 ||
+                (end.month as number) < 1 || (end.month as number) > 12) return;
+            const firstIndex = (start.year as number) * 12 + (start.month as number) - 1;
+            const endIndex = (end.year as number) * 12 + (end.month as number) - 1;
+            if (endIndex < firstIndex) return;
+            for (const item of rangeMonths) {
+              const monthIndex = item.year * 12 + item.month - 1;
+              if (monthIndex >= firstIndex && monthIndex <= endIndex) archivedMonths.add(item.value);
+            }
+          });
+          const openMonths: AuditMonthOption[] = rangeMonths
+            .filter((item) => !archivedMonths.has(item.value))
+            .map((item) => ({ value: item.value, label: ymLabel(item.year, item.month), active: true }));
+          if (!cancelled) {
+            setAuditMonthOptions(openMonths);
+            setAuditMonthError("");
+            const scheduledMonth = auditMonthValue(t.year, t.month);
+            setAuditMonth(openMonths.some((item) => item.value === scheduledMonth)
+              ? scheduledMonth
+              : openMonths[0]?.value ?? "");
+            if (openMonths.length === 0) setAuditMonthError("此排程區間的月份均已封存，無可新增稽核月份。");
+          }
+        } catch {
+          if (!cancelled) {
+            setAuditMonthOptions([]);
+            setAuditMonth("");
+            setAuditMonthError("無法確認稽核月份是否已封存，請稍後重新載入。");
+          }
+        }
         // 逐件紀錄
         const recs = await loadCaseRecords(t.id);
         if (cancelled) return;
@@ -769,6 +891,68 @@ export function ReviewExecutePage({
     setAnswers((prev) => ({ ...prev, [qid]: idx }));
   }
 
+  function openQuestionCamera(questionId: string) {
+    photoQuestionIdRef.current = questionId;
+    photoInputRef.current?.click();
+  }
+
+  function handleCameraSelection(event: ChangeEvent<HTMLInputElement>) {
+    const files = event.currentTarget.files;
+    const questionId = photoQuestionIdRef.current;
+    if (files?.length && questionId) {
+      setPhotoCaptureCounts((previous) => ({
+        ...previous,
+        [questionId]: (previous[questionId] ?? 0) + files.length,
+      }));
+      onAction("已拍照；目前只在本次表單顯示標記，照片不會保存至審查結果。");
+    }
+    event.currentTarget.value = "";
+  }
+
+  async function handleScheduleUnitChange(taskId: string) {
+    if (!task || taskId === task.id || switchingSchedule) return;
+    const nextTask = assignedScheduleTasks.find((candidate) => candidate.id === taskId);
+    if (!nextTask) return;
+    setSwitchingSchedule(true);
+    try {
+      const [nextRecords, nextDrafts] = await Promise.all([
+        loadCaseRecords(nextTask.id),
+        loadDraftRecords(nextTask.id),
+      ]);
+      const nextQuota = isSharedPeriodicQuotaTask(nextTask)
+        ? await loadPeriodicQuotaCount(nextTask)
+        : { count: nextRecords.length, draftCount: nextDrafts.length, occupiedSlots: [] as number[] };
+      setTask(nextTask);
+      setRecords(nextRecords);
+      setDrafts(nextDrafts);
+      setQuotaDoneCount(nextQuota.count);
+      setQuotaDraftCount(nextQuota.draftCount);
+      setAllDone(isTaskComplete(nextQuota.count, nextTask.caseCount));
+      setEditingId(null);
+      setEditingDraftId(null);
+      setAnswers({});
+      setNotes({});
+      setCommonErrorAnswers({});
+      setPhotoUrlsByQuestion({});
+      setPhotoCaptureCounts({});
+      setPersonEmpNo("");
+      setPersonName("");
+      setPersonQuery("");
+      setPersonDupWarn(null);
+      personDupSeq.current += 1;
+      setBedNo("");
+      setSelectedAuditItem("");
+      setReviewDate(todayStr());
+      setActiveQuestionId(questions[0]?.id ?? "");
+      setReviewMobileStep("basic");
+      onAction(`已切換至排程單位 ${nextTask.unitId || "NA（不限單位）"}，請重新確認基本資料。`);
+    } catch (error) {
+      onAction(`切換排程單位失敗：${toErrorMessage(error)}`);
+    } finally {
+      setSwitchingSchedule(false);
+    }
+  }
+
   /* ---------- 審查人員搜尋 ---------- */
   const reviewerSugg = useMemo(() => {
     const q = reviewerQuery.trim();
@@ -785,24 +969,24 @@ export function ReviewExecutePage({
     setShowSugg(false);
   }
 
-  /* ---------- 受審人員搜尋（v1.15.0：同單位在職人員，必填） ---------- */
+  /* ---------- 受審人員搜尋（可跨單位；單位不同時提醒但不阻擋） ---------- */
   const personSugg = useMemo(() => {
     const q = personQuery.trim();
     if (q === "") return [];
-    const unitId = task?.unitId ?? "";
     return usersList
-      .filter(
-        (u) =>
-          (unitId === "" || u.unitCode === unitId) &&
-          (u.staffId.includes(q) || u.name.includes(q)),
-      )
+      .filter((u) => u.staffId.includes(q) || u.name.includes(q))
       .sort((a, b) => {
         const sa = a.status === "在職" ? 0 : 1;
         const sb = b.status === "在職" ? 0 : 1;
         return sa - sb || a.staffId.localeCompare(b.staffId);
       })
       .slice(0, 8);
-  }, [personQuery, usersList, task?.unitId]);
+  }, [personQuery, usersList]);
+
+  const selectedPersonOption = usersList.find((person) => person.staffId === personEmpNo);
+  const personUnitMismatch = Boolean(
+    task?.unitId && selectedPersonOption?.unitCode && selectedPersonOption.unitCode !== task.unitId,
+  );
 
   function selectPerson(u: PersonOption) {
     setPersonEmpNo(u.staffId);
@@ -810,6 +994,9 @@ export function ReviewExecutePage({
     setPersonQuery("");
     setShowPersonSugg(false);
     void checkPersonDuplicate(u.staffId);
+    if (task?.unitId && u.unitCode && u.unitCode !== task.unitId) {
+      onAction(`提醒：受審人員編制單位為 ${u.unitCode}，與排程單位 ${task.unitId} 不同；仍可繼續審查。`);
+    }
   }
 
   function handlePersonBarcode(value: string) {
@@ -821,19 +1008,14 @@ export function ReviewExecutePage({
     const exactMatch = usersList.find(
       (user) => user.staffId.trim().toLocaleLowerCase() === normalizedId,
     );
-    const unitId = task?.unitId ?? "";
-    if (exactMatch && (unitId === "" || exactMatch.unitCode === unitId)) {
+    if (exactMatch) {
       selectPerson(exactMatch);
       return;
     }
 
     setPersonQuery(scannedId);
     setShowPersonSugg(true);
-    onAction(
-      exactMatch
-        ? `掃描到職編 ${scannedId}，但該人員不屬於此審查的受審單位。`
-        : `已讀取職編 ${scannedId}，請確認搜尋結果並選取受審人員。`,
-    );
+    onAction(`已讀取職編 ${scannedId}，請確認搜尋結果並選取受審人員。`);
   }
 
   /**
@@ -955,6 +1137,13 @@ export function ReviewExecutePage({
   /* ---------- 送出（逐件新增 or 單件更新） ---------- */
   async function handleSaveDraft() {
     if (!task) return;
+    const selectedMonth = auditMonthOptions.find((option) => option.value === auditMonth && option.active);
+    if (!selectedMonth) {
+      setReviewMobileStep("basic");
+      onAction(auditMonthError || "請選擇尚未封存的稽核月份");
+      return;
+    }
+    const [auditYear, auditMonthNumber] = auditMonth.split("-").map(Number);
     setSubmitting(true);
     try {
       const db = getFirebaseDb();
@@ -1008,8 +1197,8 @@ export function ReviewExecutePage({
         indicatorId: task.indicatorId,
         unitId: task.unitId,
         reviewerId: task.reviewerId,
-        year: task.year,
-        month: task.month,
+        year: auditYear,
+        month: auditMonthNumber,
         ...(task.indicatorVersionAtSchedule ? { indicatorVersionAtSchedule: task.indicatorVersionAtSchedule } : {}),
         ...(typeof task.thresholdAtSchedule === "number" ? { thresholdAtSchedule: task.thresholdAtSchedule } : {}),
         thresholdRuleAtSchedule: task.thresholdRuleAtSchedule ?? ">=",
@@ -1080,11 +1269,12 @@ export function ReviewExecutePage({
       setNotes({});
       setCommonErrorAnswers({});
       setPhotoUrlsByQuestion({});
+      setPhotoCaptureCounts({});
       setActiveQuestionId(questions[0]?.id ?? "");
       setPersonEmpNo("");
       setPersonName("");
       setBedNo("");
-      onAction("審查內容已暫存，尚未列入正式紀錄或分析");
+      onAction(`審查內容已暫存，尚未列入正式紀錄或分析${Object.values(photoCaptureCounts).some((count) => count > 0) ? "；本次拍照未保存" : ""}`);
     } catch (error) {
       onAction(`暫存失敗：${toErrorMessage(error)}`);
     } finally {
@@ -1132,25 +1322,41 @@ export function ReviewExecutePage({
     const firstMissing = questions.find((q) => answers[q.id] == null);
     if (firstMissing) {
       onAction(`第 ${questions.indexOf(firstMissing) + 1} 題尚未作答`);
+      setReviewMobileStep("questions");
       setActiveQuestionId(firstMissing.id);
-      setQuestionNavigationOpen(false);
       window.setTimeout(() => document.getElementById(`req-q-${firstMissing.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
       return;
     }
     if (!reviewerEmpNo.trim()) {
+      setReviewMobileStep("basic");
       onAction("請填寫審查人員職編");
       return;
     }
     if (requireReviewee && !personEmpNo.trim()) {
+      setReviewMobileStep("basic");
       onAction("請選擇受審人員");
       return;
     }
     if (requireBedNo && !bedNo.trim()) {
+      setReviewMobileStep("basic");
       onAction("請填寫病人床號");
       return;
     }
     if (auditItems.length > 0 && !selectedAuditItem) {
+      setReviewMobileStep("basic");
       onAction("請選擇審核項目");
+      return;
+    }
+    const activeAuditMonth = auditMonthOptions.some((option) => option.value === auditMonth && option.active);
+    if (!activeAuditMonth && !editingId) {
+      setReviewMobileStep("basic");
+      onAction(auditMonthError || "請選擇尚未封存的稽核月份");
+      return;
+    }
+    const [auditYear, auditMonthNumber] = auditMonth.split("-").map(Number);
+    if (!auditYear || auditMonthNumber < 1 || auditMonthNumber > 12) {
+      setReviewMobileStep("basic");
+      onAction("請選擇有效的稽核月份");
       return;
     }
     setSubmitting(true);
@@ -1179,6 +1385,16 @@ export function ReviewExecutePage({
       );
       const editId =
         target.mode === "task" ? (target.editRecordId ?? editingId) : editingId;
+      if (!editId) {
+        const archiveIds = await findArchiveIdsForRecord(db, task.indicatorId, auditYear, auditMonthNumber);
+        if (archiveIds.length > 0) {
+          setAuditMonthOptions((previous) => previous.filter((option) => option.value !== auditMonth));
+          setAuditMonth("");
+          setAuditMonthError("所選月份已封存，請改選尚未封存的稽核月份。");
+          setReviewMobileStep("basic");
+          throw new Error("所選稽核月份已封存，請返回基本資料改選月份。");
+        }
+      }
       if (editId) {
         // 單件更新：不增加件數
         const recordRef = doc(db, "reviewRecords", editId);
@@ -1276,7 +1492,7 @@ export function ReviewExecutePage({
               intervalId,
               personEmpNo: personId,
             });
-            onAction("此區間已封存：修改已送出審核，核准後才會生效");
+            onAction(`此區間已封存：修改已送出審核，核准後才會生效${Object.values(photoCaptureCounts).some((count) => count > 0) ? "；本次拍照未保存" : ""}`);
             if (target.mode === "records") {
               setEditingId(null);
             } else {
@@ -1362,7 +1578,7 @@ export function ReviewExecutePage({
             // 更新成功後仍回到查詢列表；下次載入會重新取得區間件數。
           }
         }
-        onAction(`已更新審查結果${rate != null ? `，正確率 ${rate}%` : ""}`);
+        onAction(`已更新審查結果${rate != null ? `，正確率 ${rate}%` : ""}${Object.values(photoCaptureCounts).some((count) => count > 0) ? "；本次拍照未保存至審查結果" : ""}`);
         if (target.mode === "records") {
           setEditingId(null); // 回到查詢列表
         } else {
@@ -1417,8 +1633,8 @@ export function ReviewExecutePage({
           indicatorId: task.indicatorId,
           unitId: task.unitId,
           reviewerId: task.reviewerId,
-          year: task.year,
-          month: task.month,
+          year: auditYear,
+          month: auditMonthNumber,
           ...(task.indicatorVersionAtSchedule
             ? { indicatorVersionAtSchedule: task.indicatorVersionAtSchedule }
             : {}),
@@ -1530,13 +1746,14 @@ export function ReviewExecutePage({
         setCommonErrorAnswers({});
         setNotes({});
         setPhotoUrlsByQuestion({});
+        setPhotoCaptureCounts({});
         setActiveQuestionId(questions[0]?.id ?? "");
         setPersonEmpNo("");
         setPersonName("");
         setPersonQuery("");
         setBedNo("");
         onAction(
-          `已送出第 ${sharedQuotaTask ? completedCount : seq} 件（${sharedQuotaTask ? "本區間合計" : "共需"} ${sharedQuotaTask ? `${completedCount}/` : ""}${req} 件）${rate != null ? `，正確率 ${rate}%` : ""}`,
+          `已送出第 ${sharedQuotaTask ? completedCount : seq} 件（${sharedQuotaTask ? "本區間合計" : "共需"} ${sharedQuotaTask ? `${completedCount}/` : ""}${req} 件）${rate != null ? `，正確率 ${rate}%` : ""}${Object.values(photoCaptureCounts).some((count) => count > 0) ? "；本次拍照僅作畫面標記，未保存至結果" : ""}`,
         );
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
@@ -1590,6 +1807,10 @@ export function ReviewExecutePage({
 
   const isRecordsView = target.mode === "records" && !editingId && !editingDraftId;
   const quotaFull = isTaskComplete(usedCount, task.caseCount);
+  const selectedAuditMonthLabel = (() => {
+    const [year, month] = auditMonth.split("-").map(Number);
+    return year && month ? ymLabel(year, month) : "未選稽核月份";
+  })();
 
   return (
     <div className="review-execute-page">
@@ -1600,7 +1821,7 @@ export function ReviewExecutePage({
       </div>
       <SectionTitle
         title={`${isRecordsView ? "審查結果查詢" : "審查表單"}：${indicatorName}`}
-        note={`${ymLabel(task.year, task.month)}・${task.unitId}・${sharedQuotaTask ? "正式紀錄／本區間" : "正式紀錄"} ${progressLabel(doneCount, task.caseCount)} 件${draftCount > 0 ? `・暫存未送出 ${draftCount} 件` : ""}`}
+        note={`排程 ${ymLabel(task.year, task.month)}・稽核 ${selectedAuditMonthLabel}・${task.unitId || "NA（不限單位）"}・${sharedQuotaTask ? "正式紀錄／本區間" : "正式紀錄"} ${progressLabel(doneCount, task.caseCount)} 件${draftCount > 0 ? `・暫存未送出 ${draftCount} 件` : ""}`}
       />
 
       {!editingDraftId && drafts.length > 0 && (
@@ -1725,6 +1946,39 @@ export function ReviewExecutePage({
       ) : (
         /* ============ 審查表單（逐件） ============ */
         <>
+          {!allDone && (
+            <nav className="review-mobile-steps" aria-label="審查流程步驟">
+              <button
+                type="button"
+                className={`review-mobile-step${reviewMobileStep === "basic" ? " active" : ""}`}
+                aria-current={reviewMobileStep === "basic" ? "step" : undefined}
+                onClick={() => setReviewMobileStep("basic")}
+              >
+                <span className="review-mobile-step-number">1</span>
+                <b>基本資料</b>
+              </button>
+              <button
+                type="button"
+                className={`review-mobile-step${reviewMobileStep === "questions" ? " active" : ""}`}
+                aria-current={reviewMobileStep === "questions" ? "step" : undefined}
+                onClick={() => setReviewMobileStep("questions")}
+              >
+                <span className="review-mobile-step-number">2</span>
+                <b>審查題目</b>
+                <small>{answeredCount}/{questions.length}</small>
+              </button>
+            </nav>
+          )}
+          <input
+            ref={photoInputRef}
+            className="review-camera-input"
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={handleCameraSelection}
+            tabIndex={-1}
+            aria-hidden="true"
+          />
           {editingDraftId && (
             <p className="dup-note">正在編輯暫存紀錄；按「提交審查結果」後才會列為正式紀錄。</p>
           )}
@@ -1749,7 +2003,7 @@ export function ReviewExecutePage({
             </section>
           )}
 
-          <section className="panel">
+          <section className={`panel review-mobile-page review-mobile-basic${reviewMobileStep === "questions" ? " is-inactive" : ""}`}>
             <div className="form-grid">
               <div className="form-field">
                 <label className="field-label">指標名稱</label>
@@ -1758,11 +2012,27 @@ export function ReviewExecutePage({
                 </p>
               </div>
               <div className="form-field">
-                <label className="field-label">受審單位</label>
-                <p>
-                  <b>{task.unitId === "" ? "NA（不限單位）" : task.unitId}</b>
-                  <span className="muted-text">（已鎖定）</span>
-                </p>
+                <label className="field-label">排程單位</label>
+                {assignedScheduleTasks.length > 1 && !editingId && !editingDraftId ? (
+                  <select
+                    className="text-input"
+                    value={task.id}
+                    disabled={switchingSchedule}
+                    onChange={(event) => void handleScheduleUnitChange(event.target.value)}
+                    aria-label="選擇排程單位"
+                  >
+                    {assignedScheduleTasks.map((scheduledTask) => (
+                      <option key={scheduledTask.id} value={scheduledTask.id}>
+                        {scheduledTask.unitId || "NA（不限單位）"}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p>
+                    <b>{task.unitId === "" ? "NA（不限單位）" : task.unitId}</b>
+                    {(editingId || editingDraftId) && <span className="muted-text">（編輯中固定）</span>}
+                  </p>
+                )}
               </div>
               <div className="form-field">
                 <label className="field-label">審查日期</label>
@@ -1773,6 +2043,31 @@ export function ReviewExecutePage({
                   onChange={(e) => setReviewDate(e.target.value)}
                   aria-label="審查日期"
                 />
+              </div>
+              <div className="form-field">
+                <label className="field-label" htmlFor="review-audit-month">稽核月份 <span style={{ color: "#b3372f" }}>*</span></label>
+                <select
+                  id="review-audit-month"
+                  className="text-input"
+                  value={auditMonth}
+                  disabled={Boolean(editingId)}
+                  onChange={(event) => setAuditMonth(event.target.value)}
+                  aria-label="選擇尚未封存的稽核月份"
+                >
+                  <option value="">請選擇尚未封存的月份</option>
+                  {auditMonthOptions.map((option) => (
+                    <option key={option.value} value={option.value} disabled={!option.active && !editingId}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                {editingId && auditMonthOptions.some((option) => option.value === auditMonth && !option.active) && (
+                  <small className="review-field-warning" role="status">原紀錄月份已封存，修改會沿用既有封存後送審流程。</small>
+                )}
+                {editingDraftId && auditMonthOptions.some((option) => option.value === auditMonth && !option.active) && (
+                  <small className="review-field-warning" role="status">此暫存月份已封存；提交前請改選尚未封存月份。</small>
+                )}
+                {auditMonthError && !editingId && <small className="review-field-warning" role="status">{auditMonthError}</small>}
               </div>
               <div className="form-field" style={{ position: "relative" }}>
                 <label className="field-label">審查人員（職編）</label>
@@ -1833,7 +2128,7 @@ export function ReviewExecutePage({
               {requireReviewee && (
                 <div className="form-field" style={{ position: "relative" }}>
                   <label className="field-label">
-                    職編 <span style={{ color: "#b3372f" }}>*</span>
+                    受審人員（職編） <span style={{ color: "#b3372f" }}>*</span>
                   </label>
                   {personEmpNo ? (
                     <p style={{ margin: "12px 0" }}>
@@ -1860,11 +2155,7 @@ export function ReviewExecutePage({
                         <input
                           type="text"
                           className="text-input"
-                          placeholder={
-                            task.unitId === ""
-                              ? "輸入職編或姓名搜尋（全院）"
-                              : `輸入職編或姓名搜尋（${task.unitId}同單位）`
-                          }
+                          placeholder="輸入職編或姓名搜尋（全院）"
                           value={personQuery}
                           onChange={(e) => {
                             setPersonQuery(e.target.value);
@@ -1893,6 +2184,7 @@ export function ReviewExecutePage({
                                 onClick={() => selectPerson(u)}
                               >
                                 {staffLabel(u.staffId, u.name)}
+                                {u.unitCode && <span className="muted-text">（{u.unitCode}）</span>}
                                 {u.status && u.status !== "在職" && (
                                   <span className="muted-text">
                                     （{u.status}）
@@ -1904,6 +2196,11 @@ export function ReviewExecutePage({
                         </ul>
                       )}
                     </>
+                  )}
+                  {personUnitMismatch && selectedPersonOption && (
+                    <div className="review-unit-warning" role="status">
+                      提醒：系統編制單位「{selectedPersonOption.unitCode}」與排程單位「{task.unitId}」不同；仍可繼續審查。
+                    </div>
                   )}
                   {personDupWarn && (
                     <div
@@ -1935,7 +2232,7 @@ export function ReviewExecutePage({
           </section>
 
           {auditItems.length > 0 && (
-            <section className="panel audit-item-selection">
+            <section className={`panel audit-item-selection review-mobile-page review-mobile-basic${reviewMobileStep === "questions" ? " is-inactive" : ""}`}>
               <label className="field-label" htmlFor="review-audit-item">
                 審核項目 <span style={{ color: "#b3372f" }}>*</span>
               </label>
@@ -1956,6 +2253,13 @@ export function ReviewExecutePage({
             </section>
           )}
 
+          <div className="review-mobile-next-wrap">
+            <button type="button" className="button button-primary review-mobile-next" onClick={() => setReviewMobileStep("questions")}>
+              開始逐題審查 <ChevronRight size={17} />
+            </button>
+          </div>
+
+          <div className={`review-mobile-page review-mobile-questions${reviewMobileStep === "basic" ? " is-inactive" : ""}`}>
           {questions.length === 0 ? (
             <EmptyState
               title="該指標尚未建立審查題目"
@@ -1970,11 +2274,8 @@ export function ReviewExecutePage({
                   photoCounts={attachedPhotoCounts}
                   activeQuestionId={currentQuestionId}
                   answeredCount={answeredCount}
-                  mobileOpen={questionNavigationOpen}
-                  onMobileOpenChange={setQuestionNavigationOpen}
                   onSelect={(questionId) => {
                     setActiveQuestionId(questionId);
-                    setQuestionNavigationOpen(false);
                     window.setTimeout(
                       () =>
                         document
@@ -1985,6 +2286,9 @@ export function ReviewExecutePage({
                   }}
                 />
                 <div className="review-workspace-main">
+                  <p className="settings-note review-photo-notice">
+                    相機會開啟裝置拍照／照片選取器；目前照片只作本次畫面標記，不會保存至審查結果。
+                  </p>
                   <ReviewQuestionList
                     mode="edit"
                     questions={questions}
@@ -1995,6 +2299,8 @@ export function ReviewExecutePage({
                     activeQuestionId={currentQuestionId}
                     photoCounts={attachedPhotoCounts}
                     photoUrlsByQuestion={photoUrlsByQuestion}
+                    photoCaptureCounts={photoCaptureCounts}
+                    onTakePhoto={openQuestionCamera}
                     onAnswer={chooseAnswer}
                     onCommonErrors={(qid, values) =>
                       setCommonErrorAnswers((prev) => ({ ...prev, [qid]: values }))
@@ -2077,6 +2383,7 @@ export function ReviewExecutePage({
               </div>
             </>
           )}
+          </div>
         </>
       )}
       {personBarcodeOpen && (
@@ -2104,8 +2411,6 @@ function QuestionNavigator({
   photoCounts,
   activeQuestionId,
   answeredCount,
-  mobileOpen,
-  onMobileOpenChange,
   onSelect,
 }: {
   questions: AuditQuestion[];
@@ -2113,8 +2418,6 @@ function QuestionNavigator({
   photoCounts: Record<string, number>;
   activeQuestionId: string;
   answeredCount: number;
-  mobileOpen: boolean;
-  onMobileOpenChange: (open: boolean) => void;
   onSelect: (questionId: string) => void;
 }) {
   const items = questions.map((question, index) => ({
@@ -2165,19 +2468,14 @@ function QuestionNavigator({
 
   return (
     <div className="review-question-navigator">
-      <details
-        className="review-question-mobile-nav"
-        open={mobileOpen}
-        onToggle={(event) => onMobileOpenChange(event.currentTarget.open)}
-      >
-        <summary>
+      <section className="review-question-mobile-nav" aria-label="題號導覽">
+        <div className="review-question-mobile-nav-head">
           <ListChecks size={17} />
           <b>題號導覽</b>
           <span>已答 {answeredCount}/{questions.length} 題</span>
-          <ChevronDown size={16} className="review-nav-chevron" />
-        </summary>
+        </div>
         {list(true)}
-      </details>
+      </section>
       <aside className="review-question-sidebar" aria-label="固定題號導覽">
         {list(false)}
       </aside>
