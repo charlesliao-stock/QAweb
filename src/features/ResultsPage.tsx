@@ -2506,7 +2506,7 @@ export function ResultsPage({
                             legend="達閾值率"
                             capaMarks={s.cols.map((col) => {
                               const hit = unitCapaCases.find((c) => c.indicatorId === ind.id && c.stage !== "已撤案" && capaInColumn(c, col.months));
-                              return hit ? { id: hit.id, label: hit.caseNumber } : null;
+                              return hit ? { id: hit.id, label: hit.caseNumber, actions: hit.actions.map((a) => a.title) } : null;
                             })}
                             onCapaClick={(i) => {
                               const hit = unitCapaCases.find((c) => c.indicatorId === ind.id && c.stage !== "已撤案" && capaInColumn(c, s.cols[i].months));

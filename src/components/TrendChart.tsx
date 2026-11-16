@@ -8,8 +8,10 @@
  * 的查詢結果（.chart-current）移除。
  * v1.59.0：未達閾值的點標紅（填色／描邊改紅色，連線不改色；閾值取
  * threshold prop，與紅色虛線閾值線同一來源；無資料的點不會出現在 values 中）。
- * v1.79.0：capaMarks（與 values 對齊）有值的點，在點旁顯示可點選的圓圈 C，
- * 點選觸發 onCapaClick（連結對應 CAPA 案件）；圖表選項可切換顯示。
+ * v1.79.0：capaMarks（與 values 對齊）有值的點，在點旁一律顯示可點選的圓圈 C，
+ * 點選觸發 onCapaClick（連結對應 CAPA 案件）。
+ * 另一個獨立選項「顯示未達閾值月份的改善措施」：勾選時，在圖上方以小方框列出該 CAPA 的
+ * 改善措施，方框與資料點以實線連接，點方框同樣連結 CAPA。
  */
 import { useRef, useState } from "react";
 import { isPassing } from "../lib/analysisRates";
@@ -42,8 +44,8 @@ export function TrendChart({
   legend?: string;
   /** 點選某點（下探用）；未提供時點不可點 */
   onPointClick?: (index: number) => void;
-  /** v1.79.0：該點當期已啟動的 CAPA（與 values 對齊；null／缺值不顯示）；label 為案件編號（提示用） */
-  capaMarks?: ({ id: string; label: string } | null)[];
+  /** v1.79.0：該點當期已啟動的 CAPA（與 values 對齊；null／缺值不顯示）；label 為案件編號、actions 為改善措施標題 */
+  capaMarks?: ({ id: string; label: string; actions?: string[] } | null)[];
   /** 點選圓圈 C（index 對齊 values） */
   onCapaClick?: (index: number) => void;
 }) {
@@ -51,7 +53,7 @@ export function TrendChart({
   const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
   const [highlightBelow, setHighlightBelow] = useState(true);
   const [showThreshold, setShowThreshold] = useState(true);
-  const [showCapa, setShowCapa] = useState(true);
+  const [showActions, setShowActions] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   if (values.length === 0) {
     return (
@@ -118,6 +120,36 @@ export function TrendChart({
       y,
     });
   };
+  // 改善措施方框：圖上方另闢一條空白帶（viewBox 向上延伸，資料點座標不變）；
+  // 同一層水平不重疊，放不下時往上疊一層
+  const BOX_W = 132;
+  const BOX_LINE = 12;
+  const BOX_PAD = 6;
+  const LEVEL_GAP = 8;
+  const actionBoxes: { i: number; x: number; level: number; lines: string[]; h: number }[] = [];
+  if (showActions && capaMarks) {
+    const levelEnds: number[] = [];
+    pts.forEach((p, i) => {
+      const mark = capaMarks[i];
+      if (!mark) return;
+      const acts = (mark.actions ?? []).filter((t) => t.trim());
+      const lines = acts.length
+        ? acts.slice(0, 3).map((t) => `• ${t.length > 11 ? `${t.slice(0, 11)}…` : t}`)
+        : ["（尚未填寫改善措施）"];
+      if (acts.length > 3) lines.push(`…共 ${acts.length} 項`);
+      const x = Math.max(2, Math.min(p.x - BOX_W / 2, 598 - BOX_W));
+      let level = levelEnds.findIndex((end) => x >= end + 4);
+      if (level === -1) {
+        level = levelEnds.length;
+        levelEnds.push(0);
+      }
+      levelEnds[level] = x + BOX_W;
+      actionBoxes.push({ i, x, level, lines, h: BOX_PAD * 2 + lines.length * BOX_LINE });
+    });
+  }
+  const boxMaxH = actionBoxes.reduce((m, b) => Math.max(m, b.h), 0);
+  const boxLevels = actionBoxes.reduce((m, b) => Math.max(m, b.level + 1), 0);
+  const bandH = boxLevels > 0 ? boxLevels * (boxMaxH + LEVEL_GAP) : 0;
   return (
     <div className="trend-chart-wrap">
       <div className="chart-options" aria-label="曲線圖顯示選項">
@@ -131,8 +163,8 @@ export function TrendChart({
         </label>
         {capaMarks && (
           <label className="check-row">
-            <input type="checkbox" checked={showCapa} onChange={(event) => setShowCapa(event.target.checked)} />
-            顯示已啟動 CAPA 的月份（C）
+            <input type="checkbox" checked={showActions} onChange={(event) => setShowActions(event.target.checked)} />
+            顯示未達閾值月份的改善措施
           </label>
         )}
       </div>
@@ -145,7 +177,7 @@ export function TrendChart({
       <div className="chart-svg-wrap" ref={wrapRef}>
         <svg
           className="trend-chart"
-          viewBox="0 0 600 218"
+          viewBox={`0 ${-bandH} 600 ${218 + bandH}`}
           preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="趨勢圖"
@@ -253,7 +285,7 @@ export function TrendChart({
               />
             </g>
           ))}
-          {showCapa && pts.map((p, index) => capaMarks?.[index] ? (
+          {pts.map((p, index) => capaMarks?.[index] ? (
             <g
               key={`capa-${index}`}
               className="chart-capa-mark"
@@ -269,6 +301,36 @@ export function TrendChart({
               <text y="3.5" textAnchor="middle">C</text>
             </g>
           ) : null)}
+          {actionBoxes.map((b) => {
+            const p = pts[b.i];
+            const top = -((b.level + 1) * (boxMaxH + LEVEL_GAP));
+            const linkX = Math.max(b.x + 8, Math.min(p.x, b.x + BOX_W - 8));
+            return (
+              <g key={`capa-box-${b.i}`}>
+                <line x1={linkX} y1={top + b.h} x2={p.x} y2={p.y - 5} className="chart-capa-link" />
+              </g>
+            );
+          })}
+          {actionBoxes.map((b) => {
+            const top = -((b.level + 1) * (boxMaxH + LEVEL_GAP));
+            return (
+              <g
+                key={`capa-card-${b.i}`}
+                className="chart-capa-box"
+                role="button"
+                tabIndex={0}
+                aria-label={`前往 CAPA 案件 ${capaMarks?.[b.i]?.label ?? ""}`}
+                onClick={() => onCapaClick?.(b.i)}
+                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onCapaClick?.(b.i); } }}
+              >
+                <title>{`CAPA ${capaMarks?.[b.i]?.label ?? ""}，點選前往`}</title>
+                <rect x={b.x} y={top} width={BOX_W} height={b.h} rx="4" />
+                {b.lines.map((line, li) => (
+                  <text key={li} x={b.x + 6} y={top + BOX_PAD + BOX_LINE * (li + 1) - 3}>{line}</text>
+                ))}
+              </g>
+            );
+          })}
           {labels.map(
             (lb, index) =>
               index < n && (

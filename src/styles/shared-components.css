@@ -525,3 +525,8 @@ th[aria-sort="descending"] .th-sort .lucide {
 .chart-capa-mark text{fill:#0f766e;font-size:10px;font-weight:700}
 .chart-capa-mark:hover circle,.chart-capa-mark:focus-visible circle{fill:#0f766e}
 .chart-capa-mark:hover text,.chart-capa-mark:focus-visible text{fill:#fff}
+.chart-capa-link{stroke:#0f766e;stroke-width:1.2;fill:none}
+.chart-capa-box{cursor:pointer;outline:none}
+.chart-capa-box rect{fill:#f4faf9;stroke:#0f766e;stroke-width:1}
+.chart-capa-box text{fill:#244b47;font-size:10px}
+.chart-capa-box:hover rect,.chart-capa-box:focus-visible rect{fill:#e3f3f0}
