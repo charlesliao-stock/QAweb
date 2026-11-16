@@ -32,7 +32,6 @@ import {
   ClipboardCheck,
   Eye,
   Pencil,
-  ShieldCheck,
   X,
 } from "lucide-react";
 import {
@@ -1413,13 +1412,6 @@ export function AuditPage({
   return (
     <>
       <PageHeading page="audit" />
-      <div className="privacy-note">
-        <ShieldCheck size={16} />
-        <span>
-          <b>隱私提醒</b>
-          ：稽核時請勿拍攝病人臉部或可辨識身分之資訊。
-        </span>
-      </div>
       {recordsTruncated && (
         <p
           className="settings-note"
@@ -1585,16 +1577,21 @@ export function AuditPage({
                         <td>
                           <div>{r.groupName}</div>
                           <div>
-                            {r.sched.category === "temp" && (
-                              <span className="badge">
-                                {r.sched.selfReview ? "自審" : "加審"}
-                              </span>
-                            )}{" "}
                             <b>{r.indicatorCode}</b>
                           </div>
                           <div>{r.indicatorName}</div>
                         </td>
-                        <td>{r.intervalLabel}</td>
+                        <td>
+                          {r.intervalLabel}
+                          {r.sched.category === "temp" && (
+                            <>
+                              {" "}
+                              <span className="badge">
+                                {r.sched.selfReview ? "自審" : "加審"}
+                              </span>
+                            </>
+                          )}
+                        </td>
                         <td>
                           <CompactProgress
                             label="人次"
@@ -1614,15 +1611,20 @@ export function AuditPage({
                       <>
                         <td>{r.groupName}</td>
                         <td>
-                          {r.sched.category === "temp" && (
-                            <span className="badge">
-                              {r.sched.selfReview ? "自審" : "加審"}
-                            </span>
-                          )}{" "}
                           <b>{r.indicatorCode}</b>
                         </td>
                         <td>{r.indicatorName}</td>
-                        <td>{r.intervalLabel}</td>
+                        <td>
+                          {r.intervalLabel}
+                          {r.sched.category === "temp" && (
+                            <>
+                              {" "}
+                              <span className="badge">
+                                {r.sched.selfReview ? "自審" : "加審"}
+                              </span>
+                            </>
+                          )}
+                        </td>
                         <td>
                           <ProgressCell
                             done={r.progress.donePersons}
@@ -1667,12 +1669,11 @@ export function AuditPage({
                                   : "封存摘要"}
                             </button>
                           )}
-                          {!compact && r.endedTargets.length > 0 &&
+                          {!compact && r.state === "ended" && r.endedTargets.length > 0 &&
                             (() => {
-                              const done = r.endedTargets.filter((e) => summaries.has(e.id)).length;
-                              const overdue = r.endedTargets.some(
-                                (e) => e.overdue && !summaries.has(e.id),
-                              );
+                              const overdue =
+                                r.canArchive &&
+                                r.endedTargets.some((e) => e.overdue && !summaries.has(e.id));
                               const pend = pendingReqs.some((q) =>
                                 r.endedTargets.some((e) => q.archiveIds.includes(e.id)),
                               );
@@ -1680,15 +1681,19 @@ export function AuditPage({
                                 const sm = summaries.get(e.id);
                                 return !!sm && isSummaryStale(sm, r.indicatorThreshold);
                               });
+                              if (!overdue && !pend && !stale) return null;
                               return (
                                 <span
                                   className="muted-text"
                                   style={overdue || stale ? { color: "#b3372f", fontWeight: 600 } : undefined}
                                 >
-                                  已封存 {done}/{r.endedTargets.length}
-                                  {overdue ? "・逾期未封存" : ""}
-                                  {pend ? "・有待審修改" : ""}
-                                  {stale ? "・摘要已過期（閾值已變更），請重新封存" : ""}
+                                  {[
+                                    overdue ? "逾期未封存" : "",
+                                    pend ? "有待審修改" : "",
+                                    stale ? "摘要已過期（閾值已變更），請重新封存" : "",
+                                  ]
+                                    .filter(Boolean)
+                                    .join("・")}
                                 </span>
                               );
                             })()}
