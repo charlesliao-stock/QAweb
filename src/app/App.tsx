@@ -25,7 +25,7 @@ import { collection, doc, getDocs, limit, orderBy, query, serverTimestamp, updat
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
 import { getDocCacheFirst } from "../lib/cacheFirst";
-import { loadThemes } from "../lib/themeRegistry";
+import { clearThemeRegistry, loadThemes } from "../lib/themeRegistry";
 import {
   applyTheme,
   applyUiPrefs,
@@ -593,6 +593,8 @@ function Shell() {
   // loadThemes 失敗時回內建常數，applyTheme 仍有 fallback，不擋登入。
   useEffect(() => {
     applyUiPrefs();
+    // 登入前失敗時 registry 會被內建常數佔住；登入後清掉才會重讀 uiThemes
+    if (user) clearThemeRegistry();
     Promise.all([
       getCachedRef(SYSTEM_CONFIG_KEY, () =>
         getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
@@ -606,7 +608,9 @@ function Shell() {
         applyTheme(typeof t === "string" ? t : "green-2");
       })
       .catch(() => applyTheme("green-2"));
-  }, []);
+    // 登入狀態改變時必須重讀：雙寫模式不走本機快取，登入前讀 systemParams 會被
+    // 權限擋下而落到 green-2，若不重套，全院主題設定登入後永遠不生效。
+  }, [user?.staffId]);
 
   if (loading) {
     return (
