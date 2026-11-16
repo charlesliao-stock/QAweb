@@ -1028,11 +1028,14 @@ export function AuditPage({
     const list = selGroup
       ? rows.filter((r) => r.groupId === selGroup)
       : rows;
-    const m = new Map<string, string>();
+    const m = new Map<string, { code: string; name: string }>();
     list.forEach((r) => {
-      if (!m.has(r.indicatorId)) m.set(r.indicatorId, r.indicatorName);
+      if (!m.has(r.indicatorId))
+        m.set(r.indicatorId, { code: r.indicatorCode, name: r.indicatorName });
     });
-    return [...m.entries()];
+    return [...m.entries()].sort((a, b) =>
+      a[1].code.localeCompare(b[1].code, "zh-Hant", { numeric: true }),
+    );
   }, [rows, selGroup]);
 
   const filtered = useMemo(() => {
@@ -1508,9 +1511,9 @@ export function AuditPage({
           <FormSelect label="指標" value={selIndicator}
                 onChange={(e) => setSelIndicator(e.target.value)}>
                 <option value="">全部指標</option>
-                {indicatorOptions.map(([id, name]) => (
+                {indicatorOptions.map(([id, o]) => (
                   <option key={id} value={id}>
-                    {name}（{id}）
+                    {o.code} {o.name}
                   </option>
                 ))}
               </FormSelect>
