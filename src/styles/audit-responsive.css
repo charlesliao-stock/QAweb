@@ -16,10 +16,10 @@
   .audit-review-card {
     min-width: 0;
     padding: 16px;
-    border: 1px solid var(--line, #e2e9eb);
+    border: 2px solid #b7c6cb;
     border-radius: 12px;
     background: var(--surface, #fff);
-    box-shadow: 0 2px 8px rgba(25, 55, 65, 0.05);
+    box-shadow: 0 2px 8px rgba(25, 55, 65, 0.08);
   }
 
   .audit-review-card-head {
@@ -160,4 +160,11 @@
 :root[data-mode="dark"] .audit-review-card-status.is-complete {
   background: #253d30;
   color: #a6d6b8;
+}
+
+@media (max-width: 1024px) {
+  :root[data-mode="dark"] .audit-review-card {
+    border-color: #526166;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
+  }
 }
