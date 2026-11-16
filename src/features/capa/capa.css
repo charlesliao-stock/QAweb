@@ -121,3 +121,17 @@
 @media(max-width:1080px){.capa-master-detail{grid-template-columns:minmax(295px,34%) minmax(0,1fr)}.capa-detail-meta{gap:5px 10px}.capa-overview-grid{grid-template-columns:1fr}.capa-overview-finding textarea{min-height:64px}}
 @media(max-width:760px){.capa-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.capa-master-detail{grid-template-columns:minmax(0,1fr);gap:10px}.capa-master{min-height:250px;max-height:360px}.capa-detail{min-height:560px;max-height:none}.capa-detail-scroll{overflow:visible}.capa-detail-head{padding:13px 14px 11px}.capa-detail-head h2{font-size:16px}.capa-stepper{padding:9px 12px}.capa-stepper-track{justify-content:flex-start}.capa-step{min-width:76px}.capa-detail-scroll{padding:11px 13px}.capa-overview-context dl{grid-template-columns:repeat(2,minmax(0,1fr))}.capa-detail-foot{position:sticky;bottom:0;background:#fff}}
 @media(max-width:480px){.capa-stat{min-height:74px;padding:10px 10px 10px 13px}.capa-stat span{font-size:11px}.capa-stat small{font-size:9px}.capa-stat strong{font-size:23px}.capa-filter-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px}.capa-clear-filters{grid-column:1/-1;justify-self:end}.capa-detail-topline{align-items:flex-start}.capa-detail-topline .case-meta{flex-wrap:wrap;gap:5px}.case-meta-status{flex-direction:column;align-items:flex-end}.capa-detail-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.capa-overview-heading{align-items:flex-start;flex-direction:column}.capa-overview-heading>span{text-align:left}.capa-overview-grid{gap:9px}.capa-overview-context dl{grid-template-columns:1fr}.capa-overview-finding textarea{min-height:82px}}
+
+/* v1.78.0：案件清單整頁寬、點選後進入內頁 */
+.capa-list-table td{vertical-align:top}
+.capa-list-row{cursor:pointer}
+.capa-list-row:hover,.capa-list-row:focus-visible{background:#f3f9f8;outline:none}
+.capa-cell-sub{display:block;margin-top:3px;color:#7a8a90;font-size:11px;font-weight:400}
+.capa-cell-reason{max-width:420px}
+.capa-cell-reason>span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.capa-detail-page{display:flex;flex-direction:column;overflow:visible}
+.capa-detail-scroll-page{overflow:visible}
+.capa-back{margin-bottom:8px}
+.capa-step small{color:#8a99a0;font-size:10px;font-weight:400;white-space:nowrap}
+.capa-step.current small{color:#0f766e}
+.capa-muted{color:#7a8a90;font-size:11px}

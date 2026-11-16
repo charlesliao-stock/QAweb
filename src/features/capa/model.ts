@@ -7,6 +7,9 @@ export type CapaStage =
   | "結案核准"
   | "正式結案"
   | "已退回";
+/** v1.78.0：清單與內頁使用的 4 個進度（儲存的 CapaStage 不變，僅對應顯示） */
+export type CapaProgress = "待確認" | "分析撰寫中" | "送審中" | "結案";
+export const CAPA_PROGRESS: CapaProgress[] = ["待確認", "分析撰寫中", "送審中", "結案"];
 export type CapaSource = "人工立案" | "結果分析" | "系統觸發";
 export type CapaTemplateType = "原因分析" | "改善措施" | "成效驗證";
 export type CapaActionStatus = "待開始" | "進行中" | "已完成";
@@ -77,6 +80,11 @@ export interface CapaCase {
   dueDate: string;
   closedAt?: string;
   returnedFrom?: CapaStage;
+  /** v1.78.0：各進度開始的日期時間（ISO）；舊案件缺值時以 createdAt／closedAt 補顯示 */
+  stageTimes?: Partial<Record<CapaProgress, string>>;
+  /** v1.78.0：結案核准預設人員（單位督導），送審時帶入核准層級 */
+  approverId?: string;
+  approverName?: string;
 }
 export interface CapaSettings {
   triggerEnabled: boolean;
@@ -85,6 +93,8 @@ export interface CapaSettings {
   multiLevelApproval: boolean;
   approvalRoles: string[];
   verifierRole: string;
+  /** v1.78.0：觸發 CAPA 時預設負責人的角色（單位內依此角色找人），預設「護理長」 */
+  ownerRole: string;
 }
 export interface CapaTemplate {
   id: string;
@@ -99,8 +109,9 @@ export const DEFAULT_CAPA_SETTINGS: CapaSettings = {
   defaultTriggerPeriods: 2,
   indicatorOverrides: {},
   multiLevelApproval: true,
-  approvalRoles: ["督導", "品管執行幹事"],
+  approvalRoles: ["督導"],
   verifierRole: "督導／品管",
+  ownerRole: "護理長",
 };
 export const CAPA_STAGES: CapaStage[] = [
   "待確認", "原因分析", "措施規劃", "措施執行", "成效驗證", "結案核准", "正式結案",
@@ -162,4 +173,21 @@ export function newId(prefix = "capa"): string {
 }
 export function makeHistory(action: string, actorId: string, actorName: string, note = ""): CapaHistoryEntry {
   return { id: newId("history"), action, actorId, actorName, at: new Date().toISOString(), ...(note ? { note } : {}) };
+}
+
+/** 儲存階段 → 4 個進度（已退回與原因分析至成效驗證皆屬分析撰寫中） */
+export function progressOfStage(stage: CapaStage): CapaProgress {
+  if (stage === "待確認") return "待確認";
+  if (stage === "結案核准") return "送審中";
+  if (stage === "正式結案") return "結案";
+  return "分析撰寫中";
+}
+
+/** 某進度開始的時間；舊案件待確認＝建立時間、結案＝closedAt */
+export function progressTimeOf(item: CapaCase, progress: CapaProgress): string {
+  const recorded = item.stageTimes?.[progress];
+  if (recorded) return recorded;
+  if (progress === "待確認") return item.createdAt;
+  if (progress === "結案") return item.closedAt ?? "";
+  return "";
 }
