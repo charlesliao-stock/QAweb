@@ -352,16 +352,11 @@ function ResultMonthPicker({
   );
 }
 
-/** 矩陣格格式：75%(3/4)；無資料 — */
-function fmtCell(cell: CellValue): string {
-  return formatPassRate(cell);
-}
-
 /**
  * 矩陣格內容（v1.76.5）：百分比在上、(分子/分母) 在下以縮減欄寬；
  * 加審字樣置於右側垂直置中。無資料顯示 —。
  */
-function RateCellBody({ cell, extra }: { cell: CellValue; extra?: boolean }) {
+function RateCellBody({ cell, extra }: { cell: PassRate; extra?: boolean }) {
   if (cell.rate == null) return <>—</>;
   const pct = Number.isInteger(cell.rate) ? String(cell.rate) : cell.rate.toFixed(1);
   return (
