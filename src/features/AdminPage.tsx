@@ -80,6 +80,7 @@ import {
   type SystemStatus,
 } from "../lib/maintenance";
 import { AdminCleanupSection } from "./AdminCleanupSection";
+import { DbStatusSection } from "./DbStatusSection";
 import { getReadMeter, resetReadMeter, subscribeReadMeter } from "../lib/readMeter";
 import { pad2 } from "../lib/ym";
 
@@ -1465,6 +1466,8 @@ function QuotaControlSection({
   }
 
   return (
+    <>
+    <DbStatusSection />
     <section className="panel" id="quota-control">
       <SectionTitle
         title="流量控管"
@@ -1562,6 +1565,7 @@ function QuotaControlSection({
         </>
       )}
     </section>
+    </>
   );
 }
 

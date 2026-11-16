@@ -187,3 +187,14 @@
 ## 單位分析曲線圖：圓圈 C 與改善措施方框分開（2026-11-16；版號 1.79.1）
 - [x] 圓圈 C 一律顯示（有啟動 CAPA 的資料點旁），可點選連結 CAPA；移除 C 的顯示切換。
 - [x] 還原獨立選項「顯示未達閾值月份的改善措施」（預設關）：勾選後於圖上方以小方框列出該 CAPA 的改善措施（最多 3 項，其餘顯示共 N 項；未填寫時顯示提示），方框以實線連到資料點，點方框亦連結 CAPA；方框同層水平重疊時自動疊層。
+
+## 雙寫＋故障轉移（Supabase 主／Firebase 備）（2026-11-16；版號 1.81.0）
+- `src/lib/dual/*`：文件編碼、查詢執行器、Supabase(PostgREST)／Firestore 轉接器、DualStore（佇列、斷路器、故障轉移）、dualDb（Firestore 子集 API）、bootstrap（開關）、status（狀態判斷）。
+- `lib/db.ts` 加 dual 分支；`cacheFirst.ts` 在 dual 模式直接走 db.ts；`firebase.ts` 建立 Firestore 後呼叫 `initDual()`。
+- 預設關閉：未設 `VITE_DB_MODE=dual`（及 Supabase 兩個變數）時行為與 1.79.1 完全相同。
+- 錯誤分流：規則拒絕（SQLSTATE QA403／HTTP 400、409、422）→ 直接報錯，不轉移、不計斷路器；401／403／5xx／逾時 → 視為主庫不可用，轉移到 Firebase。
+- 管理頁（流量控管上方）新增「資料庫狀態」卡：主庫／備援、連線狀態、待同步筆數、Supabase 資料庫大小對 500 MB；主庫失聯時全站顯示提示橫幅。
+- Supabase SQL 依序執行：`supabase/01-docs.sql` → `02-apply-ops.sql` → `03-rls.sql` → `04-status.sql`（皆可重複執行）。
+- 沿用 Firebase 登入：Supabase 後台加 Firebase 第三方驗證；`scripts/set-supabase-claims.mts` 替帳號加 role=authenticated（新增帳號後要再跑一次）。
+- 資料搬遷：`scripts/migrate-firestore-to-supabase.mts`（先 --dry-run 看讀取量，再 --yes，最後 --verify）。
+- 測試：`npx tsx scripts/test-dual-write.mts`（15 項）；RLS：`supabase/tests/`（53 項，需本機 Postgres，見檔頭）。

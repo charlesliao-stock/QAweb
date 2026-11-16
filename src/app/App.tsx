@@ -39,6 +39,8 @@ import { VERSION_LABEL } from "../version";
 import { pagePermissionKey } from "../lib/permissions";
 import { usePermissions } from "../lib/usePermissions";
 import { MAINTENANCE_EVENT } from "../lib/maintenance";
+import { dualHealth } from "../lib/dual/bootstrap";
+import { describeHealth } from "../lib/dual/status";
 import { DashboardPage } from "../features/DashboardPage";
 // v1.28 階段 6（A1）：儀表板是登入後首頁，留在首屏 chunk；其餘 7 頁懶載入，
 // 切頁時才載入對應 chunk（首次切頁多一次請求，以 Suspense 顯示載入中、不空白卡住）。
@@ -523,6 +525,17 @@ function Shell() {
   const [toast, setToast] = useState("");
   // v1.41.0 流量控管：攔截到維護中阻擋時，db.ts 會發出事件，這裡顯示橫幅
   const [maintenanceBanner, setMaintenanceBanner] = useState("");
+  // 雙寫模式：主資料庫失聯、改由備援服務時，所有人都看得到提示（平常不顯示）
+  const [dbBanner, setDbBanner] = useState("");
+  useEffect(() => {
+    const check = (): void => {
+      const h = dualHealth();
+      setDbBanner(h && h.mode === "failover" ? describeHealth(h).text : "");
+    };
+    check();
+    const t = window.setInterval(check, 10_000);
+    return () => window.clearInterval(t);
+  }, []);
   useEffect(() => {
     const handler = (event: Event) => {
       setCapaLaunch((event as CustomEvent<CapaLaunchContext>).detail ?? {});
@@ -661,6 +674,11 @@ function Shell() {
         )}
       </button>
       <main className="main-area">
+        {dbBanner && (
+          <div className="maintenance-banner" role="alert">
+            <span>{dbBanner}</span>
+          </div>
+        )}
         {maintenanceBanner && (
           <div className="maintenance-banner" role="alert">
             <span>{maintenanceBanner}</span>

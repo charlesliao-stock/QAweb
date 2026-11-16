@@ -40,6 +40,7 @@ import {
 } from "firebase/firestore";
 import { getDoc as dbGetDoc, getDocs as dbGetDocs } from "./db";
 import { isDemoMode } from "./demoMode";
+import { isDualMode } from "./dual/bootstrap";
 import { assertFirestoreAllowed, isMaintenanceError } from "./maintenance";
 
 export interface CacheFirstApi {
@@ -99,6 +100,7 @@ export function clearServerOnly(): void {
  */
 export async function getDocsCacheFirst(q: any): Promise<QuerySnapshot> {
   if (api.isDemoMode()) return api.getDocs(q);
+  if (isDualMode()) return api.getDocs(q); // 雙寫：讀 Supabase，不使用 Firestore 本機快取
   if (isServerOnlyNow()) {
     // v1.41.0 流量控管：強制走伺服器前先檢查維護開關
     await assertFirestoreAllowed({ kind: "read" });
@@ -123,6 +125,7 @@ export async function getDocsCacheFirst(q: any): Promise<QuerySnapshot> {
  */
 export async function getDocCacheFirst(ref: any): Promise<DocumentSnapshot> {
   if (api.isDemoMode()) return api.getDoc(ref);
+  if (isDualMode()) return api.getDoc(ref);
   if (isServerOnlyNow()) {
     // v1.41.0 流量控管：強制走伺服器前先檢查維護開關
     await assertFirestoreAllowed({ path: ref?.path, kind: "read" });

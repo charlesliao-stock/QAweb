@@ -1,4 +1,5 @@
 import { loadRefCollection } from "./refLoad";
+import { initDual } from "./dual/bootstrap";
 import { getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
 import {
@@ -89,6 +90,8 @@ export function getFirebaseDb(): Firestore {
     // 絕不讓初始化失敗拖垮整站（快取未命中時走伺服器，行為與改前一致）。
     dbInstance = getFirestore(app);
   }
+  // 雙寫模式（VITE_DB_MODE=dual）才會真的初始化；預設為空操作
+  initDual(dbInstance, getFirebaseAuth);
   return dbInstance;
 }
 
