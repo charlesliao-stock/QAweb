@@ -34,6 +34,15 @@ service cloud.firestore {
       return hasRole('護理長') && myUnitCode() != '' && data.get('unitCode', '') == myUnitCode();
     }
 
+    // 督導以 titleUnitCodes 管轄多個單位：可讀其管轄單位的編制人員（指派 CAPA 撰寫人）
+    function myTitleUnitCodes() {
+      return get(/databases/$(database)/documents/users/$(staffId())).data.get('titleUnitCodes', []);
+    }
+
+    function isSupervisorOf(data) {
+      return hasRole('督導') && data.get('unitCode', '') in myTitleUnitCodes();
+    }
+
     function isAdmin() {
       return hasRole('系統管理員');
     }
@@ -125,8 +134,8 @@ service cloud.firestore {
     // 人員主檔：本人可讀寫自己（不可改 roles/status）；管理員全權
     // 幹事可查人員清單（建指標選負責人用），但不可新增/刪除
     match /users/{id} {
-      allow get: if isAuthed() && (id == staffId() || isAdmin() || isUnitHeadOf(resource.data));
-      allow list: if isAdmin() || isGanShi() || isUnitHeadOf(resource.data);
+      allow get: if isAuthed() && (id == staffId() || isAdmin() || isUnitHeadOf(resource.data) || isSupervisorOf(resource.data));
+      allow list: if isAdmin() || isGanShi() || isUnitHeadOf(resource.data) || isSupervisorOf(resource.data);
       allow create: if isAdmin();
       allow update: if isAuthed() && (isAdmin() || (id == staffId()
         && request.resource.data.get('roles', []) == resource.data.get('roles', [])
