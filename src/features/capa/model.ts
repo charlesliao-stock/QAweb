@@ -85,6 +85,9 @@ export interface CapaCase {
   /** v1.78.0：結案核准預設人員（單位督導），送審時帶入核准層級 */
   approverId?: string;
   approverName?: string;
+  /** v1.78.2：撰寫人（預設＝負責人；負責人可指定他人，指定後同樣可編輯）；舊案件缺值視同負責人 */
+  writerId?: string;
+  writerName?: string;
 }
 export interface CapaSettings {
   triggerEnabled: boolean;

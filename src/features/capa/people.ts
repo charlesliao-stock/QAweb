@@ -62,3 +62,13 @@ export async function findUnitPeople(
         : undefined,
   };
 }
+
+/** 單位內可被指定為撰寫人的在職人員（負責人／管理員用；規則允許護理長讀本單位人員） */
+export async function listUnitPeople(unitCode: string): Promise<CapaPerson[]> {
+  if (!unitCode) return [];
+  const snapshot = await getDocs(query(collection(getFirebaseDb(), "users"), where("unitCode", "==", unitCode)));
+  return toRows(snapshot)
+    .filter((row) => row.status !== "停用" && row.status !== "離職")
+    .map((row) => ({ id: row.id, name: row.name }))
+    .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+}
