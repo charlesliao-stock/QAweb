@@ -1548,7 +1548,101 @@ export function AuditPage({
           <p className="muted-text">沒有符合篩選條件的指標。</p>
         ) : (
           <>
-            <table className="data-table">
+            <div className={`audit-review-cards${compact ? " is-compact" : ""}`} aria-label="品管審查指標清單">
+              {filtered.map((r) => (
+                <article
+                  key={`card-${r.indicatorId}__${r.sched.category}__${r.sched.period}`}
+                  className="audit-review-card"
+                >
+                  <div className="audit-review-card-head">
+                    <div className="audit-review-card-title">
+                      <span className="audit-review-card-group">{r.groupName}</span>
+                      <b>{r.indicatorCode}　{r.indicatorName}</b>
+                    </div>
+                    <span className={`audit-review-card-status is-${r.state}${r.complete ? " is-complete" : ""}`}>
+                      {r.state === "pending" ? "待完成" : r.state === "ended" ? "已結束" : r.complete ? "已完成" : "進行中"}
+                    </span>
+                  </div>
+                  <div className="audit-review-card-interval">
+                    審查區間：{r.intervalLabel}
+                    {r.sched.category === "temp" && (
+                      <span className="badge">{r.sched.selfReview ? "自審" : "加審"}</span>
+                    )}
+                  </div>
+                  <div className="audit-review-card-progress">
+                    <CompactProgress
+                      label="審核進度（人次）"
+                      done={r.progress.donePersons}
+                      total={r.progress.totalPersons}
+                      pct={r.progress.personPct}
+                    />
+                    <CompactProgress
+                      label="審核進度（單位次）"
+                      done={r.progress.doneUnits}
+                      total={r.progress.totalUnits}
+                      pct={r.progress.unitPct}
+                    />
+                  </div>
+                  {r.state === "ended" && r.endedTargets.length > 0 && (() => {
+                    const overdue = r.canArchive && r.endedTargets.some((e) => e.overdue && !summaries.has(e.id));
+                    const pend = pendingReqs.some((q) => r.endedTargets.some((e) => q.archiveIds.includes(e.id)));
+                    const stale = r.endedTargets.some((e) => {
+                      const summary = summaries.get(e.id);
+                      return !!summary && isSummaryStale(summary, r.indicatorThreshold);
+                    });
+                    if (!overdue && !pend && !stale) return null;
+                    return (
+                      <p className={`audit-review-card-alert${overdue || stale ? " is-warning" : ""}`}>
+                        {[overdue ? "逾期未封存" : "", pend ? "有待審修改" : "", stale ? "摘要已過期（閾值已變更），請重新封存" : ""]
+                          .filter(Boolean)
+                          .join("・")}
+                      </p>
+                    );
+                  })()}
+                  <div className="audit-review-card-actions">
+                    {r.state === "pending" ? (
+                      <span className="muted-text">尚未開始</span>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="button button-outline"
+                          disabled={viewLoadingKey !== null}
+                          onClick={() => openView(r)}
+                        >
+                          <Eye size={15} /> 檢視
+                        </button>
+                        {r.canArchive && r.state === "ended" && r.endedTargets.length > 0 && (
+                          <button
+                            type="button"
+                            className="button button-outline"
+                            disabled={archivingId !== null}
+                            onClick={() => handleArchive(r)}
+                          >
+                            <Archive size={15} />{" "}
+                            {archivingId === rowKeyOf(r)
+                              ? "封存中…"
+                              : r.endedTargets.every((e) => summaries.has(e.id))
+                                ? "重新封存"
+                                : "封存摘要"}
+                          </button>
+                        )}
+                        {r.state === "active" && !r.complete && (
+                          <button
+                            type="button"
+                            className="button button-primary"
+                            onClick={() => openExec(r)}
+                          >
+                            <ClipboardCheck size={15} /> 審查
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+            <table className="data-table audit-review-table">
               <thead>
                 <tr>
                   {compact ? (
