@@ -1,7 +1,7 @@
 rules_version = '2';
 // 護理品質指標管理系統 — Firestore Security Rules（第一階段：Spark 方案 v1.3）
 // 權限以 users/{職編} 文件的 roles 欄位判斷（第二階段改 custom claims）。
-// 登入 email 格式為 {職編}@nurseboard.internal，規則從 token email 取職編。
+// 登入 email 格式為 {職編}@kmuh.org.tw，規則從 token email 取職編。
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -9,7 +9,7 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // 從登入 token 的 email 取職編（admin@nurseboard.internal → admin）
+    // 從登入 token 的 email 取職編（admin@kmuh.org.tw → admin）
     function staffId() {
       return isAuthed() && request.auth.token.email is string
         ? request.auth.token.email.split('@')[0]

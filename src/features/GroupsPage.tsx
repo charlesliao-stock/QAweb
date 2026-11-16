@@ -218,7 +218,7 @@ function emptyUserForm(): UserForm {
     email: "",
     phone: "",
     memberships: [],
-    mustChangePassword: true,
+    mustChangePassword: false,
     titleUnitCodes: [],
     reviewerAccessExpiresAt: "",
   };
@@ -1891,7 +1891,7 @@ export function GroupsPage({
           groupId: m.groupId,
           roles: [...m.roles],
         })),
-      mustChangePassword: true,
+      mustChangePassword: false,
       titleUnitCodes: [],
       reviewerAccessExpiresAt: row.reviewerAccessExpiresAt,
     });
@@ -2116,7 +2116,7 @@ export function GroupsPage({
         }
         await batch.commit();
         onAction(
-          `已新增人員 ${staffId}。請再到 Firebase Console → Authentication 新增使用者，email 為 ${staffId}@nurseboard.internal，初始密碼請設為職編 ${staffId}（首次登入須更改）`,
+          `已新增人員 ${staffId}。登入帳號會由「建立登入帳號」排程自動建立；該員請在登入頁按「開通帳號」，到 ${staffId}@kmuh.org.tw 收認證連結並設定密碼`,
         );
       } else if (view.kind === "edit") {
         const userRef = doc(db, "users", view.staffId);
@@ -3279,7 +3279,7 @@ export function GroupsPage({
                 ? deriveRoles(v.memberships)
                 : ["一般人員"],
             titleUnitCodes: [],
-            mustChangePassword: true,
+            mustChangePassword: false,
             status: "在職",
             ...auditFields(me, true),
           });
@@ -3877,7 +3877,7 @@ export function GroupsPage({
             validateRows={validateUserRows}
             importRows={importUserRows}
             sampleNote="範例：單位代號填入單位主檔的代號；職稱填現有職稱名稱；群組與角色須按欄位成對填寫，可填兩組。"
-            postImportNote="提醒：匯入的人員仍需到 Firebase Console → Authentication 手動建立登入帳號（email 格式為「職編@nurseboard.internal」，初始密碼請設為該員職編，首次登入須更改）。"
+            postImportNote="提醒：匯入後請到 GitHub Actions 執行「Provision auth accounts」建立登入帳號（排程每小時也會自動執行）；人員再於登入頁按「開通帳號」，到「職編@kmuh.org.tw」收認證連結設定密碼。"
             onDone={loadUsers}
             onAction={onAction}
           />
@@ -5107,21 +5107,7 @@ export function GroupsPage({
           )}
           {!isUserEditing && (
             <div className="form-field">
-              <label className="field-label">首次登入強制改密碼</label>
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={userForm.mustChangePassword}
-                  onChange={(e) =>
-                    setUserForm((prev) => ({
-                      ...prev,
-                      mustChangePassword: e.target.checked,
-                    }))
-                  }
-                />
-                <span>啟用（建議保持開啟）</span>
-              </label>
-              <p className="settings-note">帳號與初始密碼統一為職編：登入帳號為「職編@nurseboard.internal」，在 Firebase Console 建立使用者時初始密碼請設為該員職編；首次登入須更改密碼。</p>
+              <p className="settings-note">登入帳號為職編，認證信寄到「職編@kmuh.org.tw」；新增後由排程建立登入帳號，該員在登入頁按「開通帳號」自行設定密碼。</p>
             </div>
           )}
             </div>

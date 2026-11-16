@@ -138,6 +138,8 @@ interface UserLite {
   unitCode: string;
   status: string;
   reviewerAccessActive: boolean;
+  /** 已開通帳號（曾成功登入，users.activatedAt 有值）；false＝尚未開通，無法自行登入 */
+  activated: boolean;
 }
 
 interface ReviewerLite {
@@ -366,6 +368,11 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     users.forEach((u) => m.set(u.id, u.name));
     return m;
   }, [users]);
+  // v1.83.0：尚未開通帳號的在職人員（排程指派審查員時提醒用）
+  const inactiveIds = useMemo(
+    () => new Set(users.filter((u) => !u.activated && u.status !== "停用").map((u) => u.id)),
+    [users],
+  );
   const unitNameOf = useCallback(
     (code: string) => units.find((u) => u.code === code)?.name ?? code,
     [units],
@@ -495,6 +502,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             unitCode: typeof data.unitCode === "string" ? data.unitCode : "",
             status: typeof data.status === "string" ? data.status : "在職",
             reviewerAccessActive: isReviewerAccessActive(data.reviewerAccessExpiresAt),
+            activated: typeof data.activatedAt === "string" && data.activatedAt !== "",
           };
         }),
       );
@@ -1224,6 +1232,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             row={detailRow}
             assignment={assignments.get(detailRow.indicatorId) ?? null}
             usersMap={usersMap}
+            inactiveIds={inactiveIds}
             unitNameOf={unitNameOf}
             canEdit={canEdit}
             actor={actor}
@@ -1296,6 +1305,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               units={units}
               groupMap={groupMap}
               usersMap={usersMap}
+              inactiveIds={inactiveIds}
               initial={assignments.get(indicator.id) ?? null}
               canEdit={canEdit}
               onAction={onAction}
@@ -1488,6 +1498,30 @@ function UnitTreePicker({
         );
       })}
     </>
+  );
+}
+
+/**
+ * 提醒（v1.83.0）：已被指派、但尚未開通帳號的審查員。只提醒，不阻擋排程；
+ * 未開通者仍可被選取與指派，但開通前無法自行登入執行審查。
+ */
+function InactiveReviewerNotice({
+  reviewerIds,
+  inactiveIds,
+  nameOf,
+}: {
+  reviewerIds: string[];
+  inactiveIds: Set<string>;
+  nameOf: (id: string) => string;
+}) {
+  const pending = [...new Set(reviewerIds)].filter((id) => inactiveIds.has(id));
+  if (pending.length === 0) return null;
+  return (
+    <div className="settings-note" role="status" style={{ marginBottom: 8 }}>
+      ⚠ 以下已指派的審查員尚未開通帳號，開通前無法登入執行審查：
+      {pending.map((id) => staffLabel(id, nameOf(id))).join("、")}。
+      請通知他們在登入頁按「開通帳號」，到「職編@kmuh.org.tw」收認證連結設定密碼。
+    </div>
   );
 }
 
@@ -2122,6 +2156,10 @@ function AddAuditDialog({
       : defaultAddAuditReviewers(assignment, row.schedule?.unitIds ?? []),
   );
   const [items, setItems] = useState<AssignmentItem[]>([]);
+  const inactiveIds = useMemo(
+    () => new Set(users.filter((u) => !u.activated && u.status !== "停用").map((u) => u.id)),
+    [users],
+  );
   const [saving, setSaving] = useState(false);
   // v1.60.0：常駐錯誤區（失敗訊息留著直到關閉或下次成功，不只靠一閃即逝的 toast）
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -2565,6 +2603,11 @@ function AddAuditDialog({
         </div>
       )}
 
+      <InactiveReviewerNotice
+        reviewerIds={items.map((it) => it.reviewerId)}
+        inactiveIds={inactiveIds}
+        nameOf={(id) => users.find((u) => u.id === id)?.name ?? ""}
+      />
       <div className="form-field" style={{ marginTop: 12 }}>
         <label className="field-label">預覽</label>
         <p>
@@ -2921,6 +2964,7 @@ function ScheduleDetailModal({
   row,
   assignment,
   usersMap,
+  inactiveIds,
   unitNameOf,
   canEdit,
   actor,
@@ -2931,6 +2975,7 @@ function ScheduleDetailModal({
   row: RowItem;
   assignment: IndicatorAssignment | null;
   usersMap: Map<string, string>;
+  inactiveIds: Set<string>;
   unitNameOf: (code: string) => string;
   /** v1.60.0：manageSchedule 才顯示刪除入口 */
   canEdit: boolean;
@@ -3162,6 +3207,15 @@ function ScheduleDetailModal({
         title="審查員／單位設定"
         note={isTemp ? "臨時排程不存分工表" : undefined}
       />
+      <InactiveReviewerNotice
+        reviewerIds={
+          isTemp
+            ? tempReviewers.map(([id]) => id)
+            : (assignment?.items ?? []).map((it) => it.reviewerId)
+        }
+        inactiveIds={inactiveIds}
+        nameOf={(id) => usersMap.get(id) ?? ""}
+      />
       {isTemp ? (
         loading ? (
           <p className="settings-note">讀取中…</p>
@@ -3232,6 +3286,7 @@ function AssignmentEditor({
   units,
   groupMap,
   usersMap,
+  inactiveIds,
   initial,
   canEdit,
   onAction,
@@ -3242,6 +3297,7 @@ function AssignmentEditor({
   units: UnitLite[];
   groupMap: Map<string, string>;
   usersMap: Map<string, string>;
+  inactiveIds: Set<string>;
   initial: IndicatorAssignment | null;
   canEdit: boolean;
   onAction: (m: string) => void;
@@ -3390,6 +3446,11 @@ function AssignmentEditor({
         <SectionTitle
           title="審查員／單位設定"
           note="先選審查員（可多選），再選其負責單位（可多選），按「加入分工表」；同一單位可指派給多位審查員（會警示但不阻擋）。審查件數在「排程／單位設定」中按年度設定。"
+        />
+        <InactiveReviewerNotice
+          reviewerIds={items.map((it) => it.reviewerId)}
+          inactiveIds={inactiveIds}
+          nameOf={(id) => usersMap.get(id) ?? ""}
         />
         {reviewerOptions.length === 0 ? (
           <p className="settings-note">

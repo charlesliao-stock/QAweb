@@ -20,7 +20,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { AuthProvider, useAuth } from "../lib/auth";
+import { AuthProvider, requestActivationMail, STAFF_MAIL_DOMAIN, normalizeStaffId, useAuth } from "../lib/auth";
 import { collection, doc, getDocs, limit, orderBy, query, serverTimestamp, updateDoc, where } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
@@ -133,6 +133,33 @@ function LoginScreen() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // v1.83.0：開通帳號／忘記密碼（寄 Firebase 認證連結到「職編@kmuh.org.tw」）
+  const [mode, setMode] = useState<"login" | "activate">("login");
+  const [notice, setNotice] = useState("");
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = window.setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [cooldown]);
+
+  const submitActivation = async () => {
+    setError("");
+    setNotice("");
+    setBusy(true);
+    try {
+      await requestActivationMail(staffId);
+      setNotice(
+        `若職編 ${normalizeStaffId(staffId)} 已建檔，認證連結已寄到 ${normalizeStaffId(staffId)}@${STAFF_MAIL_DOMAIN}，請到院內信箱點連結設定密碼（連結有時效，信件可能在垃圾郵件匣）。`,
+      );
+      setCooldown(60);
+    } catch (err) {
+      setError(toErrorMessage(err, "寄送失敗，請稍後再試"));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const submitLogin = async () => {
     setError("");
@@ -220,6 +247,57 @@ function LoginScreen() {
               <ArrowRight size={17} />
             </button>
           </>
+        ) : mode === "activate" ? (
+          <>
+            <div className="login-eyebrow">
+              <span className="live-dot" /> 開通帳號／忘記密碼
+            </div>
+            <h1>
+              以院內信箱
+              <br />
+              <em>設定你的密碼。</em>
+            </h1>
+            <p className="login-lead">
+              輸入職編，系統會寄認證連結到「職編@{STAFF_MAIL_DOMAIN}」。點信中連結設定密碼後，回到這裡用職編與新密碼登入。
+            </p>
+            <label className="field-label" htmlFor="activate-staff-id">
+              職編
+            </label>
+            <input
+              id="activate-staff-id"
+              className="text-input"
+              value={staffId}
+              onChange={(event) => setStaffId(event.target.value)}
+              placeholder={`請輸入職編（不需輸入 @${STAFF_MAIL_DOMAIN}）`}
+              autoComplete="username"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && cooldown <= 0) void submitActivation();
+              }}
+            />
+            {notice && <div className="login-demo-hint">{notice}</div>}
+            {error && <div className="login-error">{error}</div>}
+            <button
+              className="button button-primary login-action"
+              onClick={() => void submitActivation()}
+              disabled={busy || cooldown > 0}
+            >
+              {busy ? "寄送中…" : cooldown > 0 ? `${cooldown} 秒後可重寄` : "寄送認證連結"}
+              <ArrowRight size={17} />
+            </button>
+            <div className="login-foot">
+              <button
+                className="button button-ghost"
+                onClick={() => {
+                  setMode("login");
+                  setError("");
+                  setNotice("");
+                }}
+              >
+                返回登入
+              </button>
+            </div>
+            <div className="login-version">{VERSION_LABEL}</div>
+          </>
         ) : (
           <>
             <div className="login-eyebrow">
@@ -273,7 +351,16 @@ function LoginScreen() {
             </div>
             <div className="login-version">{VERSION_LABEL}</div>
             <div className="login-demo-hint">
-              新帳號首次登入：密碼預設為職編，登入後須立即更改
+              首次使用或忘記密碼？
+              <button
+                className="button button-ghost"
+                onClick={() => {
+                  setMode("activate");
+                  setError("");
+                }}
+              >
+                開通帳號
+              </button>
             </div>
             <div className="login-demo-hint">
               展示帳號：demo／demo（展示模式，操作不會寫入資料庫）

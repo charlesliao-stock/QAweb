@@ -1,0 +1,69 @@
+name: Provision auth accounts
+
+# 為人員檔有、但 Firebase Auth 還沒有登入帳號的人員建立帳號（email＝職編@kmuh.org.tw，
+# 隨機密碼、同時補 role=authenticated）。人員再於登入頁按「開通帳號」收認證連結自設密碼。
+# 只在手動觸發時執行（每人讀 Firestore 一次，不排程以免耗 Spark 讀取額度）。
+# 匯入人員檔後，到 Actions → Provision auth accounts → Run workflow（先勾 dry_run 預覽）。
+# 需要 secret：FIREBASE_SERVICE_ACCOUNT = 服務帳戶 JSON 檔的完整內容
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只預覽，不寫入"
+        type: boolean
+        default: false
+      max_accounts:
+        description: "單次最多建立幾個帳號"
+        type: string
+        default: "500"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provision-auth-accounts
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    name: Create missing Firebase accounts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+
+      - name: Prepare tool directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/provision"
+          cp scripts/provision-auth-accounts.mts "$RUNNER_TEMP/provision/"
+          cd "$RUNNER_TEMP/provision"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund firebase-admin tsx
+
+      - name: Write service account
+        env:
+          SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$SA_JSON" ]; then echo "::error::缺少 secret FIREBASE_SERVICE_ACCOUNT"; exit 1; fi
+          umask 077
+          printf '%s' "$SA_JSON" > "$RUNNER_TEMP/sa.json"
+
+      - name: Run
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
+          DRY: ${{ inputs.dry_run == true && '--dry-run' || '' }}
+          MAX: ${{ inputs.max_accounts }}
+        run: |
+          cd "$RUNNER_TEMP/provision"
+          npx tsx provision-auth-accounts.mts $DRY --max="${MAX:-500}"
+
+      - name: Remove service account
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sa.json"

@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   onAuthStateChanged,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut,
   updatePassword,
@@ -27,22 +28,30 @@ import { setMaintenanceAdmin } from "./maintenance";
 /** 登入時載入的角色詮釋資料快取（效期計時器共用，避免每 30 秒重讀）。 */
 let cachedRoleMeta: RoleMetaMap | undefined;
 
-/** 登入用 email 合成規則：職編即帳號，phase 1 不寄信故用內部網域 */
+/** 認證信與登入共用的信箱網域：帳號信箱一律是「職編@kmuh.org.tw」。 */
+export const STAFF_MAIL_DOMAIN = "kmuh.org.tw";
+
+/**
+ * 整理使用者輸入的職編：全形轉半形、移除所有空白；
+ * 若誤輸入完整信箱（含 @），只取 @ 前面的職編。
+ */
+export function normalizeStaffId(input: string): string {
+  const folded = input.normalize("NFKC").replace(/\s+/g, "");
+  const at = folded.indexOf("@");
+  return at >= 0 ? folded.slice(0, at) : folded;
+}
+
+/** 登入用 email 合成規則：職編即帳號，信箱＝職編@kmuh.org.tw（認證連結也寄到此信箱） */
 export function staffEmail(staffId: string): string {
-  return `${staffId.trim()}@nurseboard.internal`;
+  return `${normalizeStaffId(staffId)}@${STAFF_MAIL_DOMAIN}`;
 }
 
 /**
- * 帳號與初始密碼統一約定（v1.40.6）：帳號＝職編、初始密碼＝職編，
- * 首次登入強制更改密碼（users 文件 mustChangePassword，預設 true）。
- * 注意：MVP 無 Cloud Functions，帳號開通目前仍由管理員在 Firebase Console
- * 手動建立（email＝職編@nurseboard.internal）；建立時初始密碼請填本函式
- * 回傳值（即該員職編）。日後若在站內新增開通／重設流程，一律用本函式
- * 決定初始密碼，不得再另設預設值。展示帳號 demo／demo 不適用本約定。
+ * 帳號開通（v1.83.0）：管理員匯入人員檔後，由 GitHub Actions（provision-auth-accounts）
+ * 為尚無登入帳號者建立 Firebase 帳號（隨機密碼、無人知道）。人員在登入頁按「開通帳號／
+ * 忘記密碼」，系統以 Firebase 內建信寄認證連結到「職編@kmuh.org.tw」，點連結自設密碼。
+ * 不再有「初始密碼＝職編」的約定。展示帳號 demo／demo 不適用。
  */
-export function defaultInitialPassword(staffId: string): string {
-  return staffId.trim();
-}
 
 export interface StaffProfile {
   staffId: string;
@@ -60,6 +69,8 @@ export interface StaffProfile {
   /** v1.58.0：督導負責的單位代碼（僅部級職稱為督導時設定；承接舊督導轄區群組） */
   titleUnitCodes: string[];
   mustChangePassword: boolean;
+  /** 首次成功登入時間（ISO；空字串＝尚未開通／從未登入） */
+  activatedAt: string;
 }
 
 interface AuthContextValue {
@@ -87,6 +98,7 @@ const DEMO_USER: StaffProfile = {
   reviewerAccessExpiresAt: "",
   titleUnitCodes: [],
   mustChangePassword: false,
+  activatedAt: "",
 };
 
 function toAuthErrorMessage(error: unknown): string {
@@ -99,10 +111,14 @@ function toAuthErrorMessage(error: unknown): string {
     case "auth/wrong-password":
     case "auth/user-not-found":
       return "職編或密碼錯誤";
+    case "auth/invalid-email":
+      return "職編格式不正確，請只輸入職編（不需輸入 @kmuh.org.tw）";
     case "auth/user-disabled":
       return "此帳號已停用，請聯絡系統管理員";
     case "auth/too-many-requests":
       return "嘗試次數過多，請稍後再試";
+    case "auth/quota-exceeded":
+      return "今日寄信額度已用完，請明天再試或聯絡系統管理員";
     case "auth/network-request-failed":
       return "網路連線失敗，請檢查網路後再試";
     case "auth/operation-not-allowed":
@@ -115,6 +131,26 @@ function toAuthErrorMessage(error: unknown): string {
       return error instanceof Error && error.message
         ? error.message
         : "登入失敗，請稍後再試";
+  }
+}
+
+/**
+ * 寄送開通／重設密碼認證連結（Firebase 內建信，Spark 每日上限 150 封，見 README）。
+ * 一律回傳成功訊息，不透露職編是否存在；實際錯誤只擋格式與頻率。
+ */
+export async function requestActivationMail(staffId: string): Promise<void> {
+  const id = normalizeStaffId(staffId);
+  if (!id) throw new Error("請輸入職編");
+  try {
+    await sendPasswordResetEmail(getFirebaseAuth(), staffEmail(id));
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { code: unknown }).code)
+        : "";
+    // 帳號不存在（尚未建立／職編錯誤）不告知，避免被拿來探測職編
+    if (code === "auth/user-not-found") return;
+    throw new Error(toAuthErrorMessage(error));
   }
 }
 
@@ -169,6 +205,7 @@ async function loadProfile(staffId: string): Promise<StaffProfile> {
     reviewerAccessExpiresAt,
     titleUnitCodes,
     mustChangePassword: raw.mustChangePassword === true,
+    activatedAt: typeof raw.activatedAt === "string" ? raw.activatedAt : "",
   };
 }
 
@@ -230,7 +267,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user?.reviewerAccessExpiresAt]);
 
   const login = useCallback(async (staffId: string, password: string) => {
-    const trimmed = staffId.trim();
+    const trimmed = normalizeStaffId(staffId);
     if (!trimmed || !password) {
       throw new Error("請輸入職編與密碼");
     }
@@ -245,7 +282,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const auth = getFirebaseAuth();
       await signInWithEmailAndPassword(auth, staffEmail(trimmed), password);
-      const profile = await loadProfile(trimmed);
+      let profile = await loadProfile(trimmed);
+      // v1.83.0：首次成功登入記下開通時間（供排程提醒「尚未開通的審查員」；失敗不擋登入）
+      if (!profile.activatedAt) {
+        const activatedAt = new Date().toISOString();
+        try {
+          await updateDoc(doc(getFirebaseDb(), "users", trimmed), { activatedAt });
+          profile = { ...profile, activatedAt };
+        } catch {
+          /* 寫入失敗不影響登入，下次登入再補 */
+        }
+      }
       setUser(profile);
       // v1.41.0 流量控管：管理員在維護期間豁免攔截
       setMaintenanceAdmin(profile.roles.includes("系統管理員"));

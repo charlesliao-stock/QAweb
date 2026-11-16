@@ -29,7 +29,7 @@ Workflow 固定將 `VITE_FIREBASE_DEMO_READS` 與 `VITE_FIREBASE_REVIEWER_ROLE_W
 
 ## Firebase Authentication 與審查結果
 
-在 Firebase 模式下，使用職編與密碼登入（登入帳號格式為 `{職編}@nurseboard.internal`），並讀取 `users/{職編}` 的姓名、角色、單位及群組欄位。結果分析僅查詢 `reviewRecords` 中指定指標、目前登入角色允許範圍與年度的已送出紀錄；需要相應 Firestore Rules 授權。年度排程設定儲存至 `indicatorYearSchedules`，欄位為 `indicatorId`、`year`、`months`、`monthsPerAudit` 及多選的 `unitIds`；舊文件未有 `unitIds` 時，畫面預選目前帳號可管理的單位。審查員管理從既有 `users` 選取人員並增加 `roles: 審查員`；不建立 Auth 帳號，也不改動獨立的審查員—單位指派資料。審查結果 adapter 不提供寫入審查紀錄的函式。
+在 Firebase 模式下，使用職編與密碼登入（登入帳號格式為 `{職編}@kmuh.org.tw`，使用者只輸入職編），並讀取 `users/{職編}` 的姓名、角色、單位及群組欄位。結果分析僅查詢 `reviewRecords` 中指定指標、目前登入角色允許範圍與年度的已送出紀錄；需要相應 Firestore Rules 授權。年度排程設定儲存至 `indicatorYearSchedules`，欄位為 `indicatorId`、`year`、`months`、`monthsPerAudit` 及多選的 `unitIds`；舊文件未有 `unitIds` 時，畫面預選目前帳號可管理的單位。審查員管理從既有 `users` 選取人員並增加 `roles: 審查員`；不建立 Auth 帳號，也不改動獨立的審查員—單位指派資料。審查結果 adapter 不提供寫入審查紀錄的函式。
 
 ```bash
 cp .env.example .env.local
