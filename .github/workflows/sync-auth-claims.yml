@@ -1,0 +1,65 @@
+name: Sync Supabase auth claims
+
+# 替所有 Firebase 帳號補上 Supabase 需要的 role=authenticated 標記。
+# 已有標記的帳號會略過，重複執行是安全的。只打 Firebase Auth，不耗 Firestore 額度。
+# 需要在 GitHub → Settings → Secrets and variables → Actions 建立 secret：
+#   FIREBASE_SERVICE_ACCOUNT = 服務帳戶 JSON 檔的完整內容
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只預覽，不寫入"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 * * * *"   # 每小時一次（UTC）
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-auth-claims
+  cancel-in-progress: false
+
+jobs:
+  claims:
+    name: Set role=authenticated
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+
+      - name: Prepare tool directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/claims"
+          cp scripts/set-supabase-claims.mts "$RUNNER_TEMP/claims/"
+          cd "$RUNNER_TEMP/claims"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund firebase-admin tsx
+
+      - name: Write service account
+        env:
+          SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$SA_JSON" ]; then echo "::error::缺少 secret FIREBASE_SERVICE_ACCOUNT"; exit 1; fi
+          umask 077
+          printf '%s' "$SA_JSON" > "$RUNNER_TEMP/sa.json"
+
+      - name: Run
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
+          DRY: ${{ inputs.dry_run == true && '--dry-run' || '' }}
+        run: |
+          cd "$RUNNER_TEMP/claims"
+          npx tsx set-supabase-claims.mts $DRY
+
+      - name: Remove service account
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sa.json"
