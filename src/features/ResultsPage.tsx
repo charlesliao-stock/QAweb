@@ -2504,6 +2504,14 @@ export function ResultsPage({
                             }
                             thresholds={s.thresholds}
                             legend="達閾值率"
+                            capaMarks={s.cols.map((col) => {
+                              const hit = unitCapaCases.find((c) => c.indicatorId === ind.id && c.stage !== "已撤案" && capaInColumn(c, col.months));
+                              return hit ? { id: hit.id, label: hit.caseNumber } : null;
+                            })}
+                            onCapaClick={(i) => {
+                              const hit = unitCapaCases.find((c) => c.indicatorId === ind.id && c.stage !== "已撤案" && capaInColumn(c, s.cols[i].months));
+                              if (hit) window.dispatchEvent(new CustomEvent("capa:open", { detail: { caseId: hit.id } }));
+                            }}
                             onPointClick={(i) =>
                               openDrill(ind.id, s.cols[i], unitUnit, selUnitCode, unitPanel.sectionKey
                                 ? { sectionKey: unitPanel.sectionKey }

@@ -518,3 +518,10 @@ th[aria-sort="descending"] .th-sort .lucide {
   margin-left: 0;
   margin-right: 0;
 }
+
+/* v1.79.0：曲線圖點旁的圓圈 C（已啟動 CAPA，可點選連結案件） */
+.chart-capa-mark{cursor:pointer;outline:none}
+.chart-capa-mark circle{fill:#fff;stroke:#0f766e;stroke-width:1.6}
+.chart-capa-mark text{fill:#0f766e;font-size:10px;font-weight:700}
+.chart-capa-mark:hover circle,.chart-capa-mark:focus-visible circle{fill:#0f766e}
+.chart-capa-mark:hover text,.chart-capa-mark:focus-visible text{fill:#fff}

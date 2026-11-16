@@ -8,6 +8,8 @@
  * 的查詢結果（.chart-current）移除。
  * v1.59.0：未達閾值的點標紅（填色／描邊改紅色，連線不改色；閾值取
  * threshold prop，與紅色虛線閾值線同一來源；無資料的點不會出現在 values 中）。
+ * v1.79.0：capaMarks（與 values 對齊）有值的點，在點旁顯示可點選的圓圈 C，
+ * 點選觸發 onCapaClick（連結對應 CAPA 案件）；圖表選項可切換顯示。
  */
 import { useRef, useState } from "react";
 import { isPassing } from "../lib/analysisRates";
@@ -21,6 +23,8 @@ export function TrendChart({
   thresholds,
   legend = "整體達標率",
   onPointClick,
+  capaMarks,
+  onCapaClick,
 }: {
   values?: number[];
   /** x 軸標籤（例如月份），數量對齊 values */
@@ -38,12 +42,16 @@ export function TrendChart({
   legend?: string;
   /** 點選某點（下探用）；未提供時點不可點 */
   onPointClick?: (index: number) => void;
+  /** v1.79.0：該點當期已啟動的 CAPA（與 values 對齊；null／缺值不顯示）；label 為案件編號（提示用） */
+  capaMarks?: ({ id: string; label: string } | null)[];
+  /** 點選圓圈 C（index 對齊 values） */
+  onCapaClick?: (index: number) => void;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
   const [highlightBelow, setHighlightBelow] = useState(true);
   const [showThreshold, setShowThreshold] = useState(true);
-  const [showCapaPlaceholder, setShowCapaPlaceholder] = useState(false);
+  const [showCapa, setShowCapa] = useState(true);
   const wrapRef = useRef<HTMLDivElement>(null);
   if (values.length === 0) {
     return (
@@ -121,12 +129,13 @@ export function TrendChart({
           <input type="checkbox" checked={showThreshold} onChange={(event) => setShowThreshold(event.target.checked)} />
           顯示閾值線
         </label>
-        <label className="check-row">
-          <input type="checkbox" checked={showCapaPlaceholder} onChange={(event) => setShowCapaPlaceholder(event.target.checked)} />
-          顯示未達閾值月份的改善措施
-        </label>
+        {capaMarks && (
+          <label className="check-row">
+            <input type="checkbox" checked={showCapa} onChange={(event) => setShowCapa(event.target.checked)} />
+            顯示已啟動 CAPA 的月份（C）
+          </label>
+        )}
       </div>
-      {showCapaPlaceholder && <p className="settings-note" role="status">改善措施顯示功能已保留，待 CAPA 功能完成後串接。</p>}
       <div className="chart-legend">
         <span>
           <i className="legend-line" />
@@ -244,6 +253,22 @@ export function TrendChart({
               />
             </g>
           ))}
+          {showCapa && pts.map((p, index) => capaMarks?.[index] ? (
+            <g
+              key={`capa-${index}`}
+              className="chart-capa-mark"
+              transform={`translate(${Math.min(p.x + 13, 588)},${Math.max(p.y - 13, 10)})`}
+              role="button"
+              tabIndex={0}
+              aria-label={`前往 CAPA 案件 ${capaMarks[index]?.label ?? ""}`}
+              onClick={(event) => { event.stopPropagation(); onCapaClick?.(index); }}
+              onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onCapaClick?.(index); } }}
+            >
+              <title>{`本期已啟動 CAPA（${capaMarks[index]?.label ?? ""}），點選前往`}</title>
+              <circle r="8" />
+              <text y="3.5" textAnchor="middle">C</text>
+            </g>
+          ) : null)}
           {labels.map(
             (lb, index) =>
               index < n && (
