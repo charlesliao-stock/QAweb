@@ -3,7 +3,8 @@
  * 安全設計：
  * - 預設全不勾；先「預覽數量」（伺服器計數，低讀取量）再執行；
  * - 執行需輸入「清除」確認；永久刪除、無法復原；
- * - 保護：目前登入者、具「系統管理員」角色的人員、「系統管理員」角色本身不會被刪；
+ * - 保護：admin 帳號（職編固定為 admin，不論角色）、目前登入者、具「系統管理員」角色的人員、
+ *   「系統管理員」角色本身不會被刪；
  * - 可限定單一指標（只清該指標的審查／排程資料）；
  * - 只刪 Firestore 文件；Firebase 驗證帳號（登入帳密）無法從瀏覽器刪除，會保留；
  * - 每次執行寫一筆稽核軌跡（只記集合與筆數）。
@@ -30,6 +31,9 @@ import {
 import { toErrorMessage } from "../lib/errors";
 
 type Group = "review" | "schedule" | "org" | "capa";
+
+/** 內建管理員帳號的職編：資料清理永遠保留，即使它的角色被改動。 */
+const ADMIN_STAFF_ID = "admin";
 
 interface Target {
   id: string;
@@ -65,9 +69,10 @@ const TARGETS: Target[] = [
     label: "人員（僅人員資料文件）",
     group: "org",
     protect: (id, data, me) =>
+      id === ADMIN_STAFF_ID ||
       id === me.staffId ||
       (Array.isArray(data.roles) && (data.roles as unknown[]).includes("系統管理員")),
-    note: "保留你自己與所有系統管理員；登入帳號（Firebase 驗證）不會被刪",
+    note: "一律保留 admin 帳號、你自己與所有系統管理員；登入帳號（Firebase 驗證）不會被刪",
   },
   {
     id: "roles",

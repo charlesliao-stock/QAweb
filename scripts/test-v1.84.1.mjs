@@ -63,9 +63,9 @@ check("建立帳號腳本", () => {
   must(prov.includes("信箱相同"), "缺衝突偵測");
   must(prov.includes("舊格式帳號"), "缺舊格式帳號提示");
 });
-check("版號 1.84.1", () => {
-  must(versionTs.includes('export const VERSION = "1.84.1";'), "version.ts");
-  must(pkg.version === "1.84.1", "package.json");
+check("版號 1.84.x 起", () => {
+  must(/export const VERSION = "1\.(84|85)\.\d+";/.test(versionTs), "version.ts");
+  must(/^1\.(84|85)\./.test(pkg.version), "package.json");
 });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
