@@ -17,6 +17,8 @@ import {
   type User as FirebaseUser,
 } from "firebase/auth";
 import { doc, getDoc, updateDoc } from "./db";
+// 寄信記錄在「尚未登入」時寫入，不能走雙寫層（Supabase 需登入身分），直接寫 Firestore
+import { addDoc, collection as rawCollection, serverTimestamp } from "firebase/firestore";
 import { getFirebaseAuth, getFirebaseDb } from "./firebase";
 import { isDemoMode, setDemoMode } from "./demoMode";
 import { clearRefCache } from "./refCache";
@@ -138,16 +140,36 @@ function toAuthErrorMessage(error: unknown): string {
  * 寄送開通／重設密碼認證連結（Firebase 內建信，Spark 每日上限 150 封，見 README）。
  * 一律回傳成功訊息，不透露職編是否存在；實際錯誤只擋格式與頻率。
  */
+/**
+ * 寄信記錄（v1.84.0，前端回報、僅供參考）：寄信當下尚未登入，Spark 沒有後端可可靠記錄，
+ * 所以由登入頁回報到 mailLogs（規則限制欄位與大小，僅管理員可讀）。任何人都可能偽造或灌入，
+ * 記錄失敗也不影響寄信。
+ */
+function logMailAttempt(staffId: string, result: string): void {
+  try {
+    void addDoc(rawCollection(getFirebaseDb(), "mailLogs"), {
+      staffId: staffId.slice(0, 32),
+      result,
+      source: "client",
+      at: serverTimestamp(),
+    }).catch(() => undefined);
+  } catch {
+    /* 記錄失敗不影響寄信 */
+  }
+}
+
 export async function requestActivationMail(staffId: string): Promise<void> {
   const id = normalizeStaffId(staffId);
   if (!id) throw new Error("請輸入職編");
   try {
     await sendPasswordResetEmail(getFirebaseAuth(), staffEmail(id));
+    logMailAttempt(id, "accepted");
   } catch (error) {
     const code =
       typeof error === "object" && error !== null && "code" in error
         ? String((error as { code: unknown }).code)
-        : "";
+        : "other";
+    logMailAttempt(id, code.replace(/^auth\//, "").slice(0, 40));
     // 帳號不存在（尚未建立／職編錯誤）不告知，避免被拿來探測職編
     if (code === "auth/user-not-found") return;
     throw new Error(toAuthErrorMessage(error));

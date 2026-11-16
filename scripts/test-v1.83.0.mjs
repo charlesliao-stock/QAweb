@@ -76,9 +76,9 @@ check("不再強制改密碼預設／不再有 nurseboard.internal 登入網域"
   must(!authSrc.includes("nurseboard.internal"), "auth.tsx 仍有舊網域");
   must(!groupsSrc.includes("nurseboard.internal"), "GroupsPage 仍有舊網域");
 });
-check("版號一致 1.83.0", () => {
-  must(versionTs.includes('export const VERSION = "1.83.0";'), "version.ts");
-  must(pkg.version === "1.83.0", "package.json");
+check("版號一致（1.83.x 起）", () => {
+  must(/export const VERSION = "1\.(83|84)\.\d+";/.test(versionTs), "version.ts");
+  must(/^1\.(83|84)\./.test(pkg.version), "package.json");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

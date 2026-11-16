@@ -143,6 +143,19 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // 開通信寄送記錄（v1.84.0，前端回報、僅供參考）：寄信時尚未登入，所以允許未登入建立，
+    // 但只收固定欄位與長度、時間以伺服器為準；僅管理員可讀與刪除，不可修改。
+    match /mailLogs/{id} {
+      allow create: if request.resource.data.keys().hasOnly(['staffId', 'result', 'source', 'at'])
+        && request.resource.data.staffId is string
+        && request.resource.data.staffId.size() > 0 && request.resource.data.staffId.size() <= 32
+        && request.resource.data.result is string && request.resource.data.result.size() <= 40
+        && request.resource.data.source == 'client'
+        && request.resource.data.at == request.time;
+      allow read, delete: if isAdmin();
+      allow update: if false;
+    }
+
     // 預計算品質摘要：登入者唯讀，僅 Admin SDK 後端可寫。
     match /reviewSummaries/{id} {
       allow read: if isAuthed();

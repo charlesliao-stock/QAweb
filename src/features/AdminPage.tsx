@@ -7,6 +7,7 @@ import {
   Database,
   Eye,
   Gauge,
+  Mail,
   Pencil,
   Plus,
   RotateCcw,
@@ -81,6 +82,7 @@ import {
 } from "../lib/maintenance";
 import { AdminCleanupSection } from "./AdminCleanupSection";
 import { DbStatusSection } from "./DbStatusSection";
+import { MailLogSection } from "./MailLogSection";
 import { getReadMeter, resetReadMeter, subscribeReadMeter } from "../lib/readMeter";
 import { pad2 } from "../lib/ym";
 
@@ -1671,7 +1673,7 @@ function QuotaUsageBars({
   );
 }
 
-type AdminTab = "parameters" | "cleanup" | "quota" | "themes" | "audit" | "capa" | "audit-policy" | "dashboard-visibility";
+type AdminTab = "parameters" | "cleanup" | "quota" | "themes" | "audit" | "capa" | "audit-policy" | "dashboard-visibility" | "mail-log";
 
 export function AdminPage({
   onAction,
@@ -1688,7 +1690,7 @@ export function AdminPage({
     ...(isAdmin ? [{ id: "dashboard-visibility" as const, label: "儀表板顯示", icon: Eye }] : []),
     ...(canManageRoles ? [{ id: "quota" as const, label: "流量控管", icon: Gauge }, { id: "themes" as const, label: "主題模板", icon: Eye }] : []),
     { id: "audit", label: "稽核軌跡", icon: ShieldCheck },
-    ...(isAdmin ? [{ id: "capa" as const, label: "CAPA 管理", icon: ClipboardCheck }, { id: "cleanup" as const, label: "資料清理", icon: Trash2 }] : []),
+    ...(isAdmin ? [{ id: "capa" as const, label: "CAPA 管理", icon: ClipboardCheck }, { id: "cleanup" as const, label: "資料清理", icon: Trash2 }, { id: "mail-log" as const, label: "寄信記錄", icon: Mail }] : []),
     { id: "audit-policy", label: "稽核政策", icon: Check },
   ];
   useEffect(() => {
@@ -1737,6 +1739,7 @@ export function AdminPage({
         {activeTab === "themes" && canManageRoles && <TemplateManagementSection onAction={onAction} onThemeChanged={() => setThemeTick((t) => t + 1)} />}
         {activeTab === "audit" && <AuditLogSection canManageRoles={canManageRoles} />}
         {activeTab === "cleanup" && isAdmin && <AdminCleanupSection onAction={onAction} />}
+        {activeTab === "mail-log" && isAdmin && <MailLogSection onAction={onAction} />}
         {activeTab === "capa" && isAdmin && <CapaPage onAction={onAction} managementOnly />}
         {activeTab === "audit-policy" && (
           <div className="admin-settings-grid">
