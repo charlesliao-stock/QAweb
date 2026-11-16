@@ -36,6 +36,20 @@ export async function loadCapaCases(): Promise<CapaCase[]> {
   return dataRows<CapaCase>(snapshot).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+/** 結果分析下探清單／單位分析「C」標記專用：只讀單一指標的案件（單欄位等號，免複合索引） */
+export async function loadCapaCasesByIndicator(indicatorId: string): Promise<CapaCase[]> {
+  await seedDemoIfNeeded();
+  const snapshot = await getDocs(query(collection(db(), CASES), where("indicatorId", "==", indicatorId)));
+  return dataRows<CapaCase>(snapshot);
+}
+
+/** 單位分析「C」標記專用：只讀單一單位的案件（單欄位等號，免複合索引） */
+export async function loadCapaCasesByUnit(unitCode: string): Promise<CapaCase[]> {
+  await seedDemoIfNeeded();
+  const snapshot = await getDocs(query(collection(db(), CASES), where("unitCode", "==", unitCode)));
+  return dataRows<CapaCase>(snapshot);
+}
+
 /**
  * 儀表板「待結案核准」專用：只讀 stage＝結案核准 的案件（單欄位等號，免複合索引），
  * 不再整個 capa 集合全讀，降低 Spark 讀取量。

@@ -124,6 +124,8 @@ import {
   type QuestionErrorRow,
 } from "../lib/analysisRates";
 import { canOpenDrill } from "../lib/drillScope";
+import { loadCapaCasesByIndicator, loadCapaCasesByUnit, loadCapaSettings } from "./capa/store";
+import type { CapaCase, CapaSettings } from "./capa/model";
 import {
   getCachedYears,
   invalidateCachedYears,
@@ -352,11 +354,26 @@ function ResultMonthPicker({
   );
 }
 
+/** 低於閾值時回傳 " below"（紅字樣式），否則空字串；閾值未設定（<=0）不標示 */
+function isBelow(rate: number | null | undefined, threshold: number | undefined): string {
+  return rate != null && threshold != null && threshold > 0 && rate < threshold ? " below" : "";
+}
+
+/** CAPA 案件的來源月份（periodKeys 最後一筆，YYYY-MM）是否落在該欄的月份內 */
+function capaInColumn(item: CapaCase, months: { year: number; month: number }[]): boolean {
+  const last = item.periodKeys[item.periodKeys.length - 1];
+  const m = /^(\d{4})-(\d{1,2})$/.exec(last ?? "");
+  if (!m) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  return months.some((x) => x.year === y && x.month === mo);
+}
+
 /**
  * 矩陣格內容（v1.76.5）：百分比在上、(分子/分母) 在下以縮減欄寬；
  * 加審字樣置於右側垂直置中。無資料顯示 —。
  */
-function RateCellBody({ cell, extra }: { cell: PassRate; extra?: boolean }) {
+function RateCellBody({ cell, extra, capa }: { cell: PassRate; extra?: boolean; capa?: boolean }) {
   if (cell.rate == null) return <>—</>;
   const pct = Number.isInteger(cell.rate) ? String(cell.rate) : cell.rate.toFixed(1);
   return (
@@ -366,6 +383,7 @@ function RateCellBody({ cell, extra }: { cell: PassRate; extra?: boolean }) {
         <span className="rate-count">({cell.pass}/{cell.total})</span>
       </span>
       {extra ? <small className="extra-review-note rate-stack-extra">加審</small> : null}
+      {capa ? <span className="capa-mark" title="本期已啟動 CAPA" aria-label="本期已啟動 CAPA">C</span> : null}
     </span>
   );
 }
@@ -1354,6 +1372,19 @@ export function ResultsPage({
   /** v1.51.0：不限單位選項值（紀錄／任務的 unitId 為 ""，顯示為 NA） */
   const NA_UNIT = "NA";
   const selUnitCode = selUnit === NA_UNIT ? "" : selUnit;
+  // 單位分析：該單位的 CAPA 案件（單位條件一次查詢），供「C」標記使用
+  const [unitCapaCases, setUnitCapaCases] = useState<CapaCase[]>([]);
+  useEffect(() => {
+    if (tab !== "unit" || !applied || !selUnitCode) {
+      setUnitCapaCases([]);
+      return;
+    }
+    let alive = true;
+    loadCapaCasesByUnit(selUnitCode)
+      .then((rows) => { if (alive) setUnitCapaCases(rows); })
+      .catch(() => { if (alive) setUnitCapaCases([]); });
+    return () => { alive = false; };
+  }, [tab, applied, selUnitCode]);
   const errorUnitCode = errorUnit === NA_UNIT ? "" : errorUnit;
   const hasNaUnit = useMemo(
     () =>
@@ -2368,6 +2399,10 @@ export function ResultsPage({
                   cellValue(id, col, selUnitCode, unitUnit)
                 }
                 hasExtraReview={(id, col) => hasTempReview(id, col, selUnitCode)}
+                thresholdOf={(id) => indOf.get(id)?.threshold ?? 0}
+                capaMarkOf={(id, col) =>
+                  unitCapaCases.some((c) => c.indicatorId === id && capaInColumn(c, col.months))
+                }
                 onCell={(id, col) =>
                   openDrill(id, col, unitUnit, selUnitCode)
                 }
@@ -2931,6 +2966,7 @@ export function ResultsPage({
           recordIndex={recordIndex}
           indOf={indOf}
           unitNameOf={unitNameOf}
+          columns={visibleColumns}
         />
       )}
 
@@ -3528,6 +3564,8 @@ function RateMatrix({
   columns,
   cellOf,
   hasExtraReview,
+  thresholdOf,
+  capaMarkOf,
   onCell,
   onDetailCell,
   onChart,
@@ -3543,6 +3581,10 @@ function RateMatrix({
   columns: AnalysisPeriodColumn[];
   cellOf: (rowId: string, col: AnalysisPeriodColumn) => CellValue;
   hasExtraReview?: (rowId: string, col: AnalysisPeriodColumn) => boolean;
+  /** 單位分析：低於閾值顯示紅字 */
+  thresholdOf?: (rowId: string) => number;
+  /** 單位分析：該欄期間內有啟動 CAPA 時於結果旁顯示圓圈 C */
+  capaMarkOf?: (rowId: string, col: AnalysisPeriodColumn) => boolean;
   onCell?: (rowId: string, col: AnalysisPeriodColumn) => void;
   /** v1.50.0：分組／逐題明細格可點下探（帶分組 key，只顯示該分組的個人結果） */
   onDetailCell?: (rowId: string, detailKey: string, col: AnalysisPeriodColumn) => void;
@@ -3599,7 +3641,7 @@ function RateMatrix({
                 return (
                   <td
                     key={c.key}
-                    className={`rate-cell${clickable ? " clickable" : ""}`}
+                    className={`rate-cell${clickable ? " clickable" : ""}${isBelow(cell.rate, thresholdOf?.(row.id))}`}
                     title={clickable ? `${cell.title}（點選下探）` : cell.title}
                     onClick={
                       clickable ? () => onCell(row.id, c) : undefined
@@ -3617,7 +3659,7 @@ function RateMatrix({
                         : undefined
                     }
                   >
-                    <RateCellBody cell={cell} extra={!!hasExtraReview?.(row.id, c)} />
+                    <RateCellBody cell={cell} extra={!!hasExtraReview?.(row.id, c)} capa={!!capaMarkOf?.(row.id, c)} />
                   </td>
                 );
               })}
@@ -3658,7 +3700,7 @@ function RateMatrix({
                   return (
                     <td
                       key={column.key}
-                      className={`rate-cell${detailClickable ? " clickable" : ""}`}
+                      className={`rate-cell${detailClickable ? " clickable" : ""}${isBelow(detailCell.rate, thresholdOf?.(row.id))}`}
                       title={detailClickable ? `${formatPassRate(detailCell)}（點選下探到個人審查結果）` : formatPassRate(detailCell)}
                       onClick={
                         detailClickable ? () => onDetailCell(row.id, detail.key, column) : undefined
@@ -3813,6 +3855,7 @@ function DrillModal({
   recordIndex,
   indOf,
   unitNameOf,
+  columns,
 }: {
   drill: DrillState;
   onClose: () => void;
@@ -3826,6 +3869,8 @@ function DrillModal({
   recordIndex: RecordIndex;
   indOf: Map<string, IndicatorOpt>;
   unitNameOf: Map<string, string>;
+  /** 目前查詢畫面的期間欄（由舊到新）：連續未達標偵測只用已載入的欄，不另外讀取 */
+  columns: AnalysisPeriodColumn[];
 }) {
   const ind = indOf.get(drill.indicatorId);
   const th = ind?.threshold ?? 0;
@@ -3839,6 +3884,20 @@ function DrillModal({
   }, [l2Needs, drill.indicatorId, l2Months, onNeedMonths]);
   const [showRecentResults, setShowRecentResults] = useState(false);
   const [recentResultCount, setRecentResultCount] = useState(3);
+  // CAPA：該指標的案件（一次）與觸發規則設定（一次），僅 L1 單位列表使用
+  const [capaCases, setCapaCases] = useState<CapaCase[] | null>(null);
+  const [capaSettings, setCapaSettings] = useState<CapaSettings | null>(null);
+  useEffect(() => {
+    if (drill.l2UnitId != null || drill.l2All === true) return;
+    let alive = true;
+    loadCapaCasesByIndicator(drill.indicatorId)
+      .then((rows) => { if (alive) setCapaCases(rows); })
+      .catch(() => { if (alive) setCapaCases([]); });
+    loadCapaSettings()
+      .then((v) => { if (alive) setCapaSettings(v); })
+      .catch(() => { if (alive) setCapaSettings(null); });
+    return () => { alive = false; };
+  }, [drill.indicatorId, drill.l2UnitId, drill.l2All]);
   const currentStartKey = useMemo(
     () => Math.min(...col.months.map(({ year, month }) => year * 100 + month)),
     [col.months],
@@ -3973,6 +4032,56 @@ function DrillModal({
     }
     return map;
   }, [recordIndex, drill.indicatorId, drill.mode, l1Units, l1Summary, col, th, filterIds, filterKind]);
+  // 連續未達標偵測：只用目前查詢畫面已載入的期間欄；沒有審查資料的欄不列入；
+  // 期數取 CAPA 設定（指標覆寫優先，否則全院預設）。選定期間本身須有資料且為最新一期。
+  const capaTriggers = useMemo(() => {
+    const map = new Map<string, { need: number; series: { label: string; rate: number; ym: string }[] }>();
+    if (!capaSettings?.triggerEnabled || th <= 0 || filterIds) return map;
+    const need = Math.max(1, capaSettings.indicatorOverrides[drill.indicatorId] ?? capaSettings.defaultTriggerPeriods);
+    const idx = columns.findIndex((c) => c.key === col.key);
+    const cols = idx >= 0 ? columns.slice(0, idx + 1) : [col];
+    const rateOf = (months: { year: number; month: number }[], unitId: string): PassRate => {
+      const cells = summaryCellsFor(drill.indicatorId, months, unitId);
+      if (cells) return passRateFromCells(cells.filter((c) => c.unitId === unitId));
+      return passRateOf(recordsForIndex(recordIndex, drill.indicatorId, months, unitId), th);
+    };
+    for (const unitId of l1Units) {
+      const series: { label: string; rate: number; ym: string }[] = [];
+      for (const c of cols) {
+        const pr = rateOf(c.months, unitId);
+        if (pr.rate == null || pr.total === 0) continue;
+        const withData = [...c.months]
+          .sort((a, b) => b.year * 100 + b.month - (a.year * 100 + a.month))
+          .find((m) => rateOf([m], unitId).total > 0) ?? c.months[c.months.length - 1];
+        series.push({ label: c.label, rate: pr.rate, ym: `${withData.year}-${pad2(withData.month)}` });
+      }
+      const last = series.slice(-need);
+      const selectedHasData = series.length > 0 && series[series.length - 1].label === col.label;
+      if (selectedHasData && last.length >= need && last.every((x) => x.rate < th)) {
+        map.set(unitId, { need, series: last });
+      }
+    }
+    return map;
+  }, [capaSettings, th, filterIds, drill.indicatorId, columns, col, l1Units, summaryCellsFor, recordIndex]);
+  const startCapa = (unitId: string) => {
+    const trig = capaTriggers.get(unitId);
+    if (!trig) return;
+    const fmt = (r: number) => (Number.isInteger(r) ? String(r) : r.toFixed(1));
+    const lastItem = trig.series[trig.series.length - 1];
+    window.dispatchEvent(new CustomEvent("capa:open", { detail: {
+      indicatorId: drill.indicatorId,
+      indicatorCode: ind?.code ?? "",
+      indicatorName: ind?.name ?? "",
+      threshold: th,
+      period: lastItem.ym,
+      periodKeys: trig.series.map((x) => x.ym),
+      unitCode: unitId,
+      unitName: unitNameOf.get(unitId) ?? "",
+      rate: lastItem.rate,
+      summary: `${trig.series.map((x) => `${x.label} ${fmt(x.rate)}%`).join("、")}，連續${trig.need}次審查皆未達閾值`,
+      snapshots: trig.series.map((x) => ({ period: x.ym.replace("-", "/").replace(/\/(\d)$/, "/0$1"), rate: x.rate })),
+    } }));
+  };
   // L2 列：該單位該期間被審人員在各選項的審查結果（l2All 時為全部單位）
   const l2Active = drill.l2UnitId != null || drill.l2All === true;
   const l2Rows = useMemo(() => {
@@ -4085,12 +4194,13 @@ function DrillModal({
                   <th className="ind-col">單位</th>
                   {showRecentResults && historyMonths.map((month) => <th key={month.key} className="rate-col">{month.label}</th>)}
                   <th className="rate-col" style={showRecentResults ? { background: "#eef4ff" } : undefined}>{col.label}</th>
+                  <th className="rate-col">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {l1Units.length === 0 ? (
                   <tr>
-                    <td colSpan={2 + (showRecentResults ? historyMonths.length : 0)}>{historyBusy ? "讀取中…" : historyNote || "無資料"}</td>
+                    <td colSpan={3 + (showRecentResults ? historyMonths.length : 0)}>{historyBusy ? "讀取中…" : historyNote || "無資料"}</td>
                   </tr>
                 ) : (
                   l1Units.map((unitId) => {
@@ -4149,7 +4259,25 @@ function DrillModal({
                               : undefined
                           }
                         >
-                          {cell ? <RateCellBody cell={cell} /> : "—"}
+                          {cell ? (
+                            <RateCellBody
+                              cell={cell}
+                              capa={(capaCases ?? []).some((c) => c.unitCode === unitId && capaInColumn(c, col.months))}
+                            />
+                          ) : "—"}
+                        </td>
+                        <td className="rate-cell">
+                          {(() => {
+                            if (!capaTriggers.has(unitId) || capaCases == null) return null;
+                            const open = capaCases.some((c) => c.unitCode === unitId && c.stage !== "正式結案");
+                            return open ? (
+                              <span className="muted-text">CAPA 進行中</span>
+                            ) : (
+                              <button type="button" className="text-button capa-start-link" onClick={() => startCapa(unitId)}>
+                                啟動CAPA
+                              </button>
+                            );
+                          })()}
                         </td>
                       </tr>
                     );

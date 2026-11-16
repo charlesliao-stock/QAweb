@@ -91,6 +91,8 @@ type CapaLaunchContext = {
   unitCode?: string;
   unitName?: string;
   rate?: number;
+  summary?: string;
+  snapshots?: Array<{ period: string; rate: number }>;
 };
 
 const NAV_GROUPS = [

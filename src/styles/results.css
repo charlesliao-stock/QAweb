@@ -269,6 +269,30 @@
 .rate-stack .rate-stack-extra {
   margin-left: 0;
 }
+/* v1.77.0：該期已啟動 CAPA 的圓圈 C */
+.capa-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border: 1.5px solid #0f766e;
+  border-radius: 50%;
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  flex: none;
+}
+.capa-start-link {
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.capa-start-link:hover {
+  color: #8a1a12;
+}
 .analysis-matrix td.rate-cell.clickable:hover {
   background: #eef6f4;
   text-decoration: underline;
