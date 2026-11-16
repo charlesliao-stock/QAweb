@@ -357,6 +357,24 @@ function fmtCell(cell: CellValue): string {
   return formatPassRate(cell);
 }
 
+/**
+ * 矩陣格內容（v1.76.5）：百分比在上、(分子/分母) 在下以縮減欄寬；
+ * 加審字樣置於右側垂直置中。無資料顯示 —。
+ */
+function RateCellBody({ cell, extra }: { cell: CellValue; extra?: boolean }) {
+  if (cell.rate == null) return <>—</>;
+  const pct = Number.isInteger(cell.rate) ? String(cell.rate) : cell.rate.toFixed(1);
+  return (
+    <span className="rate-stack">
+      <span className="rate-stack-main">
+        <span className="rate-pct">{pct}%</span>
+        <span className="rate-count">({cell.pass}/{cell.total})</span>
+      </span>
+      {extra ? <small className="extra-review-note rate-stack-extra">加審</small> : null}
+    </span>
+  );
+}
+
 function SelectField({
   label,
   value,
@@ -3604,7 +3622,7 @@ function RateMatrix({
                         : undefined
                     }
                   >
-                    {fmtCell(cell)}{hasExtraReview?.(row.id, c) ? <small className="extra-review-note">(加審)</small> : null}
+                    <RateCellBody cell={cell} extra={!!hasExtraReview?.(row.id, c)} />
                   </td>
                 );
               })}
@@ -3663,7 +3681,7 @@ function RateMatrix({
                           : undefined
                       }
                     >
-                      {formatPassRate(detailCell)}{hasExtraReview?.(row.id, column) ? <small className="extra-review-note">(加審)</small> : null}
+                      <RateCellBody cell={detailCell} extra={!!hasExtraReview?.(row.id, column)} />
                     </td>
                   );
                 })}
@@ -4109,7 +4127,7 @@ function DrillModal({
                               tabIndex={hClickable ? 0 : undefined}
                               onKeyDown={hClickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } } : undefined}
                             >
-                              {hp.total === 0 ? "—" : fmtCell(hCell)}
+                              {hp.total === 0 ? "—" : <RateCellBody cell={hCell} />}
                             </td>
                           );
                         })}
@@ -4136,7 +4154,7 @@ function DrillModal({
                               : undefined
                           }
                         >
-                          {cell ? fmtCell(cell) : "—"}
+                          {cell ? <RateCellBody cell={cell} /> : "—"}
                         </td>
                       </tr>
                     );

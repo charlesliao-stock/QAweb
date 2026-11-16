@@ -245,6 +245,30 @@
 .analysis-matrix td.rate-cell.clickable {
   cursor: pointer;
 }
+/* v1.76.5：百分比在上、(件數/件數) 在下；加審置於右側中間 */
+.rate-stack {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.rate-stack-main {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.25;
+}
+.rate-stack .rate-pct {
+  font-size: 14px;
+}
+.rate-stack .rate-count {
+  font-size: 11.5px;
+  font-weight: 400;
+  opacity: 0.78;
+}
+.rate-stack .rate-stack-extra {
+  margin-left: 0;
+}
 .analysis-matrix td.rate-cell.clickable:hover {
   background: #eef6f4;
   text-decoration: underline;
