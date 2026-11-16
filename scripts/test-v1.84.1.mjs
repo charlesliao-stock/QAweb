@@ -61,11 +61,11 @@ check("建立帳號腳本", () => {
   must(prov.includes('{ role: "authenticated", staffId }'), "未寫 staffId 標記");
   must(prov.includes("補標記"), "缺補標記");
   must(prov.includes("信箱相同"), "缺衝突偵測");
-  must(prov.includes("舊格式帳號"), "缺舊格式帳號提示");
+  must(prov.includes("信箱開頭有 0 的舊格式帳號也會因此被清掉"), "缺舊格式帳號說明（v1.85.0 起由對帳自動刪除）");
 });
 check("版號 1.84.x 起", () => {
-  must(/export const VERSION = "1\.(84|85)\.\d+";/.test(versionTs), "version.ts");
-  must(/^1\.(84|85)\./.test(pkg.version), "package.json");
+  must(/export const VERSION = "1\.(84|85|86)\.\d+";/.test(versionTs), "version.ts");
+  must(/^1\.(84|85|86)\./.test(pkg.version), "package.json");
 });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

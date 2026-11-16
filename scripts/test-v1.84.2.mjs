@@ -31,9 +31,9 @@ check("人員清理一律保留 admin，原保護仍在", () => {
 check("說明文字寫明保留 admin", () => {
   must(src.includes("一律保留 admin 帳號"), "note");
 });
-check("版號 1.84.2", () => {
-  must(versionTs.includes('export const VERSION = "1.84.2";'), "version.ts");
-  must(pkg.version === "1.84.2", "package.json");
+check("版號 1.84.x 起", () => {
+  must(/export const VERSION = "1\.(84|85|86)\.\d+";/.test(versionTs), "version.ts");
+  must(/^1\.(84|85|86)\./.test(pkg.version), "package.json");
 });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

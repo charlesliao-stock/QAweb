@@ -48,8 +48,8 @@ check("系統管理有寄信記錄分頁（僅管理員）；手動載入", () =
   must(!/useEffect/.test(secSrc), "不應自動讀取");
 });
 check("版號 1.84.x 起", () => {
-  must(/export const VERSION = "1\.(84|85)\.\d+";/.test(versionTs), "version.ts");
-  must(/^1\.(84|85)\./.test(pkg.version), "package.json");
+  must(/export const VERSION = "1\.(84|85|86)\.\d+";/.test(versionTs), "version.ts");
+  must(/^1\.(84|85|86)\./.test(pkg.version), "package.json");
 });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1,12 +1,19 @@
 name: Provision auth accounts
 
-# 為人員檔有、但 Firebase Auth 還沒有登入帳號的人員建立帳號（email＝職編去掉開頭 0＋@kmuh.org.tw，
-# 隨機密碼、同時補 role=authenticated）。人員再於登入頁按「開通帳號」收認證連結自設密碼。
-# 只在手動觸發時執行（每人讀 Firestore 一次，不排程以免耗 Spark 讀取額度）。
-# 匯入人員檔後，到 Actions → Provision auth accounts → Run workflow（先勾 dry_run 預覽）。
-# 需要 secret：FIREBASE_SERVICE_ACCOUNT = 服務帳戶 JSON 檔的完整內容
+# 登入帳號對帳：以 Supabase 人員名單為準，讓 Firebase 登入帳號與名單一致（email＝職編去掉
+# 開頭 0＋@kmuh.org.tw）。每小時自動執行，也可手動執行（建議先勾 dry_run 預覽）：
+#   - 建立名單有、但沒有登入帳號者（隨機密碼，寫入 role／staffId 標記）；人員再到登入頁按「開通帳號」
+#   - 「停用」者停用登入、改回在職者啟用
+#   - 刪除名單已不存在的帳號與其 Firestore users 文件（admin@kmuh.org.tw 永遠保留）
+# 安全上限：名單讀不到或是空的就不動作；一次要刪的帳號超過 max_delete（預設 20）整批不刪並失敗。
+# 手動選項 prune_firestore：另外清掉 Firestore users 中名單沒有的文件（會逐筆讀 Firestore，耗讀取額度）。
+# 需要 secrets：FIREBASE_SERVICE_ACCOUNT（服務帳戶 JSON 全文）、SUPABASE_SERVICE_ROLE_KEY（Supabase
+#   Project Settings → API 的 service_role，只放這裡，不要放進程式碼）。
+# 選用 variable：KEEP_EMAILS（逗號分隔，額外永遠保留的登入信箱）。
 
 on:
+  schedule:
+    - cron: "11 * * * *" # 每小時（UTC）
   workflow_dispatch:
     inputs:
       dry_run:
@@ -17,6 +24,14 @@ on:
         description: "單次最多建立幾個帳號"
         type: string
         default: "500"
+      max_delete:
+        description: "單次最多刪除幾個帳號（超過整批不刪）"
+        type: string
+        default: "20"
+      prune_firestore:
+        description: "另外清掉 Firestore users 中名單沒有的文件（耗讀取額度）"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -27,7 +42,7 @@ concurrency:
 
 jobs:
   provision:
-    name: Create missing Firebase accounts
+    name: Reconcile Firebase accounts with roster
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -58,11 +73,16 @@ jobs:
       - name: Run
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
+          SUPABASE_URL: https://wdahafyhshsolrpsnzaz.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          KEEP_EMAILS: ${{ vars.KEEP_EMAILS }}
           DRY: ${{ inputs.dry_run == true && '--dry-run' || '' }}
+          PRUNE: ${{ inputs.prune_firestore == true && '--prune-firestore' || '' }}
           MAX: ${{ inputs.max_accounts }}
+          MAXDEL: ${{ inputs.max_delete }}
         run: |
           cd "$RUNNER_TEMP/provision"
-          npx tsx provision-auth-accounts.mts $DRY --max="${MAX:-500}"
+          npx tsx provision-auth-accounts.mts $DRY $PRUNE --max="${MAX:-500}" --max-delete="${MAXDEL:-20}"
 
       - name: Remove service account
         if: always()
