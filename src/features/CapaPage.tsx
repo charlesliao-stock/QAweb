@@ -8,6 +8,9 @@ import { loadCapaCases, loadCapaSettings, loadCapaTemplates, saveCapaCase, saveC
 import { findUnitPeople, listUnitPeople, type CapaPerson } from "./capa/people";
 import "./capa/capa.css";
 import { toErrorMessage } from "../lib/errors";
+import { useOrgMeta } from "../lib/useOrgMeta";
+import { hasRoleCategory, titleFlagsOf } from "../lib/orgMeta";
+import { isConvenerRole, isOfficerRole } from "../lib/roleIdentity";
 
 type LaunchContext = { indicatorId?: string; indicatorCode?: string; indicatorName?: string; threshold?: number; period?: string; periodKeys?: string[]; unitCode?: string; unitName?: string; rate?: number; summary?: string; snapshots?: Array<{ period: string; rate: number }>; caseId?: string };
 type ViewTab = "cases" | "settings" | "templates";
@@ -32,7 +35,7 @@ function makeCase(context: LaunchContext, staffId: string, staffName: string, un
 }
 
 export function CapaPage({ onAction, launchContext, onLaunchConsumed, managementOnly = false }: { onAction: (message: string) => void; launchContext?: LaunchContext | null; onLaunchConsumed?: () => void; managementOnly?: boolean }) {
-  const { user } = useAuth(); const { isAdmin } = usePermissions();
+  const { user } = useAuth(); const { isAdmin } = usePermissions(); const orgMeta = useOrgMeta();
   const [tab, setTab] = useState<ViewTab>(() => managementOnly ? "settings" : "cases"); const [cases, setCases] = useState<CapaCase[]>([]); const [settings, setSettings] = useState<CapaSettings>(DEFAULT_CAPA_SETTINGS); const [templates, setTemplates] = useState<CapaTemplate[]>([]);
   const [selectedId, setSelectedId] = useState(""); const [keywordDraft, setKeywordDraft] = useState(""); const [keyword, setKeyword] = useState(""); const [progressFilter, setProgressFilter] = useState(""); const [sourceFilter, setSourceFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 } | null>(null);
@@ -84,9 +87,14 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
   const [unitPeople, setUnitPeople] = useState<CapaPerson[]>([]);
   // 指派撰寫人：負責人、管理員，或管轄該單位的督導（非單位主管指派時，候選人一律以「該案件單位」的編制人員為主）
   const supervisesUnit = Boolean(draft?.unitCode) && roles.includes(settings.approvalRoles[0] || "督導") && (user?.titleUnitCodes ?? []).includes(draft?.unitCode ?? "");
-  const canAssign = (ownerOrAdmin || supervisesUnit) && progress !== "結案";
+  // 督導以上、執行幹事以上（含管理員、召集人、院／區主管）可修改負責人與撰寫人
+  const titleFlags = titleFlagsOf(user?.title ?? "", user?.titleId, orgMeta.titleMeta, orgMeta.titleMetaById);
+  const isManager = isAdmin || titleFlags.isHospitalHead || titleFlags.isDistrictHead || titleFlags.isOfficer || hasRoleCategory(roles, "senior", orgMeta.roleMeta) || isConvenerRole(roles, orgMeta.roleMeta) || isOfficerRole(roles, orgMeta.roleMeta);
+  const canChangeOwner = (isManager || supervisesUnit) && progress !== "結案";
+  const canAssign = (ownerOrAdmin || isManager || supervisesUnit) && progress !== "結案";
   const peopleUnit = canAssign ? draft?.unitCode ?? "" : "";
   useEffect(() => { if (!peopleUnit) { setUnitPeople([]); return; } let alive = true; listUnitPeople(peopleUnit).then((rows) => { if (alive) setUnitPeople(rows); }).catch(() => { if (alive) setUnitPeople([]); }); return () => { alive = false; }; }, [peopleUnit]);
+  const assignOwner = (person: CapaPerson) => { if (!draft || person.id === draft.ownerId) return; const followWriter = writerId === draft.ownerId; void persistCase({ ...draft, ownerId: person.id, ownerName: person.name, ...(followWriter ? { writerId: person.id, writerName: person.name } : {}) }, `變更負責人：${person.name}`); };
   const assignWriter = (person: CapaPerson) => { if (!draft || person.id === writerId) return; void persistCase({ ...draft, writerId: person.id, writerName: person.name }, `指定撰寫人：${person.name}`); };
   const currentApproval = draft?.approvalSteps.find((step) => step.decision === "待審核");
   const canApprove = Boolean(currentApproval && (isAdmin || roles.includes(currentApproval.role) || currentApproval.approverId === actorId) && draft?.ownerId !== actorId && writerId !== actorId);
@@ -153,7 +161,7 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
         <button type="button" className="button button-ghost button-sm capa-back" onClick={() => setSelectedId("")}><ChevronLeft size={15} />返回改善案件清單</button>
         <div className="capa-detail-topline"><div className="case-meta"><span className="capa-kicker">CAPA CASE</span><b>{draft.caseNumber}</b><span className={`capa-pill ${draft.source === "人工立案" ? "blue" : draft.source === "系統觸發" ? "amber" : "teal"}`}>{draft.source}</span></div><div className="case-meta-status"><span className={`capa-pill ${progressClass(progress)}`}>{progress}</span></div></div>
         <h2>{draft.title}</h2>
-        <div className="capa-detail-meta"><span><b>指標</b>{draft.indicatorCode ? `${draft.indicatorCode}｜` : ""}{draft.indicatorName || "未連結"}</span><span><b>單位</b>{draft.unitName || "待確認"}</span><span><b>負責人</b>{draft.ownerName || "尚未指派"}</span><span><b>撰寫人</b>{canAssign ? <select className="capa-due-input" value={writerId} onChange={(event) => { const person = unitPeople.find((row) => row.id === event.target.value); if (person) assignWriter(person); }} disabled={saving} aria-label="指定撰寫人">{!unitPeople.some((row) => row.id === writerId) && <option value={writerId}>{writerName || "—"}</option>}{unitPeople.map((row) => <option key={row.id} value={row.id}>{row.name}（{row.id}）</option>)}</select> : writerName || "—"}</span><span><b>結案審核人</b>{draft.approverName || (settings.approvalRoles[0] || "督導")}</span><span className={isOverdue(draft) ? "capa-due-overdue" : undefined}><b>改善期限</b><input type="date" className="capa-due-input" value={dueDateOf(draft)} onChange={(event) => updateDraft({ dueDate: event.target.value })} disabled={progress === "送審中" || progress === "結案"} /></span></div>
+        <div className="capa-detail-meta"><span><b>指標</b>{draft.indicatorCode ? `${draft.indicatorCode}｜` : ""}{draft.indicatorName || "未連結"}</span><span><b>單位</b>{draft.unitName || "待確認"}</span><span><b>負責人</b>{canChangeOwner ? <select className="capa-due-input" value={draft.ownerId} onChange={(event) => { const person = unitPeople.find((row) => row.id === event.target.value); if (person) assignOwner(person); }} disabled={saving} aria-label="變更負責人">{!unitPeople.some((row) => row.id === draft.ownerId) && <option value={draft.ownerId}>{draft.ownerName || "—"}</option>}{unitPeople.map((row) => <option key={row.id} value={row.id}>{row.name}（{row.id}）</option>)}</select> : draft.ownerName || "尚未指派"}</span><span><b>撰寫人</b>{canAssign ? <select className="capa-due-input" value={writerId} onChange={(event) => { const person = unitPeople.find((row) => row.id === event.target.value); if (person) assignWriter(person); }} disabled={saving} aria-label="指定撰寫人">{!unitPeople.some((row) => row.id === writerId) && <option value={writerId}>{writerName || "—"}</option>}{unitPeople.map((row) => <option key={row.id} value={row.id}>{row.name}（{row.id}）</option>)}</select> : writerName || "—"}</span><span><b>結案審核人</b>{draft.approverName || (settings.approvalRoles[0] || "督導")}</span><span className={isOverdue(draft) ? "capa-due-overdue" : undefined}><b>改善期限</b><input type="date" className="capa-due-input" value={dueDateOf(draft)} onChange={(event) => updateDraft({ dueDate: event.target.value })} disabled={progress === "送審中" || progress === "結案"} /></span></div>
         <p>建立於 {formatDateTime(draft.createdAt)}　·　最近更新 {formatDateTime(draft.updatedAt)}</p>
       </header>
       <div className="capa-stepper" aria-label="案件進度"><div className="capa-stepper-caption"><b>案件進度</b><span>目前進度 · {progress}</span></div><div className="capa-stepper-track">{CAPA_PROGRESS.map((item, index) => { const current = CAPA_PROGRESS.indexOf(progress); const time = progressTimeOf(draft, item); return <div key={item} className={`capa-step${current > index ? " done" : current === index ? " current" : ""}`}><i>{current > index ? <Check size={14} /> : index + 1}</i><span>{item}</span><small>{time ? formatDateTime(time) : "—"}</small></div>; })}</div></div>
