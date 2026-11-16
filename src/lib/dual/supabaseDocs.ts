@@ -56,8 +56,11 @@ export function supabaseDocs(opt: SupabaseOptions): SupabaseAdapter {
   const pageSize = opt.pageSize ?? 1000;
 
   async function headers(extra?: Record<string, string>): Promise<Record<string, string>> {
-    const token = (await opt.getToken?.()) ?? opt.apiKey;
-    return { apikey: opt.apiKey, Authorization: `Bearer ${token}`, ...extra };
+    const token = await opt.getToken?.();
+    // 未登入：不打 Supabase（新式 sb_publishable_ 金鑰不是 JWT，放進 Bearer 只會得到 401），
+    // 且以 DataError 回報，不算主資料庫故障，不會觸發備援切換。
+    if (opt.getToken && !token) throw new DataError("尚未登入，無法存取資料庫", 401, "QA401");
+    return { apikey: opt.apiKey, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra };
   }
 
   async function check(res: Response, what: string): Promise<void> {

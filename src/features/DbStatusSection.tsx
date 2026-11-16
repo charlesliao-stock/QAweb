@@ -4,7 +4,7 @@
  * Firebase 的當日用量條仍由下方「流量控管」區顯示；這裡只放 Supabase 的資料庫大小。
  */
 import { useCallback, useEffect, useState } from "react";
-import { dualDrainNow, dualHealth, dualRequested, fetchSupabaseUsage } from "../lib/dual/bootstrap";
+import { dualClearEvents, dualDrainNow, dualEvents, dualHealth, dualRequested, fetchSupabaseUsage } from "../lib/dual/bootstrap";
 import {
   SUPABASE_LIMITS, dbLabel, describeHealth, formatBytes, level, pct, type SupabaseUsage,
 } from "../lib/dual/status";
@@ -71,6 +71,7 @@ export function DbStatusSection() {
   }
 
   const line = describeHealth(health);
+  const events = dualEvents();
   const sync = async (): Promise<void> => {
     setBusy(true);
     try { await dualDrainNow(); } finally { setBusy(false); tick((n) => n + 1); }
@@ -133,6 +134,24 @@ export function DbStatusSection() {
         </button>
         <button className="button button-outline" type="button" onClick={() => void loadUsage()}>重新整理用量</button>
       </div>
+
+      <h4 style={{ margin: "16px 0 6px" }}>最近事件</h4>
+      {events.length === 0 ? (
+        <p className="settings-note">目前沒有事件記錄。</p>
+      ) : (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, maxHeight: 220, overflowY: "auto", fontSize: 13 }}>
+          {events.map((ev, i) => (
+            <li key={`${ev.ts}-${i}`} style={{ padding: "3px 0", borderBottom: "1px solid #eee", color: TONE_COLOR[ev.level === "info" ? "ok" : ev.level] }}>
+              <span style={{ color: "#6b7280", marginRight: 8 }}>{new Date(ev.ts).toLocaleString("zh-TW", { hour12: false })}</span>
+              {ev.text}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="settings-note">只記錄在這台電腦的瀏覽器上，最多 50 筆，不含資料內容。</p>
+      {events.length > 0 && (
+        <button className="button button-outline" type="button" onClick={() => { dualClearEvents(); tick((n) => n + 1); }}>清除記錄</button>
+      )}
     </section>
   );
 }

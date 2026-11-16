@@ -12,7 +12,7 @@ import { installDualStore, isDualInstalled } from "./dualDb";
 import { DualStore, type DualEvent, type DualHealth } from "./dualStore";
 import { firestoreDocs } from "./firestoreDocs";
 import { supabaseDocs, type SupabaseAdapter } from "./supabaseDocs";
-import type { SupabaseUsage } from "./status";
+import { dbLabel, type SupabaseUsage } from "./status";
 
 const env = import.meta.env as Record<string, string | undefined>;
 const SUPABASE_URL = env.VITE_SUPABASE_URL ?? "";
@@ -27,6 +27,32 @@ export function isDualMode(): boolean {
 }
 
 let lastEvent: DualEvent | null = null;
+
+/** 最近事件記錄（保留最近 50 筆，存在本機瀏覽器；只記狀態切換與錯誤，不含資料內容）。 */
+export interface EventLogItem { ts: number; level: "info" | "warn" | "bad"; text: string }
+const EVENT_KEY = "dualstore:events:v1";
+const EVENT_MAX = 50;
+let eventLog: EventLogItem[] = [];
+try {
+  if (typeof localStorage !== "undefined") {
+    const raw = JSON.parse(localStorage.getItem(EVENT_KEY) ?? "[]") as EventLogItem[];
+    if (Array.isArray(raw)) eventLog = raw.slice(-EVENT_MAX);
+  }
+} catch { /* 記錄壞掉就從空的開始 */ }
+
+function logEvent(level: EventLogItem["level"], text: string): void {
+  const last = eventLog[eventLog.length - 1];
+  // 同一訊息 30 秒內重複只記一次，避免洗版
+  if (last && last.text === text && Date.now() - last.ts < 30_000) return;
+  eventLog = [...eventLog, { ts: Date.now(), level, text }].slice(-EVENT_MAX);
+  try { localStorage.setItem(EVENT_KEY, JSON.stringify(eventLog)); } catch { /* 空間不足就略過 */ }
+}
+
+export function dualEvents(): EventLogItem[] { return [...eventLog].reverse(); }
+export function dualClearEvents(): void {
+  eventLog = [];
+  try { localStorage.removeItem(EVENT_KEY); } catch { /* ignore */ }
+}
 let dualStoreRef: DualStore | null = null;
 let supabaseRef: SupabaseAdapter | null = null;
 let refreshedForRole = false;
@@ -77,10 +103,23 @@ export function initDual(firestoreDb: any, getAuth: () => Auth): void {
     onEvent: (e) => {
       lastEvent = e;
       if (e.type === "failover-write" || e.type === "dead-letter") console.warn("[dual]", e);
+      if (e.type === "failover-write") logEvent("bad", `主資料庫無法寫入，${e.ops} 筆改寫到備援，待恢復後補回`);
+      else if (e.type === "dead-letter") logEvent("bad", `同步失敗被放棄：${e.col}/${e.id}（目標 ${dbLabel(e.target)}），請聯絡管理員對帳`);
+      else if (e.type === "error") logEvent(e.breaker === "open" ? "bad" : "warn", `${dbLabel(e.db)} 連線錯誤（${e.breaker === "open" ? "已判定無法使用" : "將重試"}）：${e.error.slice(0, 120)}`);
     },
   });
   dualStoreRef = store;
   installDualStore(store);
+  logEvent("info", `雙寫模式啟動：主資料庫 ${dbLabel("supabase")}，備援 ${dbLabel("firebase")}`);
+  if (typeof window !== "undefined") {
+    let prev = store.mode();
+    window.setInterval(() => {
+      const m = store.mode();
+      if (m === prev) return;
+      logEvent(m === "failover" ? "bad" : "info", m === "failover" ? "切換到備援：主資料庫暫時無法使用" : "主資料庫已恢復，切回主資料庫");
+      prev = m;
+    }, 3000);
+  }
   // 上線／回到前景時補送佇列
   if (typeof window !== "undefined") {
     const kick = (): void => void store.drain().catch(() => {});
