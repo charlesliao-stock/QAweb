@@ -19,7 +19,7 @@ create schema if not exists app;
 -- ---------- 身分 ----------
 create or replace function app.staff_id() returns text
 language sql stable as $$
-  select coalesce(split_part(coalesce(auth.jwt()->>'email', ''), '@', 1), '')
+  select coalesce(nullif(auth.jwt()->>'staffId', ''), split_part(coalesce(auth.jwt()->>'email', ''), '@', 1), '')
 $$;
 
 create or replace function app.my_data() returns jsonb

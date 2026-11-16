@@ -46,7 +46,7 @@ check("normalizeStaffId：全形轉半形、去空白、取 @ 前", () => {
 });
 check("staffEmail 一律 職編@kmuh.org.tw", () => {
   must(authSrc.includes('export const STAFF_MAIL_DOMAIN = "kmuh.org.tw";'), "網域常數");
-  must(authSrc.includes("return `${normalizeStaffId(staffId)}@${STAFF_MAIL_DOMAIN}`;"), "staffEmail 規則");
+  must(authSrc.includes("return `${staffMailLocal(staffId)}@${STAFF_MAIL_DOMAIN}`;"), "staffEmail 規則（v1.84.1 起信箱去掉開頭 0）");
 });
 check("invalid-email 中文訊息；開通信不探測職編", () => {
   must(authSrc.includes('case "auth/invalid-email":'), "缺 invalid-email");
@@ -77,8 +77,8 @@ check("不再強制改密碼預設／不再有 nurseboard.internal 登入網域"
   must(!groupsSrc.includes("nurseboard.internal"), "GroupsPage 仍有舊網域");
 });
 check("版號一致（1.83.x 起）", () => {
-  must(/export const VERSION = "1\.(83|84)\.\d+";/.test(versionTs), "version.ts");
-  must(/^1\.(83|84)\./.test(pkg.version), "package.json");
+  must(/export const VERSION = "1\.(83|84|85)\.\d+";/.test(versionTs), "version.ts");
+  must(/^1\.(83|84|85)\./.test(pkg.version), "package.json");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

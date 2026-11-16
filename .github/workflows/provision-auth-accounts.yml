@@ -1,6 +1,6 @@
 name: Provision auth accounts
 
-# 為人員檔有、但 Firebase Auth 還沒有登入帳號的人員建立帳號（email＝職編@kmuh.org.tw，
+# 為人員檔有、但 Firebase Auth 還沒有登入帳號的人員建立帳號（email＝職編去掉開頭 0＋@kmuh.org.tw，
 # 隨機密碼、同時補 role=authenticated）。人員再於登入頁按「開通帳號」收認證連結自設密碼。
 # 只在手動觸發時執行（每人讀 Firestore 一次，不排程以免耗 Spark 讀取額度）。
 # 匯入人員檔後，到 Actions → Provision auth accounts → Run workflow（先勾 dry_run 預覽）。

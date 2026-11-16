@@ -20,7 +20,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { AuthProvider, requestActivationMail, STAFF_MAIL_DOMAIN, normalizeStaffId, useAuth } from "../lib/auth";
+import { AuthProvider, requestActivationMail, STAFF_MAIL_DOMAIN, normalizeStaffId, staffEmail, useAuth } from "../lib/auth";
 import { collection, doc, getDocs, limit, orderBy, query, serverTimestamp, updateDoc, where } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
@@ -151,7 +151,7 @@ function LoginScreen() {
     try {
       await requestActivationMail(staffId);
       setNotice(
-        `若職編 ${normalizeStaffId(staffId)} 已建檔，認證連結已寄到 ${normalizeStaffId(staffId)}@${STAFF_MAIL_DOMAIN}，請到院內信箱點連結設定密碼（連結有時效，信件可能在垃圾郵件匣）。`,
+        `若職編 ${normalizeStaffId(staffId)} 已建檔，認證連結已寄到 ${staffEmail(staffId)}，請到院內信箱點連結設定密碼（連結有時效，信件可能在垃圾郵件匣）。`,
       );
       setCooldown(60);
     } catch (err) {
@@ -258,7 +258,7 @@ function LoginScreen() {
               <em>設定你的密碼。</em>
             </h1>
             <p className="login-lead">
-              輸入職編，系統會寄認證連結到「職編@{STAFF_MAIL_DOMAIN}」。點信中連結設定密碼後，回到這裡用職編與新密碼登入。
+              輸入職編，系統會寄認證連結到你的院內信箱（職編去掉開頭的 0，@{STAFF_MAIL_DOMAIN}）。點信中連結設定密碼後，回到這裡用職編與新密碼登入。
             </p>
             <label className="field-label" htmlFor="activate-staff-id">
               職編

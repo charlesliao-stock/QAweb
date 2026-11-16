@@ -43,9 +43,35 @@ export function normalizeStaffId(input: string): string {
   return at >= 0 ? folded.slice(0, at) : folded;
 }
 
-/** 登入用 email 合成規則：職編即帳號，信箱＝職編@kmuh.org.tw（認證連結也寄到此信箱） */
+/**
+ * 院內信箱的帳號部分：職編去掉開頭的 0（例如職編 0930462 → 信箱 930462@kmuh.org.tw）。
+ * 全是 0 時保留原值，避免變成空字串。
+ */
+export function staffMailLocal(staffId: string): string {
+  const id = normalizeStaffId(staffId);
+  const stripped = id.replace(/^0+/, "");
+  return stripped === "" ? id : stripped;
+}
+
+/** 登入用 email 合成規則：信箱＝職編去掉開頭 0＋@kmuh.org.tw（認證連結也寄到此信箱） */
 export function staffEmail(staffId: string): string {
-  return `${normalizeStaffId(staffId)}@${STAFF_MAIL_DOMAIN}`;
+  return `${staffMailLocal(staffId)}@${STAFF_MAIL_DOMAIN}`;
+}
+
+/**
+ * 由登入帳號還原「人員檔的職編」：信箱去掉了開頭的 0，所以優先讀 Firebase 自訂標記 staffId
+ * （建立帳號時寫入，Firestore 規則與 Supabase 也讀同一個標記）；沒有標記的帳號
+ * （例如手動建立的 admin@kmuh.org.tw）退回信箱 @ 前面的部分。
+ */
+async function resolveStaffId(user: FirebaseUser, forceRefresh = false): Promise<string> {
+  try {
+    const token = await user.getIdTokenResult(forceRefresh);
+    const claim = token.claims.staffId;
+    if (typeof claim === "string" && claim !== "") return claim;
+  } catch {
+    /* 取不到標記時退回信箱 */
+  }
+  return (user.email ?? "").split("@")[0] ?? "";
 }
 
 /**
@@ -255,8 +281,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false);
         return;
       }
-      const staffId = current.email.split("@")[0] ?? "";
       try {
+        const staffId = await resolveStaffId(current);
         const profile = await loadProfile(staffId);
         setUser(profile);
         // v1.41.0 流量控管：管理員在維護期間豁免攔截
@@ -303,13 +329,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     try {
       const auth = getFirebaseAuth();
-      await signInWithEmailAndPassword(auth, staffEmail(trimmed), password);
-      let profile = await loadProfile(trimmed);
+      const cred = await signInWithEmailAndPassword(auth, staffEmail(trimmed), password);
+      // 以標記還原人員檔職編（輸入 930462 或 0930462 都會對到同一個人）
+      const resolvedId = (await resolveStaffId(cred.user, true)) || trimmed;
+      let profile = await loadProfile(resolvedId);
       // v1.83.0：首次成功登入記下開通時間（供排程提醒「尚未開通的審查員」；失敗不擋登入）
       if (!profile.activatedAt) {
         const activatedAt = new Date().toISOString();
         try {
-          await updateDoc(doc(getFirebaseDb(), "users", trimmed), { activatedAt });
+          await updateDoc(doc(getFirebaseDb(), "users", resolvedId), { activatedAt });
           profile = { ...profile, activatedAt };
         } catch {
           /* 寫入失敗不影響登入，下次登入再補 */

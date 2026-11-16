@@ -2116,7 +2116,7 @@ export function GroupsPage({
         }
         await batch.commit();
         onAction(
-          `已新增人員 ${staffId}。登入帳號會由「建立登入帳號」排程自動建立；該員請在登入頁按「開通帳號」，到 ${staffId}@kmuh.org.tw 收認證連結並設定密碼`,
+          `已新增人員 ${staffId}。登入帳號會由「建立登入帳號」排程自動建立；該員請在登入頁按「開通帳號」，到院內信箱（職編去掉開頭的 0＋@kmuh.org.tw）收認證連結並設定密碼`,
         );
       } else if (view.kind === "edit") {
         const userRef = doc(db, "users", view.staffId);
@@ -3877,7 +3877,7 @@ export function GroupsPage({
             validateRows={validateUserRows}
             importRows={importUserRows}
             sampleNote="範例：單位代號填入單位主檔的代號；職稱填現有職稱名稱；群組與角色須按欄位成對填寫，可填兩組。"
-            postImportNote="提醒：匯入後請到 GitHub Actions 執行「Provision auth accounts」建立登入帳號（排程每小時也會自動執行）；人員再於登入頁按「開通帳號」，到「職編@kmuh.org.tw」收認證連結設定密碼。"
+            postImportNote="提醒：匯入後請到 GitHub Actions 執行「Provision auth accounts」建立登入帳號（排程每小時也會自動執行）；人員再於登入頁按「開通帳號」，到院內信箱（職編去掉開頭的 0＋@kmuh.org.tw）收認證連結設定密碼。"
             onDone={loadUsers}
             onAction={onAction}
           />
@@ -5107,7 +5107,7 @@ export function GroupsPage({
           )}
           {!isUserEditing && (
             <div className="form-field">
-              <p className="settings-note">登入帳號為職編，認證信寄到「職編@kmuh.org.tw」；新增後由排程建立登入帳號，該員在登入頁按「開通帳號」自行設定密碼。</p>
+              <p className="settings-note">登入帳號為職編，認證信寄到「職編去掉開頭的 0＋@kmuh.org.tw」；新增後由排程建立登入帳號，該員在登入頁按「開通帳號」自行設定密碼。</p>
             </div>
           )}
             </div>

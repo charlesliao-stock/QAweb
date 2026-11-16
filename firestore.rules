@@ -10,9 +10,13 @@ service cloud.firestore {
     }
 
     // 從登入 token 的 email 取職編（admin@kmuh.org.tw → admin）
+    // v1.84.1：信箱去掉了職編開頭的 0，所以優先讀自訂標記 staffId（建立帳號時寫入）；
+    // 沒有標記的帳號（例如手動建立的 admin）退回信箱 @ 前面的部分。
     function staffId() {
-      return isAuthed() && request.auth.token.email is string
-        ? request.auth.token.email.split('@')[0]
+      return isAuthed()
+        ? (request.auth.token.get('staffId', '') is string && request.auth.token.get('staffId', '') != ''
+            ? request.auth.token.get('staffId', '')
+            : (request.auth.token.email is string ? request.auth.token.email.split('@')[0] : ''))
         : '';
     }
 
