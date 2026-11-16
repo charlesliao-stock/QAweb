@@ -68,8 +68,10 @@ export function docOf(first: unknown, ...segments: string[]): DocRef {
     collPath = r.path;
     id = segments[0] ?? genId();
   } else {
-    id = segments[segments.length - 1] ?? genId();
-    collPath = segments.slice(0, -1).join("/");
+    // 支援單一路徑字串 doc(db, "configs/abc") 與多段 doc(db, "a", "b", "c")
+    const parts = segments.flatMap((x) => x.split("/")).filter((x) => x !== "");
+    id = parts[parts.length - 1] ?? genId();
+    collPath = parts.slice(0, -1).join("/");
   }
   return { __dual: "doc", collPath, id, path: `${collPath}/${id}` };
 }
