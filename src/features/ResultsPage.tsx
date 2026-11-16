@@ -2415,7 +2415,7 @@ export function ResultsPage({
                 hasExtraReview={(id, col) => hasTempReview(id, col, selUnitCode)}
                 thresholdOf={(id) => indOf.get(id)?.threshold ?? 0}
                 capaMarkOf={(id, col) =>
-                  unitCapaCases.find((c) => c.indicatorId === id && capaInColumn(c, col.months))
+                  unitCapaCases.find((c) => c.indicatorId === id && c.stage !== "已撤案" && capaInColumn(c, col.months))
                 }
                 onCell={(id, col) =>
                   openDrill(id, col, unitUnit, selUnitCode)
@@ -4276,14 +4276,14 @@ function DrillModal({
                           {cell ? (
                             <RateCellBody
                               cell={cell}
-                              capa={(capaCases ?? []).find((c) => c.unitCode === unitId && capaInColumn(c, col.months))}
+                              capa={(capaCases ?? []).find((c) => c.unitCode === unitId && c.stage !== "已撤案" && capaInColumn(c, col.months))}
                             />
                           ) : "—"}
                         </td>
                         <td className="rate-cell">
                           {(() => {
                             if (!capaTriggers.has(unitId) || capaCases == null) return null;
-                            const open = capaCases.some((c) => c.unitCode === unitId && c.stage !== "正式結案");
+                            const open = capaCases.some((c) => c.unitCode === unitId && c.stage !== "正式結案" && c.stage !== "已撤案");
                             return open ? (
                               <span className="muted-text">CAPA 進行中</span>
                             ) : (

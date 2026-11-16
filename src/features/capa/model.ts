@@ -6,9 +6,11 @@ export type CapaStage =
   | "成效驗證"
   | "結案核准"
   | "正式結案"
-  | "已退回";
+  | "已退回"
+  | "已撤案";
 /** v1.78.0：清單與內頁使用的 4 個進度（儲存的 CapaStage 不變，僅對應顯示） */
-export type CapaProgress = "待確認" | "分析撰寫中" | "送審中" | "結案";
+export type CapaProgress = "待確認" | "分析撰寫中" | "送審中" | "結案" | "已撤案";
+/** 正常流程的 4 個進度（進度條用）；「已撤案」為流程外的終止狀態 */
 export const CAPA_PROGRESS: CapaProgress[] = ["待確認", "分析撰寫中", "送審中", "結案"];
 export type CapaSource = "人工立案" | "結果分析" | "系統觸發";
 export type CapaTemplateType = "原因分析" | "改善措施" | "成效驗證";
@@ -88,6 +90,8 @@ export interface CapaCase {
   /** v1.78.2：撰寫人（預設＝負責人；負責人可指定他人，指定後同樣可編輯）；舊案件缺值視同負責人 */
   writerId?: string;
   writerName?: string;
+  /** v1.78.5：撤案原因（撤案時間記於 stageTimes["已撤案"]） */
+  withdrawReason?: string;
 }
 export interface CapaSettings {
   triggerEnabled: boolean;
@@ -169,7 +173,7 @@ export const DEMO_CAPA_TEMPLATES: CapaTemplate[] = [
 ];
 export const CAPA_STATUS_LABEL: Record<CapaStage, string> = {
   待確認: "待確認", 原因分析: "原因分析", 措施規劃: "措施規劃", 措施執行: "措施執行",
-  成效驗證: "成效驗證", 結案核准: "結案核准", 正式結案: "已核准結案", 已退回: "退回補充",
+  成效驗證: "成效驗證", 結案核准: "結案核准", 正式結案: "已核准結案", 已退回: "退回補充", 已撤案: "已撤案",
 };
 export function newId(prefix = "capa"): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -183,6 +187,7 @@ export function progressOfStage(stage: CapaStage): CapaProgress {
   if (stage === "待確認") return "待確認";
   if (stage === "結案核准") return "送審中";
   if (stage === "正式結案") return "結案";
+  if (stage === "已撤案") return "已撤案";
   return "分析撰寫中";
 }
 
