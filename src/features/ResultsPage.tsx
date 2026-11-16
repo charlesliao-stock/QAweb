@@ -373,7 +373,7 @@ function capaInColumn(item: CapaCase, months: { year: number; month: number }[])
  * 矩陣格內容（v1.76.5）：百分比在上、(分子/分母) 在下以縮減欄寬；
  * 加審字樣置於右側垂直置中。無資料顯示 —。
  */
-function RateCellBody({ cell, extra, capa }: { cell: PassRate; extra?: boolean; capa?: boolean }) {
+function RateCellBody({ cell, extra, capa }: { cell: PassRate; extra?: boolean; capa?: CapaCase }) {
   if (cell.rate == null) return <>—</>;
   const pct = Number.isInteger(cell.rate) ? String(cell.rate) : cell.rate.toFixed(1);
   return (
@@ -383,7 +383,21 @@ function RateCellBody({ cell, extra, capa }: { cell: PassRate; extra?: boolean; 
         <span className="rate-count">({cell.pass}/{cell.total})</span>
       </span>
       {extra ? <small className="extra-review-note rate-stack-extra">加審</small> : null}
-      {capa ? <span className="capa-mark" title="本期已啟動 CAPA" aria-label="本期已啟動 CAPA">C</span> : null}
+      {capa ? (
+        <button
+          type="button"
+          className="capa-mark"
+          title={`本期已啟動 CAPA（${capa.caseNumber}），點選前往`}
+          aria-label={`前往 CAPA 案件 ${capa.caseNumber}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            window.dispatchEvent(new CustomEvent("capa:open", { detail: { caseId: capa.id } }));
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          C
+        </button>
+      ) : null}
     </span>
   );
 }
@@ -2401,7 +2415,7 @@ export function ResultsPage({
                 hasExtraReview={(id, col) => hasTempReview(id, col, selUnitCode)}
                 thresholdOf={(id) => indOf.get(id)?.threshold ?? 0}
                 capaMarkOf={(id, col) =>
-                  unitCapaCases.some((c) => c.indicatorId === id && capaInColumn(c, col.months))
+                  unitCapaCases.find((c) => c.indicatorId === id && capaInColumn(c, col.months))
                 }
                 onCell={(id, col) =>
                   openDrill(id, col, unitUnit, selUnitCode)
@@ -3584,7 +3598,7 @@ function RateMatrix({
   /** 單位分析：低於閾值顯示紅字 */
   thresholdOf?: (rowId: string) => number;
   /** 單位分析：該欄期間內有啟動 CAPA 時於結果旁顯示圓圈 C */
-  capaMarkOf?: (rowId: string, col: AnalysisPeriodColumn) => boolean;
+  capaMarkOf?: (rowId: string, col: AnalysisPeriodColumn) => CapaCase | undefined;
   onCell?: (rowId: string, col: AnalysisPeriodColumn) => void;
   /** v1.50.0：分組／逐題明細格可點下探（帶分組 key，只顯示該分組的個人結果） */
   onDetailCell?: (rowId: string, detailKey: string, col: AnalysisPeriodColumn) => void;
@@ -3659,7 +3673,7 @@ function RateMatrix({
                         : undefined
                     }
                   >
-                    <RateCellBody cell={cell} extra={!!hasExtraReview?.(row.id, c)} capa={!!capaMarkOf?.(row.id, c)} />
+                    <RateCellBody cell={cell} extra={!!hasExtraReview?.(row.id, c)} capa={capaMarkOf?.(row.id, c)} />
                   </td>
                 );
               })}
@@ -4262,7 +4276,7 @@ function DrillModal({
                           {cell ? (
                             <RateCellBody
                               cell={cell}
-                              capa={(capaCases ?? []).some((c) => c.unitCode === unitId && capaInColumn(c, col.months))}
+                              capa={(capaCases ?? []).find((c) => c.unitCode === unitId && capaInColumn(c, col.months))}
                             />
                           ) : "—"}
                         </td>

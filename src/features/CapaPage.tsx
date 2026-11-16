@@ -9,7 +9,7 @@ import "./capa/capa.css";
 import { pad2 } from "../lib/ym";
 import { toErrorMessage } from "../lib/errors";
 
-type LaunchContext = { indicatorId?: string; indicatorCode?: string; indicatorName?: string; threshold?: number; period?: string; periodKeys?: string[]; unitCode?: string; unitName?: string; rate?: number; summary?: string; snapshots?: Array<{ period: string; rate: number }> };
+type LaunchContext = { indicatorId?: string; indicatorCode?: string; indicatorName?: string; threshold?: number; period?: string; periodKeys?: string[]; unitCode?: string; unitName?: string; rate?: number; summary?: string; snapshots?: Array<{ period: string; rate: number }>; caseId?: string };
 type ViewTab = "cases" | "settings" | "templates";
 const formatDate = (value: string) => value ? new Date(value).toLocaleDateString("zh-TW") : "—";
 const stageIndex = (stage: CapaStage) => CAPA_STAGES.indexOf(stage);
@@ -33,7 +33,7 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
   const [launch, setLaunch] = useState<LaunchContext | null>(null); const [createOpen, setCreateOpen] = useState(false); const [templateDraft, setTemplateDraft] = useState<CapaTemplate | null>(null); const [approvalNote, setApprovalNote] = useState("");
   const reload = useCallback(async () => { setLoading(true); setError(""); try { const [nextCases, nextSettings, nextTemplates] = await Promise.all([loadCapaCases(), loadCapaSettings(), loadCapaTemplates()]); setCases(nextCases); setSettings(nextSettings); setTemplates(nextTemplates); setSelectedId((current) => current && nextCases.some((item) => item.id === current) ? current : nextCases[0]?.id ?? ""); } catch (cause) { setError(toErrorMessage(cause, "無法載入 CAPA 資料；請確認登入狀態與資料權限。")); } finally { setLoading(false); } }, []);
   useEffect(() => { void reload(); }, [reload]);
-  useEffect(() => { if (!launchContext) return; setLaunch(launchContext); setTab("cases"); setCreateOpen(true); onLaunchConsumed?.(); }, [launchContext, onLaunchConsumed]);
+  useEffect(() => { if (!launchContext) return; setTab("cases"); if (launchContext.caseId) { setSelectedId(launchContext.caseId); } else { setLaunch(launchContext); setCreateOpen(true); } onLaunchConsumed?.(); }, [launchContext, onLaunchConsumed]);
   const filtered = useMemo(() => cases.filter((item) => { const text = `${item.caseNumber} ${item.title} ${item.indicatorCode} ${item.indicatorName} ${item.unitName} ${item.ownerName}`.toLowerCase(); return (!appliedQuery || text.includes(appliedQuery.trim().toLowerCase())) && (statusFilter === "全部狀態" || CAPA_STATUS_LABEL[item.stage] === statusFilter) && (sourceFilter === "全部來源" || item.source === sourceFilter); }).sort((a, b) => { const overdueOrder = Number(isCaseOverdue(b)) - Number(isCaseOverdue(a)); if (overdueOrder) return overdueOrder; const closedOrder = Number(a.stage === "正式結案") - Number(b.stage === "正式結案"); if (closedOrder) return closedOrder; return a.stage === "正式結案" ? b.updatedAt.localeCompare(a.updatedAt) : (a.dueDate || "9999-99-99").localeCompare(b.dueDate || "9999-99-99"); }), [cases, queryText, statusFilter, sourceFilter]);
   const selected = filtered.find((item) => item.id === selectedId) ?? null;
   useEffect(() => { setDraft(selected ? structuredClone(selected) : null); setApprovalNote(""); }, [selectedId, selected]);

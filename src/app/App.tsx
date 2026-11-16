@@ -92,6 +92,7 @@ type CapaLaunchContext = {
   unitName?: string;
   rate?: number;
   summary?: string;
+  caseId?: string;
   snapshots?: Array<{ period: string; rate: number }>;
 };
 

@@ -282,6 +282,13 @@
   font-weight: 700;
   line-height: 1;
   flex: none;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.capa-mark:hover {
+  background: #0f766e;
+  color: #fff;
 }
 .capa-start-link {
   color: #b42318;
