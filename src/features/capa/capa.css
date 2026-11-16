@@ -135,3 +135,6 @@
 .capa-step small{color:#8a99a0;font-size:10px;font-weight:400;white-space:nowrap}
 .capa-step.current small{color:#0f766e}
 .capa-muted{color:#7a8a90;font-size:11px}
+.capa-due-overdue{color:#b42318;font-weight:700}
+.capa-due-overdue .capa-cell-sub{color:#b42318}
+.capa-due-input{box-sizing:border-box;min-height:26px;padding:2px 6px;border:1px solid #dfe7e9;border-radius:6px;background:#fff;color:inherit;font:inherit;font-size:12px}

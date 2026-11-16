@@ -11,8 +11,13 @@ import { toErrorMessage } from "../lib/errors";
 
 type LaunchContext = { indicatorId?: string; indicatorCode?: string; indicatorName?: string; threshold?: number; period?: string; periodKeys?: string[]; unitCode?: string; unitName?: string; rate?: number; summary?: string; snapshots?: Array<{ period: string; rate: number }>; caseId?: string };
 type ViewTab = "cases" | "settings" | "templates";
-type SortKey = "number" | "unit" | "owner" | "indicator" | "reason" | "progress";
+type SortKey = "number" | "unit" | "owner" | "indicator" | "reason" | "due" | "progress";
 const formatDateTime = (value: string) => value ? new Date(value).toLocaleString("zh-TW", { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+/** 改善期限預設為發動（建立）後 30 天；舊案件未設定時以建立日＋30 天顯示 */
+const addDaysKey = (iso: string, days: number) => { const base = iso ? new Date(iso) : new Date(); base.setDate(base.getDate() + days); return dateKey(base); };
+const dueDateOf = (item: CapaCase) => item.dueDate || addDaysKey(item.createdAt, 30);
+const isOverdue = (item: CapaCase) => progressOfStage(item.stage) !== "結案" && dueDateOf(item) < dateKey(new Date());
 const progressClass = (progress: CapaProgress) => progress === "結案" ? "green" : progress === "送審中" ? "teal" : progress === "分析撰寫中" ? "amber" : "blue";
 
 function makeCase(context: LaunchContext, staffId: string, staffName: string, unitCode: string, unitName: string, settings: CapaSettings, people: { owner?: CapaPerson; approver?: CapaPerson } = {}): CapaCase {
@@ -23,7 +28,7 @@ function makeCase(context: LaunchContext, staffId: string, staffName: string, un
     ...(people.approver ? { approverId: people.approver.id, approverName: people.approver.name } : {}),
     threshold: context.threshold ?? 90, triggerPeriodCount: settings.defaultTriggerPeriods, periodKeys: context.periodKeys?.length ? context.periodKeys : [period], resultSnapshots: context.snapshots?.length ? context.snapshots : typeof context.rate === "number" ? [{ period, rate: context.rate }] : [], findingSummary: context.summary ?? (context.indicatorName ? `${context.indicatorName}於${period}結果 ${typeof context.rate === "number" ? `${context.rate}%` : "待確認"}，請補充問題與影響範圍。` : ""), immediateAction: "", rootCause: "", contributingFactors: "", actions: [],
     verification: { baseline: typeof context.rate === "number" ? `${context.rate}%` : "", target: `連續 ${settings.defaultTriggerPeriods} 個有效審查期達到 ≥${context.threshold ?? 90}%`, observationPeriods: settings.defaultTriggerPeriods, dataSource: "結果分析／審查紀錄", sampleSize: "依當期排程收案", verifierRole: settings.verifierRole, result: "未驗證", resultNote: "" },
-    approvalSteps: [], history: [makeHistory("建立待確認案件", staffId, staffName, context.indicatorId ? "由結果分析帶入來源脈絡" : "人工立案")], createdAt: now, updatedAt: now, dueDate: "", stageTimes: { 待確認: now } };
+    approvalSteps: [], history: [makeHistory("建立待確認案件", staffId, staffName, context.indicatorId ? "由結果分析帶入來源脈絡" : "人工立案")], createdAt: now, updatedAt: now, dueDate: addDaysKey(now, 30), stageTimes: { 待確認: now } };
 }
 
 export function CapaPage({ onAction, launchContext, onLaunchConsumed, managementOnly = false }: { onAction: (message: string) => void; launchContext?: LaunchContext | null; onLaunchConsumed?: () => void; managementOnly?: boolean }) {
@@ -45,7 +50,7 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
       const text = `${item.caseNumber} ${item.unitCode} ${item.unitName} ${item.ownerName} ${item.indicatorCode} ${item.indicatorName} ${item.findingSummary} ${item.rootCause}`.toLowerCase();
       return (!word || text.includes(word)) && (!progressFilter || progressOfStage(item.stage) === progressFilter) && (!sourceFilter || item.source === sourceFilter);
     });
-    const value = (item: CapaCase, key: SortKey) => key === "number" ? item.caseNumber : key === "unit" ? item.unitName || item.unitCode : key === "owner" ? item.ownerName : key === "indicator" ? `${item.indicatorCode} ${item.indicatorName}` : key === "reason" ? item.findingSummary : CAPA_PROGRESS.indexOf(progressOfStage(item.stage));
+    const value = (item: CapaCase, key: SortKey) => key === "number" ? item.caseNumber : key === "unit" ? item.unitName || item.unitCode : key === "owner" ? item.ownerName : key === "indicator" ? `${item.indicatorCode} ${item.indicatorName}` : key === "reason" ? item.findingSummary : key === "due" ? dueDateOf(item) : CAPA_PROGRESS.indexOf(progressOfStage(item.stage));
     return list.sort((a, b) => {
       if (!sort) return b.updatedAt.localeCompare(a.updatedAt);
       const x = value(a, sort.key); const y = value(b, sort.key);
@@ -121,13 +126,14 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
       </FilterPanel>
       <ListPanel title="改善案件" count={filtered.length} actions={<button className="icon-button" onClick={() => void reload()} title="重新載入案件" aria-label="重新載入案件"><Activity size={16} /></button>}>
         {loading ? <p className="muted-text" role="status">正在載入案件資料…</p> : cases.length === 0 ? <EmptyState title="目前尚無 CAPA 案件" description="可由結果分析下探單位清單的「啟動CAPA」帶入指標脈絡，或人工開立改善追蹤。" /> : filtered.length === 0 ? <p className="muted-text">沒有符合篩選條件的案件。</p> :
-          <table className="data-table capa-list-table"><thead><tr><SortTh label="編號" k="number" /><SortTh label="單位" k="unit" /><SortTh label="負責人" k="owner" /><SortTh label="指標名稱" k="indicator" /><SortTh label="原因" k="reason" /><SortTh label="進度／更新日期" k="progress" /></tr></thead>
+          <table className="data-table capa-list-table"><thead><tr><SortTh label="編號" k="number" /><SortTh label="單位" k="unit" /><SortTh label="負責人" k="owner" /><SortTh label="指標名稱" k="indicator" /><SortTh label="原因" k="reason" /><SortTh label="改善期限" k="due" /><SortTh label="進度／更新日期" k="progress" /></tr></thead>
             <tbody>{filtered.map((item) => { const itemProgress = progressOfStage(item.stage); return <tr key={item.id} className="capa-list-row" tabIndex={0} onClick={() => setSelectedId(item.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedId(item.id); } }}>
               <td><b>{item.caseNumber}</b></td>
               <td>{item.unitName || "單位待確認"}{item.unitCode ? <small className="capa-cell-sub">{item.unitCode}</small> : null}</td>
               <td>{item.ownerName || "尚未指派"}</td>
               <td>{item.indicatorCode ? <b>{item.indicatorCode}　</b> : null}{item.indicatorName || "未連結指標"}</td>
               <td className="capa-cell-reason"><span>{item.findingSummary || "—"}</span>{item.rootCause ? <small className="capa-cell-sub">根因：{item.rootCause}</small> : null}</td>
+              <td className={isOverdue(item) ? "capa-due-overdue" : undefined}>{dueDateOf(item)}{isOverdue(item) ? <small className="capa-cell-sub">已逾期</small> : null}</td>
               <td><span className={`capa-pill ${progressClass(itemProgress)}`}>{itemProgress}</span><small className="capa-cell-sub">{formatDateTime(item.updatedAt)}</small></td>
             </tr>; })}</tbody></table>}
       </ListPanel>
@@ -137,7 +143,7 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
         <button type="button" className="button button-ghost button-sm capa-back" onClick={() => setSelectedId("")}><ChevronLeft size={15} />返回改善案件清單</button>
         <div className="capa-detail-topline"><div className="case-meta"><span className="capa-kicker">CAPA CASE</span><b>{draft.caseNumber}</b><span className={`capa-pill ${draft.source === "人工立案" ? "blue" : draft.source === "系統觸發" ? "amber" : "teal"}`}>{draft.source}</span></div><div className="case-meta-status"><span className={`capa-pill ${progressClass(progress)}`}>{progress}</span></div></div>
         <h2>{draft.title}</h2>
-        <div className="capa-detail-meta"><span><b>指標</b>{draft.indicatorCode ? `${draft.indicatorCode}｜` : ""}{draft.indicatorName || "未連結"}</span><span><b>單位</b>{draft.unitName || "待確認"}</span><span><b>負責人</b>{draft.ownerName || "尚未指派"}</span><span><b>結案核准</b>{draft.approverName || (settings.approvalRoles[0] || "督導")}</span></div>
+        <div className="capa-detail-meta"><span><b>指標</b>{draft.indicatorCode ? `${draft.indicatorCode}｜` : ""}{draft.indicatorName || "未連結"}</span><span><b>單位</b>{draft.unitName || "待確認"}</span><span><b>負責人</b>{draft.ownerName || "尚未指派"}</span><span><b>結案核准</b>{draft.approverName || (settings.approvalRoles[0] || "督導")}</span><span className={isOverdue(draft) ? "capa-due-overdue" : undefined}><b>改善期限</b><input type="date" className="capa-due-input" value={dueDateOf(draft)} onChange={(event) => updateDraft({ dueDate: event.target.value })} disabled={progress === "送審中" || progress === "結案"} /></span></div>
         <p>建立於 {formatDateTime(draft.createdAt)}　·　最近更新 {formatDateTime(draft.updatedAt)}</p>
       </header>
       <div className="capa-stepper" aria-label="案件進度"><div className="capa-stepper-caption"><b>案件進度</b><span>目前進度 · {progress}</span></div><div className="capa-stepper-track">{CAPA_PROGRESS.map((item, index) => { const current = CAPA_PROGRESS.indexOf(progress); const time = progressTimeOf(draft, item); return <div key={item} className={`capa-step${current > index ? " done" : current === index ? " current" : ""}`}><i>{current > index ? <Check size={14} /> : index + 1}</i><span>{item}</span><small>{time ? formatDateTime(time) : "—"}</small></div>; })}</div></div>
