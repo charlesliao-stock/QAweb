@@ -189,7 +189,7 @@ export function ReviewQuestionList(props: ReviewQuestionListProps) {
                             return (
                               <label
                                 key={oi}
-                                className={`check-row${sel === oi ? " checked" : ""}${negative ? " review-option-negative" : ""}${notApplicable ? " review-option-not-applicable" : ""}`}
+                                className={`check-row${sel === oi ? " checked" : ""}${positive ? " review-option-positive" : ""}${negative ? " review-option-negative" : ""}${notApplicable ? " review-option-not-applicable" : ""}`}
                               >
                                 <input
                                   type="radio"

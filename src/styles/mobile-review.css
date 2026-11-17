@@ -546,6 +546,22 @@
     touch-action: manipulation;
   }
 
+  /* v1.88.9 手機／平板：選項未選中即帶淡底，方便一眼分辨（是淡綠／否淡粉紅／不適用灰） */
+  .review-execute-page .review-answer-options .review-option-positive {
+    border-color: #c9e8d5;
+    background: #e8f6ee;
+  }
+
+  .review-execute-page .review-answer-options .review-option-negative {
+    border-color: #f2cfcc;
+    background: #fdecea;
+  }
+
+  .review-execute-page .review-answer-options .review-option-not-applicable {
+    border-color: #d8dfe2;
+    background: #eef1f2;
+  }
+
   .review-execute-page .review-answer-options .check-row input[type="radio"] {
     position: absolute;
     width: 1px;
@@ -583,10 +599,23 @@
     box-shadow: 0 0 0 1px rgba(22, 132, 119, 0.12);
   }
 
+  .review-execute-page .review-answer-options .review-option-positive:has(input:checked) {
+    border-color: #168477;
+    background: #d5edde;
+    color: #185d4c;
+  }
+
   .review-execute-page .review-answer-options .review-option-negative:has(input:checked) {
     border-color: #c5453e;
-    background: #fff3f2;
+    background: #f9dddb;
     color: #a62a23;
+  }
+
+  /* 不適用選中時用灰底，不沿用通用選中態的綠底 */
+  .review-execute-page .review-answer-options .review-option-not-applicable:has(input:checked) {
+    border-color: #6b7d84;
+    background: #dde4e7;
+    color: #45565e;
   }
 
   .review-execute-page .review-answer-options .check-row:has(input:focus-visible) {
@@ -843,16 +872,44 @@
     color: #cbd6d2;
   }
 
+  /* v1.88.9 深色模式：未選中亦帶淡底（綠／粉紅／灰），文字維持淺色可讀 */
+  :root[data-mode="dark"] .review-execute-page .review-answer-options .review-option-positive {
+    border-color: #3a5a4b;
+    background: #22342c;
+  }
+
+  :root[data-mode="dark"] .review-execute-page .review-answer-options .review-option-negative {
+    border-color: #5c3a38;
+    background: #382726;
+  }
+
+  :root[data-mode="dark"] .review-execute-page .review-answer-options .review-option-not-applicable {
+    border-color: #414d52;
+    background: #272e31;
+  }
+
   :root[data-mode="dark"] .review-execute-page .review-answer-options .check-row:has(input:checked) {
     border-color: #218f83;
     background: #273c38;
     color: #b4e2d8;
   }
 
+  :root[data-mode="dark"] .review-execute-page .review-answer-options .review-option-positive:has(input:checked) {
+    border-color: #218f83;
+    background: #2a463a;
+    color: #b4e2d8;
+  }
+
   :root[data-mode="dark"] .review-execute-page .review-answer-options .review-option-negative:has(input:checked) {
     border-color: #a44743;
-    background: #392827;
+    background: #472e2c;
     color: #ffaaa4;
+  }
+
+  :root[data-mode="dark"] .review-execute-page .review-answer-options .review-option-not-applicable:has(input:checked) {
+    border-color: #7b8f96;
+    background: #333d41;
+    color: #d4dde0;
   }
 
   :root[data-mode="dark"] .review-execute-page .review-note-textarea {
