@@ -19,14 +19,7 @@ import {
   periodLabel,
   type CycleCategory,
 } from "./cycle";
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
-/** 月份快捷：一年 2 / 3 / 4 次，12 個月平均分配的起始月份（v1.18 前 UI 用；保留供舊資料相容） */
-export const QUICK_MONTHS: Record<2 | 3 | 4, number[]> = {
-  2: [1, 7],
-  3: [1, 5, 9],
-  4: [1, 4, 7, 10],
-};
+import { pad2, shiftYm } from "./ym";
 
 /** 審查頻次：一年幾次（v1.18 排程設定下拉） */
 export type ReviewFrequency = 2 | 3 | 4;
@@ -140,12 +133,14 @@ export function autoSelectMonths(
 /**
  * 排程／單位設定是否完成（v1.18）：受審單位≥1、月份≥1、審查件數>0。
  * 「已排」燈號與「產生排程」啟用條件共用此判定。
+ * v1.51.0：不限單位（unlimitedUnits）時單位條件即滿足。
  */
 export function scheduleSetupComplete(
   s: {
     unitIds?: unknown;
     months?: unknown;
     caseCount?: unknown;
+    unlimitedUnits?: unknown;
   } | null,
 ): boolean {
   if (!s) return false;
@@ -153,7 +148,7 @@ export function scheduleSetupComplete(
   const months = Array.isArray(s.months) ? s.months : [];
   const cc = s.caseCount;
   return (
-    units.length > 0 &&
+    (s.unlimitedUnits === true || units.length > 0) &&
     months.length > 0 &&
     typeof cc === "number" &&
     Number.isInteger(cc) &&
@@ -193,15 +188,6 @@ export function intervalRangeLabels(
     });
 }
 
-/** 審查員主檔（人員管理→審查員頁籤）：依指標分類組別分組 */
-export interface ReviewReviewerDoc {
-  /** 指標分類組別 id（即 groups collection 的 id） */
-  groupId: string;
-  /** 人員職編（users 文件 id） */
-  personId: string;
-  createdAt: unknown;
-}
-
 /**
  * 審核排程設定（每支指標每年一份；v1.16.0 起改用 IndicatorSchedule，
  * 本介面僅供舊資料相容讀取）。
@@ -227,57 +213,12 @@ export interface IndicatorYearSchedule {
 }
 
 /**
- * 防禦性解析年度排程的 unitCaseCounts（只接受 ≥1 整數）。
- */
-export function parseUnitCaseCounts(raw: unknown): Record<string, number> {
-  const out: Record<string, number> = {};
-  if (raw && typeof raw === "object") {
-    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-      if (typeof v === "number" && Number.isInteger(v) && v >= 1) out[k] = v;
-    }
-  }
-  return out;
-}
-
-/**
  * 防禦性解析單一審查件數（只接受 ≥1 整數，否則 null）。
  */
 export function parseCaseCount(raw: unknown): number | null {
   return typeof raw === "number" && Number.isInteger(raw) && raw >= 1
     ? raw
     : null;
-}
-
-/**
- * 年度件數表單初值（字串，供數字輸入框用）。
- * 遷移順序：caseCount → 舊 unitCaseCounts 第一個值 → 分工表舊 caseCount 第一個值 → ""。
- * （v1.10.0 的每單位表格是過度設計；使用者確認全單位件數相同，v1.10.1 起改單一值。）
- */
-export function initialCaseCount(
-  schedule:
-    | {
-        caseCount?: number | null;
-        unitCaseCounts?: Record<string, number>;
-      }
-    | null
-    | undefined,
-  assignment: { items: AssignmentItem[] } | null | undefined,
-): string {
-  if (schedule?.caseCount != null && schedule.caseCount >= 1)
-    return String(schedule.caseCount);
-  const ucc = schedule?.unitCaseCounts;
-  if (ucc) {
-    const first = Object.values(ucc).find(
-      (v) => typeof v === "number" && Number.isInteger(v) && v >= 1,
-    );
-    if (first != null) return String(first);
-  }
-  for (const it of assignment?.items ?? []) {
-    for (const u of it.units) {
-      if (u.caseCount != null) return String(u.caseCount);
-    }
-  }
-  return "";
 }
 
 /** 分工表：一位審查員負責的單位＋每輪審查件數（v1.9.0） */
@@ -293,6 +234,11 @@ export interface AssignmentItem {
   /** 審查員職編 */
   reviewerId: string;
   units: AssignedUnit[];
+  /**
+   * 不限單位（v1.51.0）：此審查員不固定單位，units 為空；
+   * 任務產生時每月份生一筆 unitId: "" 的任務。未設＝有單位。
+   */
+  unlimitedUnits?: boolean;
 }
 
 /**
@@ -323,7 +269,10 @@ export function normalizeAssignmentItem(raw: unknown): AssignmentItem | null {
       .filter((u): u is string => typeof u === "string")
       .map((unitId) => ({ unitId, caseCount: null as number | null }));
   }
-  return { reviewerId, units };
+  // v1.51.0：不限單位旗標（只在 true 時寫入，避免舊文件被改寫形狀）
+  return r.unlimitedUnits === true
+    ? { reviewerId, units, unlimitedUnits: true as const }
+    : { reviewerId, units };
 }
 
 /** 單位／審查員設定（每支指標一份，不分年度） */
@@ -334,22 +283,6 @@ export interface IndicatorAssignment {
 }
 
 export type ReviewTaskStatus = "pending" | "done" | "locked";
-
-/** 解鎖申請（v1.15.0 新增集合 unlockRequests） */
-export interface UnlockRequest {
-  taskId: string;
-  indicatorId: string;
-  unitId: string;
-  year: number;
-  month: number;
-  requestedBy: string;
-  requestedByName: string;
-  reason: string;
-  status: "pending" | "approved" | "rejected";
-  handledBy?: string;
-  handledAt?: unknown;
-  createdAt?: unknown;
-}
 
 /** 解鎖申請 doc id：taskId__unlock_<隨機>（一任務可多次申請，以時間區分） */
 export function unlockRequestDocId(taskId: string): string {
@@ -377,6 +310,25 @@ export interface ReviewTask {
   reviewerId: string;
   /** 每輪審查件數（產生時自該年度單一 caseCount 快照；null＝未設定） */
   caseCount: number | null;
+  /** 僅新產生的年度／學年度任務：同指標、單位與區間共用 N 件；舊任務及 temp 不含此欄。 */
+  quotaVersion?: 1;
+  quotaGroupId?: string;
+  quotaCategory?: "year" | "academic";
+  quotaIntervalStartYear?: number;
+  quotaIntervalStartMonth?: number;
+  quotaIntervalEndYear?: number;
+  quotaIntervalEndMonth?: number;
+  /** 新任務來源快照，用於重新產生時只重建同一排程，不波及其他類別。 */
+  scheduleCategory?: "year" | "academic" | "temp";
+  schedulePeriod?: string;
+  /** 指標排程建立時的不可變摘要依據；舊任務缺值時由讀取端相容處理。 */
+  indicatorVersionAtSchedule?: string;
+  thresholdAtSchedule?: number;
+  thresholdRuleAtSchedule?: ">=";
+  scheduleStartYear?: number;
+  scheduleStartMonth?: number;
+  scheduleEndYear?: number;
+  scheduleEndMonth?: number;
   /** 截止日 YYYY-MM-DD（審查月份次月＋系統參數「補審截止（次月幾日）」） */
   deadline: string;
   status: ReviewTaskStatus;
@@ -386,8 +338,8 @@ export interface ReviewTask {
 
 export function todayStr(): string {
   const d = new Date();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+  const m = pad2(d.getMonth() + 1);
+  const day = pad2(d.getDate());
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
@@ -396,15 +348,10 @@ export function todayStr(): string {
  * day 超過該月天數時取該月最後一日。
  */
 export function deadlineFor(year: number, month: number, day: number): string {
-  let y = year;
-  let m = month + 1;
-  if (m > 12) {
-    m = 1;
-    y += 1;
-  }
+  const { year: y, month: m } = shiftYm(year, month, 1);
   const lastDay = new Date(y, m, 0).getDate();
   const d = Math.min(Math.max(day, 1), lastDay);
-  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  return `${y}-${pad2(m)}-${pad2(d)}`;
 }
 
 export function isOverdue(deadline: string, status: ReviewTaskStatus): boolean {
@@ -421,10 +368,13 @@ export const UNCATEGORIZED_GROUP_ID = "__uncategorized__";
 /**
  * 人員儲存時是否應自動加入審查員名單（純函式）：roles 含任一審查員身分。
  * 移除角色時，同步移除自動加入的「未分類」審查員（手動指派的不動）。
- * v1.21：新舊審查員角色並認（審查員／品管組審查員／單位審查員）。
+ * v1.40.5：審查員身分改以角色詮釋資料判斷（傳入 roleMeta；未傳時以舊名稱推導）。
  */
-export function shouldAutoLinkReviewer(roles: string[]): boolean {
-  return isReviewerRole(roles);
+export function shouldAutoLinkReviewer(
+  roles: string[],
+  roleMeta?: import("./orgMeta").RoleMetaMap,
+): boolean {
+  return isReviewerRole(roles, roleMeta);
 }
 
 /**
@@ -456,15 +406,6 @@ export function findDuplicateUnits(
   return dup;
 }
 
-/** 展開任務筆數預估：月份數 × 所有 (審查員, 單位) 配對數 */
-export function estimateTaskCount(
-  months: number[],
-  items: AssignmentItem[],
-): number {
-  const pairs = items.reduce((n, it) => n + it.units.length, 0);
-  return months.length * pairs;
-}
-
 /**
  * @deprecated 改用 buildReviewTasksPerCalendar（經 monthToCalendarYear 換算）或 buildTasksFromSchedule
  */
@@ -494,6 +435,20 @@ export function buildReviewTasks(
   const tasks: Omit<ReviewTask, "createdAt" | "completedAt">[] = [];
   for (const month of input.months) {
     for (const it of input.items) {
+      // v1.51.0：不限單位項目每月份生一筆 unitId: "" 的任務（不固定單位）
+      if (it.unlimitedUnits === true) {
+        tasks.push({
+          indicatorId: input.indicatorId,
+          year: input.year,
+          month,
+          unitId: "",
+          reviewerId: it.reviewerId,
+          caseCount: input.caseCount ?? null,
+          deadline: deadlineFor(input.year, month, input.deadlineDay),
+          status: "pending",
+        });
+        continue;
+      }
       for (const u of it.units) {
         tasks.push({
           indicatorId: input.indicatorId,
@@ -509,14 +464,6 @@ export function buildReviewTasks(
     }
   }
   return tasks;
-}
-
-/** 預估全年總件數：任務筆數 × 單一審查件數（未設定則 0） */
-export function estimateTotalCases(
-  taskCount: number,
-  caseCount: number | null,
-): number {
-  return caseCount != null ? taskCount * caseCount : 0;
 }
 
 /* =====================================================================
@@ -545,10 +492,15 @@ export interface IndicatorSchedule {
   intervalMonths: ReviewInterval | null;
   /** 關聯年份（臨時排程用，v1.18；null＝未設定） */
   refYear: number | null;
-  /** 每輪審查件數（全單位共用單一值；null＝未設定） */
+  /** 週期排程每個單位每區間的審查件數 N（設定值對所有單位相同；null＝未設定） */
   caseCount: number | null;
   /** 受審單位 id 清單（各組複選／全選） */
   unitIds: string[];
+  /**
+   * 不限單位（v1.51.0）：不固定單位、沒有單位限制；unitIds 為空，
+   * 任務／紀錄的 unitId 存 ""、顯示為 NA。舊排程無此欄＝false。
+   */
+  unlimitedUnits: boolean;
   notes: string;
   /** 自審（護理長為自己單位審查） */
   selfReview: boolean;
@@ -615,6 +567,7 @@ export function parseIndicatorSchedule(raw: unknown): IndicatorSchedule | null {
         : null,
     caseCount: parseCaseCount(d.caseCount),
     unitIds,
+    unlimitedUnits: d.unlimitedUnits === true,
     notes: typeof d.notes === "string" ? d.notes : "",
     selfReview: d.selfReview === true,
     updatedBy: typeof d.updatedBy === "string" ? d.updatedBy : "",
@@ -647,6 +600,7 @@ export function legacyYearScheduleToIndicatorSchedule(
     refYear: null,
     caseCount: parseCaseCount(d.caseCount),
     unitIds: [],
+    unlimitedUnits: false,
     notes: typeof d.notes === "string" ? d.notes : "",
     selfReview: false,
     updatedBy: "",
@@ -656,7 +610,7 @@ export function legacyYearScheduleToIndicatorSchedule(
 }
 
 /** 排程稽核：fire-and-forget，不擋主流程 */
-function auditSchedule(
+export function auditSchedule(
   db: any,
   actor: { id: string; name: string },
   action: string,
@@ -760,6 +714,7 @@ export async function saveSchedule(
           : null,
       caseCount: parseCaseCount(sched.caseCount),
       unitIds: sched.unitIds.filter((u) => typeof u === "string"),
+      unlimitedUnits: sched.unlimitedUnits === true,
       notes: sched.notes ?? "",
       selfReview: sched.selfReview === true,
       updatedBy: actor.id,
@@ -799,6 +754,7 @@ export async function deleteSchedule(
       refYear: null,
       caseCount: null,
       unitIds: [],
+      unlimitedUnits: false,
       notes: "",
       selfReview: false,
       updatedBy: actor.id,
@@ -870,17 +826,7 @@ export function scheduleReviewCalendarMonths(sched: {
   return [...out.values()].sort((a, b) => a.year - b.year || a.month - b.month);
 }
 
-/**
- * 依排程展開審查任務。
- *
- * 沿用 buildReviewTasks 的（月份 × 審查員 × 單位）展開邏輯，
- * 但月份先以 scheduleReviewCalendarMonths 展開為全部審查曆年月
- *（起始月＋區間月數，可跨年）後、按曆年分組再展開
- *（reviewTasks 欄位結構不變）。
- *
- * 產生前先刪除該排程涵蓋曆年、該指標「未執行」的舊任務（已完成的保留，
- * 沿用既有規則）；成功後 audit「產生排程」。回傳新產生任務筆數。
- */
+/** 建立任務時才動態載入 builder，避免 dashboard 首屏包含排程寫入邏輯。 */
 export async function buildTasksFromSchedule(
   db: any,
   sched: IndicatorSchedule,
@@ -888,75 +834,33 @@ export async function buildTasksFromSchedule(
   actor: { id: string; name: string },
   deadlineDay = 10,
 ): Promise<number> {
-  // v1.23：起始月＋區間月數展開為全部審查曆年月（可跨年）
-  const reviewMonths = scheduleReviewCalendarMonths(sched);
-  const items = assignments?.items ?? [];
-  // 曆年月 → 曆年分組（學年度會跨兩個曆年）
-  const byYear = new Map<number, number[]>();
-  for (const { year: cy, month: m } of reviewMonths) {
-    const arr = byYear.get(cy) ?? [];
-    arr.push(m);
-    byYear.set(cy, arr);
-  }
+  const { buildTasksFromSchedule: build } = await import("./scheduleTaskBuilder");
+  return build(db, sched, assignments, actor, deadlineDay);
+}
 
-  // 只刪除該指標、涵蓋曆年中「未執行」的舊任務（done 保留），沿用既有規則
-  const BATCH_LIMIT = 400;
-  let batch = writeBatch(db);
-  let ops = 0;
-  const commits: Promise<void>[] = [];
-  const flush = () => {
-    if (ops > 0) {
-      commits.push(batch.commit());
-      batch = writeBatch(db);
-      ops = 0;
-    }
-  };
-  for (const cy of byYear.keys()) {
-    const oldSnap = await getDocs(
-      query(
-        collection(db, "reviewTasks"),
-        where("indicatorId", "==", sched.indicatorId),
-        where("year", "==", cy),
-      ),
-    );
-    oldSnap.docs.forEach((d) => {
-      if (d.data().status === "done") return; // 已完成保留
-      batch.delete(d.ref);
-      ops += 1;
-      if (ops >= BATCH_LIMIT) flush();
-    });
-  }
+/** 穩定的週期配額組 ID：同指標／單位／排程輪次共用，刻意不含 reviewerId。 */
+export function periodicQuotaGroupId(input: {
+  indicatorId: string;
+  unitId: string;
+  category: "year" | "academic";
+  period: string;
+  start: { year: number; month: number };
+}): string {
+  return [
+    "quota-v1",
+    input.indicatorId,
+    input.category,
+    input.period,
+    `${input.start.year}-${pad2(input.start.month)}`,
+    input.unitId,
+  ]
+    .map(encodeURIComponent)
+    .join("|");
+}
 
-  // 按曆年展開新任務
-  let taskCount = 0;
-  for (const [cy, ms] of byYear) {
-    const newTasks = buildReviewTasks({
-      indicatorId: sched.indicatorId,
-      year: cy,
-      months: ms,
-      items,
-      caseCount: sched.caseCount ?? null,
-      deadlineDay,
-    });
-    newTasks.forEach((t) => {
-      const ref = doc(collection(db, "reviewTasks"));
-      batch.set(ref, { ...t, createdAt: serverTimestamp() });
-      ops += 1;
-      taskCount += 1;
-      if (ops >= BATCH_LIMIT) flush();
-    });
-  }
-  flush();
-  await Promise.all(commits);
-
-  auditSchedule(
-    db,
-    actor,
-    "產生排程",
-    sched,
-    `${sched.indicatorId}・${sched.periodLabel}：產生 ${taskCount} 筆任務`,
-  );
-  return taskCount;
+/** 週期共用配額：每個 group 的每個名額固定對應一個 document。 */
+export function periodicQuotaSlotDocId(quotaGroupId: string, slot: number): string {
+  return `${quotaGroupId}__slot__${slot}`;
 }
 
 /** createTempSchedule 輸入（加審／自審） */
@@ -976,6 +880,12 @@ export interface TempScheduleInput {
   items?: AssignmentItem[];
   /** 關聯年份（v1.18 加審；顯示／查閱用） */
   refYear?: number;
+  /**
+   * 目標曆年（v1.60.0 未達閾值挑選用）：指定時 period 時間戳的年份
+   * 取此值（任務曆年跟著走），refYear 亦同步為此值；未指定時沿用舊
+   * 行為（period＝建立當下時間戳，任務曆年＝建立當年）。
+   */
+  yearOverride?: number;
   /** true＝自審（護理長為自己單位），false＝加審 */
   selfReview: boolean;
   notes?: string;
@@ -1001,6 +911,10 @@ export async function createTempSchedule(
     input.items && input.items.length > 0
       ? input.items.map((it) => ({
           reviewerId: it.reviewerId,
+          // v1.51.0：不限單位旗標透傳（units 為空）；NA 加審必須走 items 分支
+          ...(it.unlimitedUnits === true
+            ? { unlimitedUnits: true as const }
+            : {}),
           units: it.units
             .filter((u) => typeof u.unitId === "string" && u.unitId)
             .map((u) => ({
@@ -1018,20 +932,39 @@ export async function createTempSchedule(
   const allUnitIds = [
     ...new Set(items.flatMap((it) => it.units.map((u) => u.unitId))),
   ];
+  // v1.60.0：未達閾值挑選可指定目標曆年。temp 的任務曆年由 period
+  // 時間戳的年份決定（monthToCalendarYear 的 temp 分支），故以當下
+  // 時間換年產生 period，毫秒精度不變、唯一性與 Date.now() 相同。
+  const periodMs = (() => {
+    if (
+      typeof input.yearOverride === "number" &&
+      Number.isInteger(input.yearOverride)
+    ) {
+      const d = new Date();
+      d.setFullYear(input.yearOverride);
+      return d.getTime();
+    }
+    return Date.now();
+  })();
   const sched: IndicatorSchedule = {
     indicatorId: input.indicatorId,
     category: "temp",
-    period: String(Date.now()),
+    period: String(periodMs),
     periodLabel: "臨時",
     months: parseScheduleMonths(input.months),
     frequency: null,
     intervalMonths: null,
     refYear:
-      typeof input.refYear === "number" && Number.isInteger(input.refYear)
-        ? input.refYear
-        : null,
+      typeof input.yearOverride === "number" &&
+      Number.isInteger(input.yearOverride)
+        ? input.yearOverride
+        : typeof input.refYear === "number" &&
+            Number.isInteger(input.refYear)
+          ? input.refYear
+          : null,
     caseCount: parseCaseCount(input.caseCount),
     unitIds: allUnitIds.length > 0 ? allUnitIds : unitIds,
+    unlimitedUnits: items.some((it) => it.unlimitedUnits === true),
     notes: input.notes ?? "",
     selfReview: input.selfReview === true,
     updatedBy: input.actor.id,
@@ -1051,10 +984,142 @@ export async function createTempSchedule(
     input.actor,
     sched.selfReview ? "自審排程" : "加審",
     sched,
-    `${input.indicatorId}・${sched.unitIds.length} 單位・${items.length} 位審查員・${taskCount} 筆任務`,
+    `${input.indicatorId}・${sched.unlimitedUnits ? "不限單位" : `${sched.unitIds.length} 單位`}・${items.length} 位審查員・${taskCount} 筆任務`,
   );
   return {
     scheduleId: scheduleDocId(sched.indicatorId, sched.category, sched.period),
     taskCount,
   };
+}
+
+/* ================= v1.60.0：刪除排程連帶任務、重複加審偵測 ================= */
+
+/** 任務是否屬於該排程（純函式）：以任務的 scheduleCategory／schedulePeriod 標記判定；未標記的舊任務不歸屬，不誤刪。 */
+export function isTaskOfSchedule(
+  task: {
+    scheduleCategory?: unknown;
+    schedulePeriod?: unknown;
+  },
+  sched: { category: ScheduleCategory; period: string },
+): boolean {
+  return (
+    task.scheduleCategory === sched.category &&
+    String(task.schedulePeriod ?? "") === sched.period
+  );
+}
+
+/**
+ * 刪除排程＋其未完成任務（v1.60.0）。
+ * - 排程文件刪除（沿用 deleteSchedule，稽核「刪除排程」）。
+ * - 只刪標記屬於該排程（scheduleCategory／schedulePeriod 相符）且
+ *   status 非 done 的任務；已完成任務與已提交的審查紀錄（reviewRecords）
+ *   一律保留；未標記的舊任務因無法歸屬而不刪。
+ * - 另寫稽核「刪除排程任務」，附刪除／保留筆數。
+ */
+export async function deleteScheduleWithTasks(
+  db: any,
+  indicatorId: string,
+  category: ScheduleCategory,
+  period: string,
+  actor: { id: string; name: string },
+): Promise<{
+  deletedTasks: number;
+  keptDoneTasks: number;
+  scheduleFound: boolean;
+}> {
+  const sched = await getSchedule(db, indicatorId, category, period);
+  let deletedTasks = 0;
+  let keptDoneTasks = 0;
+  if (sched) {
+    const snap = await getDocs(
+      query(
+        collection(db, "reviewTasks"),
+        where("indicatorId", "==", indicatorId),
+      ),
+    );
+    const BATCH_LIMIT = 400;
+    let batch = writeBatch(db);
+    let ops = 0;
+    const commits: Promise<void>[] = [];
+    const flush = () => {
+      if (ops > 0) {
+        commits.push(batch.commit());
+        batch = writeBatch(db);
+        ops = 0;
+      }
+    };
+    snap.docs.forEach((d) => {
+      const data = d.data() as Record<string, unknown>;
+      if (!isTaskOfSchedule(data, sched)) return;
+      if (data.status === "done") {
+        keptDoneTasks += 1;
+        return;
+      }
+      batch.delete(d.ref);
+      ops += 1;
+      deletedTasks += 1;
+      if (ops >= BATCH_LIMIT) flush();
+    });
+    flush();
+    await Promise.all(commits);
+  }
+  await deleteSchedule(db, indicatorId, category, period, actor);
+  if (sched) {
+    auditSchedule(
+      db,
+      actor,
+      "刪除排程任務",
+      sched,
+      `${indicatorId}・${periodLabel(category, period)}：刪除 ${deletedTasks} 筆未完成任務（已完成 ${keptDoneTasks} 筆保留）`,
+    );
+  }
+  return { deletedTasks, keptDoneTasks, scheduleFound: sched != null };
+}
+
+/** 近期重複加審比對用的臨時排程最小欄位 */
+export interface TempScheduleLike {
+  category: ScheduleCategory;
+  period: string;
+  months: number[];
+  unitIds: string[];
+  unlimitedUnits: boolean;
+  selfReview: boolean;
+}
+
+/**
+ * 近期重複加審偵測（v1.60.0，純函式）。
+ * 同指標、同一類臨時排程（加審／自審分開比）、相同排序月份、
+ * 相同單位集合（含不限單位）且建立時間在 windowMs 內（預設 10 分鐘）
+ * → 回傳該筆排程，否則 null。
+ * 只擋短時間內的重複建立；正常第二次加審（不同月份／單位／隔天以上）
+ * 不受影響。period 非時間戳的舊臨時排程不參與比對。
+ */
+export function findDuplicateTempSchedule(
+  temps: TempScheduleLike[],
+  input: {
+    months: number[];
+    unitIds: string[];
+    unlimitedUnits: boolean;
+    selfReview: boolean;
+  },
+  nowMs: number,
+  windowMs = 10 * 60 * 1000,
+): TempScheduleLike | null {
+  const monthsKey = [...input.months].sort((a, b) => a - b).join(",");
+  const unitsKey = input.unlimitedUnits
+    ? "NA"
+    : [...input.unitIds].sort().join(",");
+  for (const t of temps) {
+    if (t.category !== "temp" || t.selfReview !== input.selfReview) continue;
+    const tMs = Number(t.period);
+    if (!Number.isFinite(tMs) || tMs <= 0) continue;
+    if (nowMs - tMs > windowMs || tMs > nowMs + 60 * 1000) continue;
+    if ([...t.months].sort((a, b) => a - b).join(",") !== monthsKey) continue;
+    const tUnits = t.unlimitedUnits
+      ? "NA"
+      : [...t.unitIds].sort().join(",");
+    if (tUnits !== unitsKey) continue;
+    return t;
+  }
+  return null;
 }

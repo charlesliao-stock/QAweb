@@ -1,29 +1,219 @@
-import { Plus } from "lucide-react";
-import { EmptyState, PageHeading } from "../components/ui";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Activity, AlertTriangle, Check, ChevronLeft, ChevronRight, ClipboardCheck, Plus, Save, Settings2, ShieldCheck, X } from "lucide-react";
+import { EmptyState, FilterPanel, FilterSearchField, FormSelect, ListPanel, PageHeading, SortableTh } from "../components/ui";
+import { useAuth } from "../lib/auth";
+import { usePermissions } from "../lib/usePermissions";
+import { CAPA_PROGRESS, DEFAULT_CAPA_SETTINGS, makeHistory, newId, progressOfStage, progressTimeOf, type CapaAction, type CapaApprovalStep, type CapaCase, type CapaProgress, type CapaSettings, type CapaStage, type CapaTemplate, type CapaTemplateType } from "./capa/model";
+import { loadCapaCases, loadCapaSettings, loadCapaTemplates, saveCapaCase, saveCapaSettings, saveCapaTemplate } from "./capa/store";
+import { findUnitPeople, listUnitPeople, type CapaPerson } from "./capa/people";
+import "./capa/capa.css";
+import { toErrorMessage } from "../lib/errors";
+import { useOrgMeta } from "../lib/useOrgMeta";
+import { hasRoleCategory, titleFlagsOf } from "../lib/orgMeta";
+import { isConvenerRole, isOfficerRole } from "../lib/roleIdentity";
 
-export function CapaPage({
-  onAction,
-}: {
-  onAction: (message: string) => void;
-}) {
-  return (
-    <>
-      <PageHeading
-        page="capa"
-        action={
-          <button
-            className="button button-primary"
-            onClick={() => onAction("資料串接完成後才能開立改善追蹤")}
-          >
-            <Plus size={16} />
-            開立改善追蹤
-          </button>
-        }
-      />
-      <EmptyState
-        title="尚未串接資料"
-        description="CAPA 改善追蹤單將在 Firestore 串接完成後顯示。"
-      />
-    </>
-  );
+type LaunchContext = { indicatorId?: string; indicatorCode?: string; indicatorName?: string; threshold?: number; period?: string; periodKeys?: string[]; unitCode?: string; unitName?: string; rate?: number; summary?: string; snapshots?: Array<{ period: string; rate: number }>; caseId?: string };
+type ViewTab = "cases" | "settings" | "templates";
+type SortKey = "number" | "unit" | "owner" | "indicator" | "reason" | "due" | "progress";
+const formatDateTime = (value: string) => value ? new Date(value).toLocaleString("zh-TW", { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+/** 改善期限預設為發動（建立）後 30 天；舊案件未設定時以建立日＋30 天顯示 */
+const addDaysKey = (iso: string, days: number) => { const base = iso ? new Date(iso) : new Date(); base.setDate(base.getDate() + days); return dateKey(base); };
+const dueDateOf = (item: CapaCase) => item.dueDate || addDaysKey(item.createdAt, 30);
+const isOverdue = (item: CapaCase) => progressOfStage(item.stage) !== "結案" && dueDateOf(item) < dateKey(new Date());
+const progressClass = (progress: CapaProgress) => progress === "已撤案" ? "muted" : progress === "結案" ? "green" : progress === "送審中" ? "teal" : progress === "分析撰寫中" ? "amber" : "blue";
+
+function makeCase(context: LaunchContext, staffId: string, staffName: string, unitCode: string, unitName: string, settings: CapaSettings, people: { owner?: CapaPerson; approver?: CapaPerson } = {}): CapaCase {
+  const now = new Date().toISOString(); const period = context.period || now.slice(0, 7);
+  const owner = people.owner ?? { id: staffId, name: staffName };
+  return { id: newId("capa"), caseNumber: `CA-${new Date().getFullYear()}-${String(Date.now()).slice(-4)}`, title: `${context.unitName || unitName || "單位待確認"}${context.indicatorName ? `｜${context.indicatorName}` : "｜品質改善追蹤"}`,
+    source: context.indicatorId ? "結果分析" : "人工立案", stage: "待確認", indicatorId: context.indicatorId || "", indicatorCode: context.indicatorCode || "", indicatorName: context.indicatorName || "", unitCode: context.unitCode || unitCode, unitName: context.unitName || unitName, ownerId: owner.id, ownerName: owner.name, writerId: owner.id, writerName: owner.name,
+    ...(people.approver ? { approverId: people.approver.id, approverName: people.approver.name } : {}),
+    threshold: context.threshold ?? 90, triggerPeriodCount: settings.defaultTriggerPeriods, periodKeys: context.periodKeys?.length ? context.periodKeys : [period], resultSnapshots: context.snapshots?.length ? context.snapshots : typeof context.rate === "number" ? [{ period, rate: context.rate }] : [], findingSummary: context.summary ?? (context.indicatorName ? `${context.indicatorName}於${period}結果 ${typeof context.rate === "number" ? `${context.rate}%` : "待確認"}，請補充問題與影響範圍。` : ""), immediateAction: "", rootCause: "", contributingFactors: "", actions: [],
+    verification: { baseline: typeof context.rate === "number" ? `${context.rate}%` : "", target: `連續 ${settings.defaultTriggerPeriods} 個有效審查期達到 ≥${context.threshold ?? 90}%`, observationPeriods: settings.defaultTriggerPeriods, dataSource: "結果分析／審查紀錄", sampleSize: "依當期排程收案", verifierRole: settings.verifierRole, result: "未驗證", resultNote: "" },
+    approvalSteps: [], history: [makeHistory("建立待確認案件", staffId, staffName, context.indicatorId ? "由結果分析帶入來源脈絡" : "人工立案")], createdAt: now, updatedAt: now, dueDate: addDaysKey(now, 30), stageTimes: { 待確認: now } };
+}
+
+export function CapaPage({ onAction, launchContext, onLaunchConsumed, managementOnly = false }: { onAction: (message: string) => void; launchContext?: LaunchContext | null; onLaunchConsumed?: () => void; managementOnly?: boolean }) {
+  const { user } = useAuth(); const { isAdmin } = usePermissions(); const orgMeta = useOrgMeta();
+  const [tab, setTab] = useState<ViewTab>(() => managementOnly ? "settings" : "cases"); const [cases, setCases] = useState<CapaCase[]>([]); const [settings, setSettings] = useState<CapaSettings>(DEFAULT_CAPA_SETTINGS); const [templates, setTemplates] = useState<CapaTemplate[]>([]);
+  const [selectedId, setSelectedId] = useState(""); const [keywordDraft, setKeywordDraft] = useState(""); const [keyword, setKeyword] = useState(""); const [progressFilter, setProgressFilter] = useState(""); const [sourceFilter, setSourceFilter] = useState("");
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 } | null>(null);
+  const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState(""); const [draft, setDraft] = useState<CapaCase | null>(null);
+  const [withdrawOpen, setWithdrawOpen] = useState(false); const [withdrawNote, setWithdrawNote] = useState("");
+  const [launch, setLaunch] = useState<LaunchContext | null>(null); const [createOpen, setCreateOpen] = useState(false); const [templateDraft, setTemplateDraft] = useState<CapaTemplate | null>(null); const [approvalNote, setApprovalNote] = useState("");
+  const reload = useCallback(async () => { setLoading(true); setError(""); try { const [nextCases, nextSettings, nextTemplates] = await Promise.all([loadCapaCases(), loadCapaSettings(), loadCapaTemplates()]); setCases(nextCases); setSettings(nextSettings); setTemplates(nextTemplates); setSelectedId((current) => current && nextCases.some((item) => item.id === current) ? current : ""); } catch (cause) { setError(toErrorMessage(cause, "無法載入 CAPA 資料；請確認登入狀態與資料權限。")); } finally { setLoading(false); } }, []);
+  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => { if (!launchContext) return; setTab("cases"); if (launchContext.caseId) { setSelectedId(launchContext.caseId); } else { setLaunch(launchContext); setCreateOpen(true); } onLaunchConsumed?.(); }, [launchContext, onLaunchConsumed]);
+  const toggleSort = (key: SortKey) => setSort((current) => current?.key === key ? { key, dir: current.dir === 1 ? -1 : 1 } : { key, dir: 1 });
+  const tableSort = sort ? { key: sort.key, direction: sort.dir === 1 ? "asc" as const : "desc" as const } : null;
+  const SortTh = ({ label, k }: { label: string; k: SortKey }) => <SortableTh label={label} sortKey={k} sort={tableSort} onSort={toggleSort} />;
+  const filtered = useMemo(() => {
+    const word = keyword.trim().toLowerCase();
+    const list = cases.filter((item) => {
+      const text = `${item.caseNumber} ${item.unitCode} ${item.unitName} ${item.ownerName} ${item.indicatorCode} ${item.indicatorName} ${item.findingSummary} ${item.rootCause}`.toLowerCase();
+      return (!word || text.includes(word)) && (!progressFilter || progressOfStage(item.stage) === progressFilter) && (!sourceFilter || item.source === sourceFilter);
+    });
+    const value = (item: CapaCase, key: SortKey) => key === "number" ? item.caseNumber : key === "unit" ? item.unitName || item.unitCode : key === "owner" ? item.ownerName : key === "indicator" ? `${item.indicatorCode} ${item.indicatorName}` : key === "reason" ? item.findingSummary : key === "due" ? dueDateOf(item) : CAPA_PROGRESS.indexOf(progressOfStage(item.stage));
+    return list.sort((a, b) => {
+      if (!sort) return b.updatedAt.localeCompare(a.updatedAt);
+      const x = value(a, sort.key); const y = value(b, sort.key);
+      const result = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "zh-Hant", { numeric: true });
+      return result * sort.dir || b.updatedAt.localeCompare(a.updatedAt);
+    });
+  }, [cases, keyword, progressFilter, sourceFilter, sort]);
+  const selected = cases.find((item) => item.id === selectedId) ?? null;
+  useEffect(() => { setDraft(selected ? structuredClone(selected) : null); setApprovalNote(""); setWithdrawOpen(false); setWithdrawNote(""); }, [selectedId, selected]);
+  const updateDraft = (patch: Partial<CapaCase>) => setDraft((current) => current ? { ...current, ...patch } : current);
+  const actorId = user?.staffId ?? "demo"; const actorName = user?.name ?? "展示使用者"; const roles = user?.roles ?? [];
+  const persistCase = async (next: CapaCase, action: string, note = "") => { const value = { ...next, updatedAt: new Date().toISOString(), history: [...next.history, makeHistory(action, actorId, actorName, note)] }; setSaving(true); setError(""); try { await saveCapaCase(value, { id: actorId, name: actorName }, action, note); setCases((current) => [value, ...current.filter((item) => item.id !== value.id)]); setSelectedId(value.id); setDraft(structuredClone(value)); onAction(action); return value; } catch (cause) { const message = toErrorMessage(cause, "儲存失敗，請確認 CAPA 權限與資料庫連線。"); setError(message); onAction(message); return null; } finally { setSaving(false); } };
+  const openNewCase = async () => {
+    if (!user) return; setSaving(true);
+    // 預設負責人＝單位護理長、結案核准＝單位督導（依單位內角色；讀取失敗時負責人退回為開案者）
+    let people: { owner?: CapaPerson; approver?: CapaPerson } = {};
+    try { people = await findUnitPeople(launch?.unitCode || user.unitCode || "", settings.ownerRole, settings.approvalRoles[0] || "督導"); } catch { people = {}; }
+    setSaving(false);
+    const value = makeCase(launch ?? {}, actorId, actorName, user.unitCode ?? "", user.unitName ?? "", settings, people);
+    const saved = await persistCase(value, value.source === "結果分析" ? "由結果分析建立 CAPA 待確認案件" : "人工建立 CAPA 待確認案件");
+    if (saved) { setCreateOpen(false); setLaunch(null); }
+  };
+  const saveSettings = async () => { if (!isAdmin) return; setSaving(true); try { await saveCapaSettings(settings, { id: actorId, name: actorName }); onAction("CAPA 系統設定已儲存"); } catch (cause) { setError(toErrorMessage(cause, "設定儲存失敗")); } finally { setSaving(false); } };
+  const saveTemplate = async () => { if (!isAdmin || !templateDraft?.name.trim() || !templateDraft.content.trim()) return; setSaving(true); try { const item = { ...templateDraft, name: templateDraft.name.trim(), content: templateDraft.content.trim() }; await saveCapaTemplate(item, { id: actorId, name: actorName }); setTemplates((current) => [item, ...current.filter((row) => row.id !== item.id)]); setTemplateDraft(null); onAction("CAPA 範本已儲存"); } catch (cause) { setError(toErrorMessage(cause, "範本儲存失敗")); } finally { setSaving(false); } };
+  const transition = (stage: CapaStage, action: string, note = "", patch: Partial<CapaCase> = {}) => draft && persistCase({ ...draft, ...patch, stage }, action, note);
+  const progress: CapaProgress = draft ? progressOfStage(draft.stage) : "待確認";
+  const writing = progress === "分析撰寫中"; const ownerOrAdmin = isAdmin || draft?.ownerId === actorId;
+  // 撰寫人（預設＝負責人）與負責人、管理員皆可編輯；由負責人送出結案審核
+  const writerId = draft ? draft.writerId || draft.ownerId : ""; const writerName = draft ? draft.writerName || draft.ownerName : "";
+  const canEdit = ownerOrAdmin || writerId === actorId; const editable = writing && canEdit;
+  const [unitPeople, setUnitPeople] = useState<CapaPerson[]>([]);
+  // 指派撰寫人：負責人、管理員，或管轄該單位的督導（非單位主管指派時，候選人一律以「該案件單位」的編制人員為主）
+  const supervisesUnit = Boolean(draft?.unitCode) && roles.includes(settings.approvalRoles[0] || "督導") && (user?.titleUnitCodes ?? []).includes(draft?.unitCode ?? "");
+  // 督導以上、執行幹事以上（含管理員、召集人、院／區主管）可修改負責人與撰寫人
+  const titleFlags = titleFlagsOf(user?.title ?? "", user?.titleId, orgMeta.titleMeta, orgMeta.titleMetaById);
+  const isManager = isAdmin || titleFlags.isHospitalHead || titleFlags.isDistrictHead || titleFlags.isOfficer || hasRoleCategory(roles, "senior", orgMeta.roleMeta) || isConvenerRole(roles, orgMeta.roleMeta) || isOfficerRole(roles, orgMeta.roleMeta);
+  const finished = progress === "結案" || progress === "已撤案";
+  const canChangeOwner = (isManager || supervisesUnit) && !finished;
+  // 撤案：督導以上、執行幹事以上（結案或已撤案後不可再撤案）
+  const canWithdraw = (isManager || supervisesUnit) && !finished;
+  const canAssign = (ownerOrAdmin || isManager || supervisesUnit) && !finished;
+  const peopleUnit = canAssign ? draft?.unitCode ?? "" : "";
+  useEffect(() => { if (!peopleUnit) { setUnitPeople([]); return; } let alive = true; listUnitPeople(peopleUnit).then((rows) => { if (alive) setUnitPeople(rows); }).catch(() => { if (alive) setUnitPeople([]); }); return () => { alive = false; }; }, [peopleUnit]);
+  const assignOwner = (person: CapaPerson) => { if (!draft || person.id === draft.ownerId) return; const followWriter = writerId === draft.ownerId; void persistCase({ ...draft, ownerId: person.id, ownerName: person.name, ...(followWriter ? { writerId: person.id, writerName: person.name } : {}) }, `變更負責人：${person.name}`); };
+  const assignWriter = (person: CapaPerson) => { if (!draft || person.id === writerId) return; void persistCase({ ...draft, writerId: person.id, writerName: person.name }, `指定撰寫人：${person.name}`); };
+  const currentApproval = draft?.approvalSteps.find((step) => step.decision === "待審核");
+  const canApprove = Boolean(currentApproval && (isAdmin || roles.includes(currentApproval.role) || currentApproval.approverId === actorId) && draft?.ownerId !== actorId && writerId !== actorId);
+  const activeTemplates = templates.filter((item) => item.active);
+  const addAction = (template?: CapaTemplate) => { if (!draft) return; const action: CapaAction = { id: newId("action"), title: template?.content ?? "", causeId: "", ownerId: draft.ownerId, ownerName: draft.ownerName, dueDate: "", status: "待開始", evidence: "" }; updateDraft({ actions: [...draft.actions, action] }); };
+  const patchAction = (id: string, patch: Partial<CapaAction>) => draft && updateDraft({ actions: draft.actions.map((item) => item.id === id ? { ...item, ...patch } : item) });
+  const removeAction = (id: string) => draft && updateDraft({ actions: draft.actions.filter((item) => item.id !== id) });
+  // 待確認 → 分析撰寫中：護理長（負責人）確認知悉
+  const confirmCase = () => { if (!draft) return; if (!draft.findingSummary.trim()) { setError("請先描述發現的問題與影響範圍。"); return; } void transition("原因分析", "確認知悉，進入分析撰寫", "", { stageTimes: { ...draft.stageTimes, 分析撰寫中: new Date().toISOString() } }); };
+  // 分析撰寫中 → 送審中：送出結案審核，核准層級帶入單位督導
+  const submitCase = () => {
+    if (!draft) return;
+    if (!draft.rootCause.trim()) { setError("請先填寫已確認的根因。"); return; }
+    if (!draft.actions.length || draft.actions.some((item) => !item.title.trim() || !item.ownerName.trim() || !item.dueDate)) { setError("請至少建立一項改善措施，並填妥改善內容、負責人與期限。"); return; }
+    if (!draft.verification.resultNote.trim()) { setError("請填寫成效說明（結案說明）。"); return; }
+    const approvalRoles = (settings.multiLevelApproval ? settings.approvalRoles : settings.approvalRoles.slice(0, 1)).filter((role) => role.trim()); const stepRoles = approvalRoles.length ? approvalRoles : ["督導"];
+    const approvalSteps: CapaApprovalStep[] = stepRoles.map((role, index) => ({ role, decision: "待審核" as const, ...(index === 0 && draft.approverId ? { approverId: draft.approverId, approverName: draft.approverName } : {}) }));
+    void transition("結案核准", "送出結案審核", draft.verification.resultNote, { approvalSteps, stageTimes: { ...draft.stageTimes, 送審中: new Date().toISOString() } });
+  };
+  const withdrawCase = () => {
+    if (!draft) return; const reason = withdrawNote.trim(); if (!reason) { setError("撤案時必須填寫原因。"); return; }
+    void persistCase({ ...draft, stage: "已撤案", withdrawReason: reason, stageTimes: { ...draft.stageTimes, 已撤案: new Date().toISOString() } }, "撤案", reason);
+  };
+  const returnCase = (index: number) => {
+    if (!draft) return; if (!approvalNote.trim()) { setError("退回時必須填寫原因。"); return; }
+    const times = { ...draft.stageTimes }; delete times["送審中"];
+    void persistCase({ ...draft, stage: "原因分析", approvalSteps: [], stageTimes: times }, `第 ${index + 1} 層退回，回到分析撰寫`, approvalNote);
+  };
+  const approveCase = (index: number) => {
+    if (!draft) return; const now = new Date().toISOString();
+    const steps = draft.approvalSteps.map((row, idx) => idx === index ? { ...row, decision: "核准" as const, note: approvalNote, decidedBy: actorName, decidedAt: now } : row);
+    const all = steps.every((row) => row.decision === "核准");
+    void persistCase({ ...draft, stage: all ? "正式結案" : "結案核准", approvalSteps: steps, ...(all ? { closedAt: now, stageTimes: { ...draft.stageTimes, 結案: now } } : {}) }, all ? "全部核准，結案" : `第 ${index + 1} 層核准`, approvalNote); setApprovalNote("");
+  };
+  const inDetail = tab === "cases" && selected != null;
+
+  return <div className={`capa-page${managementOnly ? " capa-management-only" : ""}`}>{!managementOnly && <PageHeading page="capa" action={<button className="button button-primary" onClick={() => { setLaunch(null); setCreateOpen(true); }}><Plus size={16} />開立改善追蹤</button>} />}
+    {error && <div className="capa-error" role="alert"><AlertTriangle size={17} />{error}<button aria-label="關閉錯誤" onClick={() => setError("")}><X size={16} /></button></div>}
+    {!inDetail && <div className="capa-toolbar"><div className="capa-tabs" role="tablist" aria-label="CAPA 功能">{!managementOnly && <button className={tab === "cases" ? "active" : ""} onClick={() => setTab("cases")}><Activity size={15} />案件追蹤</button>}{isAdmin && <><button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}><Settings2 size={15} />系統設定</button><button className={tab === "templates" ? "active" : ""} onClick={() => setTab("templates")}><ClipboardCheck size={15} />範本維護</button></>}</div>{!managementOnly && <span className="capa-data-note"><ShieldCheck size={14} />依登入權限顯示案件</span>}</div>}
+    {tab === "cases" && !inDetail && <>
+      <div className="capa-stats">
+        <Stat label="待確認" value={cases.filter((item) => progressOfStage(item.stage) === "待確認").length} tone="blue" caption="CAPA 已觸發，待護理長確認知悉" />
+        <Stat label="分析撰寫中" value={cases.filter((item) => progressOfStage(item.stage) === "分析撰寫中").length} tone="amber" caption="確認知悉後、送出審核前" />
+        <Stat label="送審中" value={cases.filter((item) => progressOfStage(item.stage) === "送審中").length} tone="teal" caption="已送出結案審核，待核准" />
+        <Stat label="結案" value={cases.filter((item) => progressOfStage(item.stage) === "結案").length} tone="green" caption="結案核准完成" />
+      </div>
+      <FilterPanel actions={(keyword || progressFilter || sourceFilter) && <button type="button" className="button button-outline" onClick={() => { setKeyword(""); setKeywordDraft(""); setProgressFilter(""); setSourceFilter(""); }}>清除篩選</button>}>
+        <FormSelect label="進度" value={progressFilter} onChange={(event) => setProgressFilter(event.target.value)}><option value="">全部進度</option>{[...CAPA_PROGRESS, "已撤案" as CapaProgress].map((item) => <option key={item} value={item}>{item}</option>)}</FormSelect>
+        <FormSelect label="來源" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="">全部來源</option><option value="人工立案">人工立案</option><option value="結果分析">結果分析</option><option value="系統觸發">系統觸發</option></FormSelect>
+        <FilterSearchField label="關鍵字" placeholder="搜尋編號、單位、負責人、指標或原因" value={keywordDraft} onChange={setKeywordDraft} onSearch={() => setKeyword(keywordDraft)} />
+      </FilterPanel>
+      <ListPanel title="改善案件" count={filtered.length} actions={<button className="icon-button" onClick={() => void reload()} title="重新載入案件" aria-label="重新載入案件"><Activity size={16} /></button>}>
+        {loading ? <p className="muted-text" role="status">正在載入案件資料…</p> : cases.length === 0 ? <EmptyState title="目前尚無 CAPA 案件" description="可由結果分析下探單位清單的「啟動CAPA」帶入指標脈絡，或人工開立改善追蹤。" /> : filtered.length === 0 ? <p className="muted-text">沒有符合篩選條件的案件。</p> :
+          <table className="data-table capa-list-table"><thead><tr><SortTh label="編號" k="number" /><SortTh label="單位" k="unit" /><SortTh label="負責人" k="owner" /><SortTh label="指標名稱" k="indicator" /><SortTh label="原因" k="reason" /><SortTh label="改善期限" k="due" /><SortTh label="進度／更新日期" k="progress" /></tr></thead>
+            <tbody>{filtered.map((item) => { const itemProgress = progressOfStage(item.stage); return <tr key={item.id} className="capa-list-row" tabIndex={0} onClick={() => setSelectedId(item.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedId(item.id); } }}>
+              <td><b>{item.caseNumber}</b></td>
+              <td>{item.unitName || "單位待確認"}{item.unitCode ? <small className="capa-cell-sub">{item.unitCode}</small> : null}</td>
+              <td>{item.ownerName || "尚未指派"}</td>
+              <td>{item.indicatorCode ? <b>{item.indicatorCode}　</b> : null}{item.indicatorName || "未連結指標"}</td>
+              <td className="capa-cell-reason"><span>{item.findingSummary || "—"}</span>{item.rootCause ? <small className="capa-cell-sub">根因：{item.rootCause}</small> : null}</td>
+              <td className={isOverdue(item) ? "capa-due-overdue" : undefined}>{dueDateOf(item)}{isOverdue(item) ? <small className="capa-cell-sub">已逾期</small> : null}</td>
+              <td><span className={`capa-pill ${progressClass(itemProgress)}`}>{itemProgress}</span><small className="capa-cell-sub">{formatDateTime(item.updatedAt)}</small></td>
+            </tr>; })}</tbody></table>}
+      </ListPanel>
+    </>}
+    {inDetail && (!draft ? <p className="muted-text" role="status">載入案件中…</p> : <section className="capa-detail-page panel-card">
+      <header className="capa-detail-head">
+        <button type="button" className="button button-ghost button-sm capa-back" onClick={() => setSelectedId("")}><ChevronLeft size={15} />返回改善案件清單</button>
+        <div className="capa-detail-topline"><div className="case-meta"><span className="capa-kicker">CAPA CASE</span><b>{draft.caseNumber}</b><span className={`capa-pill ${draft.source === "人工立案" ? "blue" : draft.source === "系統觸發" ? "amber" : "teal"}`}>{draft.source}</span></div><div className="case-meta-status"><span className={`capa-pill ${progressClass(progress)}`}>{progress}</span>{canWithdraw && <button type="button" className="button button-outline button-sm capa-withdraw-btn" onClick={() => setWithdrawOpen((open) => !open)}>撤案</button>}</div></div>
+        {withdrawOpen && canWithdraw && <div className="capa-withdraw-panel"><label className="capa-wide-label">撤案原因（必填）<textarea value={withdrawNote} onChange={(event) => setWithdrawNote(event.target.value)} placeholder="說明撤案原因，例如誤判、資料更正後已達標、重複開案" /></label><div className="capa-action-bar"><button className="button button-secondary" onClick={() => { setWithdrawOpen(false); setWithdrawNote(""); }}>取消</button><button className="button button-danger" onClick={withdrawCase} disabled={saving}>確認撤案</button></div></div>}
+        {progress === "已撤案" && <div className="capa-closed-note capa-withdrawn-note"><AlertTriangle size={17} />此案件已於 {formatDateTime(draft.stageTimes?.已撤案 ?? "")} 撤案。原因：{draft.withdrawReason || "未填寫"}</div>}
+        <h2>{draft.title}</h2>
+        <div className="capa-detail-meta"><span><b>指標</b>{draft.indicatorCode ? `${draft.indicatorCode}｜` : ""}{draft.indicatorName || "未連結"}</span><span><b>單位</b>{draft.unitName || "待確認"}</span><span><b>負責人</b>{canChangeOwner ? <select className="capa-due-input" value={draft.ownerId} onChange={(event) => { const person = unitPeople.find((row) => row.id === event.target.value); if (person) assignOwner(person); }} disabled={saving} aria-label="變更負責人">{!unitPeople.some((row) => row.id === draft.ownerId) && <option value={draft.ownerId}>{draft.ownerName || "—"}</option>}{unitPeople.map((row) => <option key={row.id} value={row.id}>{row.name}（{row.id}）</option>)}</select> : draft.ownerName || "尚未指派"}</span><span><b>撰寫人</b>{canAssign ? <select className="capa-due-input" value={writerId} onChange={(event) => { const person = unitPeople.find((row) => row.id === event.target.value); if (person) assignWriter(person); }} disabled={saving} aria-label="指定撰寫人">{!unitPeople.some((row) => row.id === writerId) && <option value={writerId}>{writerName || "—"}</option>}{unitPeople.map((row) => <option key={row.id} value={row.id}>{row.name}（{row.id}）</option>)}</select> : writerName || "—"}</span><span><b>結案審核人</b>{draft.approverName || (settings.approvalRoles[0] || "督導")}</span><span className={isOverdue(draft) ? "capa-due-overdue" : undefined}><b>改善期限</b><input type="date" className="capa-due-input" value={dueDateOf(draft)} onChange={(event) => updateDraft({ dueDate: event.target.value })} disabled={progress === "送審中" || finished} /></span></div>
+        <p>建立於 {formatDateTime(draft.createdAt)}　·　最近更新 {formatDateTime(draft.updatedAt)}</p>
+      </header>
+      <div className="capa-stepper" aria-label="案件進度"><div className="capa-stepper-caption"><b>案件進度</b><span>目前進度 · {progress}</span></div><div className="capa-stepper-track">{CAPA_PROGRESS.map((item, index) => { const current = CAPA_PROGRESS.indexOf(progress); const time = progressTimeOf(draft, item); return <div key={item} className={`capa-step${current > index ? " done" : current === index ? " current" : ""}`}><i>{current > index ? <Check size={14} /> : index + 1}</i><span>{item}</span><small>{time ? formatDateTime(time) : "—"}</small></div>; })}</div></div>
+      <div className="capa-detail-scroll capa-detail-scroll-page"><CaseOverview item={draft} disabled={progress === "送審中" || finished || !canEdit} onFindingChange={(findingSummary) => updateDraft({ findingSummary })} />
+        <section className="capa-section"><SectionHeading title="立即處置" note="控制已發生問題或補救當下影響；與根因矯正措施分開記錄" /><label className="capa-wide-label">已採取的立即處置<textarea value={draft.immediateAction} onChange={(event) => updateDraft({ immediateAction: event.target.value })} placeholder="記錄即時風險控制、補救方式與影響範圍" disabled={progress === "送審中" || finished || !canEdit} /></label>
+          {progress === "待確認" && <div className="capa-action-bar">{!ownerOrAdmin && <small className="capa-muted">需由負責人（{draft.ownerName || "單位護理長"}）確認知悉</small>}<button className="button button-primary" onClick={confirmCase} disabled={saving || !ownerOrAdmin}>確認知悉，開始分析撰寫 <ChevronRight size={15} /></button></div>}</section>
+        <section className="capa-section"><SectionHeading title="系統性原因分析" note={writing ? "目前可編輯；優先檢視流程、工具與工作條件" : "需聚焦系統因素，避免預設為個人過失"} /><label className="capa-wide-label">根因<textarea value={draft.rootCause} onChange={(event) => updateDraft({ rootCause: event.target.value })} placeholder="說明已確認的根因，避免只重述問題現象" disabled={!editable} /></label><label className="capa-wide-label">促成因素／佐證<textarea value={draft.contributingFactors} onChange={(event) => updateDraft({ contributingFactors: event.target.value })} placeholder="流程、環境、工具、資訊、訓練或工作條件等因素與佐證" disabled={!editable} /></label></section>
+        <section className="capa-section"><SectionHeading title="改善措施" note="每項行動連結原因、責任人、期限與完成證據" action={editable ? <button className="button button-secondary" onClick={() => addAction()}><Plus size={14} />新增措施</button> : undefined} />{draft.actions.length === 0 ? <div className="capa-inline-empty">尚未新增改善措施。教育／提醒類範本不應是唯一措施，請同時評估流程或工具改善。</div> : <div className="capa-actions">{draft.actions.map((item, index) => <article className="capa-action-card" key={item.id}><div className="action-card-title"><b>措施 {index + 1}</b>{editable && <button className="text-button danger-text" onClick={() => removeAction(item.id)}>移除</button>}</div><label>改善內容<input value={item.title} onChange={(event) => patchAction(item.id, { title: event.target.value })} disabled={!editable} placeholder="描述可執行且可驗證的改善行動" /></label><div className="capa-form-grid three"><label>對應原因<input value={item.causeId} onChange={(event) => patchAction(item.id, { causeId: event.target.value })} disabled={!editable} placeholder="連結上方根因" /></label><label>負責人<input value={item.ownerName} onChange={(event) => patchAction(item.id, { ownerName: event.target.value })} disabled={!editable} /></label><label>期限<input type="date" value={item.dueDate} onChange={(event) => patchAction(item.id, { dueDate: event.target.value })} disabled={!editable} /></label></div><div className="capa-form-grid two"><label>執行狀態<select value={item.status} onChange={(event) => patchAction(item.id, { status: event.target.value as CapaAction["status"] })} disabled={!editable}><option>待開始</option><option>進行中</option><option>已完成</option></select></label><label>完成證據／附件說明<input value={item.evidence} onChange={(event) => patchAction(item.id, { evidence: event.target.value })} disabled={!editable} placeholder="記錄文件、版本、日期或存放位置" /></label></div></article>)}</div>}{editable && activeTemplates.some((item) => item.type === "改善措施") && <div className="capa-template-chips"><span>常用範本：</span>{activeTemplates.filter((item) => item.type === "改善措施").map((item) => <button key={item.id} onClick={() => addAction(item)}>{item.name}</button>)}</div>}</section>
+        <section className="capa-section"><SectionHeading title="成效驗證計畫與說明" note="結案核准時，依預先設定的條件檢視改善是否有效" /><div className="capa-form-grid two"><label>改善前基準<input value={draft.verification.baseline} onChange={(event) => updateDraft({ verification: { ...draft.verification, baseline: event.target.value } })} disabled={!editable} /></label><label>目標／通過條件<input value={draft.verification.target} onChange={(event) => updateDraft({ verification: { ...draft.verification, target: event.target.value } })} disabled={!editable} /></label><label>觀察有效期數<input type="number" min={1} max={12} value={draft.verification.observationPeriods} onChange={(event) => updateDraft({ verification: { ...draft.verification, observationPeriods: Number(event.target.value) } })} disabled={!editable} /></label><label>資料來源／樣本量<input value={`${draft.verification.dataSource}；${draft.verification.sampleSize}`} readOnly /></label></div><label className="capa-wide-label">成效說明（結案說明）<textarea value={draft.verification.resultNote} onChange={(event) => updateDraft({ verification: { ...draft.verification, resultNote: event.target.value } })} placeholder="填寫實際觀察期別、結果、樣本量及副作用檢視；送出結案審核時必填" disabled={!editable} /></label>
+          {editable && <div className="capa-action-bar">{!ownerOrAdmin && <small className="capa-muted">撰寫完成後，由負責人（{draft.ownerName}）送出結案審核</small>}<button className="button button-secondary" onClick={() => void persistCase(draft, "儲存分析撰寫進度")} disabled={saving}><Save size={15} />儲存進度</button><button className="button button-primary" onClick={submitCase} disabled={saving || !ownerOrAdmin}>送出結案審核 <ChevronRight size={15} /></button></div>}</section>
+        {(progress === "送審中" || progress === "結案") && <section className="capa-section"><SectionHeading title="結案核准" note={progress === "結案" ? `核准完成 · ${formatDateTime(draft.closedAt || "")}` : "所有必要核准完成前，不得標示結案"} />{draft.approvalSteps.length ? <div className="capa-approval-list">{draft.approvalSteps.map((step, index) => <div className="capa-approval-row" key={`${step.role}-${index}`}><span className={`approval-dot ${step.decision === "核准" ? "approved" : step.decision === "退回" ? "rejected" : ""}`}>{step.decision === "核准" ? <Check size={13} /> : index + 1}</span><div><b>第 {index + 1} 層 · {step.role}{step.approverName ? `（${step.approverName}）` : ""}</b><small>{step.decision}{step.decidedBy ? ` · ${step.decidedBy}` : ""}{step.decidedAt ? ` · ${formatDateTime(step.decidedAt)}` : ""}{step.note ? ` · ${step.note}` : ""}</small></div>{step.decision === "待審核" && canApprove && draft.stage === "結案核准" && index === draft.approvalSteps.findIndex((row) => row.decision === "待審核") && <div className="approval-actions"><button className="button button-secondary" onClick={() => returnCase(index)}>退回補充</button><button className="button button-primary" onClick={() => approveCase(index)}>核准</button></div>}</div>)}</div> : <div className="capa-inline-empty">此案件沒有核准層級紀錄。</div>}{draft.stage === "結案核准" && currentApproval && canApprove && <label className="capa-wide-label approval-note">核准意見／退回原因<textarea value={approvalNote} onChange={(event) => setApprovalNote(event.target.value)} placeholder="若退回補充，請填寫具體原因" /></label>}{draft.stage === "結案核准" && currentApproval && draft.ownerId === actorId && <p className="capa-warning-inline"><ShieldCheck size={15} />案件負責人不可核准自己負責的案件。</p>}{progress === "結案" && <div className="capa-closed-note"><Check size={17} />改善案件已結案，所有核准層級均已完成。</div>}</section>}
+        <section className="capa-section"><SectionHeading title="案件歷程" note="留存操作人、時間與狀態決定，作為案件稽核軌跡" />{draft.history.slice().reverse().map((entry) => <div className="capa-history-row" key={entry.id}><i /><div><b>{entry.action}</b><span>{entry.actorName} · {formatDateTime(entry.at)}{entry.note ? ` · ${entry.note}` : ""}</span></div></div>)}</section>
+      </div>
+      <div className="capa-detail-foot"><span>{saving ? "儲存中…" : `更新於 ${formatDateTime(draft.updatedAt)}`}</span></div>
+    </section>)}
+    {tab === "settings" && <SettingsPanel settings={settings} setSettings={setSettings} cases={cases} saving={saving} onSave={() => void saveSettings()} />}
+    {tab === "templates" && <TemplatesPanel templates={templates} setTemplateDraft={setTemplateDraft} saving={saving} onToggle={(item) => { const changed = { ...item, active: !item.active }; void saveCapaTemplate(changed, { id: actorId, name: actorName }).then(() => { setTemplates((current) => [changed, ...current.filter((row) => row.id !== changed.id)]); onAction(changed.active ? "範本已啟用" : "範本已停用"); }).catch((cause: unknown) => setError(toErrorMessage(cause, "範本狀態更新失敗"))); }} />}
+    {createOpen && <div className="capa-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setCreateOpen(false); setLaunch(null); } }}><section className="capa-modal" role="dialog" aria-modal="true" aria-labelledby="capa-create-title"><header><div><span className="capa-kicker">CAPA / NEW CASE</span><h2 id="capa-create-title">開立改善追蹤</h2></div><button className="icon-button" onClick={() => { setCreateOpen(false); setLaunch(null); }} aria-label="關閉"><X size={18} /></button></header><p>案件先以「待確認」建立，確認後才進入正式原因分析與改善流程。</p>{launch?.indicatorId && <div className="capa-source-card compact"><AlertTriangle size={16} /><span>來源：結果分析　·　{launch.indicatorCode} {launch.indicatorName}　·　{launch.period || "目前查詢期間"}{typeof launch.rate === "number" ? `　·　${launch.rate}%` : ""}</span></div>}<div className="capa-form-grid two"><label>指標編號<input value={launch?.indicatorCode ?? ""} onChange={(event) => setLaunch((current) => ({ ...current, indicatorCode: event.target.value }))} placeholder="選填" /></label><label>指標名稱<input value={launch?.indicatorName ?? ""} onChange={(event) => setLaunch((current) => ({ ...current, indicatorName: event.target.value }))} placeholder="選填" /></label><label>單位代碼<input value={launch?.unitCode ?? user?.unitCode ?? ""} onChange={(event) => setLaunch((current) => ({ ...current, unitCode: event.target.value }))} placeholder="請確認單位代碼" /></label><label>單位名稱<input value={launch?.unitName ?? user?.unitName ?? ""} onChange={(event) => setLaunch((current) => ({ ...current, unitName: event.target.value }))} placeholder="請確認單位" /></label><label>指標閾值（%）<input type="number" min={0} max={100} value={launch?.threshold ?? 90} onChange={(event) => setLaunch((current) => ({ ...current, threshold: Number(event.target.value) }))} /></label><label>來源期間（YYYY-MM）<input type="month" value={launch?.period ?? ""} onChange={(event) => setLaunch((current) => ({ ...current, period: event.target.value }))} /></label></div><label className="capa-wide-label">問題摘要<textarea value={launch?.summary ?? (launch?.indicatorName ? `${launch.indicatorName}於${launch.period || "查詢期間"}${typeof launch.rate === "number" ? `結果 ${launch.rate}%` : "結果待確認"}，請補充問題與影響範圍。` : "")} onChange={(event) => setLaunch((current) => ({ ...current, summary: event.target.value }))} placeholder="請補充問題與影響範圍" /></label><footer><button className="button button-secondary" onClick={() => { setCreateOpen(false); setLaunch(null); }}>取消</button><button className="button button-primary" onClick={() => void openNewCase()} disabled={saving}><Plus size={15} />建立待確認案件</button></footer></section></div>}
+    {templateDraft && <div className="capa-modal-backdrop"><section className="capa-modal" role="dialog" aria-modal="true" aria-labelledby="capa-template-title"><header><div><span className="capa-kicker">CAPA / TEMPLATE</span><h2 id="capa-template-title">{templateDraft.id.startsWith("new-") ? "新增範本" : "編輯範本"}</h2></div><button className="icon-button" onClick={() => setTemplateDraft(null)} aria-label="關閉"><X size={18} /></button></header><div className="capa-form-grid two"><label>範本類型<select value={templateDraft.type} onChange={(event) => setTemplateDraft({ ...templateDraft, type: event.target.value as CapaTemplateType })}><option>原因分析</option><option>改善措施</option><option>成效驗證</option></select></label><label>適用分類<input value={templateDraft.category} onChange={(event) => setTemplateDraft({ ...templateDraft, category: event.target.value })} /></label></div><label className="capa-wide-label">範本名稱<input value={templateDraft.name} onChange={(event) => setTemplateDraft({ ...templateDraft, name: event.target.value })} /></label><label className="capa-wide-label">帶入內容<textarea value={templateDraft.content} onChange={(event) => setTemplateDraft({ ...templateDraft, content: event.target.value })} /></label><label className="capa-check"><input type="checkbox" checked={templateDraft.active} onChange={(event) => setTemplateDraft({ ...templateDraft, active: event.target.checked })} />啟用範本</label><p className="capa-muted">範本只協助起草，不取代逐案確認負責人、期限、證據與適用內容。</p><footer><button className="button button-secondary" onClick={() => setTemplateDraft(null)}>取消</button><button className="button button-primary" onClick={() => void saveTemplate()} disabled={saving || !templateDraft.name.trim() || !templateDraft.content.trim()}><Save size={15} />儲存範本</button></footer></section></div>}
+  </div>;
+}
+
+function Stat({ label, value, tone, caption }: { label: string; value: number; tone: string; caption: string }) { return <article className={`capa-stat ${tone}`}><div><span>{label}</span><small>{caption}</small></div><strong>{value}</strong></article>; }
+function CaseOverview({ item, disabled, onFindingChange }: { item: CapaCase; disabled: boolean; onFindingChange: (value: string) => void }) {
+  const linked = Boolean(item.indicatorId || item.indicatorCode || item.resultSnapshots.length);
+  return <section className="capa-case-overview" aria-label="案件概覽與問題摘要">
+    <div className="capa-overview-heading"><div><span className="capa-kicker">CASE OVERVIEW</span><h3>案件概覽</h3></div><span>先確認來源與問題範圍，再進入原因分析</span></div>
+    <div className="capa-overview-grid">
+      <div className="capa-overview-context">
+        <dl><div><dt>案件來源</dt><dd>{item.source}</dd></div><div><dt>指標</dt><dd>{item.indicatorCode ? <b>{item.indicatorCode}　</b> : ""}{item.indicatorName || (linked ? "未命名指標" : "人工立案，未連結指標")}</dd></div><div><dt>單位</dt><dd>{item.unitName || "尚待確認"}{item.unitCode ? `（${item.unitCode}）` : ""}</dd></div><div><dt>觸發規則</dt><dd>{linked ? `連續 ${item.triggerPeriodCount} 個有效審查期未達 ${item.threshold}%` : "請依案件需要補充衡量標準"}</dd></div></dl>
+        <div className="capa-result-block"><div className="capa-result-heading"><b>結果來源快照</b>{linked && <span>目標閾值 ≥ {item.threshold}%</span>}</div>{item.resultSnapshots.length ? <div className="capa-result-snapshots">{item.resultSnapshots.map((snapshot) => <div key={`${snapshot.period}-${snapshot.rate}`} className={`capa-result-snapshot ${snapshot.rate >= item.threshold ? "met" : "below"}`}><span>{snapshot.period}{snapshot.extraAudit ? " · 加審" : ""}</span><b>{snapshot.rate}%</b><small>{snapshot.rate >= item.threshold ? "達閾值" : "未達閾值"}</small></div>)}</div> : <p className="capa-no-snapshot">{linked ? "已連結指標期別，尚無可顯示的結果值。" : "此案件未連結結果分析；如有相關期別或證據，請補充於問題摘要。"}</p>}</div>
+      </div>
+      <label className="capa-overview-finding"><span><b>問題與影響摘要</b><small>描述可觀察到的問題與影響範圍，避免只記錄解決方案。</small></span><textarea value={item.findingSummary} onChange={(event) => onFindingChange(event.target.value)} placeholder="說明發現的品質問題、涉及範圍與目前已知影響" disabled={disabled} /></label>
+    </div>
+  </section>;
+}
+function SectionHeading({ title, note, action }: { title: string; note?: string; action?: ReactNode }) { return <div className="capa-section-heading"><div><h3>{title}</h3>{note && <small>{note}</small>}</div>{action}</div>; }
+function SettingsPanel({ settings, setSettings, cases, saving, onSave }: { settings: CapaSettings; setSettings: (value: CapaSettings) => void; cases: CapaCase[]; saving: boolean; onSave: () => void }) {
+  const indicators = Array.from(new Map(cases.filter((item) => item.indicatorId).map((item) => [item.indicatorId, { id: item.indicatorId, code: item.indicatorCode, name: item.indicatorName }])).values()); const [overrideId, setOverrideId] = useState(""); const [overrideCount, setOverrideCount] = useState(3);
+  return <div className="capa-settings-grid"><section className="panel-card capa-settings-card"><SectionHeading title="未達閾值觸發規則" note="系統提供開案建議；觸發不會自動視為正式 CAPA" /><p className="capa-muted">觸發門檻保留設定版本，案件建立時保存當時期數、閾值及來源快照。</p><label className="capa-setting-row"><span><b>啟用連續未達標提醒</b><small>達門檻後顯示待確認案件入口</small></span><input type="checkbox" checked={settings.triggerEnabled} onChange={(event) => setSettings({ ...settings, triggerEnabled: event.target.checked })} /></label><label className="capa-setting-row"><span><b>全院預設連續有效審查期數</b><small>預設 2；只計有審查資料的期別</small></span><select value={settings.defaultTriggerPeriods} onChange={(event) => setSettings({ ...settings, defaultTriggerPeriods: Number(event.target.value) })}>{[2, 3, 4, 5, 6].map((count) => <option key={count} value={count}>{count} 期</option>)}</select></label><div className="capa-setting-facts"><span><Check size={14} />缺少審查資料的期間不列入計算</span><span><Check size={14} />加審紀錄歸併原月份，不另算一期</span><span><Check size={14} />個別指標可覆寫全院預設</span></div><SectionHeading title="個別指標覆寫" note="以已有案件的指標為可選項" /><div className="capa-override-add"><select value={overrideId} onChange={(event) => setOverrideId(event.target.value)}><option value="">選擇指標</option>{indicators.map((item) => <option key={item.id} value={item.id}>{item.code}｜{item.name}</option>)}</select><select value={overrideCount} onChange={(event) => setOverrideCount(Number(event.target.value))}>{[2, 3, 4, 5, 6].map((count) => <option key={count} value={count}>{count} 期</option>)}</select><button className="button button-secondary" onClick={() => { if (overrideId) setSettings({ ...settings, indicatorOverrides: { ...settings.indicatorOverrides, [overrideId]: overrideCount } }); }}>新增</button></div>{Object.entries(settings.indicatorOverrides).map(([id, count]) => <div className="capa-override-row" key={id}><span>{indicators.find((row) => row.id === id)?.code || id}　{indicators.find((row) => row.id === id)?.name}</span><b>{count} 期</b><button className="text-button danger-text" onClick={() => { const next = { ...settings.indicatorOverrides }; delete next[id]; setSettings({ ...settings, indicatorOverrides: next }); }}>移除</button></div>)}<div className="capa-action-bar"><button className="button button-primary" onClick={onSave} disabled={saving}><Save size={15} />儲存 CAPA 設定</button></div></section>
+    <section className="panel-card capa-settings-card"><SectionHeading title="結案審核設定" note="結案必須核准；未完成核准不會正式結案" /><label className="capa-setting-row"><span><b>啟用多層級審核</b><small>關閉時仍保留一位核准者</small></span><input type="checkbox" checked={settings.multiLevelApproval} onChange={(event) => setSettings({ ...settings, multiLevelApproval: event.target.checked })} /></label><label className="capa-setting-field">預設負責人角色（觸發 CAPA 時，依單位內此角色指派）<input value={settings.ownerRole} onChange={(event) => setSettings({ ...settings, ownerRole: event.target.value })} /></label><label className="capa-setting-field">第 1 層核准角色（預設督導；依單位管轄指派）<input value={settings.approvalRoles[0] ?? ""} onChange={(event) => setSettings({ ...settings, approvalRoles: [event.target.value, ...settings.approvalRoles.slice(1)] })} /></label>{settings.multiLevelApproval && <label className="capa-setting-field">第 2 層核准角色<input value={settings.approvalRoles[1] ?? ""} onChange={(event) => setSettings({ ...settings, approvalRoles: [settings.approvalRoles[0] ?? "", event.target.value] })} /></label>}<label className="capa-setting-field">驗證角色提示<input value={settings.verifierRole} onChange={(event) => setSettings({ ...settings, verifierRole: event.target.value })} /></label><div className="capa-setting-facts"><span><ShieldCheck size={14} />主責人不得核准自己的案件</span><span><AlertTriangle size={14} />退回時必須填寫原因</span><span><Check size={14} />送審案件保留核准層級快照</span></div><div className="capa-action-bar"><button className="button button-primary" onClick={onSave} disabled={saving}><Save size={15} />儲存 CAPA 設定</button></div></section></div>;
+}
+function TemplatesPanel({ templates, setTemplateDraft, saving, onToggle }: { templates: CapaTemplate[]; setTemplateDraft: (item: CapaTemplate) => void; saving: boolean; onToggle: (item: CapaTemplate) => void }) {
+  return <section className="panel-card capa-templates-panel"><div className="capa-panel-head"><div><h2>CAPA 範本維護</h2><small>原因分析提示、改善措施與成效驗證</small></div><button className="button button-primary" onClick={() => setTemplateDraft({ id: `new-${newId("template")}`, type: "改善措施", name: "", category: "", content: "", active: true })}><Plus size={15} />新增範本</button></div><div className="capa-template-groups">{(["原因分析", "改善措施", "成效驗證"] as CapaTemplateType[]).map((type) => <section key={type}><h3>{type}</h3>{templates.filter((item) => item.type === type).map((item) => <article className="capa-template-row" key={item.id}><div><b>{item.name}</b><span>{item.category || "未分類"}</span><p>{item.content}</p></div><div className="template-row-actions"><span className={`capa-pill ${item.active ? "green" : "muted"}`}>{item.active ? "啟用" : "停用"}</span><button className="text-button" onClick={() => setTemplateDraft({ ...item })}>編輯</button><button className="text-button" onClick={() => onToggle(item)} disabled={saving}>{item.active ? "停用" : "啟用"}</button></div></article>)}{!templates.some((item) => item.type === type) && <p className="capa-inline-empty">尚無此類範本。</p>}</section>)}</div><p className="capa-muted">範本僅協助起草；案件負責人、期限、證據與適用內容仍須逐案確認。教育／提醒類範本不作唯一建議。</p></section>;
 }

@@ -6,14 +6,16 @@ import { useMemo, useState } from "react";
 import { doc, serverTimestamp, updateDoc } from "../../lib/db";
 import { getFirebaseDb } from "../../lib/firebase";
 import { SectionTitle } from "../../components/ui";
-import { lagLights } from "../../lib/dashboardStats";
+import { lagLights, taskProgressLabel } from "../../lib/dashboardStats";
 import {
   DEFAULT_DASHBOARD_SECTIONS,
   type DashboardSections,
 } from "../../lib/dashboardSections";
-import { progressLabel } from "../../lib/reviewProgress";
+import { displayUnitCode, staffLabel } from "../../lib/mask";
+import { useStaffNameMap } from "../../lib/useStaffNames";
 import { todayStr } from "../../lib/scheduling";
 import type { DashboardData } from "./useDashboardData";
+import { pad2 } from "../../lib/ym";
 
 export function OfficerTab({
   data,
@@ -31,6 +33,8 @@ export function OfficerTab({
   const curYear = now.getFullYear();
   const curMonth = now.getMonth() + 1;
   const [busyId, setBusyId] = useState("");
+  /** v1.50.0：審查員顯示職編/遮罩姓名（users 走共用快取） */
+  const staffNames = useStaffNameMap();
 
   const lags = useMemo(
     () =>
@@ -73,16 +77,16 @@ export function OfficerTab({
     <>
       {sections.lagLights && (
         <section className="panel">
-          <SectionTitle
-            title="全院進度落後預警"
-            note="截止日 5 天內：完成度＜50% 紅燈、＜80% 黃燈"
-          />
+        <SectionTitle
+          title="全院進度落後預警"
+          note="截止日 5 天內：完成度＜50% 紅燈、＜80% 黃燈"
+        />
         {data.loading ? (
           <p className="settings-note">讀取中…</p>
         ) : lags.length === 0 ? (
           <p className="settings-note">目前無即將到期的落後任務。</p>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll dashboard-responsive-table">
             <table className="data-table">
               <thead>
                 <tr>
@@ -97,7 +101,7 @@ export function OfficerTab({
               <tbody>
                 {lags.map(({ task: t, pct, level }) => (
                   <tr key={t.id}>
-                    <td>
+                    <td data-label="預警燈號">
                       <span
                         className={`status-pill${level === "red" ? " danger" : " warning"}`}
                       >
@@ -105,13 +109,13 @@ export function OfficerTab({
                         {Math.round(pct * 100)}%
                       </span>
                     </td>
-                    <td>
+                    <td data-label="指標名稱">
                       {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                     </td>
-                    <td>{t.unitId}</td>
-                    <td>{t.reviewerId}</td>
-                    <td>{progressLabel(t.doneCount, t.caseCount)}</td>
-                    <td>{t.deadline}</td>
+                    <td data-label="審查單位">{displayUnitCode(t.unitId)}</td>
+                    <td data-label="審查員">{staffLabel(t.reviewerId, staffNames.get(t.reviewerId) ?? "")}</td>
+                    <td data-label="完成／應審件數">{taskProgressLabel(t)}</td>
+                    <td data-label="截止日期">{t.deadline}</td>
                   </tr>
                 ))}
               </tbody>
@@ -130,7 +134,7 @@ export function OfficerTab({
         {locked.length === 0 ? (
           <p className="settings-note">目前無鎖定任務。</p>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll dashboard-responsive-table">
             <table className="data-table">
               <thead>
                 <tr>
@@ -144,20 +148,18 @@ export function OfficerTab({
               <tbody>
                 {locked.map((t) => (
                   <tr key={t.id}>
-                    <td>
-                      {t.year}/{String(t.month).padStart(2, "0")}
+                    <td data-label="年月">
+                      {t.year}/{pad2(t.month)}
                     </td>
-                    <td>
+                    <td data-label="指標名稱">
                       {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                     </td>
-                    <td>{t.unitId}</td>
+                    <td data-label="審查單位">{displayUnitCode(t.unitId)}</td>
                     {/* v1.28 階段 2：補紀錄超過上限者進度未知，顯示「—」而非錯誤的 0 */}
-                    <td>
-                      {t.doneCountUnknown
-                        ? "—"
-                        : progressLabel(t.doneCount, t.caseCount)}
+                    <td data-label="完成／應審件數">
+                      {taskProgressLabel(t)}
                     </td>
-                    <td>{t.deadline}</td>
+                    <td data-label="截止日期">{t.deadline}</td>
                   </tr>
                 ))}
               </tbody>
@@ -176,7 +178,7 @@ export function OfficerTab({
         {data.unlockPending.length === 0 ? (
           <p className="settings-note">目前無待審核的解鎖申請。</p>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll dashboard-responsive-table">
             <table className="data-table">
               <thead>
                 <tr>
@@ -191,19 +193,18 @@ export function OfficerTab({
               <tbody>
                 {data.unlockPending.map((u) => (
                   <tr key={u.id}>
-                    <td>
-                      {u.year}/{String(u.month).padStart(2, "0")}
+                    <td data-label="年月">
+                      {u.year}/{pad2(u.month)}
                     </td>
-                    <td>
+                    <td data-label="指標名稱">
                       {data.indicatorMap.get(u.indicatorId) ?? u.indicatorId}
                     </td>
-                    <td>{u.unitId}</td>
-                    <td>
-                      {u.requestedBy}
-                      {u.requestedByName ? `／${u.requestedByName}` : ""}
+                    <td data-label="審查單位">{displayUnitCode(u.unitId)}</td>
+                    <td data-label="申請人">
+                      {staffLabel(u.requestedBy, u.requestedByName ?? "")}
                     </td>
-                    <td style={{ maxWidth: 240 }}>{u.reason}</td>
-                    <td>
+                    <td data-label="原因" style={{ maxWidth: 240 }}>{u.reason}</td>
+                    <td data-label="操作">
                       <button
                         className="text-button"
                         disabled={busyId === u.id}

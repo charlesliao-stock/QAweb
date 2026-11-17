@@ -1,12 +1,15 @@
 /**
- * 督導儀表板頁籤（v1.15.0）：轄區＝負責群組下的單位。
+ * 督導儀表板頁籤（v1.15.0）：轄區＝負責單位。
  * 各單位進度＋品質燈號、連續下滑／未達標警訊。
+ * v1.58.0：轄區改由督導職稱的負責單位（titleUnitCodes，單位代碼）決定，
+ * 不再讀督導轄區群組。
  */
 import { useMemo } from "react";
 import { SectionTitle } from "../../components/ui";
 import {
   cycleMonthLabel,
   declineAlerts,
+  taskProgressCount,
   unitMonthAvgs,
 } from "../../lib/dashboardStats";
 import { avgRateOf, ragStatus, type StatsCycle } from "../../lib/resultAnalysis";
@@ -16,19 +19,18 @@ import {
 } from "../../lib/dashboardSections";
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
+import { CapaPendingReviewCard } from "./CapaPendingReviewCard";
+import { ymPadded } from "../../lib/ym";
 
-function ymOf(year: number, month: number): string {
-  return `${year}-${String(month).padStart(2, "0")}`;
-}
 
 export function SupervisorTab({
   data,
-  districtGroupIds,
+  titleUnitCodes,
   cycle = "year",
   sections = DEFAULT_DASHBOARD_SECTIONS,
 }: {
   data: DashboardData;
-  districtGroupIds: string[];
+  titleUnitCodes: string[];
   /** 統計週期（系統參數；預設曆年） */
   cycle?: StatsCycle;
   /** v1.28 階段 2：顯示設定旗標（預設只留轄區單位進度，3 個月趨勢關閉） */
@@ -39,28 +41,40 @@ export function SupervisorTab({
   const curMonth = now.getMonth() + 1;
 
   const districtUnits = useMemo(
-    () => data.units.filter((u) => districtGroupIds.includes(u.groupId)),
-    [data, districtGroupIds],
+    () => data.units.filter((u) => titleUnitCodes.includes(u.code)),
+    [data, titleUnitCodes],
   );
   const districtUnitIds = useMemo(
     () => new Set(districtUnits.map((u) => u.id)),
     [districtUnits],
   );
 
-  const ym = ymOf(curYear, curMonth);
+  const ym = ymPadded(curYear, curMonth);
   // 各單位本月進度＋品質燈號
   const unitRows = useMemo(() => {
     return districtUnits.map((u) => {
       const tasks = data.tasks.filter(
         (t) => t.unitId === u.id && t.year === curYear && t.month === curMonth,
       );
-      const done = tasks.reduce((n, t) => n + t.doneCount, 0);
-      const req = tasks.reduce((n, t) => n + requiredCases(t.caseCount), 0);
-      const rates = data.records
-        .filter(
-          (r) => r.unitId === u.id && r.year === curYear && r.month === curMonth,
-        )
-        .map((r) => r.rate);
+      let done = 0;
+      let req = 0;
+      let progressUnknown = false;
+      const countedQuotaGroups = new Set<string>();
+      for (const task of tasks) {
+        if (task.quotaGroupId) {
+          if (countedQuotaGroups.has(task.quotaGroupId)) continue;
+          countedQuotaGroups.add(task.quotaGroupId);
+        }
+        const progressCount = taskProgressCount(task);
+        if (progressCount == null) progressUnknown = true;
+        else done += progressCount;
+        req += requiredCases(task.caseCount);
+      }
+      const monthRecords = data.records.filter(
+        (r) => r.unitId === u.id && r.year === curYear && r.month === curMonth,
+      );
+      const monthCount = monthRecords.length;
+      const rates = monthRecords.map((r) => r.rate);
       const avg = avgRateOf(rates);
       // 燈號：用該單位本月指標的最低閾值判定（簡化）
       const ths = tasks
@@ -71,9 +85,11 @@ export function SupervisorTab({
         unit: u,
         done,
         req,
+        monthCount,
+        progressUnknown,
         avg,
         rag: ragStatus(avg, th),
-        complete: req > 0 && done >= req,
+        complete: req > 0 && !progressUnknown && done >= req,
       };
     });
   }, [data, districtUnits, curYear, curMonth]);
@@ -87,7 +103,7 @@ export function SupervisorTab({
         m += 12;
         y -= 1;
       }
-      return ymOf(y, m);
+      return ymPadded(y, m);
     }).reverse();
     // declineAlerts 吃的 yms 需與 unitMonthAvgs 輸出的 ym 標籤同格式
     const yms = calYms.map((s) => {
@@ -100,12 +116,12 @@ export function SupervisorTab({
     return declineAlerts(rows, yms, 90);
   }, [data, districtUnitIds, curYear, curMonth, cycle]);
 
-  if (districtGroupIds.length === 0) {
+  if (titleUnitCodes.length === 0) {
     return (
       <section className="panel">
         <SectionTitle title="督導轄區" />
         <p className="settings-note">
-          尚未設定負責群組，請聯絡系統管理員至「群組與人員」→ 人員編輯 → 督導轄區群組勾選。
+          尚未設定負責單位，請聯絡系統管理員至「群組與人員」→ 人員編輯 → 職稱 → 負責單位設定。
         </p>
       </section>
     );
@@ -113,6 +129,7 @@ export function SupervisorTab({
 
   return (
     <>
+      {sections.capaPendingReview && <CapaPendingReviewCard variant="supervisor" />}
       {/* v1.28 階段 2：近 3 個月趨勢警訊改去「結果分析」看，程式保留、旗標關閉 */}
       {sections.trendAlerts ? (
         alerts.length > 0 && (
@@ -141,12 +158,13 @@ export function SupervisorTab({
         {unitRows.length === 0 ? (
           <p className="settings-note">轄區內尚無單位。</p>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll dashboard-unit-progress-table">
             <table className="data-table">
               <thead>
                 <tr>
                   <th>單位</th>
-                  <th>完成/應審件數</th>
+                  <th>審查進度（週期為區間共用）</th>
+                  <th>本月實際件數</th>
                   <th>平均正確率</th>
                   <th>品質燈號</th>
                   <th>狀態</th>
@@ -158,9 +176,12 @@ export function SupervisorTab({
                     <td>{r.unit.code}</td>
                     <td>
                       {r.req > 0
-                        ? `${r.done}/${r.req}`
+                        ? r.progressUnknown
+                          ? "—"
+                          : `${r.done}/${r.req}`
                         : "本月無任務"}
                     </td>
+                    <td>{r.monthCount}</td>
                     <td>{r.avg != null ? `${r.avg}%` : "—"}</td>
                     <td>
                       <span
@@ -198,7 +219,7 @@ export function SupervisorTab({
         )}
       </section>
 
-      <div className="task-cards">
+      <div className="task-cards dashboard-unit-progress-cards">
         {unitRows.map((r) => (
           <div key={r.unit.id} className="task-card">
             <div className="task-card-top">
@@ -217,8 +238,14 @@ export function SupervisorTab({
             </div>
             <div className="task-card-meta">
               <span>
-                完成/應審：{r.req > 0 ? `${r.done}/${r.req}` : "本月無任務"}
+                審查進度（週期為區間共用）：
+                {r.req > 0
+                  ? r.progressUnknown
+                    ? "—"
+                    : `${r.done}/${r.req}`
+                  : "本月無任務"}
               </span>
+              <span>本月實際件數：{r.monthCount}</span>
               <span>
                 平均正確率：{r.avg != null ? `${r.avg}%` : "—"}
               </span>

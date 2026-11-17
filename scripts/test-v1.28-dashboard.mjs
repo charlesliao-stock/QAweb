@@ -11,7 +11,8 @@ writeFileSync(
   "/tmp/t128d.ts",
   [
     `export { DEFAULT_DASHBOARD_SECTIONS, parseDashboardSections, resolveDashboardSections } from "${ROOT}/src/lib/dashboardSections";`,
-    `export { countRecordsByTask, dashboardMonthWindow, mergeDashTasks } from "${ROOT}/src/lib/dashboardStats";`,
+    `export { countRecordsByTask, dashboardMonthWindow, mergeDashTasks, taskProgressCount, taskProgressLabel, lagLights } from "${ROOT}/src/lib/dashboardStats";`,
+    `export { quotaRecordMatchesGroup } from "${ROOT}/src/features/dashboard/periodicQuotaCounts";`,
   ].join("\n"),
 );
 await build({ entryPoints: ["/tmp/t128d.ts"], bundle: true, format: "cjs", platform: "node", outfile: "/tmp/t128d.cjs", logLevel: "silent" });
@@ -51,5 +52,38 @@ a("resolve：皆缺值回預設", L.resolveDashboardSections().monthlyTodo === t
 // 計數
 a("計數：依 taskId 累加", (() => { const m = L.countRecordsByTask([{ taskId: "a" }, { taskId: "a" }, { taskId: "b" }]); return m.get("a") === 2 && m.get("b") === 1; })());
 
-console.log(f ? `failed ${f}` : "v1.28-dashboard：16 項通過");
+// 年度／學年度週期件數：任務 progress 採整個 quota group，calendar-month doneCount 保持分離
+{
+  const periodicTask = {
+    id: "task-a",
+    quotaGroupId: "quota-a",
+    doneCount: 0,
+    quotaDoneCount: 2,
+    caseCount: 3,
+    status: "pending",
+    deadline: "2026-11-08",
+  };
+  a("週期任務：進度使用區間共用 quota count", L.taskProgressCount(periodicTask) === 2 && L.taskProgressLabel(periodicTask) === "2/3");
+  a("週期任務：落後燈號以區間 count 計算", (() => { const rows = L.lagLights([periodicTask], "2026-11-06"); return rows.length === 1 && Math.abs(rows[0].pct - 2 / 3) < 0.001 && rows[0].level === "yellow"; })());
+  const monthlyTask = { id: "task-b", doneCount: 1, caseCount: 3 };
+  a("一般／臨時任務：進度仍使用原 task 件數", L.taskProgressCount(monthlyTask) === 1 && L.taskProgressLabel(monthlyTask) === "1/3");
+}
+
+// 週期 quota 匯入結果必須與指標、單位及區間年月全數相符
+{
+  const group = {
+    indicatorId: "indicator-a",
+    unitId: "10A",
+    quotaIntervalStartYear: 2026,
+    quotaIntervalStartMonth: 2,
+    quotaIntervalEndYear: 2026,
+    quotaIntervalEndMonth: 4,
+  };
+  a("quota match：同指標、同單位、區間內", L.quotaRecordMatchesGroup({ indicatorId: "indicator-a", unitId: "10A", year: 2026, month: 3 }, group));
+  a("quota match：不同指標不混計", !L.quotaRecordMatchesGroup({ indicatorId: "indicator-b", unitId: "10A", year: 2026, month: 3 }, group));
+  a("quota match：不同單位不混計", !L.quotaRecordMatchesGroup({ indicatorId: "indicator-a", unitId: "10B", year: 2026, month: 3 }, group));
+  a("quota match：區間外不計", !L.quotaRecordMatchesGroup({ indicatorId: "indicator-a", unitId: "10A", year: 2026, month: 5 }, group));
+}
+
+console.log(f ? `failed ${f}` : "v1.28-dashboard：配額與 dashboard assertions 通過");
 process.exit(f ? 1 : 0);

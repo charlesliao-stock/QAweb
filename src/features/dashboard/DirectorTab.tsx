@@ -4,14 +4,17 @@
  */
 import { useMemo } from "react";
 import { SectionTitle } from "../../components/ui";
-import { radarMatrix } from "../../lib/dashboardStats";
+import { radarMatrix, taskProgressCount } from "../../lib/dashboardStats";
 import {
   DEFAULT_DASHBOARD_SECTIONS,
   type DashboardSections,
 } from "../../lib/dashboardSections";
 import { avgRateOf } from "../../lib/resultAnalysis";
+import { displayUnitCode } from "../../lib/mask";
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
+import { CapaPendingReviewCard } from "./CapaPendingReviewCard";
+import { pad2 } from "../../lib/ym";
 
 /** 簡易 SVG 雷達圖：axes 軸、series 系列（值 0–100） */
 function RadarChart({
@@ -125,14 +128,25 @@ export function DirectorTab({
     [data, curYear, curMonth],
   );
 
-  // 全院戰情
-  const totalTasks = monthTasks.length;
-  const doneTasks = monthTasks.filter(
-    (t) => t.doneCount >= requiredCases(t.caseCount),
-  ).length;
+  // 全院戰情：週期配額按 quota group 去重，temp/舊 task 則各自計算。
+  const countedMonthTasks = useMemo(() => {
+    const seenQuotaGroups = new Set<string>();
+    return monthTasks.filter((task) => {
+      if (!task.quotaGroupId) return true;
+      if (seenQuotaGroups.has(task.quotaGroupId)) return false;
+      seenQuotaGroups.add(task.quotaGroupId);
+      return true;
+    });
+  }, [monthTasks]);
+  const totalTasks = countedMonthTasks.length;
+  const doneTasks = countedMonthTasks.filter((task) => {
+    const count = taskProgressCount(task);
+    return count != null && count >= requiredCases(task.caseCount);
+  }).length;
   const totalRate =
     totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 1000) / 10 : null;
-  const totalCases = monthTasks.reduce((n, t) => n + t.doneCount, 0);
+  // 月報的人次只算本月紀錄；週期 quota progress 不重複列入各月件數。
+  const totalCases = monthRecords.length;
   // 綜合達標率：各單位月平均達標的比例
   const byUnit = new Map<string, (number | null)[]>();
   for (const r of monthRecords) {
@@ -210,12 +224,13 @@ export function DirectorTab({
 
   return (
     <>
+      {sections.capaPendingReview && <CapaPendingReviewCard variant="director" />}
       {sections.overview && (
         <section className="panel">
           <SectionTitle
-            title={`全院品質戰情總覽（${curYear}/${String(curMonth).padStart(2, "0")}）`}
+            title={`全院品質戰情總覽（${curYear}/${pad2(curMonth)}）`}
           />
-        <div className="table-scroll">
+        <div className="table-scroll dashboard-responsive-table">
           <table className="data-table">
             <thead>
               <tr>
@@ -226,19 +241,19 @@ export function DirectorTab({
             </thead>
             <tbody>
               <tr>
-                <td>
+                <td data-label="全院查核完成率">
                   <b>{totalRate != null ? `${totalRate}%` : "—"}</b>
                   <span className="muted-text">
                     （{doneTasks}/{totalTasks} 任務）
                   </span>
                 </td>
-                <td>
+                <td data-label="綜合達標率（單位≧90%）">
                   <b>{unitPassRate != null ? `${unitPassRate}%` : "—"}</b>
                   <span className="muted-text">
                     （{passUnits}/{byUnit.size} 單位）
                   </span>
                 </td>
-                <td>
+                <td data-label="當月受審總人次">
                   <b>{totalCases}</b>
                 </td>
               </tr>
@@ -291,7 +306,7 @@ export function DirectorTab({
             <ol style={{ margin: 0, paddingLeft: 22 }}>
               {riskyUnits.map((r) => (
                 <li key={r.unitId} style={{ marginBottom: 6 }}>
-                  <b style={{ color: "#b3372f" }}>{r.unitId}</b>
+                  <b style={{ color: "#b3372f" }}>{displayUnitCode(r.unitId)}</b>
                   <span className="muted-text">（平均 {r.avg}%）</span>
                 </li>
               ))}

@@ -1,23 +1,3 @@
-export type Role =
-  | "一般人員"
-  | "審查員"
-  | "護理長"
-  | "主任"
-  | "副主任"
-  | "督導"
-  | "各組召集人"
-  | "執行幹事"
-  | "品管執行幹事"
-  | "系統管理員"
-  | "指標負責人"
-  // v1.21：新角色
-  | "品管組召集人"
-  | "品管組執行幹事"
-  | "品管組審查員"
-  | "單位召集人"
-  | "單位執行幹事"
-  | "單位審查員";
-
 export type PageId =
   | "dashboard"
   | "indicators"
@@ -25,11 +5,16 @@ export type PageId =
   | "audit"
   | "results"
   | "groups"
+  | "role-members"
+  | "title-members"
+  | "group-units"
+  | "unit-members"
+  | "title-units"
+  | "handoff"
   | "capa"
   | "admin"
+  | "permissions"
   | "reviewers";
-
-export type Rag = "green" | "amber" | "red";
 
 export interface Indicator {
   id: string;

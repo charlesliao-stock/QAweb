@@ -1,0 +1,452 @@
+/* ===== 指標排程（v1.8.0） ===== */
+
+.muted-text {
+  font-size: var(--font-small);
+  color: #8a9494;
+  margin-top: 2px;
+}
+.month-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.month-cell {
+  flex: 1 1 calc(16.666% - 6px);
+  min-width: 96px;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid #dde5e4;
+  border-radius: 8px;
+  padding: 6px 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.month-cell.checked {
+  border-color: var(--teal);
+  background: #eef6f4;
+}
+.unit-group-block {
+  border: 1px solid #e3e9e8;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+.unit-group-head {
+  margin-bottom: 6px;
+}
+.unit-check-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 12px;
+  padding-left: 24px;
+}
+.dup-warn {
+  color: #b7791f;
+  vertical-align: -2px;
+  margin-left: 4px;
+}
+.dup-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--font-body);
+  color: #8a5a13;
+  background: #fdf6e7;
+  border: 1px solid #f0dfb8;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 12px;
+}
+/* 每輪審查件數（v1.9.0） */
+
+.case-count-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-body);
+  white-space: nowrap;
+}
+.case-count-field input[type="number"] {
+  width: 76px;
+  padding: 5px 8px;
+  border: 1px solid #d8d5cc;
+  border-radius: 6px;
+  font-size: var(--font-body);
+  text-align: right;
+}
+.assign-unit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #e5e2da;
+  font-size: var(--font-body);
+}
+.assign-unit-row:last-child {
+  border-bottom: none;
+}
+:root[data-mode="dark"] .assign-unit-row {
+  border-bottom-color: #3d4a49;
+}
+:root[data-mode="dark"] .case-count-field input[type="number"] {
+  border-color: #3d4a49;
+  background: #1c2422;
+  color: inherit;
+}
+:root[data-mode="dark"] .dup-note {
+  background: #3a2f18;
+  border-color: #6b5320;
+  color: #e8c87e;
+}
+:root[data-mode="dark"] .month-cell {
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .month-cell.checked {
+  background: #1e3a36;
+}
+:root[data-mode="dark"] .unit-group-block {
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .muted-text {
+  color: #9aa5a4;
+}
+
+/* ---------- 審查表單執行頁（v1.10.0） ---------- */
+.question-card {
+  border: 1px solid #e2e8e7;
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: #fbfdfd;
+}
+.question-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.question-head b {
+  font-size: var(--font-subtitle);
+}
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.radio-group .check-row input[type="radio"] {
+  accent-color: var(--accent, #2f7d6d);
+  width: 16px;
+  height: 16px;
+}
+
+:root[data-mode="dark"] .question-card {
+  background: #202726;
+  border-color: #3d4a49;
+}
+
+/* ---------- 審查表單：一個組別一個方框（v1.24） ---------- */
+.review-group-label {
+  font-weight: 700;
+  font-size: var(--font-subtitle);
+  margin: 0 0 6px 2px;
+}
+.review-group-box {
+  border: 1px solid #e2e8e7;
+  border-radius: 10px;
+  background: #fbfdfd;
+  padding: 4px 14px;
+  margin-bottom: 16px;
+}
+.review-group-box:last-child {
+  margin-bottom: 0;
+}
+/* 每題一行：題目左、選項中、備註右；指引在整行下方展開（寬度與整行相同） */
+.review-qrow {
+  padding: 12px 0;
+  border-bottom: 1px solid #e8efee;
+}
+.review-qrow:last-child {
+  border-bottom: none;
+}
+.review-qrow .q-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(180px, 240px);
+  gap: 12px;
+  align-items: start;
+}
+.review-qrow .q-text {
+  font-size: var(--font-body);
+  padding-top: 2px;
+  overflow-wrap: anywhere;
+}
+.review-qrow .q-text-btn {
+  display: inline;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.review-qrow .q-text-btn:hover {
+  background: #eef4f3;
+}
+.review-qrow .q-caret {
+  display: inline-block;
+  margin-right: 4px;
+  color: #5b6b6a;
+}
+.review-qrow .q-options {
+  padding-top: 2px;
+}
+.review-qrow .radio-group {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.review-answer-options {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.common-error-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 7px 8px 8px;
+  border: 1px solid #e4ecea;
+  border-radius: 8px;
+}
+.common-error-fieldset legend {
+  padding: 0 4px;
+  color: #7e918e;
+  font-size: var(--font-small);
+}
+.common-error-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.common-error-options label {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 250px;
+  padding: 5px 7px;
+  color: #687a77;
+  background: #f7faf9;
+  border: 1px solid #e8efed;
+  border-radius: 7px;
+  font-size: var(--font-small);
+  cursor: pointer;
+}
+.common-error-options label.checked {
+  color: #286e64;
+  background: #edf7f4;
+  border-color: #b9d9d2;
+}
+.common-error-options input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.common-error-options span {
+  overflow-wrap: anywhere;
+}
+.common-error-results {
+  margin-top: 6px;
+  color: #637572;
+  font-size: var(--font-small);
+  white-space: normal;
+}
+.review-qrow .check-row {
+  padding: 8px 10px;
+}
+.review-qrow .q-note {
+  padding-top: 2px;
+}
+.review-qrow .q-note .text-input {
+  width: 100%;
+}
+.review-qrow .q-option-result {
+  display: inline-block;
+  padding: 6px 12px;
+  border: 1px solid #cfdad8;
+  border-radius: 999px;
+  background: #f2f7f6;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.review-qrow .q-note-text {
+  display: block;
+  padding-top: 6px;
+  overflow-wrap: anywhere;
+  color: #44514f;
+}
+.review-qrow .q-guidance {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #f2f7f6;
+  border: 1px dashed #cfdad8;
+  border-radius: 8px;
+  color: #44514f;
+  font-size: var(--font-body);
+}
+.review-qrow .q-guidance p {
+  margin: 0;
+}
+:root[data-mode="dark"] .review-group-box {
+  background: #202726;
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .review-qrow {
+  border-bottom-color: #3d4a49;
+}
+:root[data-mode="dark"] .review-qrow .q-text-btn:hover {
+  background: #2b3534;
+}
+:root[data-mode="dark"] .review-qrow .q-caret {
+  color: #9aa5a4;
+}
+:root[data-mode="dark"] .review-qrow .q-guidance {
+  background: #262f2e;
+  border-color: #3d4a49;
+  color: #c3cdcc;
+}
+:root[data-mode="dark"] .review-qrow .q-option-result {
+  background: #262f2e;
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .review-qrow .q-note-text {
+  color: #c3cdcc;
+}
+/* 手機（≤640px）：題目、選項、備註依序堆疊；指引仍在整行下方（v1.24） */
+@media (max-width: 640px) {
+  .review-qrow .q-main {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .review-group-box {
+    padding: 4px 12px;
+  }
+  .review-execute-page .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .review-execute-page .review-answer-options .check-row,
+  .review-execute-page .common-error-options label {
+    min-height: 44px;
+  }
+  .review-execute-page .common-error-options label {
+    width: 100%;
+    max-width: none;
+    align-items: center;
+  }
+  .review-execute-page .form-actions {
+    align-items: stretch;
+    gap: 8px;
+  }
+  .review-execute-page .form-actions .button {
+    width: 100%;
+    min-height: 44px;
+    justify-content: center;
+  }
+  .review-execute-page .table-scroll {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* ---------- 審查人員搜尋下拉（v1.11.0） ---------- */
+.sugg-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  margin: 2px 0 0;
+  padding: 4px;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #dce4e4;
+  border-radius: 9px;
+  box-shadow: 0 6px 18px rgba(30, 60, 55, 0.12);
+  max-height: 220px;
+  overflow-y: auto;
+}
+.sugg-list li {
+  margin: 0;
+}
+.sugg-list .text-button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+.sugg-list .text-button:hover {
+  background: #eef5f3;
+}
+:root[data-mode="dark"] .sugg-list {
+  background: #232a29;
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .sugg-list .text-button:hover {
+  background: #2c3836;
+}
+
+/* ============ 儀表板「本月我的審查」手機卡片（v1.10.2） ============ */
+/* 預設（寬螢幕）：顯示表格，隱藏卡片；窄螢幕（≤640px）反之 */
+.my-review .task-cards {
+  display: none;
+}
+@media (max-width: 640px) {
+  .my-review .task-table-wrap {
+    display: none;
+  }
+  .my-review .task-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .task-card {
+    border: 1px solid #e2e8e7;
+    border-radius: 10px;
+    padding: 12px 14px;
+    background: #fbfdfd;
+  }
+  .task-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .task-card-top b {
+    font-size: var(--font-subtitle);
+    overflow-wrap: anywhere;
+  }
+  .task-card-top .status-pill {
+    flex-shrink: 0;
+  }
+  .task-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    font-size: var(--font-body);
+    color: #5b6b6a;
+    margin-bottom: 10px;
+  }
+  
+  .task-card-btn {
+    width: 100%;
+  }
+}
+:root[data-mode="dark"] .task-card {
+  background: #202726;
+  border-color: #3d4a49;
+}
+:root[data-mode="dark"] .task-card-meta {
+  color: #9aa5a4;
+}

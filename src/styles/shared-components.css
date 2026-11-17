@@ -1,0 +1,532 @@
+/* v1.54.0：data-panel 內非表格內容統一邊界（上下 16px／左右 20px）。
+   滿版表格（.table-scroll）維持貼邊不動；標題、表單、按鈕、說明文字與
+   內嵌展開區包在 .panel-inset 內。直接改 .panel.data-panel 的 padding
+   會動到全站滿版表格，故不改。 */
+.panel-inset {
+  padding: 16px 20px;
+}
+/* 內嵌展開區：上方分隔線，與上方列表區隔 */
+.panel-inset.divided {
+  border-top: 1px solid #edf0f1;
+}
+/* v1.55.0：職稱／角色層級區段標題（層級名＋人數小計＋更名／排序／刪除） */
+.level-section-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 14px 20px 8px;
+}
+.level-section-head b {
+  font-size: 15px;
+}
+.level-section + .level-section {
+  border-top: 1px solid #edf0f1;
+}
+/* 表單面板同樣需要邊界 */
+.panel.indicator-form {
+  padding: 22px 26px;
+}
+
+.section-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.section-title h2 {
+  margin: 0;
+  font-size: var(--font-small);
+  color: #42565b;
+  font-weight: 700;
+}
+.section-title > div > span {
+  display: block;
+  color: #a0abad;
+  font-size: var(--font-small);
+  margin-top: 5px;
+}
+
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  color: var(--accent-deep);
+  background: transparent;
+  padding: 4px 2px;
+  font-size: var(--font-small);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.text-button:hover {
+  color: var(--accent);
+}
+.chart-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #8a989b;
+  font-size: var(--font-small);
+  padding: 0 3px 4px;
+}
+.chart-options,
+.drill-history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  margin: 8px 0 12px;
+  color: var(--text, #344347);
+  font-size: var(--font-small);
+}
+.chart-options .check-row,
+.drill-history-controls .check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.drill-history-controls select {
+  min-width: 56px;
+  margin: 0 4px;
+}
+.chart-label-note {
+  fill: #2563eb;
+  font-size: 10px;
+}
+.extra-review-note {
+  display: inline;
+  margin-left: 4px;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 600;
+}
+.chart-legend > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.legend-line {
+  display: inline-block;
+  width: 14px;
+  height: 2px;
+  background: #258a7f;
+  border-radius: 2px;
+}
+.trend-chart {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  height: auto;
+  margin: 0 auto;
+  overflow: visible;
+}
+.chart-svg-wrap {
+  position: relative;
+}
+.chart-tip {
+  position: absolute;
+  transform: translate(-50%, -135%);
+  background: #1f2a2a;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 4px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 5;
+}
+.chart-threshold {
+  stroke: #dc2626;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.chart-threshold-label {
+  font-size: 11px;
+  fill: #dc2626;
+}
+.chart-dot.clickable {
+  cursor: pointer;
+}
+.chart-gridline {
+  stroke: #edf1f1;
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+}
+.chart-line {
+  fill: none;
+  stroke: #288a7f;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.chart-dot {
+  fill: #fff;
+  stroke: #52a79a;
+  stroke-width: 2;
+}
+.chart-dot.latest {
+  fill: #228579;
+  stroke: #fff;
+  stroke-width: 3;
+}
+/* v1.59.0：未達閾值的點標紅（填色／描邊改紅色；連線 .chart-line 不改色） */
+.chart-dot.below {
+  fill: #dc2626;
+  stroke: #dc2626;
+}
+.chart-dot.latest.below {
+  fill: #dc2626;
+  stroke: #dc2626;
+}
+
+.unit-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #66777a;
+  white-space: nowrap;
+}
+
+.unit-count {
+  color: #98a4a6;
+  font-size: var(--font-small);
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  border-radius: 5px;
+  padding: 4px 7px;
+  font-size: var(--font-small);
+  line-height: 1;
+  white-space: nowrap;
+}
+.status-pill.success {
+  color: #338675;
+  background: #eaf5f2;
+}
+.status-pill.info {
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+}
+.status-pill.warning {
+  color: #b28a40;
+  background: #fbf5e9;
+}
+.status-pill.danger {
+  color: #bb6f5e;
+  background: #fbefec;
+}
+.status-pill.muted {
+  color: #89979a;
+  background: #f0f3f4;
+}
+
+.summary-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 15px 17px;
+  background: #fff;
+  border: 1px solid #e9eeee;
+  border-radius: 9px;
+}
+.summary-cell > span {
+  color: #919fa2;
+  font-size: var(--font-small);
+}
+.summary-cell > strong {
+  color: #40575b;
+  font-size: var(--font-title);
+  letter-spacing: -0.03em;
+}
+.summary-cell small {
+  color: #a2adaf;
+  font-size: var(--font-small);
+}
+.data-panel {
+  overflow: hidden;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #edf0f1;
+}
+
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 780px;
+  text-align: left;
+}
+.data-table th {
+  padding: 12px 18px;
+  background: #fafbfb;
+  color: #9aa6a8;
+  border-bottom: 1px solid #edf0f1;
+  font-size: var(--font-small);
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* 可點擊排序的表頭按鈕（v1.12.2：審查員名單） */
+
+/* ===== 統一頁面模板：篩選區塊 + 列表區塊 ===== */
+.filter-panel {
+  padding: 16px 22px 18px;
+  margin-bottom: 14px;
+}
+.filter-panel-head,
+.list-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.filter-panel-head h2,
+.list-panel-head h2 {
+  margin: 0;
+  font-size: var(--font-subtitle);
+  color: var(--ink);
+}
+.filter-panel-head {
+  margin-bottom: 12px;
+}
+.filter-panel-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 16px;
+  align-items: flex-end;
+}
+.filter-panel-body .form-field,
+.filter-panel-body label {
+  margin-bottom: 0;
+}
+.filter-panel-actions,
+.list-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.list-panel {
+  margin-bottom: 14px;
+}
+.list-panel-head {
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--line);
+}
+.list-panel-head > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.list-panel-count {
+  font-size: var(--font-small);
+  color: var(--muted);
+}
+.list-panel .data-table,
+.list-panel .permission-table {
+  margin: 0;
+}
+.th-sort .lucide {
+  opacity: 0.45;
+  flex: none;
+}
+th[aria-sort="ascending"] .th-sort .lucide,
+th[aria-sort="descending"] .th-sort .lucide {
+  opacity: 1;
+  color: var(--teal);
+}
+@media (max-width: 720px) {
+  .filter-panel,
+  .list-panel-head {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .filter-panel-body > * {
+    flex: 1 1 100%;
+  }
+}
+.list-panel .table-scroll > p,
+.list-panel .table-scroll > .login-error {
+  margin: 12px 22px;
+}
+.filter-panel .select-wrap {
+  min-width: 160px;
+}
+/* 關鍵字欄位：輸入框 200px，[搜尋]緊接其右，整排底部對齊 */
+.filter-search-group {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.filter-panel .filter-search-input {
+  width: 200px;
+  min-width: 200px;
+  max-width: 200px;
+}
+.filter-panel-body .field-label {
+  display: block;
+  text-align: left;
+}
+@media (max-width: 720px) {
+  .filter-panel .filter-search-input {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+  .filter-search-group {
+    width: 100%;
+  }
+}
+
+/* 結果分析頁：篩選區塊內沿用原有欄位寬度，並維持捲動時固定在頂端 */
+.results-page .filter-panel-body .field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 150px;
+  margin-bottom: 0;
+}
+.results-page .filter-panel-body .select-wrap {
+  min-width: 150px;
+}
+.results-page .results-sticky-filter {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+}
+@media (max-width: 720px) {
+  .results-page .filter-panel-body .field-label,
+  .results-page .filter-panel-body .select-wrap {
+    min-width: 0;
+    flex: 1 1 45%;
+  }
+  .results-page .results-sticky-filter {
+    position: static;
+  }
+}
+
+/* ===== 篩選器共通規格（v1.75.2）：
+ * 下拉固定 150px × 45px；同列的輸入框／按鈕同為 45px 高，維持底部對齊。
+ * [搜尋]按鈕前有放大鏡（見 FilterSearchField）。 */
+.filter-panel .filter-panel-body .select-wrap {
+  width: 150px;
+  min-width: 150px;
+  max-width: 150px;
+  flex: none;
+}
+.filter-panel .filter-panel-body .select-wrap select,
+.filter-panel .filter-panel-body select.text-input {
+  box-sizing: border-box;
+  width: 150px;
+  height: 45px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.filter-panel .filter-panel-body .filter-search-input,
+.filter-panel .filter-panel-body input.text-input,
+.filter-panel .filter-panel-body .results-month-trigger,
+.filter-panel .filter-panel-body .results-month-field input {
+  box-sizing: border-box;
+  height: 45px;
+}
+.filter-panel .filter-panel-body .button {
+  height: 45px;
+}
+.filter-panel .filter-panel-body .check-row {
+  min-height: 45px;
+}
+/* 新增／批次新增等動作鈕：與篩選器同一水平線、向下對齊，靠右 */
+.filter-panel-end {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+@media (max-width: 720px) {
+  .filter-panel .filter-panel-body .select-wrap {
+    width: 100%;
+    max-width: none;
+    flex: 1 1 100%;
+  }
+  .filter-panel .filter-panel-body .select-wrap select,
+  .filter-panel .filter-panel-body select.text-input {
+    width: 100%;
+  }
+  .filter-panel-end {
+    margin-left: 0;
+  }
+}
+
+/* 結果匯入：組別／指標下拉比照篩選器規格（150×45px），同列向下對齊 */
+.results-page .results-import-filters {
+  align-items: flex-end;
+}
+.results-page .results-import-filters .form-field {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.results-page .results-import-filters .select-wrap {
+  width: 150px;
+  min-width: 150px;
+  max-width: 150px;
+}
+.results-page .results-import-filters .select-wrap select {
+  box-sizing: border-box;
+  width: 150px;
+  height: 45px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+@media (max-width: 720px) {
+  .results-page .results-import-filters .form-field,
+  .results-page .results-import-filters .select-wrap,
+  .results-page .results-import-filters .select-wrap select {
+    width: 100%;
+    max-width: none;
+  }
+}
+.filter-panel .results-range-separator {
+  padding-bottom: 12px;
+}
+.results-page .results-import-filters {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 14px 16px;
+}
+.results-page .results-import-filters .form-field {
+  width: auto;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* v1.79.0：曲線圖點旁的圓圈 C（已啟動 CAPA，可點選連結案件） */
+.chart-capa-mark{cursor:pointer;outline:none}
+.chart-capa-mark circle{fill:#fff;stroke:#0f766e;stroke-width:1.6}
+.chart-capa-mark text{fill:#0f766e;font-size:10px;font-weight:700}
+.chart-capa-mark:hover circle,.chart-capa-mark:focus-visible circle{fill:#0f766e}
+.chart-capa-mark:hover text,.chart-capa-mark:focus-visible text{fill:#fff}
+.chart-capa-link{stroke:#0f766e;stroke-width:1.2;fill:none}
+.chart-capa-box{cursor:pointer;outline:none}
+.chart-capa-box rect{fill:#f4faf9;stroke:#0f766e;stroke-width:1}
+.chart-capa-box text{fill:#244b47;font-size:10px}
+.chart-capa-box:hover rect,.chart-capa-box:focus-visible rect{fill:#e3f3f0}

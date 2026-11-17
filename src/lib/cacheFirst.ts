@@ -6,8 +6,10 @@
  * 只開快取開關不改讀法是省不到錢的（getDocs() 預設先問伺服器，一定計費），
  * 故參考資料改走本模組：先讀快取、命中免計費、未命中回伺服器。
  *
- * 範圍（收斂）：只走 refCache 漏斗的參考資料——指標／群組／單位／人員／
- * 角色／職稱六集合＋systemParams/config（變化慢）。reviewRecords／
+ * 範圍（收斂）：只走 refCache 漏斗的參考資料——指標／群組／單位／
+ * 角色／職稱集合＋systemParams/config（變化慢）。users 全集合查詢改走
+ * getDocsFromServer：Firestore 本機 query cache 可能只包含先前讀過的文件，
+ * 不能保證是完整人員名單。reviewRecords／
  * reviewTasks 保持伺服器優先（變化快、正確性優先），不擴大範圍。
  * 呼叫端不需逐處改寫：遷移方式是把 refCache fetcher 內的 getDocs／getDoc
  * 換成本模組的 getDocsCacheFirst／getDocCacheFirst。
@@ -38,6 +40,8 @@ import {
 } from "firebase/firestore";
 import { getDoc as dbGetDoc, getDocs as dbGetDocs } from "./db";
 import { isDemoMode } from "./demoMode";
+import { isDualMode } from "./dual/bootstrap";
+import { assertFirestoreAllowed, isMaintenanceError } from "./maintenance";
 
 export interface CacheFirstApi {
   isDemoMode: () => boolean;
@@ -96,12 +100,21 @@ export function clearServerOnly(): void {
  */
 export async function getDocsCacheFirst(q: any): Promise<QuerySnapshot> {
   if (api.isDemoMode()) return api.getDocs(q);
-  if (isServerOnlyNow()) return api.getDocsFromServer(q);
+  if (isDualMode()) return api.getDocs(q); // 雙寫：讀 Supabase，不使用 Firestore 本機快取
+  if (isServerOnlyNow()) {
+    // v1.41.0 流量控管：強制走伺服器前先檢查維護開關
+    await assertFirestoreAllowed({ kind: "read" });
+    return api.getDocsFromServer(q);
+  }
   try {
     const cached = await api.getDocsFromCache(q);
     if (!cached.empty) return cached;
+    // v1.41.0 流量控管：快取未命中、回伺服器前先檢查維護開關
+    await assertFirestoreAllowed({ kind: "read" });
     return await api.getDocsFromServer(q);
-  } catch {
+  } catch (err) {
+    // 維護中阻擋不得退回 db.ts 再試一次（會再被擋一次且多一次檢查）
+    if (isMaintenanceError(err)) throw err;
     return api.getDocs(q);
   }
 }
@@ -112,12 +125,21 @@ export async function getDocsCacheFirst(q: any): Promise<QuerySnapshot> {
  */
 export async function getDocCacheFirst(ref: any): Promise<DocumentSnapshot> {
   if (api.isDemoMode()) return api.getDoc(ref);
-  if (isServerOnlyNow()) return api.getDocFromServer(ref);
+  if (isDualMode()) return api.getDoc(ref);
+  if (isServerOnlyNow()) {
+    // v1.41.0 流量控管：強制走伺服器前先檢查維護開關
+    await assertFirestoreAllowed({ path: ref?.path, kind: "read" });
+    return api.getDocFromServer(ref);
+  }
   try {
     const cached = await api.getDocFromCache(ref);
     if (cached.exists()) return cached;
+    // v1.41.0 流量控管：快取未命中、回伺服器前先檢查維護開關
+    await assertFirestoreAllowed({ path: ref?.path, kind: "read" });
     return await api.getDocFromServer(ref);
-  } catch {
+  } catch (err) {
+    // 維護中阻擋不得退回 db.ts 再試一次
+    if (isMaintenanceError(err)) throw err;
     return api.getDoc(ref);
   }
 }

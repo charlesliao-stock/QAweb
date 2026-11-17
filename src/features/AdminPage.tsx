@@ -3,8 +3,11 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ClipboardCheck,
   Database,
   Eye,
+  Gauge,
+  Mail,
   Pencil,
   Plus,
   RotateCcw,
@@ -12,11 +15,13 @@ import {
   SlidersHorizontal,
   Trash2,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   limit,
   orderBy,
@@ -24,25 +29,32 @@ import {
   serverTimestamp,
   setDoc,
   updateDoc,
-  where,
   writeBatch,
 } from "../lib/db";
-import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
+import {
+  EmptyState,
+  FilterPanel,
+  FilterSearchField,
+  ListPanel,
+  PageHeading,
+  SectionTitle,
+  SortableTh,
+  useTableSort,
+  FormSelect,
+} from "../components/ui";
 import { getFirebaseDb } from "../lib/firebase";
 import {
   getCachedRef,
-  getCachedRefCollection,
   SYSTEM_CONFIG_KEY,
 } from "../lib/refCache";
-import { getDocCacheFirst, getDocsCacheFirst } from "../lib/cacheFirst";
+import { getDocCacheFirst } from "../lib/cacheFirst";
 import { isDemoMode } from "../lib/demoMode";
 import { useAuth } from "../lib/auth";
 import { applyTheme } from "../lib/uiPrefs";
-import { maskName } from "../lib/mask";
+import { staffLabel } from "../lib/mask";
 import { filterAuditRows } from "../lib/audit";
 import {
   DEFAULT_SYSTEM_PARAMS,
-  SEED_ROLES,
   SYSTEM_PARAM_LABELS,
   SYSTEM_PARAM_SELECT_OPTIONS,
   runSystemSeed,
@@ -57,14 +69,22 @@ import {
   themeToCssVars,
 } from "../lib/themeRegistry";
 import { isHexColor, validateThemeContrast } from "../lib/colorContrast";
-import {
-  PERM_KEYS,
-  PERM_LABELS,
-  emptyPermissions,
-  parsePermissions,
-  type PermKey,
-} from "../lib/permissions";
 import { usePermissions } from "../lib/usePermissions";
+import { CapaPage } from "./CapaPage";
+import { DashboardVisibilitySection } from "./DashboardVisibilitySection";
+import {
+  clearMaintenanceCache,
+  DEFAULT_QUOTA_SETTINGS,
+  normalizeQuotaSettings,
+  type QuotaSettings,
+  QUOTAS,
+  type SystemStatus,
+} from "../lib/maintenance";
+import { AdminCleanupSection } from "./AdminCleanupSection";
+import { DbStatusSection } from "./DbStatusSection";
+import { MailLogSection } from "./MailLogSection";
+import { getReadMeter, resetReadMeter, subscribeReadMeter } from "../lib/readMeter";
+import { pad2 } from "../lib/ym";
 
 function formatParamValue(key: keyof SystemParams, value: unknown): string {
   const opts = SYSTEM_PARAM_SELECT_OPTIONS[key];
@@ -129,7 +149,7 @@ function SystemInitSection({
         getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
       );
       setParams(snap.exists() ? (snap.data() as SystemParams) : null);
-      onAction("系統初始化完成：已寫入預設參數與 7 個角色");
+      onAction("系統初始化完成：已寫入預設參數與內建主題（職稱／角色請自行建立）");
     } catch {
       onAction("初始化失敗：權限不足或網路異常，請稍後再試");
     } finally {
@@ -204,7 +224,7 @@ function SystemInitSection({
         note={
           isDemoMode()
             ? "展示模式：系統參數、角色、職稱與展示資料已預載"
-            : "首次啟用時寫入預設參數與角色"
+            : "首次啟用時寫入預設參數與內建主題"
         }
         action={
           params && canManageRoles && !editing ? (
@@ -221,7 +241,7 @@ function SystemInitSection({
           <div>
             <p className="settings-note">
               尚未初始化。將寫入 systemParams/config 預設參數（RAG
-              黃燈區間、補審期限、草稿保留天數等）與 7 個預設角色定義。
+              黃燈區間、補審期限、草稿保留天數等）與內建主題。職稱／角色不再預設，請至「群組與人員」自行建立。
             </p>
             <button
               className="button button-primary"
@@ -229,7 +249,7 @@ function SystemInitSection({
               onClick={handleSeed}
             >
               <Database size={15} />
-              {seeding ? "寫入中…" : "一鍵初始化系統參數與角色"}
+              {seeding ? "寫入中…" : "一鍵初始化系統參數"}
             </button>
           </div>
         ) : (
@@ -982,25 +1002,17 @@ function TemplateManagementSection({
               <div className="form-grid">
                 {editingId == null && (
                   <>
-                    <div className="form-field">
-                      <label className="field-label">複製來源</label>
-                      <div className="select-wrap">
-                        <select
-                          value={copyFromId}
+                    <FormSelect label="複製來源" value={copyFromId}
                           onChange={(e) =>
                             handleCopyFromChange(e.target.value)
                           }
-                          aria-label="複製來源"
-                        >
+                          aria-label="複製來源">
                           {(themes ?? []).map((t) => (
                             <option key={t.id} value={t.id}>
                               {t.name}（{t.id}）
                             </option>
                           ))}
-                        </select>
-                        <ChevronDown size={15} />
-                      </div>
-                    </div>
+                        </FormSelect>
                     <div className="form-field">
                       <label className="field-label">模板 id *</label>
                       <input
@@ -1109,418 +1121,6 @@ function TemplateManagementSection({
   );
 }
 
-/* ================= 角色與權限 ================= */
-
-interface RoleRow {
-  id: string;
-  name: string;
-  description: string;
-  permissions: Record<PermKey, boolean>;
-  isSeed: boolean;
-}
-
-interface TitleRow {
-  id: string;
-  name: string;
-  level: string;
-  permissions: Record<PermKey, boolean>;
-  /** 該職稱是否曾儲存過權限矩陣（titles 文件有 permissions 欄位） */
-  permConfigured: boolean;
-}
-
-function permCell(perms: Record<PermKey, boolean>, key: PermKey): boolean {
-  return perms[key] === true;
-}
-
-function RolePermissionSection({ onAction }: { onAction: (message: string) => void }) {
-  const { user } = useAuth();
-  const [roles, setRoles] = useState<RoleRow[]>([]);
-  const [titles, setTitles] = useState<TitleRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [formError, setFormError] = useState("");
-
-  const loadAll = async () => {
-    setLoading(true);
-    try {
-      const db = getFirebaseDb();
-      const [rsnap, tsnap] = await Promise.all([
-        getCachedRefCollection("roles", () =>
-          getDocsCacheFirst(collection(db, "roles")),
-        ),
-        getCachedRefCollection("titles", () =>
-          getDocsCacheFirst(collection(db, "titles")),
-        ),
-      ]);
-      const seedIds = new Set(SEED_ROLES.map((r) => r.id));
-      setRoles(
-        rsnap.docs
-          .map((d) => {
-            const data = d.data() as Record<string, unknown>;
-            return {
-              id: d.id,
-              name: typeof data.name === "string" ? data.name : d.id,
-              description:
-                typeof data.description === "string" ? data.description : "",
-              permissions: {
-                ...emptyPermissions(),
-                ...parsePermissions(data.permissions),
-              },
-              isSeed: seedIds.has(d.id),
-            };
-          })
-          .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant")),
-      );
-      setTitles(
-        tsnap.docs
-          .map((d) => {
-            const data = d.data() as Record<string, unknown>;
-            return {
-              id: d.id,
-              name: typeof data.name === "string" ? data.name : d.id,
-              level: typeof data.level === "string" ? data.level : "",
-              permissions: {
-                ...emptyPermissions(),
-                ...parsePermissions(data.permissions),
-              },
-              permConfigured:
-                data.permissions !== undefined && data.permissions !== null,
-            };
-          })
-          .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant")),
-      );
-    } catch {
-      onAction("讀取角色／職稱清單失敗");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void loadAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function openCreate() {
-    setEditingId(null);
-    setName("");
-    setDescription("");
-    setFormError("");
-    setFormOpen(true);
-  }
-
-  function openEdit(row: RoleRow) {
-    setEditingId(row.id);
-    setName(row.name);
-    setDescription(row.description);
-    setFormError("");
-    setFormOpen(true);
-  }
-
-  async function handleSaveRole() {
-    const nm = name.trim();
-    if (!nm) {
-      setFormError("請填寫角色名稱");
-      return;
-    }
-    if (!user) {
-      setFormError("請先登入");
-      return;
-    }
-    if (
-      roles.some(
-        (r) => r.name === nm && (editingId == null || r.id !== editingId),
-      )
-    ) {
-      setFormError(`角色「${nm}」已存在`);
-      return;
-    }
-    setSaving(true);
-    try {
-      const db = getFirebaseDb();
-      if (editingId == null) {
-        await setDoc(doc(collection(db, "roles")), {
-          name: nm,
-          description: description.trim(),
-          permissions: emptyPermissions(),
-          createdAt: serverTimestamp(),
-          createdBy: user.staffId,
-          updatedAt: serverTimestamp(),
-          updatedBy: user.staffId,
-        });
-        onAction(`已新增角色「${nm}」，請在下方矩陣勾選其權限`);
-      } else {
-        await updateDoc(doc(db, "roles", editingId), {
-          name: nm,
-          description: description.trim(),
-          updatedAt: serverTimestamp(),
-          updatedBy: user.staffId,
-        });
-        onAction(`角色「${nm}」已更新`);
-      }
-      setFormOpen(false);
-      await loadAll();
-    } catch {
-      setFormError("儲存失敗：權限不足或網路異常");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleDeleteRole(row: RoleRow) {
-    if (!user) return;
-    if (row.isSeed) {
-      onAction(`「${row.name}」為系統預設角色，不可刪除`);
-      return;
-    }
-    if (!window.confirm(`確定刪除角色「${row.name}」？`)) return;
-    try {
-      const db = getFirebaseDb();
-      const used = await getDocs(
-        query(
-          collection(db, "users"),
-          where("roles", "array-contains", row.name),
-          limit(1),
-        ),
-      );
-      if (!used.empty) {
-        onAction(`角色「${row.name}」尚有人員使用，無法刪除`);
-        return;
-      }
-      await deleteDoc(doc(db, "roles", row.id));
-      onAction(`已刪除角色「${row.name}」`);
-      await loadAll();
-    } catch {
-      onAction("刪除失敗：權限不足或網路異常");
-    }
-  }
-
-  async function toggleRolePerm(row: RoleRow, key: PermKey) {
-    if (!user) return;
-    const next = { ...row.permissions, [key]: !permCell(row.permissions, key) };
-    setRoles((prev) =>
-      prev.map((r) => (r.id === row.id ? { ...r, permissions: next } : r)),
-    );
-    try {
-      await updateDoc(doc(getFirebaseDb(), "roles", row.id), {
-        permissions: next,
-        updatedAt: serverTimestamp(),
-        updatedBy: user.staffId,
-      });
-    } catch {
-      onAction("權限儲存失敗：權限不足或網路異常");
-      void loadAll();
-    }
-  }
-
-  async function toggleTitlePerm(row: TitleRow, key: PermKey) {
-    if (!user) return;
-    const next = { ...row.permissions, [key]: !permCell(row.permissions, key) };
-    // 一旦儲存過矩陣，該職稱即視為已設定（改走嚴格交集）
-    setTitles((prev) =>
-      prev.map((t) =>
-        t.id === row.id ? { ...t, permissions: next, permConfigured: true } : t,
-      ),
-    );
-    try {
-      await updateDoc(doc(getFirebaseDb(), "titles", row.id), {
-        permissions: next,
-        updatedAt: serverTimestamp(),
-        updatedBy: user.staffId,
-      });
-    } catch {
-      onAction("權限儲存失敗：權限不足或網路異常");
-      void loadAll();
-    }
-  }
-
-  function permMatrix<
-    T extends {
-      id: string;
-      name: string;
-      permissions: Record<PermKey, boolean>;
-      permConfigured?: boolean;
-    },
-  >(rows: T[], onToggle: (row: T, key: PermKey) => void) {
-    return (
-      <div className="table-scroll">
-        <table className="permission-table">
-          <thead>
-            <tr>
-              <th>名稱</th>
-              {PERM_KEYS.map((k) => (
-                <th key={k}>{PERM_LABELS[k]}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <b>{r.name}</b>
-                  {r.permConfigured === false && (
-                    <span
-                      className="status-pill warning"
-                      style={{ marginLeft: 6 }}
-                    >
-                      尚未設定
-                    </span>
-                  )}
-                </td>
-                {PERM_KEYS.map((k) => (
-                  <td key={k} style={{ textAlign: "center" }}>
-                    <input
-                      type="checkbox"
-                      checked={permCell(r.permissions, k)}
-                      onChange={() => onToggle(r, k)}
-                      aria-label={`${r.name}：${PERM_LABELS[k]}`}
-                    />
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <section className="panel data-panel permission-panel">
-        <SectionTitle
-          title="角色與權限"
-          note="先新增角色，再於下方矩陣勾選其功能權限；一人多重角色時取聯集"
-          action={
-            <button className="button button-outline" onClick={openCreate}>
-              <Plus size={14} /> 新增角色
-            </button>
-          }
-        />
-        {loading ? (
-          <p className="settings-note">讀取中…</p>
-        ) : (
-          <>
-            {formOpen && (
-              <div className="panel" style={{ marginBottom: 12 }}>
-                <div className="form-grid">
-                  <div className="form-field">
-                    <label className="field-label">角色名稱 *</label>
-                    <input
-                      className="text-input"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="例如 稽核員"
-                    />
-                  </div>
-                  <div className="form-field">
-                    <label className="field-label">說明</label>
-                    <input
-                      className="text-input"
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      placeholder="此角色的職責說明"
-                    />
-                  </div>
-                </div>
-                {formError && <div className="login-error">{formError}</div>}
-                <div className="form-actions">
-                  <button
-                    className="button button-primary"
-                    disabled={saving}
-                    onClick={handleSaveRole}
-                  >
-                    {saving ? "儲存中…" : editingId ? "儲存修改" : "新增角色"}
-                  </button>
-                  <button
-                    className="button button-outline"
-                    onClick={() => setFormOpen(false)}
-                  >
-                    取消
-                  </button>
-                </div>
-              </div>
-            )}
-            <div className="table-scroll">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>角色</th>
-                    <th>說明</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {roles.map((r) => (
-                    <tr key={r.id}>
-                      <td>
-                        <b>{r.name}</b>
-                        {r.isSeed && (
-                          <span className="muted-text">（預設）</span>
-                        )}
-                      </td>
-                      <td>{r.description || "—"}</td>
-                      <td>
-                        <button
-                          className="text-button"
-                          onClick={() => openEdit(r)}
-                        >
-                          <Pencil size={13} /> 編輯
-                        </button>{" "}
-                        {!r.isSeed && (
-                          <button
-                            className="text-button"
-                            onClick={() => void handleDeleteRole(r)}
-                          >
-                            <Trash2 size={13} /> 刪除
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ marginTop: 16 }}>
-              <SectionTitle
-                title="角色功能權限矩陣"
-                note="勾選即生效；多重角色取聯集"
-              />
-              {permMatrix(roles, toggleRolePerm)}
-            </div>
-          </>
-        )}
-      </section>
-
-      <section className="panel data-panel">
-        <SectionTitle
-          title="職稱功能權限"
-          note="尚未設定的職稱只看角色權限；儲存後改為角色＋職稱都要有才生效（無職稱者視為無權限）"
-        />
-        {loading ? (
-          <p className="settings-note">讀取中…</p>
-        ) : titles.length === 0 ? (
-          <p className="settings-note">
-            尚無職稱，請先到「人員管理 → 職稱」新增。
-          </p>
-        ) : (
-          <>
-            {titles.some((t) => !t.permConfigured) && (
-              <p className="settings-note" style={{ marginBottom: 8 }}>
-                未設定前只看角色權限；儲存後改為角色＋職稱都要有。
-              </p>
-            )}
-            {permMatrix(titles, toggleTitlePerm)}
-          </>
-        )}
-      </section>
-    </>
-  );
-}
 
 /* ================= 稽核軌跡 ================= */
 
@@ -1539,6 +1139,7 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
   const [rows, setRows] = useState<AuditRow[] | null>(null);
   const [open, setOpen] = useState(false);
   const [keyword, setKeyword] = useState("");
+  const [keywordDraft, setKeywordDraft] = useState("");
   const [dateFilter, setDateFilter] = useState("");
 
   useEffect(() => {
@@ -1567,19 +1168,16 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
               typeof data.targetId === "string" ? data.targetId : "";
             const y = createdAt ? createdAt.getFullYear() : 0;
             const m = createdAt
-              ? String(createdAt.getMonth() + 1).padStart(2, "0")
+              ? pad2(createdAt.getMonth() + 1)
               : "00";
             const day = createdAt
-              ? String(createdAt.getDate()).padStart(2, "0")
+              ? pad2(createdAt.getDate())
               : "00";
             return {
               id: d.id,
               timeText: createdAt ? createdAt.toLocaleString("zh-Hant") : "—",
               dateKey: `${y}-${m}-${day}`,
-              actorLabel:
-                actorName && actorName !== actor
-                  ? `${maskName(actorName)}（${actor}）`
-                  : actor || "—",
+              actorLabel: staffLabel(actor, actorName),
               action: typeof data.action === "string" ? data.action : "",
               target: targetId,
               detail: typeof data.detail === "string" ? data.detail : "",
@@ -1600,127 +1198,504 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
     [rows, keyword, dateFilter],
   );
 
-  return (
-    <section className="panel data-panel">
-      <SectionTitle
-        title="稽核軌跡紀錄"
-        note="最近 50 筆，僅系統管理員可查閱"
-        action={
-          canManageRoles ? (
-            <button
-              className="text-button"
-              onClick={() => setOpen((o) => !o)}
-              aria-expanded={open}
-            >
-              {open ? "收合" : "展開"}{" "}
-              <ChevronRight
-                size={14}
-                style={{
-                  transform: open ? "rotate(90deg)" : undefined,
-                  verticalAlign: "-2px",
-                }}
-              />
-            </button>
-          ) : undefined
-        }
+  const {
+    sortedRows: sortedAudit,
+    sort: auditSort,
+    toggleSort: toggleAuditSort,
+  } = useTableSort<AuditRow, "time" | "actor" | "action" | "target" | "detail">(
+    filtered,
+    {
+      time: (r) => r.dateKey,
+      actor: (r) => r.actorLabel,
+      action: (r) => r.action,
+      target: (r) => r.target,
+      detail: (r) => r.detail,
+    },
+  );
+
+  const toggleButton = (
+    <button
+      className="text-button"
+      onClick={() => setOpen((o) => !o)}
+      aria-expanded={open}
+    >
+      {open ? "收合" : "展開"}{" "}
+      <ChevronRight
+        size={14}
+        style={{
+          transform: open ? "rotate(90deg)" : undefined,
+          verticalAlign: "-2px",
+        }}
       />
-      {!canManageRoles ? (
-        <p className="settings-note">稽核軌跡僅開放系統管理員查閱。</p>
-      ) : !open ? (
-        <p className="settings-note">
-          平時隱藏，需要時點右上「展開」查看，可關鍵字搜尋與日期篩選。
-        </p>
-      ) : rows === null ? (
+    </button>
+  );
+
+  // 未展開／無權限／讀取中：維持單一摺疊面板
+  if (!canManageRoles || !open || rows === null) {
+    return (
+      <section className="panel data-panel">
+        <div className="panel-inset">
+          <SectionTitle
+            title="稽核軌跡紀錄"
+            note="最近 50 筆，僅系統管理員可查閱"
+            action={canManageRoles ? toggleButton : undefined}
+          />
+        </div>
+        <div className="panel-inset">
+          <p className="settings-note">
+            {!canManageRoles
+              ? "稽核軌跡僅開放系統管理員查閱。"
+              : !open
+                ? "平時隱藏，需要時點右上「展開」查看，可關鍵字搜尋與日期篩選。"
+                : "讀取中…"}
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <FilterPanel
+        actions={
+          (keyword.trim() || dateFilter) && (
+            <button
+              type="button"
+              className="button button-outline"
+              onClick={() => {
+                setKeyword("");
+                setKeywordDraft("");
+                setDateFilter("");
+              }}
+            >
+              清除篩選
+            </button>
+          )
+        }
+      >
+        <FilterSearchField
+          label="關鍵字搜尋"
+          placeholder="人員／動作／對象／說明"
+          value={keywordDraft}
+          onChange={setKeywordDraft}
+          onSearch={() => setKeyword(keywordDraft)}
+        />
+        <div className="form-field">
+          <label className="field-label">日期篩選</label>
+          <input
+            className="text-input"
+            type="date"
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value)}
+          />
+        </div>
+      </FilterPanel>
+      <ListPanel
+        title="稽核軌跡紀錄"
+        count={filtered.length}
+        actions={toggleButton}
+      >
+        {filtered.length === 0 ? (
+          <EmptyState
+            title={rows.length === 0 ? "尚無稽核紀錄" : "沒有符合的紀錄"}
+            description={
+              rows.length === 0
+                ? "建立、編輯或停用指標後，系統會自動寫入操作紀錄。"
+                : "請調整關鍵字或日期條件。"
+            }
+          />
+        ) : (
+          <table className="permission-table">
+            <thead>
+              <tr>
+                <SortableTh label="時間" sortKey="time" sort={auditSort} onSort={toggleAuditSort} />
+                <SortableTh label="人員" sortKey="actor" sort={auditSort} onSort={toggleAuditSort} />
+                <SortableTh label="動作" sortKey="action" sort={auditSort} onSort={toggleAuditSort} />
+                <SortableTh label="對象" sortKey="target" sort={auditSort} onSort={toggleAuditSort} />
+                <SortableTh label="說明" sortKey="detail" sort={auditSort} onSort={toggleAuditSort} />
+              </tr>
+            </thead>
+            <tbody>
+              {sortedAudit.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.timeText}</td>
+                  <td>{r.actorLabel}</td>
+                  <td>
+                    <b>{r.action}</b>
+                  </td>
+                  <td>{r.target || "—"}</td>
+                  <td>{r.detail || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </ListPanel>
+    </>
+  );
+}
+
+/**
+ * 流量控管設定區（v1.41.0，僅系統管理員可見、可改）：
+ * 提醒門檻 %、關站門檻 %、監測開關、LINE 提醒開關，存於
+ * configs/quotaSettings；目前維護狀態讀自 configs/system_status，
+ * 管理員可手動開站／關站（監測 workflow 用 Admin SDK 寫入同一文件）。
+ */
+function QuotaControlSection({
+  onAction,
+}: {
+  onAction: (message: string) => void;
+}) {
+  const { user } = useAuth();
+  const [settings, setSettings] = useState<QuotaSettings | null | undefined>(undefined);
+  const [status, setStatus] = useState<SystemStatus | null | undefined>(undefined);
+  const [warnInput, setWarnInput] = useState(String(DEFAULT_QUOTA_SETTINGS.warnPercent));
+  const [stopInput, setStopInput] = useState(String(DEFAULT_QUOTA_SETTINGS.shutdownPercent));
+  const [monitoringOn, setMonitoringOn] = useState(true);
+  const [lineOn, setLineOn] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [toggling, setToggling] = useState(false);
+
+  async function loadAll() {
+    try {
+      const snap = await getDoc(doc(getFirebaseDb(), "configs", "quotaSettings"));
+      const s = snap.exists()
+        ? normalizeQuotaSettings(snap.data() as Record<string, unknown>)
+        : { ...DEFAULT_QUOTA_SETTINGS };
+      setSettings(s);
+      setWarnInput(String(s.warnPercent));
+      setStopInput(String(s.shutdownPercent));
+      setMonitoringOn(s.monitoringEnabled);
+      setLineOn(s.lineEnabled);
+    } catch {
+      setSettings(null);
+    }
+    try {
+      const snap = await getDoc(doc(getFirebaseDb(), "configs", "system_status"));
+      if (!snap.exists()) {
+        setStatus(null);
+        return;
+      }
+      const v = snap.data() as Record<string, unknown>;
+      setStatus({
+        maintenance: v.maintenance === true,
+        reason: typeof v.reason === "string" ? v.reason : "",
+        updatedAt: "",
+        alert80SentFor: typeof v.alert80SentFor === "string" ? v.alert80SentFor : "",
+        shutdownSentFor: typeof v.shutdownSentFor === "string" ? v.shutdownSentFor : "",
+        usageDate: typeof v.usageDate === "string" ? v.usageDate : "",
+        usageReads: typeof v.usageReads === "number" ? v.usageReads : undefined,
+        usageWrites: typeof v.usageWrites === "number" ? v.usageWrites : undefined,
+        usageDeletes: typeof v.usageDeletes === "number" ? v.usageDeletes : undefined,
+        usageUpdatedAt:
+          v.usageUpdatedAt && typeof (v.usageUpdatedAt as { toDate?: unknown }).toDate === "function"
+            ? (v.usageUpdatedAt as { toDate: () => Date }).toDate().toISOString()
+            : "",
+      });
+    } catch {
+      setStatus(null);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (!cancelled) await loadAll();
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const warnNum = Number(warnInput);
+  const stopNum = Number(stopInput);
+  const validation =
+    settings === undefined
+      ? ""
+      : !Number.isFinite(warnNum) || warnNum < 50 || warnNum > 95
+        ? "提醒門檻須為 50–95 的整數"
+        : !Number.isFinite(stopNum) || stopNum < 51 || stopNum > 99
+          ? "關站門檻須為 51–99 的整數"
+          : warnNum >= stopNum
+            ? "提醒門檻必須小於關站門檻"
+            : "";
+
+  async function handleSave() {
+    if (!user || saving || validation !== "") return;
+    setSaving(true);
+    try {
+      const next: QuotaSettings = {
+        warnPercent: Math.floor(warnNum),
+        shutdownPercent: Math.floor(stopNum),
+        monitoringEnabled: monitoringOn,
+        lineEnabled: lineOn,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.staffId,
+      };
+      await setDoc(doc(getFirebaseDb(), "configs", "quotaSettings"), next, { merge: true });
+      setSettings(next);
+      onAction("流量控管設定已儲存（下次監測執行起生效）");
+    } catch {
+      onAction("儲存失敗：權限不足或網路異常");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleToggleMaintenance(next: boolean) {
+    if (!user || toggling) return;
+    setToggling(true);
+    try {
+      await setDoc(
+        doc(getFirebaseDb(), "configs", "system_status"),
+        {
+          maintenance: next,
+          reason: next ? "管理員手動關站" : "",
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      // 手動切換後立即失效本機狀態快取，下次檢查重新讀取
+      clearMaintenanceCache();
+      await loadAll();
+      onAction(next ? "已手動關站（非管理員將無法存取）" : "已手動開站");
+    } catch {
+      onAction("切換失敗：權限不足或網路異常");
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  return (
+    <>
+    <DbStatusSection />
+    <section className="panel" id="quota-control">
+      <SectionTitle
+        title="流量控管"
+        note="免費額度 80% 提醒、95% 關站（太平洋時間每日重置）"
+      />
+      {settings === undefined || status === undefined ? (
         <p className="settings-note">讀取中…</p>
       ) : (
         <>
-          <div className="form-grid" style={{ marginBottom: 12 }}>
+          <p className="settings-note">
+            目前狀態：
+            {status?.maintenance ? (
+              <b>維護中（已關站{status.reason ? `：${status.reason}` : ""}）</b>
+            ) : (
+              "正常運作"
+            )}
+            {status?.shutdownSentFor
+              ? ` · 本日已關站通知 ${status.shutdownSentFor}`
+              : ""}
+            {status?.alert80SentFor
+              ? ` · 本日已提醒 ${status.alert80SentFor}`
+              : ""}
+          </p>
+          <QuotaUsageBars status={status} warn={Number(warnInput)} stop={Number(stopInput)} />
+          <ReadMeterPanel />
+          <div className="form-grid">
             <div className="form-field">
-              <label className="field-label">關鍵字搜尋</label>
+              <label className="field-label">提醒門檻（%）</label>
               <input
                 className="text-input"
-                value={keyword}
-                onChange={(e) => setKeyword(e.target.value)}
-                placeholder="人員／動作／對象／說明"
+                type="number"
+                min={50}
+                max={95}
+                value={warnInput}
+                onChange={(e) => setWarnInput(e.target.value)}
+                aria-label="提醒門檻百分比"
               />
             </div>
             <div className="form-field">
-              <label className="field-label">日期篩選</label>
+              <label className="field-label">關站門檻（%）</label>
               <input
                 className="text-input"
-                type="date"
-                value={dateFilter}
-                onChange={(e) => setDateFilter(e.target.value)}
+                type="number"
+                min={51}
+                max={99}
+                value={stopInput}
+                onChange={(e) => setStopInput(e.target.value)}
+                aria-label="關站門檻百分比"
               />
+            </div>
+            <div className="form-field">
+              <label className="field-label">監測開關</label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={monitoringOn}
+                  onChange={(e) => setMonitoringOn(e.target.checked)}
+                />
+                <span>啟用定時監測</span>
+              </label>
+            </div>
+            <div className="form-field">
+              <label className="field-label">LINE 提醒</label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={lineOn}
+                  onChange={(e) => setLineOn(e.target.checked)}
+                />
+                <span>達門檻時發 LINE 提醒</span>
+              </label>
             </div>
           </div>
-          {filtered.length === 0 ? (
-            <EmptyState
-              title={rows.length === 0 ? "尚無稽核紀錄" : "沒有符合的紀錄"}
-              description={
-                rows.length === 0
-                  ? "建立、編輯或停用指標後，系統會自動寫入操作紀錄。"
-                  : "請調整關鍵字或日期條件。"
-              }
-            />
-          ) : (
-            <div className="table-scroll">
-              <table className="permission-table">
-                <thead>
-                  <tr>
-                    <th>時間</th>
-                    <th>人員</th>
-                    <th>動作</th>
-                    <th>對象</th>
-                    <th>說明</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((r) => (
-                    <tr key={r.id}>
-                      <td>{r.timeText}</td>
-                      <td>{r.actorLabel}</td>
-                      <td>
-                        <b>{r.action}</b>
-                      </td>
-                      <td>{r.target || "—"}</td>
-                      <td>{r.detail || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {(keyword.trim() || dateFilter) && (
-            <p className="settings-note">
-              篩選結果 {filtered.length}／{rows.length} 筆
-              <button
-                className="text-button"
-                style={{ marginLeft: 8 }}
-                onClick={() => {
-                  setKeyword("");
-                  setDateFilter("");
-                }}
-              >
-                <X size={13} /> 清除篩選
-              </button>
-            </p>
-          )}
+          {validation !== "" && <p className="settings-note">{validation}</p>}
+          <p className="settings-note">
+            門檻以免費額度（讀 50,000／寫 20,000／刪 20,000 次／天）計算，讀、寫、刪任一先到即觸發；
+            監測每 30 分鐘檢查一次，停用監測後不會自動提醒、關站或恢復。
+          </p>
+          <div className="form-actions">
+            <button
+              className="button button-primary"
+              disabled={saving || validation !== ""}
+              onClick={handleSave}
+            >
+              {saving ? "儲存中…" : "儲存設定"}
+            </button>
+            <button
+              className="button button-outline"
+              disabled={toggling}
+              onClick={() => void handleToggleMaintenance(!(status?.maintenance ?? false))}
+            >
+              {toggling ? "切換中…" : status?.maintenance ? "手動開站" : "手動關站"}
+            </button>
+          </div>
         </>
       )}
     </section>
+    </>
   );
 }
+
+/** 本分頁讀取量實測：重置後操作頁面，即可比對各集合實際讀了多少份文件 */
+function ReadMeterPanel() {
+  const [, force] = useState(0);
+  useEffect(() => subscribeReadMeter(() => force((n) => n + 1)), []);
+  const meter = getReadMeter();
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <p className="settings-note">
+        本分頁讀取實測（自 {new Date(meter.since).toLocaleTimeString("zh-TW", { hour12: false })} 起，共 <b>{meter.total.toLocaleString()}</b> 次伺服器讀取）。
+        比對封存前後：按「重置」→ 開結果分析／審查頁 → 記下數字；封存後重複一次。
+      </p>
+      {meter.rows.length > 0 && (
+        <table className="data-table">
+          <thead>
+            <tr><th>集合</th><th>伺服器讀取（計費）</th><th>快取命中（免費）</th><th>查詢次數</th></tr>
+          </thead>
+          <tbody>
+            {meter.rows.map((r) => (
+              <tr key={r.name}>
+                <td>{r.name}</td>
+                <td>{r.billed.toLocaleString()}</td>
+                <td>{r.cached.toLocaleString()}</td>
+                <td>{r.calls}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <button className="button button-outline" type="button" onClick={resetReadMeter}>重置計數</button>
+    </div>
+  );
+}
+
+/** 當日 Firestore 讀／寫／刪用量條（資料由監測 workflow 寫入 configs/system_status） */
+function QuotaUsageBars({
+  status,
+  warn,
+  stop,
+}: {
+  status: SystemStatus | null;
+  warn: number;
+  stop: number;
+}) {
+  const hasData =
+    status?.usageReads !== undefined &&
+    status?.usageWrites !== undefined &&
+    status?.usageDeletes !== undefined;
+  if (!status || !hasData) {
+    return (
+      <p className="settings-note">
+        尚無當日用量資料：需由流量監測 workflow 定時執行並寫入後才會顯示。
+      </p>
+    );
+  }
+  const rows = [
+    { label: "讀取", used: status.usageReads ?? 0, quota: QUOTAS.reads },
+    { label: "寫入", used: status.usageWrites ?? 0, quota: QUOTAS.writes },
+    { label: "刪除", used: status.usageDeletes ?? 0, quota: QUOTAS.deletes },
+  ];
+  const updated = status.usageUpdatedAt
+    ? new Date(status.usageUpdatedAt).toLocaleString("zh-TW", { hour12: false })
+    : "—";
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <p className="settings-note">
+        今日用量（太平洋日 {status.usageDate || "—"}，更新於 {updated}；指標最多延遲約 4 分鐘）
+      </p>
+      {rows.map((r) => {
+        const pct = (r.used / r.quota) * 100;
+        const color =
+          pct >= stop ? "#dc2626" : pct >= warn ? "#d97706" : "#16a34a";
+        return (
+          <div key={r.label} style={{ marginBottom: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <b>{r.label}</b>
+              <span>
+                {r.used.toLocaleString()} / {r.quota.toLocaleString()}（{pct.toFixed(1)}%）
+              </span>
+            </div>
+            <div
+              role="progressbar"
+              aria-label={`${r.label}用量`}
+              aria-valuenow={Math.round(Math.min(pct, 100))}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              style={{ height: 8, background: "#e5e7eb", borderRadius: 4, overflow: "hidden" }}
+            >
+              <div
+                style={{
+                  width: `${Math.min(pct, 100)}%`,
+                  height: "100%",
+                  background: color,
+                }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type AdminTab = "parameters" | "cleanup" | "quota" | "themes" | "audit" | "capa" | "audit-policy" | "dashboard-visibility" | "mail-log";
 
 export function AdminPage({
   onAction,
 }: {
   onAction: (message: string) => void;
 }) {
-  const { can } = usePermissions();
+  const { can, isAdmin } = usePermissions();
   const canManageRoles = can("manageRoles");
   // 主題在模板管理區變更後遞增，觸發 SystemInitSection 重讀參數（顯示目前主題）
   const [themeTick, setThemeTick] = useState(0);
+  const [activeTab, setActiveTab] = useState<AdminTab>("parameters");
+  const tabs: { id: AdminTab; label: string; icon: LucideIcon }[] = [
+    { id: "parameters", label: "系統參數", icon: SlidersHorizontal },
+    ...(isAdmin ? [{ id: "dashboard-visibility" as const, label: "儀表板顯示", icon: Eye }] : []),
+    ...(canManageRoles ? [{ id: "quota" as const, label: "流量控管", icon: Gauge }, { id: "themes" as const, label: "主題模板", icon: Eye }] : []),
+    { id: "audit", label: "稽核軌跡", icon: ShieldCheck },
+    ...(isAdmin ? [{ id: "capa" as const, label: "CAPA 管理", icon: ClipboardCheck }, { id: "cleanup" as const, label: "資料清理", icon: Trash2 }, { id: "mail-log" as const, label: "寄信記錄", icon: Mail }] : []),
+    { id: "audit-policy", label: "稽核政策", icon: Check },
+  ];
+  useEffect(() => {
+    if (!tabs.some((tab) => tab.id === activeTab)) setActiveTab("parameters");
+  }, [activeTab, canManageRoles, isAdmin]);
   return (
     <>
       <PageHeading
@@ -1728,11 +1703,7 @@ export function AdminPage({
         action={
           <button
             className="button button-outline"
-            onClick={() =>
-              document
-                .getElementById("system-init")
-                ?.scrollIntoView({ behavior: "smooth", block: "start" })
-            }
+            onClick={() => setActiveTab("parameters")}
           >
             <SlidersHorizontal size={15} />
             系統參數
@@ -1746,42 +1717,47 @@ export function AdminPage({
           角色可由系統管理員動態建立，不需修改程式；正式授權以系統管理員設定為準。
         </span>
       </div>
-      <SystemInitSection
-        onAction={onAction}
-        canManageRoles={canManageRoles}
-        themeTick={themeTick}
-      />
-      {canManageRoles && (
-        <TemplateManagementSection
-          onAction={onAction}
-          onThemeChanged={() => setThemeTick((t) => t + 1)}
-        />
-      )}
-      {canManageRoles && <RolePermissionSection onAction={onAction} />}
-      <AuditLogSection canManageRoles={canManageRoles} />
-      <div className="admin-settings-grid">
-        <section className="panel settings-panel">
-          <SectionTitle title="稽核軌跡" note="不可關閉的必要紀錄" />
-          <div className="audit-logs">
-            {[
-              "登入、登出與失敗",
-              "角色與權限變更",
-              "資料修改前後內容",
-              "結果、照片與匯出查閱",
-            ].map((line) => (
-              <div key={line}>
-                <span className="log-check">
-                  <Check size={13} />
-                </span>
-                <span>{line}</span>
-                <span className="log-required">必開</span>
+      <div className="admin-tabs" role="tablist" aria-label="系統管理項目">
+        {tabs.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === id}
+            aria-controls={`admin-panel-${id}`}
+            className={activeTab === id ? "active" : ""}
+            onClick={() => setActiveTab(id)}
+          >
+            <Icon size={15} /> {label}
+          </button>
+        ))}
+      </div>
+      <div className="admin-tab-content" id={`admin-panel-${activeTab}`} role="tabpanel">
+        {activeTab === "parameters" && <SystemInitSection onAction={onAction} canManageRoles={canManageRoles} themeTick={themeTick} />}
+        {activeTab === "dashboard-visibility" && (isAdmin ? <DashboardVisibilitySection onAction={onAction} /> : <p className="settings-note">此設定僅供系統管理員使用。</p>)}
+        {activeTab === "quota" && canManageRoles && <QuotaControlSection onAction={onAction} />}
+        {activeTab === "themes" && canManageRoles && <TemplateManagementSection onAction={onAction} onThemeChanged={() => setThemeTick((t) => t + 1)} />}
+        {activeTab === "audit" && <AuditLogSection canManageRoles={canManageRoles} />}
+        {activeTab === "cleanup" && isAdmin && <AdminCleanupSection onAction={onAction} />}
+        {activeTab === "mail-log" && isAdmin && <MailLogSection onAction={onAction} />}
+        {activeTab === "capa" && isAdmin && <CapaPage onAction={onAction} managementOnly />}
+        {activeTab === "audit-policy" && (
+          <div className="admin-settings-grid">
+            <section className="panel settings-panel">
+              <SectionTitle title="稽核軌跡" note="不可關閉的必要紀錄" />
+              <div className="audit-logs">
+                {["登入、登出與失敗", "角色與權限變更", "資料修改前後內容", "結果、照片與匯出查閱"].map((line) => (
+                  <div key={line}>
+                    <span className="log-check"><Check size={13} /></span>
+                    <span>{line}</span>
+                    <span className="log-required">必開</span>
+                  </div>
+                ))}
               </div>
-            ))}
+              <p className="settings-note">審查資料與稽核紀錄保存 3 年（可於系統參數調整）。</p>
+            </section>
           </div>
-          <p className="settings-note">
-            審查資料與稽核紀錄保存 3 年（可於系統參數調整）。
-          </p>
-        </section>
+        )}
       </div>
     </>
   );

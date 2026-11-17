@@ -11,6 +11,7 @@ import {
 } from "../../lib/dashboardSections";
 import { avgRateOf } from "../../lib/resultAnalysis";
 import type { DashboardData } from "./useDashboardData";
+import { pad2 } from "../../lib/ym";
 
 export function ConvenerTab({
   data,
@@ -98,12 +99,12 @@ export function ConvenerTab({
       {sections.groupPassRate && (
         <section className="panel">
           <SectionTitle
-            title={`本組指標全院達標率（${curYear}/${String(curMonth).padStart(2, "0")}）`}
+            title={`本組指標全院達標率（${curYear}/${pad2(curMonth)}）`}
           />
         {stats.length === 0 ? (
           <p className="settings-note">該組別尚無指標。</p>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll dashboard-responsive-table">
             <table className="data-table">
               <thead>
                 <tr>
@@ -116,12 +117,12 @@ export function ConvenerTab({
               <tbody>
                 {stats.map((s) => (
                   <tr key={s.id}>
-                    <td>{s.name}</td>
-                    <td>
+                    <td data-label="指標名稱">{s.name}</td>
+                    <td data-label="達標單位數">
                       {s.pass}/{s.total}
                     </td>
-                    <td>{s.passRate != null ? `${s.passRate}%` : "—"}</td>
-                    <td>
+                    <td data-label="達標率">{s.passRate != null ? `${s.passRate}%` : "—"}</td>
+                    <td data-label="燈號">
                       <span
                         className={`status-pill${
                           s.total === 0
@@ -154,7 +155,7 @@ export function ConvenerTab({
         {pareto.length === 0 ? (
           <p className="settings-note">尚無扣分紀錄。</p>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll dashboard-responsive-table">
             <table className="data-table">
               <thead>
                 <tr>
@@ -168,11 +169,11 @@ export function ConvenerTab({
               <tbody>
                 {pareto.map((p, i) => (
                   <tr key={p.itemText}>
-                    <td>{i + 1}</td>
-                    <td style={{ maxWidth: 320 }}>{p.itemText}</td>
-                    <td>{p.count}</td>
-                    <td>{p.cumPct}%</td>
-                    <td style={{ minWidth: 100 }}>
+                    <td data-label="排名">{i + 1}</td>
+                    <td data-label="題目" style={{ maxWidth: 320 }}>{p.itemText}</td>
+                    <td data-label="扣分次數">{p.count}</td>
+                    <td data-label="累積比例">{p.cumPct}%</td>
+                    <td data-label="累積比例圖" style={{ minWidth: 100 }}>
                       <div
                         style={{
                           height: 8,

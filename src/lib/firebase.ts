@@ -1,30 +1,34 @@
+import { loadRefCollection } from "./refLoad";
+import { initDual } from "./dual/bootstrap";
 import { getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
 import {
-  arrayUnion,
   getFirestore,
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
   type Firestore,
 } from "firebase/firestore";
-import {
-  collection,
-  doc,
-  getDocs,
-  limit,
-  query,
-  updateDoc,
-  where,
-} from "./db";
-import { getCachedRefCollection } from "./refCache";
-import { getDocsCacheFirst } from "./cacheFirst";
+import { collection, doc, getDoc, getDocs, limit, query, serverTimestamp, where, writeBatch } from "./db";
 import { fetchAllPaged } from "./pagedQuery";
 import {
+  deriveGroupIds,
+  deriveStoredRoles,
   isConvenerRole,
   isOfficerRole,
   isReviewerRole,
+  mergeMembership,
+  parseMemberships,
 } from "./roleIdentity";
+import { activeRolesForReviewerExpiry } from "./reviewerValidity";
+import { syncReviewerDoc } from "./reviewerSync";
+import {
+  buildRoleMetaMap,
+  hasRoleCategory,
+  reviewerRoleNames,
+  type RoleMetaMap,
+  type TitleFlags,
+} from "./orgMeta";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY ?? "",
@@ -69,11 +73,6 @@ export function getFirebaseAuth(): Auth {
  * demo 模式不走 Firestore SDK，狀態值與 demo 路徑無關（見 cacheFirst.ts 的隔離測試）。
  */
 export type FirestoreCacheStatus = "persistent" | "fallback";
-let firestoreCacheStatus: FirestoreCacheStatus = "fallback";
-
-export function getFirestoreCacheStatus(): FirestoreCacheStatus {
-  return firestoreCacheStatus;
-}
 
 export function getFirebaseDb(): Firestore {
   if (dbInstance) return dbInstance;
@@ -86,13 +85,13 @@ export function getFirebaseDb(): Firestore {
         tabManager: persistentMultipleTabManager(),
       }),
     });
-    firestoreCacheStatus = "persistent";
   } catch {
     // Safari 私密模式 IndexedDB 不可用、或已初始化：退回預設 getFirestore，
     // 絕不讓初始化失敗拖垮整站（快取未命中時走伺服器，行為與改前一致）。
     dbInstance = getFirestore(app);
-    firestoreCacheStatus = "fallback";
   }
+  // 雙寫模式（VITE_DB_MODE=dual）才會真的初始化；預設為空操作
+  initDual(dbInstance, getFirebaseAuth);
   return dbInstance;
 }
 
@@ -110,6 +109,10 @@ export type FirebaseProfile = {
   groupId: string;
   groupIds: string[];
   status: string;
+  /** 角色詮釋資料（有值時範圍改以類別判斷；未傳時以名稱推導，行為與舊版一致）。 */
+  roleMeta?: RoleMetaMap;
+  /** 職稱旗標（有值時單位／全院範圍亦看職稱；未傳時只看角色）。 */
+  titleFlags?: TitleFlags;
 };
 
 export type ReviewRecord = {
@@ -178,9 +181,11 @@ export function isFirebaseReviewerRoleWriteEnabled(): boolean {
 
 /**
  * 讀取某指標某年度的已送出審查紀錄（唯讀）。
- * 資料範圍依角色：全院（主任／副主任／督導／系統管理員）→ 不限；
- * 組別（召集人／執行幹事）→ 所屬組別單位；護理長 → 所屬單位；
+ * 資料範圍依身分：全院（院級主管／系統管理員）→ 不限；
+ * 組別（召集人／執行幹事類別）→ 所屬組別單位；單位主管 → 所屬單位；
  * 審查員／一般人員 → 本人送出的。
+ * v1.40.5：範圍改以角色類別＋職稱旗標判斷，不再比對角色／職稱名稱；
+ * 未傳入詮釋資料時以舊名稱推導，行為與舊版一致。
  */
 export async function readReviewRecords(
   indicatorId: string,
@@ -189,14 +194,21 @@ export async function readReviewRecords(
 ): Promise<ReviewRecord[]> {
   const db = getFirebaseDb();
   const roles = new Set(profile.roles);
-  const fullHospital = ["主任", "副主任", "督導", "系統管理員"].some((role) =>
-    roles.has(role),
-  );
+  const roleMeta = profile.roleMeta;
+  const fullHospital =
+    roles.has("系統管理員") ||
+    hasRoleCategory(profile.roles, "senior", roleMeta) ||
+    profile.titleFlags?.isHospitalHead === true ||
+    profile.titleFlags?.isDistrictHead === true;
   // v1.21：召集人／執行幹事新舊並認（組級＋單位級皆以所屬群組計範圍）
   const groupScope =
-    isConvenerRole(profile.roles) || isOfficerRole(profile.roles);
-  const unitScope = roles.has("護理長");
-  const ownScope = isReviewerRole(profile.roles) || roles.has("一般人員");
+    isConvenerRole(profile.roles, roleMeta) ||
+    isOfficerRole(profile.roles, roleMeta);
+  const unitScope =
+    hasRoleCategory(profile.roles, "unitHead", roleMeta) ||
+    profile.titleFlags?.isUnitHead === true;
+  const ownScope =
+    isReviewerRole(profile.roles, roleMeta) || roles.has("一般人員");
 
   // v1.28 階段 6（B6）：單一指標查詢改游標分頁，取代舊 limit(2000) 靜默截斷。
   // 維持單一 where（indicatorId 等號），年份仍在前端過濾：v1.14 測試明言
@@ -222,9 +234,7 @@ export async function readReviewRecords(
         ...new Set([...profile.groupIds, profile.groupId].filter(Boolean)),
       ];
       if (groupIds.length) {
-        const unitSnap = await getCachedRefCollection("units", () =>
-          getDocsCacheFirst(query(collection(db, "units"), limit(2000))),
-        );
+        const unitSnap = await loadRefCollection("units");
         const ids = new Set<string>();
         unitSnap.docs.forEach((u) => {
           const data = u.data() as Record<string, unknown>;
@@ -354,15 +364,10 @@ export async function readIndicatorYearSchedule(
 export async function readFirebaseUsersForReviewerManagement(): Promise<
   FirebaseUserRow[]
 > {
-  const db = getFirebaseDb();
-  const snapshot = await getCachedRefCollection("users", () =>
-    getDocsCacheFirst(query(collection(db, "users"), limit(1000))),
-  );
+  const snapshot = await loadRefCollection("users");
   let groupByUnit = new Map<string, string>();
   try {
-    const units = await getCachedRefCollection("units", () =>
-      getDocsCacheFirst(query(collection(db, "units"), limit(2000))),
-    );
+    const units = await loadRefCollection("units");
     groupByUnit = new Map(
       units.docs.flatMap((unit) => {
         const data = unit.data() as Record<string, unknown>;
@@ -380,11 +385,12 @@ export async function readFirebaseUsersForReviewerManagement(): Promise<
   }
   return snapshot.docs.map((document) => {
     const raw = document.data() as Record<string, unknown>;
-    const roles = Array.isArray(raw.roles)
+    const storedRoles = Array.isArray(raw.roles)
       ? (raw.roles as unknown[]).filter(
           (value): value is string => typeof value === "string",
         )
       : [];
+    const roles = activeRolesForReviewerExpiry(storedRoles, raw.reviewerAccessExpiresAt);
     const groupIds = Array.isArray(raw.groupIds)
       ? (raw.groupIds as unknown[]).filter(
           (value): value is string => typeof value === "string",
@@ -410,10 +416,7 @@ export async function readFirebaseUsersForReviewerManagement(): Promise<
 export async function readFirebaseGroupsForReviewerManagement(): Promise<
   FirebaseGroupOption[]
 > {
-  const db = getFirebaseDb();
-  const snapshot = await getCachedRefCollection("groups", () =>
-    getDocsCacheFirst(query(collection(db, "groups"), limit(500))),
-  );
+  const snapshot = await loadRefCollection("groups");
   return snapshot.docs
     .map((document) => ({
       id: document.id,
@@ -425,14 +428,100 @@ export async function readFirebaseGroupsForReviewerManagement(): Promise<
     .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
 }
 
-/** 授予審查員角色（users/{staffId}.roles arrayUnion "審查員"） */
-export async function grantReviewerRole(staffId: string): Promise<void> {
+/**
+ * 授予審查員角色（寫入指定群組的分工表，再由分工表衍生 roles 聯集）。
+ * v1.40.5：授予的角色改以 roles 集合中類別為審查員者為準（名稱由管理員設定，
+ * 不再寫死「審查員」）；找不到此類角色時才退回舊名稱（遷移相容）。
+ * v1.58.0：授予時必須明確指定群組，不再只寫 roles 聯集產生全域審查員。
+ * 回傳實際授予的角色名稱。
+ */
+export async function grantReviewerRole(
+  staffId: string,
+  actor: { staffId: string; name: string },
+  groupId: string,
+): Promise<string> {
   if (!isFirebaseReviewerRoleWriteEnabled())
     throw new Error("審查員角色寫入尚未啟用；需先完成 Firestore Rules 驗收。");
   const normalizedStaffId = staffId.trim();
   if (!normalizedStaffId) throw new Error("缺少人員職編，無法授予角色。");
+  const normalizedGroupId = groupId.trim();
+  if (!normalizedGroupId) throw new Error("請先選擇授予群組。");
   const db = getFirebaseDb();
-  await updateDoc(doc(db, "users", normalizedStaffId), {
-    roles: arrayUnion("審查員"),
+  const reviewerRoleName = await resolveReviewerRoleName();
+  const userRef = doc(db, "users", normalizedStaffId);
+  const userSnap = await getDoc(userRef);
+  if (!userSnap.exists()) throw new Error("找不到該人員資料。");
+  const before = userSnap.data();
+  const beforeRoles = Array.isArray(before.roles) ? before.roles.map(String) : [];
+  const beforeMemberships = parseMemberships(before.memberships, {
+    roles: beforeRoles,
+    groupIds: Array.isArray(before.groupIds) ? before.groupIds.map(String) : [],
   });
+  const memberships = mergeMembership(
+    beforeMemberships,
+    normalizedGroupId,
+    [reviewerRoleName],
+  );
+  const roles = deriveStoredRoles(memberships, beforeRoles);
+  const batch = writeBatch(db);
+  batch.update(userRef, {
+    memberships,
+    groupIds: deriveGroupIds(memberships),
+    roles,
+    reviewerAccessExpiresAt: null,
+  });
+  batch.set(doc(collection(db, "auditLogs")), {
+    actor: actor.staffId,
+    actorName: actor.name,
+    action: "授予審查員角色",
+    targetType: "user",
+    targetId: normalizedStaffId,
+    detail: `授予職編 ${normalizedStaffId} ${reviewerRoleName}角色（群組 ${normalizedGroupId}），效期設為永久有效`,
+    before: {
+      roles: beforeRoles,
+      memberships: beforeMemberships,
+      reviewerAccessExpiresAt: typeof before.reviewerAccessExpiresAt === "string"
+        ? before.reviewerAccessExpiresAt
+        : null,
+    },
+    after: { roles, memberships, reviewerAccessExpiresAt: null },
+    createdAt: serverTimestamp(),
+  });
+  await batch.commit();
+  // v1.51.0：授予審查員角色後同步審查員名單（同一寫入開關已在函式入口檢查）
+  try {
+    const roleMeta = await loadRoleMetaMap();
+    await syncReviewerDoc(db, normalizedStaffId, roles, roleMeta);
+  } catch {
+    // 連動失敗不阻擋授予流程；名單可由管理員以「補建審查員名單」補建
+  }
+  return reviewerRoleName;
+}
+
+/** 讀取 roles 集合建角色 meta 表（授予流程與審查員名單連動共用）。 */
+async function loadRoleMetaMap(): Promise<RoleMetaMap> {
+  const snap = await loadRefCollection("roles");
+  return buildRoleMetaMap(
+    snap.docs.map((d) => {
+      const v = d.data() as Record<string, unknown>;
+      return {
+        name: typeof v.name === "string" ? v.name : d.id,
+        levelId: v.levelId,
+      };
+    }),
+  );
+}
+
+/** 由 roles 集合找出審查員類別的角色名稱（名稱排序第一個）；無則退回舊名稱。 */
+async function resolveReviewerRoleName(): Promise<string> {
+  try {
+    const meta = await loadRoleMetaMap();
+    const names = reviewerRoleNames(meta).sort((a, b) =>
+      a.localeCompare(b, "zh-Hant"),
+    );
+    if (names.length > 0) return names[0];
+  } catch {
+    // 讀取失敗時退回舊名稱，不阻擋授予流程
+  }
+  return "審查員";
 }

@@ -6,14 +6,20 @@ import { useMemo, useState } from "react";
 import { CircleAlert, Lock } from "lucide-react";
 import { SectionTitle } from "../../components/ui";
 import { isOverdue, todayStr } from "../../lib/scheduling";
-import { progressLabel, requiredCases } from "../../lib/reviewProgress";
-import { daysBetween } from "../../lib/dashboardStats";
+import { displayUnitCode } from "../../lib/mask";
+import { requiredCases } from "../../lib/reviewProgress";
+import {
+  daysBetween,
+  taskProgressCount,
+  taskProgressLabel,
+} from "../../lib/dashboardStats";
 import {
   DEFAULT_DASHBOARD_SECTIONS,
   type DashboardSections,
 } from "../../lib/dashboardSections";
 import type { DashboardData } from "./useDashboardData";
 import type { ExecuteTarget } from "../ReviewExecutePage";
+import { pad2 } from "../../lib/ym";
 
 export function ReviewerTab({
   data,
@@ -53,12 +59,14 @@ export function ReviewerTab({
     [data, staffId, curYear, curMonth],
   );
 
-  const isDone = (doneCount: number, caseCount: number | null) =>
-    doneCount >= requiredCases(caseCount);
+  const isDone = (task: (typeof myTasks)[number]) => {
+    const doneCount = taskProgressCount(task);
+    return doneCount != null && doneCount >= requiredCases(task.caseCount);
+  };
   const pendingTasks = myTasks.filter(
-    (t) => !isDone(t.doneCount, t.caseCount),
+    (t) => !isDone(t),
   );
-  const doneTasks = myTasks.filter((t) => isDone(t.doneCount, t.caseCount));
+  const doneTasks = myTasks.filter((t) => isDone(t));
   const shown = tab === "pending" ? pendingTasks : doneTasks;
 
   const lockedTasks = pendingTasks.filter((t) => t.status === "locked");
@@ -80,7 +88,7 @@ export function ReviewerTab({
     return d >= 0 && d <= 7;
   });
 
-  const ymTitle = `${curYear}/${String(curMonth).padStart(2, "0")} 我的審查`;
+  const ymTitle = `${curYear}/${pad2(curMonth)} 我的審查`;
 
   const statusPill = (t: (typeof myTasks)[number]) => {
     if (t.status === "locked")
@@ -89,7 +97,7 @@ export function ReviewerTab({
           <Lock size={12} style={{ verticalAlign: "-1px" }} /> 已鎖定
         </span>
       );
-    const done = isDone(t.doneCount, t.caseCount);
+    const done = isDone(t);
     const overdue = isOverdue(t.deadline, done ? "done" : "pending");
     if (overdue)
       return <span className="status-pill danger">逾期未完成</span>;
@@ -103,7 +111,10 @@ export function ReviewerTab({
   return (
     <>
       <section className="panel my-review">
-        <SectionTitle title={ymTitle} note={`共 ${myTasks.length} 筆任務`} />
+        <SectionTitle
+          title={ymTitle}
+          note={`共 ${myTasks.length} 筆任務；週期排程件數為區間共用`}
+        />
         <div className="tabs" style={{ marginBottom: 12 }} role="tablist">
           <button
             className={`tab${tab === "pending" ? " active" : ""}`}
@@ -136,7 +147,7 @@ export function ReviewerTab({
                   <tr>
                     <th>指標名稱</th>
                     <th>審查單位</th>
-                    <th>完成/應審件數</th>
+                    <th>完成/應審</th>
                     <th>截止日期</th>
                     <th>狀態</th>
                     <th>操作</th>
@@ -144,7 +155,7 @@ export function ReviewerTab({
                 </thead>
                 <tbody>
                   {shown.map((t) => {
-                    const done = isDone(t.doneCount, t.caseCount);
+                    const done = isDone(t);
                     const overdue = isOverdue(
                       t.deadline,
                       done ? "done" : "pending",
@@ -154,8 +165,8 @@ export function ReviewerTab({
                         <td>
                           {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                         </td>
-                        <td>{t.unitId}</td>
-                        <td>{progressLabel(t.doneCount, t.caseCount)}</td>
+                        <td>{displayUnitCode(t.unitId)}</td>
+                        <td>{taskProgressLabel(t)}</td>
                         <td
                           style={
                             overdue && t.status !== "locked"
@@ -200,7 +211,7 @@ export function ReviewerTab({
             </div>
             <div className="task-cards">
               {shown.map((t) => {
-                const done = isDone(t.doneCount, t.caseCount);
+                const done = isDone(t);
                 return (
                   <div key={t.id} className="task-card">
                     <div className="task-card-top">
@@ -210,9 +221,9 @@ export function ReviewerTab({
                       {statusPill(t)}
                     </div>
                     <div className="task-card-meta">
-                      <span>審查單位：{t.unitId}</span>
+                      <span>審查單位：{displayUnitCode(t.unitId)}</span>
                       <span>
-                        完成/應審：{progressLabel(t.doneCount, t.caseCount)}
+                        完成/應審：{taskProgressLabel(t)}
                       </span>
                       <span>截止：{t.deadline}</span>
                     </div>
@@ -246,25 +257,25 @@ export function ReviewerTab({
               <p className="settings-note" style={{ marginBottom: 8 }}>
                 已鎖定（{lockedTasks.length} 筆）：點「審查」進入可填寫原因申請解鎖。
               </p>
-              <div className="table-scroll">
+              <div className="table-scroll dashboard-responsive-table">
                 <table className="data-table">
                   <thead>
                     <tr>
                       <th>指標名稱</th>
                       <th>審查單位</th>
-                      <th>完成/應審件數</th>
+                      <th>完成/應審</th>
                       <th>操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     {lockedTasks.map((t) => (
                       <tr key={t.id}>
-                        <td>
+                        <td data-label="指標名稱">
                           {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                         </td>
-                        <td>{t.unitId}</td>
-                        <td>{progressLabel(t.doneCount, t.caseCount)}</td>
-                        <td>
+                        <td data-label="審查單位">{displayUnitCode(t.unitId)}</td>
+                        <td data-label="完成／應審件數">{taskProgressLabel(t)}</td>
+                        <td data-label="操作">
                           <button
                             className="text-button"
                             onClick={() =>
@@ -286,7 +297,7 @@ export function ReviewerTab({
               {dueSoon.map((t) => (
                 <li key={t.id}>
                   {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}／
-                  {t.unitId}：{t.deadline} 截止
+                  {displayUnitCode(t.unitId)}：{t.deadline} 截止
                   <span className="status-pill warning" style={{ marginLeft: 8 }}>
                     剩餘 {daysBetween(today, t.deadline)} 天
                   </span>
@@ -301,13 +312,13 @@ export function ReviewerTab({
       {sections.nextMonthPreview && (
         <section className="panel">
           <SectionTitle
-            title={`次月預告（${nextYear}/${String(nextMonth).padStart(2, "0")}）`}
+            title={`次月預告（${nextYear}/${pad2(nextMonth)}）`}
             note={`共 ${upcomingTasks.length} 筆任務`}
           />
         {upcomingTasks.length === 0 ? (
           <p className="settings-note">次月尚無排定任務。</p>
         ) : (
-          <div className="table-scroll">
+          <div className="table-scroll dashboard-responsive-table">
             <table className="data-table">
               <thead>
                 <tr>
@@ -320,12 +331,12 @@ export function ReviewerTab({
               <tbody>
                 {upcomingTasks.map((t) => (
                   <tr key={t.id}>
-                    <td>
+                    <td data-label="指標名稱">
                       {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
                     </td>
-                    <td>{t.unitId}</td>
-                    <td>{t.caseCount ?? "未設定"}</td>
-                    <td>{t.deadline}</td>
+                    <td data-label="審查單位">{displayUnitCode(t.unitId)}</td>
+                    <td data-label="應審件數">{t.caseCount ?? "未設定"}</td>
+                    <td data-label="截止日期">{t.deadline}</td>
                   </tr>
                 ))}
               </tbody>

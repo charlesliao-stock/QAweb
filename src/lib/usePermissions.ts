@@ -1,103 +1,113 @@
-/**
- * 權限 hook（v1.12.1：移轉語義；v1.12.2：系統管理員 bypass）。
- * 載入 roles＋titles 集合，提供 can(permKey)：
- * - 系統管理員（roles 含「系統管理員」）→ 全部放行（bypass）
- * - 無角色／無職稱（人員沒填）→ 無權限
- * - 職稱從未設定過權限（titles 文件無 permissions 欄位）→ 只看角色聯集
- * - 職稱曾儲存過權限矩陣 → 嚴格交集（角色聯集 AND 職稱）
- */
-import { useCallback, useEffect, useState } from "react";
-import { collection } from "./db";
-import { getFirebaseDb } from "./firebase";
-import { getCachedRefCollection } from "./refCache";
-import { getDocsCacheFirst } from "./cacheFirst";
+import { loadRefCollection } from "./refLoad";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "./auth";
 import {
-  DEFAULT_ROLE_PERMS,
-  can,
+  ADMIN_ONLY_PERM_KEYS,
+  can as evaluatePermission,
   parsePermissions,
+  parseTemplateCategory,
+  templateKey,
+  type PermissionCatalog,
   type PermKey,
-  type PermUser,
-  type RolePermissions,
 } from "./permissions";
+
+/**
+ * 空 catalog（v1.38.0 範本制：無範本＝無權限）。
+ * 無範本的角色／職稱權限一律為空，不再按角色名給預設值；
+ * 系統管理員另有 bypass，不受此影響。
+ * v1.39.0：catalog 不再含角色／職稱文件（判斷不讀它們），改含
+ * 單位→群組對照（單位角色不跨單位時比對用）。
+ */
+const emptyCatalog = (): PermissionCatalog => ({
+  templates: {},
+  unitGroups: {},
+});
 
 export function usePermissions() {
   const { user } = useAuth();
-  // 先以預設基線提供判斷，Firestore 讀回後再疊加自訂值（避免載入中閃爍）
-  const [rolePerms, setRolePerms] =
-    useState<Record<string, RolePermissions>>(DEFAULT_ROLE_PERMS);
-  // 職稱權限：無程式預設值；另追蹤各職稱是否「曾儲存過」權限矩陣
-  //（permissions 欄位存在才算設定過，有別於明確存成全 false）
-  const [titlePerms, setTitlePerms] = useState<Record<string, RolePermissions>>(
-    {},
-  );
-  const [titleConfigured, setTitleConfigured] = useState<
-    Record<string, boolean>
-  >({});
+  const [catalog, setCatalog] = useState<PermissionCatalog>(emptyCatalog);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    // v1.28 階段 4：roles／titles 走參考資料共用快取（跨頁只讀一次，
-    // 自己寫入後由 db.ts 統一出口自動失效；demo 模式不快取）
+    if (!user?.staffId) {
+      setCatalog(emptyCatalog());
+      setReady(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setReady(false);
     Promise.all([
-      getCachedRefCollection("roles", () =>
-        getDocsCacheFirst(collection(getFirebaseDb(), "roles")),
-      ),
-      getCachedRefCollection("titles", () =>
-        getDocsCacheFirst(collection(getFirebaseDb(), "titles")),
-      ),
+      loadRefCollection("permissionTemplates"),
+      loadRefCollection("units"),
     ])
-      .then(([rsnap, tsnap]) => {
+      .then(([templateSnapshot, unitSnapshot]) => {
         if (cancelled) return;
-        const rp: Record<string, RolePermissions> = {
-          ...DEFAULT_ROLE_PERMS,
-        };
-        rsnap.docs.forEach((d) => {
-          const data = d.data() as Record<string, unknown>;
-          const name = typeof data.name === "string" ? data.name : d.id;
-          rp[name] = {
-            ...(DEFAULT_ROLE_PERMS[name] ?? {}),
-            ...parsePermissions(data.permissions),
+        const next = emptyCatalog();
+        templateSnapshot.docs.forEach((document) => {
+          const data = document.data() as Record<string, unknown>;
+          const category = parseTemplateCategory(data.category);
+          const name = typeof data.name === "string" ? data.name : "";
+          if (!category || !name) return;
+          next.templates[templateKey(category, name)] = {
+            category,
+            name,
+            permissions: parsePermissions(data.permissions),
+            cross: data.cross === true,
           };
         });
-        setRolePerms(rp);
-        const tp: Record<string, RolePermissions> = {};
-        const tc: Record<string, boolean> = {};
-        tsnap.docs.forEach((d) => {
-          const data = d.data() as Record<string, unknown>;
-          const name = typeof data.name === "string" ? data.name : d.id;
-          const parsed = parsePermissions(data.permissions);
-          // 同名職稱（例：群組/單位層級的「執行幹事」）取聯集
-          tp[name] = { ...(tp[name] ?? {}), ...parsed };
-          // 任一同名文件曾存過 permissions 欄位即視為已設定
-          if (data.permissions !== undefined && data.permissions !== null) {
-            tc[name] = true;
-          }
+        unitSnapshot.docs.forEach((document) => {
+          const data = document.data() as Record<string, unknown>;
+          const groupId = typeof data.groupId === "string" ? data.groupId : "";
+          if (groupId) next.unitGroups[document.id] = groupId;
         });
-        setTitlePerms(tp);
-        setTitleConfigured(tc);
+        setCatalog(next);
       })
       .catch(() => {
-        /* 讀不到就沿用預設基線 */
+        // Fail closed for non-admins. System administrator retains the emergency bypass.
+        setCatalog(emptyCatalog());
+      })
+      .finally(() => {
+        if (!cancelled) setReady(true);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user?.staffId]);
 
-  const permUser: PermUser | undefined = user
-    ? { roles: user.roles ?? [], title: user.title ?? "" }
-    : undefined;
-  // 系統管理員權限最大：直接放行所有功能（v1.12.2）
-  //（既有管理員判定邏輯：roles 含「系統管理員」；沿用 GroupsPage/AdminPage 的寫法）
+  const permUser = useMemo(
+    () =>
+      user
+        ? {
+            roles: user.roles ?? [],
+            memberships: user.memberships ?? [],
+            title: user.title ?? "",
+            titleId: user.titleId ?? "",
+            unitCode: user.unitCode ?? "",
+          }
+        : undefined,
+    [user],
+  );
   const isAdmin = (user?.roles ?? []).includes("系統管理員");
 
-  const canDo = useCallback(
-    (key: PermKey) =>
-      isAdmin || can(permUser, key, rolePerms, titlePerms, titleConfigured),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [isAdmin, user?.roles, user?.title, rolePerms, titlePerms, titleConfigured],
+  const can = useCallback(
+    (key: PermKey, groupId?: string) => {
+      // v1.56.0：組織與設定專屬鍵（群組與人員／系統管理／權限管理／管理角色與權限）
+      // 只限系統管理員。權限頁永不列出這些鍵，但舊範本可能仍勾著殘留值，
+      // 範本交集不可再放行非管理員；導覽顯示與路由守衛都走 can()，一併收掉。
+      if ((ADMIN_ONLY_PERM_KEYS as readonly string[]).includes(key)) {
+        return isAdmin;
+      }
+      return isAdmin || evaluatePermission(permUser, key, catalog, groupId);
+    },
+    [isAdmin, permUser, catalog],
   );
 
-  return { can: canDo, rolePerms, titlePerms, titleConfigured };
+  return {
+    can,
+    ready,
+    isAdmin,
+    catalog,
+  };
 }

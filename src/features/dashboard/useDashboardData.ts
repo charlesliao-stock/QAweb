@@ -11,6 +11,7 @@
  * 絕不讓儀表板掛掉。
  * 載入時自動校正任務狀態（完成→done；逾期→locked；其餘→pending，沿用 v1.12.2 模式）。
  */
+import { loadRefCollection } from "../../lib/refLoad";
 import { useCallback, useEffect, useState } from "react";
 import {
   collection,
@@ -23,8 +24,6 @@ import {
   writeBatch,
 } from "../../lib/db";
 import { getFirebaseDb } from "../../lib/firebase";
-import { getCachedRefCollection } from "../../lib/refCache";
-import { getDocsCacheFirst } from "../../lib/cacheFirst";
 import { correctTaskStatus } from "../../lib/reviewProgress";
 import {
   markCorrectionWritten,
@@ -37,9 +36,10 @@ import type {
   DashTask,
 } from "../../lib/dashboardStats";
 import {
-  countRecordsByTask,
+  countRecordsByTaskWithImports,
   dashboardMonthWindow,
   mergeDashTasks,
+  taskProgressCount,
 } from "../../lib/dashboardStats";
 import type { ReviewTaskStatus } from "../../lib/scheduling";
 
@@ -108,6 +108,10 @@ function parseTask(
 ): Omit<DashTask, "doneCount"> {
   const cc = data.caseCount;
   const st = String(data.status ?? "pending");
+  const quotaCategory =
+    data.quotaCategory === "year" || data.quotaCategory === "academic"
+      ? data.quotaCategory
+      : undefined;
   return {
     id,
     indicatorId: String(data.indicatorId ?? ""),
@@ -117,6 +121,26 @@ function parseTask(
     month: Number(data.month ?? 0),
     caseCount:
       typeof cc === "number" && Number.isInteger(cc) && cc >= 1 ? cc : null,
+    quotaVersion: data.quotaVersion === 1 ? 1 : undefined,
+    quotaGroupId:
+      typeof data.quotaGroupId === "string" ? data.quotaGroupId : undefined,
+    quotaCategory,
+    quotaIntervalStartYear:
+      typeof data.quotaIntervalStartYear === "number"
+        ? data.quotaIntervalStartYear
+        : undefined,
+    quotaIntervalStartMonth:
+      typeof data.quotaIntervalStartMonth === "number"
+        ? data.quotaIntervalStartMonth
+        : undefined,
+    quotaIntervalEndYear:
+      typeof data.quotaIntervalEndYear === "number"
+        ? data.quotaIntervalEndYear
+        : undefined,
+    quotaIntervalEndMonth:
+      typeof data.quotaIntervalEndMonth === "number"
+        ? data.quotaIntervalEndMonth
+        : undefined,
     deadline: String(data.deadline ?? ""),
     status: (st === "done" ? "done" : st === "locked" ? "locked" : "pending") as ReviewTaskStatus,
   };
@@ -147,6 +171,9 @@ function parseRecord(
         ? data.reviewedPersonName
         : "",
     rate: typeof data.rate === "number" ? data.rate : null,
+    quotaGroupId:
+      typeof data.quotaGroupId === "string" ? data.quotaGroupId : undefined,
+    source: typeof data.source === "string" ? data.source : undefined,
     answers: (ans as Record<string, unknown>[]).map((a) => ({
       questionId: String(a.questionId ?? ""),
       itemText: String(a.itemText ?? ""),
@@ -158,6 +185,29 @@ function parseRecord(
     submittedAt: data.submittedAt,
   };
 }
+
+/** false＝不讀任何 Firestore 資料（儀表板顯示空狀態，版面不變） */
+const DASHBOARD_READS_ENABLED = true;
+
+/**
+ * Spark 配額保護：同一分頁、同一月份的儀表板資料在 TTL 內直接重用，
+ * 不重複讀 Firestore（切頁再回來、角色預覽切換都不再計費）。
+ * reload()（審查執行頁返回後）會略過快取、強制重讀。
+ */
+const DASHBOARD_CACHE_TTL_MS = 5 * 60 * 1000;
+interface DashboardSnapshot {
+  key: string;
+  at: number;
+  indicators: DashIndicator[];
+  groups: DashGroup[];
+  units: DashUnit[];
+  tasks: DashTask[];
+  records: DashRecord[];
+  unlockPending: DashUnlock[];
+  correctionSkipped: boolean;
+}
+let dashboardCache: DashboardSnapshot | null = null;
+let forceNextRead = false;
 
 export function useDashboardData(): DashboardData {
   const win = dashboardMonthWindow(new Date());
@@ -173,10 +223,38 @@ export function useDashboardData(): DashboardData {
   const [correctionFailed, setCorrectionFailed] = useState(false);
   const [tick, setTick] = useState(0);
 
-  const reload = useCallback(() => setTick((t) => t + 1), []);
+  const reload = useCallback(() => {
+    forceNextRead = true;
+    setTick((t) => t + 1);
+  }, []);
 
   useEffect(() => {
+    // 儀表板讀取暫時停用（降低 Firestore 讀取量）：版面維持原樣，資料為空狀態。
+    // 恢復時把 DASHBOARD_READS_ENABLED 改回 true 即可。
+    if (!DASHBOARD_READS_ENABLED) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
+    const cacheKey = `${curYear}-${curMonth}`;
+    const hit = dashboardCache;
+    if (
+      !forceNextRead &&
+      hit &&
+      hit.key === cacheKey &&
+      Date.now() - hit.at < DASHBOARD_CACHE_TTL_MS
+    ) {
+      setIndicators(hit.indicators);
+      setGroups(hit.groups);
+      setUnits(hit.units);
+      setTasks(hit.tasks);
+      setRecords(hit.records);
+      setUnlockPending(hit.unlockPending);
+      setCorrectionSkipped(hit.correctionSkipped);
+      setLoading(false);
+      return;
+    }
+    forceNextRead = false;
     (async () => {
       setLoading(true);
       setCorrectionFailed(false); // 每輪載入重新計算寫入失敗狀態
@@ -184,15 +262,9 @@ export function useDashboardData(): DashboardData {
         const db = getFirebaseDb();
         const today = todayStr();
         const [isnap, gsnap, usnap, monthTsnap, nextTsnap, lockedTsnap, monthRsnap, alertRsnap, usnap2] = await Promise.all([
-          getCachedRefCollection("indicators", () =>
-            getDocsCacheFirst(collection(db, "indicators")),
-          ),
-          getCachedRefCollection("groups", () =>
-            getDocsCacheFirst(collection(db, "groups")),
-          ),
-          getCachedRefCollection("units", () =>
-            getDocsCacheFirst(collection(db, "units")),
-          ),
+          loadRefCollection("indicators"),
+          loadRefCollection("groups"),
+          loadRefCollection("units"),
           // v1.28 階段 2：任務只拉本月（年＋月兩個等號，不需複合索引）
           getDocs(
             query(
@@ -352,16 +424,107 @@ export function useDashboardData(): DashboardData {
           }
           if (cancelled) return;
         }
+        // v1.47.0 匯入紀錄補查：匯入紀錄 taskId 為空，taskId in 補查不到；
+        // 改按（指標，年）查（沿用 reviewRecords 既有 indicatorId＋year
+        // 複合索引，與 loadPeriodicQuotaCounts 同形），再以單位＋月份
+        // 過濾出對應任務的匯入紀錄。本月任務的紀錄已由本月查詢拉齊，
+        // 此處只補非本月任務。
+        if (fetchIds.length > 0) {
+          const importFetchTasks = list.filter((t) =>
+            fetchIds.includes(t.id),
+          );
+          const pairMap = new Map<
+            string,
+            { indicatorId: string; year: number; tasks: DashTask[] }
+          >();
+          for (const t of importFetchTasks) {
+            const key = `${t.indicatorId}||${t.year}`;
+            const entry = pairMap.get(key) ?? {
+              indicatorId: t.indicatorId,
+              year: t.year,
+              tasks: [] as DashTask[],
+            };
+            entry.tasks.push(t);
+            pairMap.set(key, entry);
+          }
+          const pairs = [...pairMap.values()];
+          const IMPORT_PAIR_CAP = 30;
+          const cappedPairs = pairs.slice(0, IMPORT_PAIR_CAP);
+          for (const pair of pairs.slice(IMPORT_PAIR_CAP)) {
+            for (const t of pair.tasks) t.doneCountUnknown = true;
+          }
+          const importSnaps = await Promise.all(
+            cappedPairs.map(({ indicatorId, year }) =>
+              getDocs(
+                query(
+                  collection(db, "reviewRecords"),
+                  where("indicatorId", "==", indicatorId),
+                  where("year", "==", year),
+                ),
+              ).catch(() => null),
+            ),
+          );
+          importSnaps.forEach((snap, i) => {
+            const pair = cappedPairs[i];
+            if (!snap) {
+              for (const t of pair.tasks) t.doneCountUnknown = true;
+              return;
+            }
+            snap.docs.forEach((d) => {
+              const data = d.data() as Record<string, unknown>;
+              if (String(data.source ?? "") !== "import") return;
+              const hit = pair.tasks.some(
+                (t) =>
+                  // v1.51.0：不限單位任務（unitId ""）按指標＋年月歸屬匯入，不分單位
+                  (t.unitId === "" ||
+                    t.unitId === String(data.unitId ?? "")) &&
+                  t.year === Number(data.year ?? 0) &&
+                  t.month === Number(data.month ?? 0),
+              );
+              if (hit && !recMap.has(d.id)) {
+                const r = parseRecord(d.id, data);
+                recMap.set(r.id, r);
+              }
+            });
+          });
+          if (cancelled) return;
+        }
         // 超過上限者：完成進度未知（畫面顯示「—」，不顯示錯誤的 0）
         for (const id of needIds.slice(EXTRA_RECORD_TASK_CAP)) {
           const t = list.find((x) => x.id === id);
           if (t) t.doneCountUnknown = true;
         }
         const recs = [...recMap.values()];
-        // 逐件完成數（本月任務的紀錄即足夠；鎖定／逾期任務已另補）
-        const countMap = countRecordsByTask(recs);
+        // 逐件完成數（本月任務的紀錄即足夠；鎖定／逾期任務已另補；
+        // v1.47.0：含匯入紀錄，按指標＋單位＋年月歸屬）
+        const countMap = countRecordsByTaskWithImports(recs, list);
         for (const t of list) {
           t.doneCount = countMap.get(t.id) ?? 0;
+        }
+        const quotaTasks = list.filter(
+          (task) => task.quotaVersion === 1 && task.quotaGroupId,
+        );
+        if (quotaTasks.length > 0) {
+          try {
+            const { loadPeriodicQuotaCounts } = await import(
+              "./periodicQuotaCounts"
+            );
+            const { counts, failedGroups } = await loadPeriodicQuotaCounts(
+              db,
+              quotaTasks,
+            );
+            if (cancelled) return;
+            quotaTasks.forEach((task) => {
+              const groupId = task.quotaGroupId!;
+              task.quotaDoneCount = counts.get(groupId) ?? 0;
+              if (failedGroups.has(groupId))
+                task.quotaDoneCountUnknown = true;
+            });
+          } catch {
+            quotaTasks.forEach((task) =>
+              (task.quotaDoneCountUnknown = true),
+            );
+          }
         }
         // 狀態自動校正（v1.12.2 模式＋v1.15.0 鎖定）
         // v1.27.2：只收集「真的不同」的任務，單一 writeBatch 提交（失敗不影響畫面，下次再試）
@@ -371,8 +534,10 @@ export function useDashboardData(): DashboardData {
         // 且不記入節流，下次載入再試。
         const fixes: { id: string; patch: Record<string, unknown> }[] = [];
         for (const t of list) {
+          const progressCount = taskProgressCount(t);
+          if (progressCount == null) continue;
           const right = correctTaskStatus(
-            t.doneCount,
+            progressCount,
             t.caseCount,
             t.deadline,
             t.status,
@@ -425,6 +590,17 @@ export function useDashboardData(): DashboardData {
           },
         );
         if (cancelled) return;
+        dashboardCache = {
+          key: cacheKey,
+          at: Date.now(),
+          indicators: inds,
+          groups: grps,
+          units: uns,
+          tasks: list,
+          records: recs,
+          unlockPending: ups,
+          correctionSkipped: skipped,
+        };
         setIndicators(inds);
         setGroups(grps);
         setUnits(uns);

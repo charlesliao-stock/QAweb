@@ -48,13 +48,7 @@ export const SEED_ROLES: SeedRoleDef[] = [
     id: "indicator-owner",
     name: "指標負責人",
     description:
-      "各組維護自己組別的指標（填 10 steps 與審核表）；每組可設多位負責人及協同負責人；提出新增／修訂／廢止申請；初期由品管執行幹事與系統管理員代管",
-  },
-  {
-    id: "qi-officer",
-    name: "品管執行幹事",
-    description:
-      "全院排程專責制定（單筆／批次／複製）、改派加派；設定各組指標審核關卡與審核人；審查員離職時代改；逾期補審解鎖；初期與系統管理員統一維護指標",
+      "各組維護自己組別的指標（填 10 steps 與審核表）；每組可設多位負責人及協同負責人；提出新增／修訂／廢止申請；初期由品管組執行幹事與系統管理員代管",
   },
   {
     id: "sysadmin",
@@ -119,18 +113,6 @@ export const SEED_TITLES: SeedTitleDef[] = [
   { name: "副護理長", level: "單位" },
   { name: "執行幹事", level: "單位" },
   { name: "護理師", level: "單位" },
-];
-
-/** 七個系統角色名稱（批次上傳人員時驗證用） */
-export const SYSTEM_ROLE_NAMES: string[] = SEED_ROLES.map((r) => r.name);
-
-/** v1.21：五個群組名稱（群組管理種子；不存在才建立） */
-export const SEED_GROUP_NAMES: string[] = [
-  "單位",
-  "加護組",
-  "病房組",
-  "腫瘤組",
-  "護品組",
 ];
 
 export interface SystemParams {
@@ -510,8 +492,9 @@ export const SYSTEM_PARAM_LABELS: Record<keyof SystemParams, string> = {
 };
 
 /**
- * 系統初始化：一鍵寫入 systemParams/config 與 7 個預設角色。
- * systemParams 僅在不存在時寫入；roles 以 merge 寫入，不覆蓋已自訂的角色。
+ * 系統初始化（v1.37.0）：只寫入 systemParams/config 與內建主題。
+ * 職稱／角色不再有預設、也不自動補種，由系統管理員自行建立後再到權限管理設定權限。
+ * SEED_ROLES／SEED_TITLES 常數保留（demoData 展示資料仍在引用），不是運行時預設。
  */
 export async function runSystemSeed(
   db: Firestore,
@@ -527,33 +510,6 @@ export async function runSystemSeed(
       updatedAt: now,
       createdBy: staffId,
     });
-  }
-  for (const role of SEED_ROLES) {
-    await setDoc(
-      doc(db, "roles", role.id),
-      {
-        name: role.name,
-        description: role.description,
-        createdAt: now,
-        updatedAt: now,
-        createdBy: staffId,
-      },
-      { merge: true },
-    );
-  }
-  // 預設職稱：文件 ID 以「層級-名稱」固定，避免重複寫入；merge 不覆蓋自訂
-  for (const title of SEED_TITLES) {
-    await setDoc(
-      doc(db, "titles", `${title.level}-${title.name}`),
-      {
-        name: title.name,
-        level: title.level,
-        createdAt: now,
-        updatedAt: now,
-        createdBy: staffId,
-      },
-      { merge: true },
-    );
   }
   // v1.32.0：內建主題種子（uiThemes 集合，僅缺失時寫入，不覆蓋已自訂／已隱藏狀態）
   for (const theme of BUILT_IN_THEMES) {

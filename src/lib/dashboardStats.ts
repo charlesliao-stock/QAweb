@@ -7,6 +7,7 @@ import { avgRateOf, type RagState, type StatsCycle } from "./resultAnalysis";
 import { requiredCases } from "./reviewProgress";
 import { toCycleKey } from "./cycle";
 import { todayStr } from "./scheduling";
+import { pad2 } from "./ym";
 
 /** 儀表板用的任務列（已含完成數） */
 export interface DashTask {
@@ -20,11 +21,45 @@ export interface DashTask {
   deadline: string;
   status: "pending" | "done" | "locked";
   doneCount: number;
+  quotaVersion?: 1;
+  quotaGroupId?: string;
+  quotaCategory?: "year" | "academic";
+  quotaIntervalStartYear?: number;
+  quotaIntervalStartMonth?: number;
+  quotaIntervalEndYear?: number;
+  quotaIntervalEndMonth?: number;
+  /** 年度／學年度週期整個區間、同單位跨審查員共用的完成數。 */
+  quotaDoneCount?: number;
+  quotaDoneCountUnknown?: boolean;
   /**
    * v1.28 階段 2：鎖定／逾期任務的紀錄以 taskId in 查詢分批補（每批 30 個、
    * 上限 90 個任務）；超過上限者完成進度未知，畫面顯示「—」而非錯誤的 0。
    */
   doneCountUnknown?: boolean;
+}
+
+/** 任務狀態/配額進度使用 quota count；月度實際紀錄仍使用 doneCount。 */
+export function taskProgressCount(
+  task: Pick<
+    DashTask,
+    | "doneCount"
+    | "doneCountUnknown"
+    | "quotaGroupId"
+    | "quotaDoneCount"
+    | "quotaDoneCountUnknown"
+  >,
+): number | null {
+  if (task.quotaGroupId) {
+    return task.quotaDoneCountUnknown ? null : task.quotaDoneCount ?? null;
+  }
+  return task.doneCountUnknown ? null : task.doneCount;
+}
+
+export function taskProgressLabel(
+  task: Pick<DashTask, "caseCount"> & Parameters<typeof taskProgressCount>[0],
+): string {
+  const count = taskProgressCount(task);
+  return count == null ? "—" : `${count}/${requiredCases(task.caseCount)}`;
 }
 
 /** 儀表板用的逐件紀錄列 */
@@ -40,6 +75,8 @@ export interface DashRecord {
   reviewedPersonEmpNo: string;
   reviewedPersonName: string;
   rate: number | null;
+  quotaGroupId?: string;
+  source?: string;
   answers: {
     questionId: string;
     itemText: string;
@@ -125,6 +162,58 @@ export function countRecordsByTask(
     m.set(r.taskId, (m.get(r.taskId) ?? 0) + 1);
   }
   return m;
+}
+
+/**
+ * 按任務計數（含匯入紀錄，v1.47.0）：匯入紀錄 taskId 為空，改按
+ * 「指標＋單位＋年月」身分鍵歸屬到對應任務。正式紀錄仍只按 taskId 計，
+ * 避免同一指標同單位同月的另一任務紀錄被重複算入。
+ * v1.51.0：不限單位任務（unitId ""）按「指標＋年月」歸屬匯入，不分單位
+ *（匯入紀錄帶真實單位，身分鍵對不上 NA 任務，故另建 NA 鍵對照）。
+ */
+export function countRecordsByTaskWithImports(
+  records: Pick<
+    DashRecord,
+    "taskId" | "indicatorId" | "unitId" | "year" | "month" | "source"
+  >[],
+  tasks: Pick<DashTask, "id" | "indicatorId" | "unitId" | "year" | "month">[],
+): Map<string, number> {
+  const counts = countRecordsByTask(records);
+  const tasksByKey = new Map<string, string[]>();
+  const naTasksByKey = new Map<string, string[]>();
+  for (const task of tasks) {
+    const key = `${task.indicatorId}||${task.unitId}||${task.year}||${task.month}`;
+    const list = tasksByKey.get(key) ?? [];
+    list.push(task.id);
+    tasksByKey.set(key, list);
+    if (task.unitId === "") {
+      const naKey = `${task.indicatorId}||${task.year}||${task.month}`;
+      const naList = naTasksByKey.get(naKey) ?? [];
+      naList.push(task.id);
+      naTasksByKey.set(naKey, naList);
+    }
+  }
+  for (const record of records) {
+    if (record.source !== "import") continue;
+    const key = `${record.indicatorId}||${record.unitId}||${record.year}||${record.month}`;
+    const ids = tasksByKey.get(key);
+    const counted = new Set<string>();
+    if (ids) {
+      for (const id of ids) {
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+        counted.add(id);
+      }
+    }
+    const naKey = `${record.indicatorId}||${record.year}||${record.month}`;
+    const naIds = naTasksByKey.get(naKey);
+    if (naIds) {
+      for (const id of naIds) {
+        if (counted.has(id)) continue;
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+    }
+  }
+  return counts;
 }
 
 /* ---------- 護理師：個人受審得分走勢（近 N 次） ---------- */
@@ -232,8 +321,10 @@ export function lagLights(
     if (t.status !== "pending") continue;
     const diff = daysBetween(today, t.deadline);
     if (diff < 0 || diff > 5) continue;
+    const doneCount = taskProgressCount(t);
+    if (doneCount == null) continue;
     const req = requiredCases(t.caseCount);
-    const pct = req > 0 ? t.doneCount / req : 1;
+    const pct = req > 0 ? doneCount / req : 1;
     if (pct >= 0.8) continue;
     out.push({ task: t, pct, level: pct < 0.5 ? "red" : "yellow" });
   }
@@ -288,9 +379,9 @@ export function cycleMonthLabel(
   cycle: StatsCycle,
 ): string {
   if (cycle === "academic") {
-    return `${toCycleKey(year, month, "academic")}-${String(month).padStart(2, "0")}`;
+    return `${toCycleKey(year, month, "academic")}-${pad2(month)}`;
   }
-  return `${year}-${String(month).padStart(2, "0")}`;
+  return `${year}-${pad2(month)}`;
 }
 
 export interface UnitMonth {
@@ -313,7 +404,7 @@ export function unitMonthAvgs(
   const map = new Map<string, (number | null)[]>();
   const labelOf = new Map<string, string>(); // 曆年月 → 輸出標籤
   for (const r of records) {
-    const cal = `${r.year}-${String(r.month).padStart(2, "0")}`;
+    const cal = `${r.year}-${pad2(r.month)}`;
     if (!ymSet.has(cal)) continue;
     if (!labelOf.has(cal))
       labelOf.set(cal, cycleMonthLabel(r.year, r.month, cycle));
@@ -452,8 +543,3 @@ export function unitPassRate(
 
 /** RAG 燈號（沿用 resultAnalysis 語義）：達標綠／未達標紅／無資料灰 */
 export type { RagState };
-export function ragOf(avg: number | null, threshold: number): RagState {
-  if (avg == null) return "gray";
-  if (!(threshold > 0)) return "gray";
-  return avg >= threshold ? "green" : "red";
-}

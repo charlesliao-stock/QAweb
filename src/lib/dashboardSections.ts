@@ -1,16 +1,6 @@
 /**
- * 儀表板顯示設定旗標（v1.28 階段 2：儀表板瘦身）。
- *
- * 瘦身版不刪除各頁籤程式，改用旗標開關：之後的「顯示設定」就是開關這些旗標。
- * 優先序：預設值 ← 管理員統一定義（systemParams/config 的 dashboardSections
- * 欄位） ← 個人偏好（本機 localStorage，沿用 uiPrefs.ts 模式）。
- * 這階段只留接口，不做設定 UI；管理員欄位與個人偏好皆為選填、缺值即用預設。
- *
- * 預設值（階段 2 定案，列入回報供糾正）：
- * 留：本月待辦、次月預告、逾期／鎖定、解鎖審核、落後燈號、48h 警示、
- *     本月重點指標、超額加審、轄區單位進度、組別達標率、全院戰情總覽。
- * 拿掉（改去結果分析看）：護理師個人走勢／常犯扣分 Top3、護理長單位 vs
- * 全院平均、督導近 3 個月趨勢、召集人帕累托 Top3、主任雷達圖／紅旗／高風險單位。
+ * 儀表板顯示設定旗標。管理者的角色／職稱覆寫由 dashboardVisibility.ts
+ * 解析；舊版全域 dashboardSections 與 resolveDashboardSections API 保留相容。
  */
 
 export type DashboardSectionKey =
@@ -32,7 +22,8 @@ export type DashboardSectionKey =
   | "overview"
   | "radar"
   | "redFlags"
-  | "riskyUnits";
+  | "riskyUnits"
+  | "capaPendingReview";
 
 export type DashboardSections = Record<DashboardSectionKey, boolean>;
 
@@ -56,31 +47,10 @@ export const DASHBOARD_SECTION_KEYS: DashboardSectionKey[] = [
   "radar",
   "redFlags",
   "riskyUnits",
+  "capaPendingReview",
 ];
 
-export const DASHBOARD_SECTION_LABELS: Record<DashboardSectionKey, string> = {
-  monthlyTodo: "本月待辦",
-  nextMonthPreview: "次月預告",
-  overdueLocked: "逾期／鎖定",
-  unlockReview: "解鎖審核",
-  lagLights: "落後燈號",
-  alert48h: "48h 警示",
-  focusIndicators: "本月重點指標",
-  overAudit: "超額加審提醒",
-  personalTrend: "個人走勢",
-  weakTop3: "常犯扣分 Top3",
-  unitAvg: "單位 vs 全院平均",
-  pareto: "帕累托 Top3",
-  trendAlerts: "近 3 個月趨勢警訊",
-  unitProgress: "轄區單位進度",
-  groupPassRate: "組別達標率",
-  overview: "全院戰情總覽",
-  radar: "科部雷達圖",
-  redFlags: "紅旗指標 Top3",
-  riskyUnits: "高風險單位 Top3",
-};
-
-/** 階段 2 預設：只留「本月任務提醒」相關區塊 */
+/** 未另行設定時延續既有預設；CAPA 摘要預設開啟但只用於護理長以上視角。 */
 export const DEFAULT_DASHBOARD_SECTIONS: DashboardSections = {
   monthlyTodo: true,
   nextMonthPreview: true,
@@ -101,9 +71,10 @@ export const DEFAULT_DASHBOARD_SECTIONS: DashboardSections = {
   radar: false,
   redFlags: false,
   riskyUnits: false,
+  capaPendingReview: true,
 };
 
-/** 只收布林值、只收已知鍵；其餘一律忽略（設定檔寫錯也不炸版） */
+/** 只收布林值、只收已知鍵；其餘一律忽略（設定檔寫錯也不炸版）。 */
 export function parseDashboardSections(raw: unknown): Partial<DashboardSections> {
   const out: Partial<DashboardSections> = {};
   if (raw == null || typeof raw !== "object") return out;
@@ -114,7 +85,7 @@ export function parseDashboardSections(raw: unknown): Partial<DashboardSections>
   return out;
 }
 
-/** 預設 ← 管理員定義 ← 個人偏好 */
+/** 舊 API 相容：預設 ← 管理員全域定義 ← 本機個人偏好。 */
 export function resolveDashboardSections(
   admin?: unknown,
   personal?: unknown,
@@ -128,7 +99,7 @@ export function resolveDashboardSections(
 
 const PERSONAL_KEY = "qi-dashboard-sections";
 
-/** 個人偏好（本機 localStorage；無瀏覽器環境時回空物件） */
+/** 舊版本機偏好讀取 API 保留相容；儀表板頁面不再讓個人偏好覆蓋管理政策。 */
 export function getPersonalDashboardSections(): Partial<DashboardSections> {
   try {
     if (typeof localStorage === "undefined") return {};
@@ -138,16 +109,4 @@ export function getPersonalDashboardSections(): Partial<DashboardSections> {
   } catch {
     return {};
   }
-}
-
-/** 寫入個人偏好（只存明確指定的鍵；供之後的設定 UI 使用） */
-export function setPersonalDashboardSections(
-  patch: Partial<DashboardSections>,
-): void {
-  if (typeof localStorage === "undefined") return;
-  const merged = {
-    ...getPersonalDashboardSections(),
-    ...parseDashboardSections(patch),
-  };
-  localStorage.setItem(PERSONAL_KEY, JSON.stringify(merged));
 }

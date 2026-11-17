@@ -1,80 +1,80 @@
 /**
- * 角色身分新舊並認（v1.21.0）。
+ * 角色身分新舊並認（v1.21.0；v1.40.5 改吃 orgMeta 詮釋資料；
+ * v1.57.0 A3：詮釋資料改由層級＋名稱關鍵字推導，見 lib/roleDerivation.ts）。
  *
- * 舊角色：審查員／召集人／執行幹事（另有「各組召集人」「執行幹事」等
- * 集合型命名）；新角色：品管組召集人／品管組執行幹事／品管組審查員／
- * 單位召集人／單位執行幹事／單位審查員。
- * 權限判斷一律以本檔的集合為準，不再用 `roles.includes("審查員")`
- * 之類的精確比對。
- *
- * 本檔零依賴、不碰 Firestore，可在 node 直接單元測試。
+ * 身分判斷改以層級＋名稱關鍵字推導（見 lib/orgMeta.ts）；
+ * 本檔的函式保留舊簽名，僅傳名稱字串時以關鍵字推導（行為與舊版一致，
+ * 供既有測試與尚未載入角色主檔的純函式使用）。正式流程請傳入 roleMeta
+ *（由 roles 集合建立）。
  */
 
-export const REVIEWER_ROLES = ["審查員", "品管組審查員", "單位審查員"];
-export const CONVENER_ROLES = [
-  "召集人",
-  "各組召集人",
-  "品管組召集人",
-  "單位召集人",
-];
-export const OFFICER_ROLES = ["執行幹事", "品管組執行幹事", "單位執行幹事"];
-/** 排程權限（召集人＋執行幹事）只認組級角色，不含單位級 */
-export const GROUP_CONVENER_ROLES = ["召集人", "品管組召集人"];
-export const GROUP_OFFICER_ROLES = ["執行幹事", "品管組執行幹事"];
-/** 單位級角色（以其單位所屬群組計群組範圍） */
-export const UNIT_LEVEL_ROLES = ["單位召集人", "單位執行幹事", "單位審查員"];
+import { hasSchedulePermissionMeta, isConvenerRoleMeta, isGroupScopedRoleMeta, isOfficerRoleMeta, isReviewerRoleMeta, isUnitLevelRoleMeta, legacyRoleCategory, legacyRoleScope, type RoleMetaMap } from "./orgMeta";
 
-/** 群組範圍角色：召集人／執行幹事／審查員（新舊皆含） */
-export const GROUP_SCOPED_ROLES = [
-  ...new Set([...CONVENER_ROLES, ...OFFICER_ROLES, ...REVIEWER_ROLES]),
-];
+export type { RoleCategory, RoleMeta, RoleMetaMap, RoleScope } from "./orgMeta";
+
+/**
+ * 舊名稱對照已移除（v1.57.0 A3）：身分改由名稱關鍵字推導，
+ * 精確比對名單會讓新名稱（如「品管組副召集人」）掉級；
+ * 需要名稱→身分時請用 deriveRoleCategory（lib/roleDerivation.ts）。
+ */
+export { legacyRoleCategory, legacyRoleScope };
 
 /** 是否為群組範圍角色（人員表單中走 memberships 配對列） */
-export function isGroupScopedRole(role: string): boolean {
-  return GROUP_SCOPED_ROLES.includes(role);
+export function isGroupScopedRole(
+  role: string,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return isGroupScopedRoleMeta(role, roleMeta);
 }
 
-function hasAny(roles: string[] | undefined, names: string[]): boolean {
-  if (!roles) return false;
-  return roles.some((r) => names.includes(r));
+/** 審查員身分：類別為審查員（無詮釋資料時以名稱關鍵字推導）。 */
+export function isReviewerRole(
+  roles: string[] | undefined,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return isReviewerRoleMeta(roles, roleMeta);
 }
 
-/** 審查員身分：舊「審查員」或新品管組／單位審查員任一 */
-export function isReviewerRole(roles: string[] | undefined): boolean {
-  return hasAny(roles, REVIEWER_ROLES);
+/** 召集人身分：類別為召集人（無詮釋資料時以名稱關鍵字推導）。 */
+export function isConvenerRole(
+  roles: string[] | undefined,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return isConvenerRoleMeta(roles, roleMeta);
 }
 
-/** 召集人身分：舊「召集人」或新品管組／單位召集人任一 */
-export function isConvenerRole(roles: string[] | undefined): boolean {
-  return hasAny(roles, CONVENER_ROLES);
-}
-
-/** 執行幹事身分：舊「執行幹事」或新品管組／單位執行幹事任一 */
-export function isOfficerRole(roles: string[] | undefined): boolean {
-  return hasAny(roles, OFFICER_ROLES);
-}
-
-/** 組級召集人（排程權限用） */
-export function isGroupConvenerRole(roles: string[] | undefined): boolean {
-  return hasAny(roles, GROUP_CONVENER_ROLES);
-}
-
-/** 組級執行幹事（排程權限用） */
-export function isGroupOfficerRole(roles: string[] | undefined): boolean {
-  return hasAny(roles, GROUP_OFFICER_ROLES);
+/** 執行幹事身分：類別為執行幹事（無詮釋資料時以名稱關鍵字推導）。 */
+export function isOfficerRole(
+  roles: string[] | undefined,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return isOfficerRoleMeta(roles, roleMeta);
 }
 
 /** 是否有排程權限：組級召集人或組級執行幹事 */
-export function hasSchedulePermission(roles: string[] | undefined): boolean {
-  return isGroupConvenerRole(roles) || isGroupOfficerRole(roles);
+export function hasSchedulePermission(
+  roles: string[] | undefined,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return hasSchedulePermissionMeta(roles, roleMeta);
 }
 
 /** 是否為單位級角色 */
-export function isUnitLevelRole(role: string): boolean {
-  return UNIT_LEVEL_ROLES.includes(role);
+export function isUnitLevelRole(
+  role: string,
+  roleMeta?: RoleMetaMap,
+): boolean {
+  return isUnitLevelRoleMeta(role, roleMeta);
 }
 
 /* ================= 人員多群組模型（v1.21.0） ================= */
+
+/**
+ * v1.87.0：委員會角色的 memberships 特殊群組值——委員會層級在品管組之上，
+ * 成員管理不選品管組，改以此值登記一列 { groupId: "ALL", roles: [...] }。
+ * 不是真實群組：deriveGroupIds 與群組列表須排除，畫面顯示為「全院」。
+ */
+export const COMMITTEE_GROUP_ID = "ALL";
 
 /** 人員群組成員資格：一人可屬多群組，各群組角色可不同 */
 export interface Membership {
@@ -86,7 +86,9 @@ export interface Membership {
 export function deriveGroupIds(memberships: Membership[]): string[] {
   const out: string[] = [];
   for (const m of memberships) {
-    if (m.groupId && !out.includes(m.groupId)) out.push(m.groupId);
+    // v1.87.0：「ALL」是委員會特殊值，不是真實群組，不寫入 groupIds
+    if (m.groupId && m.groupId !== COMMITTEE_GROUP_ID && !out.includes(m.groupId))
+      out.push(m.groupId);
   }
   return out;
 }
@@ -99,6 +101,26 @@ export function deriveRoles(memberships: Membership[]): string[] {
     }
   }
   return out;
+}
+
+/**
+ * v1.58.0：寫入 users.roles 的唯一規則——聯集一律由分工表衍生，
+ * 不再併入「其他角色」（全域角色已刪除）。
+ * 僅保留兩個不在分工表的例外：「系統管理員」（isAdmin 判斷用，
+ * 從來不在分工表，清掉會讓管理員帳號失去管理員身分）與「一般人員」
+ * （無分工表人員的預設，與批次匯入新建一致）。
+ * 無任何角色時回 ["一般人員"]。
+ */
+export function deriveStoredRoles(
+  memberships: Membership[],
+  previousRoles: string[],
+): string[] {
+  const derived = deriveRoles(memberships.filter((m) => m.groupId));
+  const keep = (previousRoles ?? []).filter(
+    (r) => r === "系統管理員" || r === "一般人員",
+  );
+  const out = [...new Set([...derived, ...keep])];
+  return out.length > 0 ? out : ["一般人員"];
 }
 
 /**
@@ -138,11 +160,122 @@ export function parseMemberships(
  * 該人員擔任指定角色的群組範圍：
  * - 組級／舊角色：memberships 中持有該角色的群組；
  * - 單位級角色：以其單位所屬群組計（unitGroupId 須由呼叫端傳入）。
+ * 單位級與否改以角色詮釋資料判斷（傳入 roleMeta；未傳時以名稱關鍵字推導）。
  */
+/* ================= 群組＋角色分工表式列表（v1.52.0） ================= */
+
+/**
+ * 加入群組＋角色：同群組已存在時角色取聯集合併進既有列，不產生第二列；
+ * 否則在尾端新增一列。回傳新陣列，不動原陣列。
+ */
+export function mergeMembership(
+  memberships: Membership[],
+  groupId: string,
+  roles: string[],
+): Membership[] {
+  const clean = [...new Set(roles.filter(Boolean))];
+  const idx = memberships.findIndex((m) => m.groupId === groupId);
+  if (idx === -1) return [...memberships, { groupId, roles: clean }];
+  return memberships.map((m, i) =>
+    i === idx
+      ? { ...m, roles: [...new Set([...m.roles, ...clean])] }
+      : m,
+  );
+}
+
+/**
+ * 編輯群組＋角色（加入區帶回原列改完按[更新]）：
+ * - 新角色為空 → 刪列（Q6：沒有角色就取消群組）；
+ * - 群組不變 → 原地更新角色；
+ * - 群組改成另一已存在的群組 → 兩列角色取聯集、刪掉原列（Q5）；
+ * - 群組改成新群組 → 原列改群組＋角色。
+ * 原列不存在時回傳原陣列。
+ */
+export function applyMembershipEdit(
+  memberships: Membership[],
+  editingGroupId: string,
+  newGroupId: string,
+  newRoles: string[],
+): Membership[] {
+  const idx = memberships.findIndex((m) => m.groupId === editingGroupId);
+  if (idx === -1) return memberships;
+  const clean = [...new Set(newRoles.filter(Boolean))];
+  if (clean.length === 0) return memberships.filter((_, i) => i !== idx);
+  if (newGroupId === editingGroupId) {
+    return memberships.map((m, i) =>
+      i === idx ? { groupId: newGroupId, roles: clean } : m,
+    );
+  }
+  const target = memberships.findIndex((m) => m.groupId === newGroupId);
+  if (target === -1) {
+    return memberships.map((m, i) =>
+      i === idx ? { groupId: newGroupId, roles: clean } : m,
+    );
+  }
+  return memberships
+    .filter((_, i) => i !== idx)
+    .map((m) =>
+      m.groupId === newGroupId
+        ? { ...m, roles: [...new Set([...m.roles, ...clean])] }
+        : m,
+    );
+}
+
+/** 依群組移除一列（直接刪，不確認；只改表單 state，儲存才生效）。 */
+export function removeMembership(
+  memberships: Membership[],
+  groupId: string,
+): Membership[] {
+  return memberships.filter((m) => m.groupId !== groupId);
+}
+
+/** 人員列表角色欄：按群組分組的一段（群組名＋該群組角色）。 */
+export interface GroupedRoleSegment {
+  label: string;
+  roles: string[];
+}
+
+/**
+ * 人員列表角色欄分段：每段＝一個群組（無角色的 membership 不列）。
+ * v1.58.0：「其他角色」已刪除，roles 聯集一律由分工表衍生，
+ * 不再有非群組角色段；無 membership 者角色欄為空。
+ */
+export function groupedRolesSegments(
+  memberships: Membership[],
+  groupNameOf: (groupId: string) => string,
+): GroupedRoleSegment[] {
+  const segments: GroupedRoleSegment[] = [];
+  for (const m of memberships) {
+    if (m.roles.length === 0) continue;
+    segments.push({ label: groupNameOf(m.groupId), roles: [...m.roles] });
+  }
+  return segments;
+}
+
+/**
+ * 人員列表角色欄分組顯示字串，例如
+ * 「病房組：品管組審查員、召集人；加護組：品管組審查員」。
+ * 亦作為 `user-role` 排序鍵。
+ */
+export function groupedRolesLabel(
+  memberships: Membership[],
+  groupNameOf: (groupId: string) => string,
+): string {
+  return groupedRolesSegments(memberships, groupNameOf)
+    .map((s) => (s.label ? `${s.label}：${s.roles.join("、")}` : s.roles.join("、")))
+    .join("；");
+}
+
 export function groupsForRoles(
   memberships: Membership[],
   roleNames: string[],
   unitGroupId?: string,
+  roleMeta?: RoleMetaMap,
+  /**
+   * v1.87.0：委員會特殊值 "ALL" 的展開對象（全部真實群組 id）。
+   * 傳入時，"ALL" 列展開為全部群組；未傳入時維持原樣回傳 "ALL"。
+   */
+  allGroupIds?: string[],
 ): string[] {
   const out: string[] = [];
   const push = (g: string) => {
@@ -151,9 +284,12 @@ export function groupsForRoles(
   for (const m of memberships) {
     for (const r of m.roles) {
       if (!roleNames.includes(r)) continue;
-      if (isUnitLevelRole(r)) {
+      if (isUnitLevelRole(r, roleMeta)) {
         // 單位級角色以其單位所屬群組計；單位未知時退回該筆 membership 的群組
         push(unitGroupId ?? m.groupId);
+      } else if (m.groupId === COMMITTEE_GROUP_ID) {
+        // v1.87.0：委員會角色持有 "ALL"，代表全部品管組
+        for (const g of allGroupIds ?? [COMMITTEE_GROUP_ID]) push(g);
       } else {
         push(m.groupId);
       }

@@ -2,7 +2,9 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import {
   Activity,
   ArrowRight,
+  ArrowRightLeft,
   BookOpenCheck,
+  Bell,
   CalendarDays,
   Check,
   ChevronLeft,
@@ -15,20 +17,30 @@ import {
   LogOut,
   Menu,
   Settings2,
+  ShieldCheck,
   X,
 } from "lucide-react";
-import { AuthProvider, useAuth } from "../lib/auth";
-import { doc } from "../lib/db";
+import { AuthProvider, requestActivationMail, STAFF_MAIL_DOMAIN, normalizeStaffId, staffEmail, useAuth } from "../lib/auth";
+import { collection, doc, getDocs, limit, orderBy, query, serverTimestamp, updateDoc, where } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
 import { getDocCacheFirst } from "../lib/cacheFirst";
-import { loadThemes } from "../lib/themeRegistry";
+import { clearThemeRegistry, loadThemes } from "../lib/themeRegistry";
 import {
   applyTheme,
   applyUiPrefs,
+  FONT_SIZE_LABELS,
+  getFontSize,
+  setFontSize,
+  type FontSizeOption,
 } from "../lib/uiPrefs";
 import { BrandMark } from "../components/ui";
 import { VERSION_LABEL } from "../version";
+import { pagePermissionKey } from "../lib/permissions";
+import { usePermissions } from "../lib/usePermissions";
+import { MAINTENANCE_EVENT } from "../lib/maintenance";
+import { dualHealth } from "../lib/dual/bootstrap";
+import { describeHealth } from "../lib/dual/status";
 import { DashboardPage } from "../features/DashboardPage";
 // v1.28 階段 6（A1）：儀表板是登入後首頁，留在首屏 chunk；其餘 7 頁懶載入，
 // 切頁時才載入對應 chunk（首次切頁多一次請求，以 Suspense 顯示載入中、不空白卡住）。
@@ -44,6 +56,14 @@ const CapaPage = lazy(() =>
 );
 const GroupsPage = lazy(() =>
   import("../features/GroupsPage").then((m) => ({ default: m.GroupsPage })),
+);
+const PermissionManagementPage = lazy(() =>
+  import("../features/PermissionManagementPage").then((m) => ({
+    default: m.PermissionManagementPage,
+  })),
+);
+const TaskHandoffPage = lazy(() =>
+  import("../features/TaskHandoffPage").then((m) => ({ default: m.TaskHandoffPage })),
 );
 const IndicatorsPage = lazy(() =>
   import("../features/IndicatorsPage").then((m) => ({
@@ -61,6 +81,23 @@ const SchedulePage = lazy(() =>
   })),
 );
 import type { PageId } from "../types";
+import type { GroupsTab, OrgMemberTarget } from "../features/GroupsPage";
+import { toErrorMessage } from "../lib/errors";
+
+type CapaLaunchContext = {
+  indicatorId?: string;
+  indicatorCode?: string;
+  indicatorName?: string;
+  threshold?: number;
+  period?: string;
+  periodKeys?: string[];
+  unitCode?: string;
+  unitName?: string;
+  rate?: number;
+  summary?: string;
+  caseId?: string;
+  snapshots?: Array<{ period: string; rate: number }>;
+};
 
 const NAV_GROUPS = [
   {
@@ -74,14 +111,17 @@ const NAV_GROUPS = [
       { id: "schedule", label: "品管審查排程", icon: CalendarDays },
       { id: "audit", label: "品管審查", icon: ClipboardCheck },
       { id: "results", label: "結果分析", icon: FileBarChart2 },
+      // v1.56.0：任務交接由組織與設定移入品質管理（只改導覽位置與所屬分區，功能與權限不動）。
+      { id: "handoff", label: "任務交接", icon: ArrowRightLeft },
       { id: "capa", label: "CAPA 改善追蹤", icon: Activity },
     ],
   },
   {
     label: "組織與設定",
     items: [
-      { id: "groups", label: "群組與人員", icon: GitBranch },
+      { id: "groups", label: "品管組與人員", icon: GitBranch },
       { id: "admin", label: "系統管理", icon: Settings2 },
+      { id: "permissions", label: "權限管理", icon: ShieldCheck },
     ],
   },
 ] as const;
@@ -94,6 +134,33 @@ function LoginScreen() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // v1.83.0：開通帳號／忘記密碼（寄 Firebase 認證連結到「職編@kmuh.org.tw」）
+  const [mode, setMode] = useState<"login" | "activate">("login");
+  const [notice, setNotice] = useState("");
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = window.setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [cooldown]);
+
+  const submitActivation = async () => {
+    setError("");
+    setNotice("");
+    setBusy(true);
+    try {
+      await requestActivationMail(staffId);
+      setNotice(
+        `若職編 ${normalizeStaffId(staffId)} 已建檔，認證連結已寄到 ${staffEmail(staffId)}，請到院內信箱點連結設定密碼（連結有時效，信件可能在垃圾郵件匣）。`,
+      );
+      setCooldown(60);
+    } catch (err) {
+      setError(toErrorMessage(err, "寄送失敗，請稍後再試"));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const submitLogin = async () => {
     setError("");
@@ -101,7 +168,7 @@ function LoginScreen() {
     try {
       await login(staffId, password);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "登入失敗");
+      setError(toErrorMessage(err, "登入失敗"));
     } finally {
       setBusy(false);
     }
@@ -117,7 +184,7 @@ function LoginScreen() {
     try {
       await changePassword(newPassword);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "密碼變更失敗");
+      setError(toErrorMessage(err, "密碼變更失敗"));
     } finally {
       setBusy(false);
     }
@@ -181,6 +248,57 @@ function LoginScreen() {
               <ArrowRight size={17} />
             </button>
           </>
+        ) : mode === "activate" ? (
+          <>
+            <div className="login-eyebrow">
+              <span className="live-dot" /> 開通帳號／忘記密碼
+            </div>
+            <h1>
+              以院內信箱
+              <br />
+              <em>設定你的密碼。</em>
+            </h1>
+            <p className="login-lead">
+              輸入職編，系統會寄認證連結到你的院內信箱（職編去掉開頭的 0，@{STAFF_MAIL_DOMAIN}）。點信中連結設定密碼後，回到這裡用職編與新密碼登入。
+            </p>
+            <label className="field-label" htmlFor="activate-staff-id">
+              職編
+            </label>
+            <input
+              id="activate-staff-id"
+              className="text-input"
+              value={staffId}
+              onChange={(event) => setStaffId(event.target.value)}
+              placeholder={`請輸入職編（不需輸入 @${STAFF_MAIL_DOMAIN}）`}
+              autoComplete="username"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && cooldown <= 0) void submitActivation();
+              }}
+            />
+            {notice && <div className="login-demo-hint">{notice}</div>}
+            {error && <div className="login-error">{error}</div>}
+            <button
+              className="button button-primary login-action"
+              onClick={() => void submitActivation()}
+              disabled={busy || cooldown > 0}
+            >
+              {busy ? "寄送中…" : cooldown > 0 ? `${cooldown} 秒後可重寄` : "寄送認證連結"}
+              <ArrowRight size={17} />
+            </button>
+            <div className="login-foot">
+              <button
+                className="button button-ghost"
+                onClick={() => {
+                  setMode("login");
+                  setError("");
+                  setNotice("");
+                }}
+              >
+                返回登入
+              </button>
+            </div>
+            <div className="login-version">{VERSION_LABEL}</div>
+          </>
         ) : (
           <>
             <div className="login-eyebrow">
@@ -234,6 +352,18 @@ function LoginScreen() {
             </div>
             <div className="login-version">{VERSION_LABEL}</div>
             <div className="login-demo-hint">
+              首次使用或忘記密碼？
+              <button
+                className="button button-ghost"
+                onClick={() => {
+                  setMode("activate");
+                  setError("");
+                }}
+              >
+                開通帳號
+              </button>
+            </div>
+            <div className="login-demo-hint">
               展示帳號：demo／demo（展示模式，操作不會寫入資料庫）
             </div>
           </>
@@ -267,12 +397,14 @@ function LoginScreen() {
 
 function Sidebar({
   page,
+  canViewPage,
   onPage,
   onExit,
   mobileOpen,
   onClose,
 }: {
   page: PageId;
+  canViewPage: (page: PageId) => boolean;
   onPage: (page: PageId) => void;
   onExit: () => void;
   mobileOpen: boolean;
@@ -282,6 +414,54 @@ function Sidebar({
   const displayName = user?.name ?? "";
   const staffId = user?.staffId ?? "";
   const unitName = user?.unitName || user?.unitCode || "";
+  const [fontSize, setFontSizeChoice] = useState<FontSizeOption>(() => getFontSize());
+  const [notifications, setNotifications] = useState<{
+    id: string; title: string; message: string; read: boolean; createdAt: unknown;
+  }[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  async function toggleNotifications() {
+    const opening = !notificationsOpen;
+    setNotificationsOpen(opening);
+    if (!opening || !staffId) return;
+    setNotificationsLoading(true);
+    try {
+      const snapshot = await getDocs(
+        query(
+          collection(getFirebaseDb(), "notifications"),
+          where("userId", "==", staffId),
+          orderBy("createdAt", "desc"),
+          limit(20),
+        ),
+      );
+      setNotifications(snapshot.docs.map((item) => {
+        const data = item.data() as Record<string, unknown>;
+        return {
+          id: item.id,
+          title: typeof data.title === "string" ? data.title : "系統通知",
+          message: typeof data.message === "string" ? data.message : "",
+          read: data.read === true,
+          createdAt: data.createdAt,
+        };
+      }));
+    } catch {
+      setNotifications([]);
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }
+  async function markNotificationRead(id: string) {
+    try {
+      await updateDoc(doc(getFirebaseDb(), "notifications", id), {
+        read: true,
+        readAt: serverTimestamp(),
+      });
+      setNotifications((items) => items.map((item) => item.id === id ? { ...item, read: true } : item));
+    } catch {
+      // 若規則或網路拒絕更新，保留未讀狀態供稍後重試。
+    }
+  }
+  const unreadNotifications = notifications.filter((item) => !item.read).length;
   return (
     <>
       {mobileOpen && (
@@ -306,30 +486,89 @@ function Sidebar({
             <X size={18} />
           </button>
         </div>
-        <nav className="main-nav" aria-label="主要導覽">
-          {NAV_GROUPS.map((group) => (
-            <div className="nav-group" key={group.label}>
-              <span className="nav-group-label">{group.label}</span>
-              {group.items.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={item.id}
-                    className={`nav-item${page === item.id ? " active" : ""}`}
-                    onClick={() => {
-                      onPage(item.id as PageId);
-                      onClose();
-                    }}
-                  >
-                    <Icon size={18} strokeWidth={1.8} />
-                    <span>{item.label}</span>
-                  </button>
-                );
-              })}
+        <div className="sidebar-notifications">
+          <button
+            className="notification-trigger"
+            type="button"
+            aria-label={`系統通知，${unreadNotifications} 則未讀`}
+            aria-expanded={notificationsOpen}
+            onClick={() => void toggleNotifications()}
+          >
+            <Bell size={17} />
+            <span>系統通知</span>
+            {unreadNotifications > 0 && <b className="notification-count">{unreadNotifications}</b>}
+          </button>
+          {notificationsOpen && (
+            <div className="notification-popover" role="region" aria-label="系統通知清單">
+              <div className="notification-popover-title">最近通知</div>
+              {notificationsLoading ? (
+                <p className="settings-note">載入中…</p>
+              ) : notifications.length === 0 ? (
+                <p className="settings-note">目前沒有通知。</p>
+              ) : notifications.map((item) => (
+                <article className={`notification-item${item.read ? " read" : " unread"}`} key={item.id}>
+                  <b>{item.title}</b>
+                  <p>{item.message}</p>
+                  {!item.read && (
+                    <button type="button" className="notification-mark-read" onClick={() => void markNotificationRead(item.id)}>
+                      標記已讀
+                    </button>
+                  )}
+                </article>
+              ))}
             </div>
-          ))}
+          )}
+        </div>
+        <nav className="main-nav" aria-label="主要導覽">
+          {NAV_GROUPS.map((group) => {
+            const visibleItems = group.items.filter((item) =>
+              canViewPage(item.id as PageId),
+            );
+            if (visibleItems.length === 0) return null;
+            return (
+              <div className="nav-group" key={group.label}>
+                <span className="nav-group-label">{group.label}</span>
+                {visibleItems.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      className={`nav-item${page === item.id ? " active" : ""}`}
+                      onClick={() => {
+                        onPage(item.id as PageId);
+                        onClose();
+                      }}
+                    >
+                      <Icon size={18} strokeWidth={1.8} />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
         </nav>
         <div className="sidebar-bottom">
+          <div className="sidebar-font-settings">
+            <span>文字大小</span>
+            <div className="font-size-options" role="group" aria-label="文字大小">
+              {(["standard", "large", "xlarge"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  className={fontSize === option ? "selected" : ""}
+                  aria-pressed={fontSize === option}
+                  onClick={() => {
+                    setFontSize(option);
+                    setFontSizeChoice(option);
+                  }}
+                  title={`${FONT_SIZE_LABELS[option]}文字`}
+                >
+                  {FONT_SIZE_LABELS[option]}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="profile-row">
             <div className="profile-avatar">
               {displayName.slice(0, 1) || "使"}
@@ -360,7 +599,53 @@ function Sidebar({
 
 function Shell() {
   const { user, loading, needsPasswordChange, logout } = useAuth();
+  const { can, ready: permissionsReady } = usePermissions();
   const [page, setPage] = useState<PageId>("dashboard");
+  // v1.86.0：人員管理頁籤（獨立頁返回時回到原本頁籤）＋成員／單位管理獨立頁目標
+  const [groupsTab, setGroupsTab] = useState<GroupsTab>("groups");
+  const [memberTarget, setMemberTarget] = useState<OrgMemberTarget | null>(null);
+  const memberPageId: PageId | null = memberTarget
+    ? memberTarget.kind === "role"
+      ? "role-members"
+      : memberTarget.kind === "title"
+        ? "title-members"
+        : memberTarget.kind === "group"
+          ? "group-units"
+          : memberTarget.kind === "title-units"
+            ? "title-units"
+            : "unit-members"
+    : null;
+  const openMemberPage = useCallback((target: OrgMemberTarget) => {
+    setMemberTarget(target);
+    setPage(
+      target.kind === "role"
+        ? "role-members"
+        : target.kind === "title"
+          ? "title-members"
+          : target.kind === "group"
+            ? "group-units"
+            : target.kind === "title-units"
+              ? "title-units"
+              : "unit-members",
+    );
+  }, []);
+  const closeMemberPage = useCallback(() => {
+    setMemberTarget(null);
+    setPage("groups");
+  }, []);
+  // v1.87.0：成員管理下層頁（職稱下層／督導單位）的返回先回上層，沒有上層才回人員管理
+  const handleMemberBack = useCallback(() => {
+    if (memberTarget?.parent) {
+      openMemberPage(memberTarget.parent);
+      return;
+    }
+    closeMemberPage();
+  }, [memberTarget, openMemberPage, closeMemberPage]);
+  // 獨立頁是「品管組與人員」的子頁：側邊欄／手機導覽仍標示品管組與人員為使用中
+  const navPage: PageId =
+    memberPageId && page === memberPageId ? "groups" : page;
+  const [capaLaunch, setCapaLaunch] = useState<CapaLaunchContext | null>(null);
+  const clearCapaLaunch = useCallback(() => setCapaLaunch(null), []);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [isMobile, setIsMobile] = useState(
@@ -369,6 +654,53 @@ function Shell() {
       window.matchMedia("(max-width: 760px)").matches,
   );
   const [toast, setToast] = useState("");
+  // v1.41.0 流量控管：攔截到維護中阻擋時，db.ts 會發出事件，這裡顯示橫幅
+  const [maintenanceBanner, setMaintenanceBanner] = useState("");
+  // 雙寫模式：主資料庫失聯、改由備援服務時，所有人都看得到提示（平常不顯示）
+  const [dbBanner, setDbBanner] = useState("");
+  useEffect(() => {
+    const check = (): void => {
+      const h = dualHealth();
+      setDbBanner(h && h.mode === "failover" ? describeHealth(h).text : "");
+    };
+    check();
+    const t = window.setInterval(check, 10_000);
+    return () => window.clearInterval(t);
+  }, []);
+  useEffect(() => {
+    const handler = (event: Event) => {
+      setCapaLaunch((event as CustomEvent<CapaLaunchContext>).detail ?? {});
+      setPage("capa");
+    };
+    window.addEventListener("capa:open", handler);
+    return () => window.removeEventListener("capa:open", handler);
+  }, []);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const reason = (event as CustomEvent<{ reason?: string }>).detail?.reason ?? "";
+      setMaintenanceBanner(
+        reason && reason.length > 0 ? `系統維護中：${reason}` : "系統維護中，暫時無法存取資料。",
+      );
+    };
+    window.addEventListener(MAINTENANCE_EVENT, handler);
+    return () => window.removeEventListener(MAINTENANCE_EVENT, handler);
+  }, []);
+  const canViewPage = useCallback(
+    (target: PageId) => {
+      const key = pagePermissionKey(target);
+      return Boolean(key && can(key));
+    },
+    [can],
+  );
+
+  useEffect(() => {
+    if (!permissionsReady || canViewPage(page)) return;
+    const pageIds: PageId[] = [];
+    NAV_GROUPS.forEach((group) => group.items.forEach((item) => pageIds.push(item.id as PageId)));
+    const firstAccessible = pageIds.find((target) => canViewPage(target));
+    if (firstAccessible) setPage(firstAccessible);
+  }, [canViewPage, page, permissionsReady]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 760px)");
@@ -392,6 +724,8 @@ function Shell() {
   // loadThemes 失敗時回內建常數，applyTheme 仍有 fallback，不擋登入。
   useEffect(() => {
     applyUiPrefs();
+    // 登入前失敗時 registry 會被內建常數佔住；登入後清掉才會重讀 uiThemes
+    if (user) clearThemeRegistry();
     Promise.all([
       getCachedRef(SYSTEM_CONFIG_KEY, () =>
         getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
@@ -405,7 +739,9 @@ function Shell() {
         applyTheme(typeof t === "string" ? t : "green-2");
       })
       .catch(() => applyTheme("green-2"));
-  }, []);
+    // 登入狀態改變時必須重讀：雙寫模式不走本機快取，登入前讀 systemParams 會被
+    // 權限擋下而落到 green-2，若不重套，全院主題設定登入後永遠不生效。
+  }, [user?.staffId]);
 
   if (loading) {
     return (
@@ -431,7 +767,8 @@ function Shell() {
   return (
     <div className={`app-shell${sidebarHidden ? " sidebar-hidden" : ""}`}>
       <Sidebar
-        page={page}
+        page={navPage}
+        canViewPage={canViewPage}
         onPage={setPage}
         onExit={() => void logout()}
         mobileOpen={mobileOpen}
@@ -472,18 +809,62 @@ function Shell() {
         )}
       </button>
       <main className="main-area">
+        {dbBanner && (
+          <div className="maintenance-banner" role="alert">
+            <span>{dbBanner}</span>
+          </div>
+        )}
+        {maintenanceBanner && (
+          <div className="maintenance-banner" role="alert">
+            <span>{maintenanceBanner}</span>
+            <button
+              type="button"
+              onClick={() => setMaintenanceBanner("")}
+              aria-label="關閉維護提示"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
         <div className="page-content">
           <Suspense
             fallback={<p className="settings-note">頁面載入中…</p>}
           >
-            {page === "dashboard" && <DashboardPage onAction={notify} />}
-            {page === "indicators" && <IndicatorsPage onAction={notify} />}
-            {page === "schedule" && <SchedulePage onAction={notify} />}
-            {page === "audit" && <AuditPage onAction={notify} />}
-            {page === "results" && <ResultsPage onAction={notify} />}
-            {page === "groups" && <GroupsPage onAction={notify} />}
-            {page === "capa" && <CapaPage onAction={notify} />}
-            {page === "admin" && <AdminPage onAction={notify} />}
+            {!canViewPage(page) ? (
+              <section className="panel"><p className="settings-note">此帳號尚未取得此頁面權限，請聯絡系統管理員。</p></section>
+            ) : (
+              <>
+                {page === "dashboard" && <DashboardPage onAction={notify} />}
+                {page === "indicators" && <IndicatorsPage onAction={notify} />}
+                {page === "schedule" && <SchedulePage onAction={notify} />}
+                {page === "audit" && <AuditPage onAction={notify} />}
+                {page === "results" && <ResultsPage onAction={notify} />}
+                {page === "groups" && (
+                  <GroupsPage
+                    onAction={notify}
+                    initialTab={groupsTab}
+                    onTabChange={setGroupsTab}
+                    onOpenMemberPage={openMemberPage}
+                  />
+                )}
+                {memberTarget && memberPageId && page === memberPageId && (
+                  <GroupsPage
+                    // v1.87.0：成員管理下層頁跳轉時以 key 強制重新掛載，
+                    // 使 managing* state 從新的 memberPage 重新帶入
+                    key={`${memberPageId}:${memberTarget.id}`}
+                    onAction={notify}
+                    initialTab={groupsTab}
+                    memberPage={memberTarget}
+                    onOpenMemberPage={openMemberPage}
+                    onBackToGroups={handleMemberBack}
+                  />
+                )}
+                {page === "handoff" && <TaskHandoffPage onAction={notify} />}
+                {page === "capa" && <CapaPage onAction={notify} launchContext={capaLaunch} onLaunchConsumed={clearCapaLaunch} />}
+                {page === "admin" && <AdminPage onAction={notify} />}
+                {page === "permissions" && <PermissionManagementPage onAction={notify} />}
+              </>
+            )}
           </Suspense>
         </div>
       </main>
@@ -505,12 +886,12 @@ function Shell() {
           { id: "audit", label: "品管", icon: ClipboardCheck },
           { id: "results", label: "結果", icon: FileBarChart2 },
           { id: "groups", label: "更多", icon: Menu },
-        ].map((item) => {
+        ].filter((item) => canViewPage(item.id as PageId)).map((item) => {
           const Icon = item.icon;
           return (
             <button
               key={item.id}
-              className={page === item.id ? "active" : ""}
+              className={navPage === item.id ? "active" : ""}
               onClick={() => setPage(item.id as PageId)}
             >
               <Icon size={19} />

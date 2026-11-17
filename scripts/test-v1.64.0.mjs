@@ -1,0 +1,175 @@
+/**
+ * v1.64.0 對拍測試：reviewSummary 由「摘要格」重算的結果，必須與
+ * analysisRates 由「原始紀錄」算的結果完全一致（人次率、單位率、
+ * 人次／單位分組計分、逐題錯誤排行）。隨機資料，固定種子。
+ * 執行：node scripts/test-v1.64.0.mjs（需 esbuild）；
+ * 或 SUMMARY_LIB_DIR=<tsc 輸出目錄> node scripts/test-v1.64.0.mjs
+ */
+import { createRequire } from "node:module";
+import { mkdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import assert from "node:assert/strict";
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+let A, S;
+if (process.env.SUMMARY_LIB_DIR) {
+  const req = createRequire(join(process.env.SUMMARY_LIB_DIR, "x.js"));
+  A = req("./analysisRates.js");
+  S = req("./reviewSummary.js");
+} else {
+  const { buildSync } = await import("esbuild");
+  const dir = join(ROOT, ".test-tmp");
+  mkdirSync(dir, { recursive: true });
+  const load = async (entry, out) => {
+    buildSync({ entryPoints: [join(ROOT, entry)], bundle: true, format: "esm", platform: "node", outfile: join(dir, out) });
+    return import(join(dir, out));
+  };
+  A = await load("src/lib/analysisRates.ts", "ar.mjs");
+  S = await load("src/lib/reviewSummary.ts", "rs.mjs");
+}
+
+let seed = 12345;
+const rnd = () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296);
+const pick = (a) => a[Math.floor(rnd() * a.length)];
+
+function makeQuestions(grouped) {
+  return Array.from({ length: 6 }, (_, i) => ({
+    id: `q${i}`, order: i, itemText: `題目${i}`,
+    groupId: grouped ? (i < 3 ? "g1" : i < 5 ? "g2" : "") : "",
+    groupName: grouped ? (i < 3 ? "組一" : i < 5 ? "組二" : "") : "",
+  }));
+}
+function makeRecords(n, withSnap) {
+  const units = ["U1", "U2", "U3", "U4"];
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const answers = [];
+    for (let q = 0; q < 6; q++) {
+      if (rnd() < 0.05) continue;
+      const r = rnd();
+      answers.push({
+        questionId: rnd() < 0.05 ? `old${q}` : `q${q}`,
+        itemText: `題目${q}`,
+        optionLabel: r < 0.65 ? "是" : r < 0.9 ? "否" : "不適用",
+        score: 0, excluded: r >= 0.9,
+      });
+    }
+    const yes = answers.filter((a) => !a.excluded && a.optionLabel === "是").length;
+    const val = answers.filter((a) => !a.excluded).length;
+    out.push({
+      indicatorId: "I", unitId: pick(units), year: 2026, month: 1 + Math.floor(rnd() * 6),
+      rate: val > 0 ? Math.round((yes / val) * 1000) / 10 : null,
+      thresholdAtSchedule: withSnap ? pick([80, 90]) : undefined,
+      indicatorVersion: pick(["v1.0", "v1.1"]),
+      answers, personEmpNo: `E${i}`, personName: `P${i}`,
+    });
+  }
+  return out;
+}
+
+let checks = 0;
+for (const grouped of [true, false]) {
+  const questions = makeQuestions(grouped);
+  const records = makeRecords(300, true);
+  const threshold = 85;
+  const summary = S.buildReviewSummary({
+    indicatorId: "I", scheduleCategory: "year", schedulePeriod: "2026",
+    start: { year: 2026, month: 1 }, end: { year: 2026, month: 6 },
+    records, questions, threshold,
+  });
+  assert.equal(summary.noSnapshotCount, 0);
+  assert.ok(S.isSummaryUsable(summary, 99));
+  const colSets = [
+    [{ months: [{ year: 2026, month: 1 }] }, { months: [{ year: 2026, month: 2 }] }],
+    [{ months: [1, 2, 3].map((m) => ({ year: 2026, month: m })) }, { months: [4, 5, 6].map((m) => ({ year: 2026, month: m })) }],
+    [{ months: [1, 2, 3, 4, 5, 6].map((m) => ({ year: 2026, month: m })) }],
+  ];
+  for (const columns of colSets) {
+    const allMonths = columns.flatMap((c) => c.months);
+    const recs = A.recordsInMonths(records, allMonths);
+    const cells = S.cellsInMonths(summary.cells, allMonths);
+    assert.deepEqual(S.passRateFromCells(cells), A.passRateOf(recs, threshold)); checks++;
+    for (const col of columns) {
+      assert.deepEqual(
+        S.unitPassRateFromCells(S.cellsInMonths(summary.cells, col.months), threshold),
+        A.unitPassRate(A.recordsInMonths(records, col.months), threshold)); checks++;
+    }
+    assert.deepEqual(S.unitPeriodPassRateFromCells(summary.cells, columns, threshold),
+      A.unitPeriodPassRate(records, columns, threshold)); checks++;
+    const norm = (rows) => rows.map((r) => ({ ...r, key: r.key.replace("\u0000", "::") })).sort((a, b) => a.key.localeCompare(b.key));
+    assert.deepEqual(norm(S.personScoringRowsFromCells(cells, questions)),
+      norm(A.personScoringBreakdownRows(recs, questions, threshold))); checks++;
+    assert.deepEqual(S.unitScoringRowsFromCells(summary.cells, questions, columns, threshold),
+      A.unitScoringBreakdownRows(records, questions, columns, threshold)); checks++;
+    const fromSum = A.questionErrorRowsFromSummaries(S.questionSummariesFromCells(cells));
+    const fromRaw = A.questionErrorRows(recs);
+    const strip = (rows) => rows.map(({ itemText, yes, no, notApplicable, validCount, errorRate, sourceVersions }) =>
+      ({ itemText, yes, no, notApplicable, validCount, errorRate, sourceVersions }));
+    assert.deepEqual(strip(fromSum), strip(fromRaw)); checks++;
+  }
+}
+// 無快照紀錄：閾值變動 → 摘要不可用
+const s2 = S.buildReviewSummary({ indicatorId: "I", scheduleCategory: "year", schedulePeriod: "2026",
+  start: { year: 2026, month: 1 }, end: { year: 2026, month: 6 },
+  records: makeRecords(20, false), questions: makeQuestions(true), threshold: 85 });
+assert.ok(s2.noSnapshotCount > 0);
+assert.ok(S.isSummaryUsable(s2, 85));
+assert.ok(!S.isSummaryUsable(s2, 90)); checks++;
+
+// v1.66.0：混合格（1–3 月取封存摘要格、4–6 月由原始紀錄現算）＝全部原始紀錄
+{
+  const questions = makeQuestions(true);
+  const records = makeRecords(300, true);
+  const threshold = 85;
+  const mk = (rs) => S.buildReviewSummary({ indicatorId: "I", scheduleCategory: "", schedulePeriod: "",
+    start: { year: 0, month: 0 }, end: { year: 0, month: 0 }, records: rs, questions, threshold }).cells;
+  const hybrid = [...mk(records.filter((r) => r.month <= 3)), ...mk(records.filter((r) => r.month > 3))];
+  const columns = [{ months: [1, 2, 3].map((m) => ({ year: 2026, month: m })) }, { months: [4, 5, 6].map((m) => ({ year: 2026, month: m })) }];
+  const all = columns.flatMap((c) => c.months);
+  assert.deepEqual(S.passRateFromCells(hybrid), A.passRateOf(records, threshold));
+  assert.deepEqual(S.unitPeriodPassRateFromCells(hybrid, columns, threshold), A.unitPeriodPassRate(records, columns, threshold));
+  assert.deepEqual(S.unitScoringRowsFromCells(hybrid, questions, columns, threshold), A.unitScoringBreakdownRows(records, questions, columns, threshold));
+  assert.equal(S.cellsInMonths(hybrid, all).length, hybrid.length);
+  checks += 4;
+  console.log("OK hybrid checks");
+}
+console.log(`OK ${checks} checks`);
+
+// 閾值：格閾值／欄閾值（眾數；全無快照退回 fallback；≤0 → null）
+{
+  const recs = [
+    { thresholdAtSchedule: 80 }, { thresholdAtSchedule: 90 }, { thresholdAtSchedule: 90 }, {},
+  ];
+  assert.equal(A.columnThresholdOf(recs, 70), 90);
+  assert.equal(A.columnThresholdOf([{}, {}], 70), 70);
+  assert.equal(A.columnThresholdOf([{}], 0), null);
+  assert.equal(A.columnThresholdOf([{ thresholdAtSchedule: 80 }, { thresholdAtSchedule: 90 }], 70), 90);
+  const qs = makeQuestions(true);
+  const rs = makeRecords(120, true);
+  const sm = S.buildReviewSummary({ indicatorId: "I", scheduleCategory: "year", schedulePeriod: "2026",
+    start: { year: 2026, month: 1 }, end: { year: 2026, month: 6 }, records: rs, questions: qs, threshold: 85 });
+  for (let m = 1; m <= 6; m++) {
+    const months = [{ year: 2026, month: m }];
+    assert.equal(S.columnThresholdFromCells(S.cellsInMonths(sm.cells, months), 85),
+      A.columnThresholdOf(A.recordsInMonths(rs, months), 85));
+  }
+  assert.ok(sm.cells.every((c) => c.indicatorVersions.length >= 1));
+  console.log("OK threshold checks");
+}
+
+// 封存提醒：區間結束滿一個月（結束月＋1 個月的月底之後）才逾期
+if (process.env.SUMMARY_LIB_DIR) {
+  const R = createRequire(join(process.env.SUMMARY_LIB_DIR, "x.js"))("./archiveReminder.js");
+  const sched = { indicatorId: "I", category: "year", period: "2026", months: [1, 4, 7, 10],
+    frequency: 4, intervalMonths: 3, refYear: null };
+  assert.equal(R.archiveDueDate({ year: 2026, month: 3 }), "2026-04-30");
+  const at = (y, m, d) => R.unarchivedOverdue([sched], new Set(), new Date(y, m - 1, d), 10);
+  assert.equal(at(2026, 4, 20).length, 0);          // Q1 已結束(過 4/10)但未滿一個月
+  assert.equal(at(2026, 5, 1).length, 1);           // 5/1 > 4/30 → Q1 逾期
+  assert.equal(at(2026, 5, 1)[0].label, "2026/1-3");
+  const done = new Set([R.endedIntervalsOf(sched, new Date(2026, 6, 20), 10)[0].archiveId]);
+  assert.equal(R.unarchivedOverdue([sched], done, new Date(2026, 6, 20), 10).length, 0); // Q1 已封存；Q2 剛結束未滿一個月
+  assert.equal(R.unarchivedOverdue([sched], done, new Date(2026, 7, 1), 10).length, 1);  // 8/1 > 7/31 → Q2 逾期
+  console.log("OK reminder checks");
+}

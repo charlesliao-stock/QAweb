@@ -8,7 +8,8 @@
  * xlsx 檔案讀取由呼叫端（lib/sheetFile）完成後傳入 string[][]。
  */
 import { splitOwners } from "./import";
-import type { Membership } from "./roleIdentity";
+import { isGroupScopedRole, type Membership } from "./roleIdentity";
+import type { RoleMetaMap } from "./orgMeta";
 
 /* ================= 共用：標題列對照 ================= */
 
@@ -111,6 +112,9 @@ export function validateUserRows(
     existingStaffIds: Set<string>;
     groupByName: Map<string, string>;
     roleNames: Set<string>;
+    roleGroupIdsByName?: Map<string, string[]>;
+    /** 角色詮釋資料（有值時群組範圍改以類別判斷；未傳時以名稱推導）。 */
+    roleMetaByName?: RoleMetaMap;
     titleNames: Set<string>;
     unitCodes: Set<string>;
   },
@@ -126,6 +130,8 @@ export function validateUserRows(
     const title = r.title.trim();
     if (title && !ctx.titleNames.has(title))
       errors.push(`職稱「${title}」不存在`);
+    // v1.55.0：新帳號預設為一般使用者，職稱可留白、之後再賦予；
+    // 更新時未填則沿用既有職稱。（舊 v1.36.0 擋下已移除。）
     const memberships: Membership[] = [];
     for (const [gRaw, rolesRaw] of [
       [r.group1, r.roles1],
@@ -143,7 +149,13 @@ export function validateUserRows(
         errors.push(`群組「${gName}」不存在`);
         continue;
       }
-      const unknown = roleNames.filter((n) => !ctx.roleNames.has(n));
+      const unknown = roleNames.filter((n) => {
+        if (!ctx.roleNames.has(n)) return true;
+        const scopedGroups = ctx.roleGroupIdsByName?.get(n);
+        if (!ctx.roleGroupIdsByName) return false;
+        if (!scopedGroups) return !isGroupScopedRole(n, ctx.roleMetaByName);
+        return !scopedGroups.includes("*") && !scopedGroups.includes(groupId);
+      });
       if (unknown.length > 0) {
         errors.push(`角色不存在：${unknown.join("、")}`);
         continue;
@@ -287,7 +299,7 @@ export function validateUnitRows(
 export const USER_TEMPLATE_HEADERS = [
   "職編",
   "姓名",
-  "單位",
+  "單位代號",
   "職稱",
   "群組1",
   "角色1",
@@ -300,6 +312,7 @@ export function userTemplateRows(): string[][] {
     USER_TEMPLATE_HEADERS,
     ["A12345", "王小明", "9A", "護理師", "病房組", "品管組審查員", "", ""],
     ["B67890", "李小華", "9B", "副護理長", "病房組", "單位執行幹事", "加護組", "單位審查員"],
+    ["C24680", "陳小美", "ICU", "護理師", "加護組", "單位審查員", "", ""],
   ];
 }
 

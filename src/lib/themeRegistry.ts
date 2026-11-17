@@ -9,18 +9,9 @@
  * 讀取走既有漏斗：refCache 記憶體快取＋cache-first 持久快取；寫入走
  * lib/db.ts 統一出口，成功後自動失效 uiThemes 快取。
  */
-import {
-  collection,
-  doc,
-  getDoc,
-  orderBy,
-  query,
-  serverTimestamp,
-  setDoc,
-} from "./db";
-import { getDocsCacheFirst } from "./cacheFirst";
+import { loadRefCollection } from "./refLoad";
+import { doc, getDoc, serverTimestamp, setDoc } from "./db";
 import { getFirebaseDb } from "./firebase";
-import { getCachedRefCollection } from "./refCache";
 import { BUILT_IN_THEMES, type UiThemeDef } from "./seed";
 
 export type { UiThemeDef };
@@ -137,19 +128,15 @@ export function normalizeThemeDef(
 export function loadThemes(): Promise<UiThemeDef[]> {
   if (registry) return Promise.resolve(registry);
   if (inflight) return inflight;
-  inflight = getCachedRefCollection("uiThemes", () =>
-    getDocsCacheFirst(
-      query(
-        collection(getFirebaseDb(), "uiThemes"),
-        orderBy("order", "asc"),
-      ),
-    ),
-  )
+  inflight = loadRefCollection("uiThemes")
     .then((snap) => {
       const defs = snap.docs.map((d) =>
         normalizeThemeDef(d.id, d.data() as Record<string, unknown>),
       );
-      registry = defs.length > 0 ? defs : [...BUILT_IN_THEMES];
+      registry =
+        defs.length > 0
+          ? defs.sort((a, b) => a.order - b.order)
+          : [...BUILT_IN_THEMES];
       return registry;
     })
     .catch(() => {

@@ -26,12 +26,6 @@ export function optionLabelsOf(set: OptionSet): string[] {
   return set === "yes-no" ? ["是", "否"] : ["是", "否", "不適用"];
 }
 
-/** 審核表題目的評分選項（舊格式 v1.16 前：顯示文字＋分數；v1.17 起題目改用 optionSet） */
-export interface QuestionOption {
-  label: string;
-  score: number;
-}
-
 /** 題目分組（由「啟用題目分組」開關控制；不是每一份指標都有） */
 export interface QuestionGroup {
   id: string;

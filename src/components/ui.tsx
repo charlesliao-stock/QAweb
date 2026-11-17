@@ -1,6 +1,25 @@
-import type { ReactNode } from "react";
-import { Check, Inbox } from "lucide-react";
-import type { PageId, Rag } from "../types";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type SelectHTMLAttributes,
+} from "react";
+import {
+  AlertCircle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Check,
+  ChevronDown,
+  Inbox,
+  LoaderCircle,
+  RefreshCw,
+  Search,
+  X,
+} from "lucide-react";
+import type { PageId } from "../types";
 
 export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
   {
@@ -26,50 +45,178 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
     },
     groups: {
       title: "人員管理",
-      description: "群組、單位、職稱與人員主檔維護（含批次上傳）",
+      description: "品管組、單位、職稱與人員主檔維護（含批次上傳）",
+    },
+    // v1.86.0：成員／單位管理獨立頁（由人員管理的成員管理／單位管理按鈕跳轉進入）
+    "role-members": {
+      title: "角色成員管理",
+      description: "管理此角色的成員（加入／移出）",
+    },
+    "title-members": {
+      title: "職稱成員管理",
+      description: "管理此職稱的成員（加入即轉任此職稱）",
+    },
+    "group-units": {
+      title: "品管組單位管理",
+      description: "管理此品管組的所屬單位",
+    },
+    // v1.86.1：單位成員管理獨立頁（由人員管理的單位頁籤「成員管理」按鈕跳轉進入）
+    "unit-members": {
+      title: "單位成員管理",
+      description: "管理此單位的成員（加入／移出）",
+    },
+    // v1.87.0：督導負責單位管理獨立頁（由職稱成員管理頁的督導成員「單位管理」跳轉進入）
+    "title-units": {
+      title: "督導負責單位管理",
+      description: "管理此督導的負責單位（加入／移出）",
+    },
+    handoff: {
+      title: "任務交接",
+      description: "將原審查員尚未完成的品管審查任務交接給新審查員",
     },
     capa: {
       title: "CAPA 改善追蹤",
       description: "追蹤改善措施、成效驗證與結案",
     },
     admin: { title: "系統管理", description: "角色權限與系統參數展示設定" },
+    permissions: {
+      title: "權限管理",
+      description: "依品管組角色與單位職稱設定頁面及功能權限",
+    },
     reviewers: {
       title: "審查員管理",
       description: "檢視審查員名單、依組別篩選並授予審查員角色",
     },
   };
 
-export function ragFor(value: number, threshold: number): Rag {
-  if (value >= threshold) return "green";
-  if (value >= threshold - 5) return "amber";
-  return "red";
-}
-
-export function RagBadge({
-  value,
-  threshold,
-  compact = false,
-}: {
-  value: number;
-  threshold: number;
-  compact?: boolean;
-}) {
-  const state = ragFor(value, threshold);
-  const label =
-    state === "green" ? "達標" : state === "amber" ? "接近閾值" : "未達標";
-  return (
-    <span className={`rag-badge rag-${state}${compact ? " compact" : ""}`}>
-      <i />
-      {compact ? label : `${label} · ${value}%`}
-    </span>
-  );
-}
-
 export function BrandMark({ small = false }: { small?: boolean }) {
   return (
     <span className={`brand-mark${small ? " small" : ""}`} aria-hidden="true">
       <Check size={small ? 16 : 19} strokeWidth={2.8} />
     </span>
+  );
+}
+
+/**
+ * v1.57.0 A4：共用彈窗（沿用 reviewer-modal backdrop＋panel 樣式；點空白關閉，
+ * 右上有關閉鈕）。關閉不儲存，表單的取消／儲存流程維持原樣。
+ */
+export function Modal({
+  title,
+  note,
+  onClose,
+  wide = false,
+  medium = false,
+  layer = 1,
+  children,
+}: {
+  title: string;
+  note?: string;
+  onClose: () => void;
+  wide?: boolean;
+  /** v1.60.0：中寬（約 960px），加審對話框用 */
+  medium?: boolean;
+  /** v1.60.0：巢狀彈窗層級（2＝第二層，backdrop 用 layer-2 樣式） */
+  layer?: 1 | 2 | 3;
+  children: ReactNode;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const getFocusable = () => Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((element) => element.getClientRects().length > 0);
+
+    const frame = window.requestAnimationFrame(() => {
+      (getFocusable()[0] ?? dialog).focus({ preventScroll: true });
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const backdrops = document.querySelectorAll<HTMLElement>(
+        ".reviewer-modal-backdrop",
+      );
+      const ownBackdrop = dialog.closest<HTMLElement>(
+        ".reviewer-modal-backdrop",
+      );
+      if (!ownBackdrop || backdrops.item(backdrops.length - 1) !== ownBackdrop) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = getFocusable();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      if (previousFocus?.isConnected) {
+        previousFocus.focus({ preventScroll: true });
+      }
+    };
+  }, []);
+
+  return (
+    <div
+      className={`reviewer-modal-backdrop${layer > 1 ? ` reviewer-modal-layer-${layer}` : ""}`}
+      onClick={onClose}
+    >
+      <div
+        className={`reviewer-modal panel${wide ? " wide" : ""}${medium ? " medium" : ""}`}
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="reviewer-modal-head">
+          <div>
+            <h2>{title}</h2>
+            {note && <p>{note}</p>}
+          </div>
+          <button
+            type="button"
+            className="button button-ghost"
+            onClick={onClose}
+            aria-label="關閉"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -89,6 +236,40 @@ export function EmptyState({
         <b>{title}</b>
         {description && <p>{description}</p>}
       </div>
+    </section>
+  );
+}
+
+export function LoadingState({ label = "資料載入中…" }: { label?: string }) {
+  return (
+    <section className="async-state panel" role="status" aria-live="polite">
+      <LoaderCircle className="async-state-spinner" size={22} aria-hidden="true" />
+      <span>{label}</span>
+    </section>
+  );
+}
+
+export function ErrorState({
+  title = "資料載入失敗",
+  description,
+  onRetry,
+}: {
+  title?: string;
+  description?: string;
+  onRetry?: () => void;
+}) {
+  return (
+    <section className="async-state async-state-error panel" role="alert">
+      <AlertCircle size={22} aria-hidden="true" />
+      <div className="async-state-copy">
+        <b>{title}</b>
+        {description && <p>{description}</p>}
+      </div>
+      {onRetry && (
+        <button type="button" className="button button-outline" onClick={onRetry}>
+          <RefreshCw size={15} aria-hidden="true" /> 重試
+        </button>
+      )}
     </section>
   );
 }
@@ -136,16 +317,301 @@ export function SummaryCell({
   label,
   value,
   note,
+  onClick,
 }: {
   label: string;
   value: string;
   note: string;
+  /** v1.50.0：提供時可點選下探到個人審查結果 */
+  onClick?: () => void;
 }) {
   return (
-    <div className="summary-cell">
+    <div
+      className={`summary-cell${onClick ? " clickable" : ""}`}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
+      title={onClick ? "點選下探到個人審查結果" : undefined}
+    >
       <span>{label}</span>
       <strong>{value}</strong>
       <small>{note}</small>
     </div>
+  );
+}
+
+/* ===== 統一頁面模板：篩選區塊 + 列表區塊（可排序） =====
+ * 全站列表頁一律「篩選區塊 → 列表區塊」兩段式；樣式在 shared-components.css
+ * 的 .filter-panel / .list-panel，隨主題 token 變化。 */
+
+/** 篩選區塊：放篩選欄位與搜尋，actions 放「清除」等按鈕。 */
+export function FilterPanel({
+  title = "篩選條件",
+  children,
+  actions,
+  className,
+}: {
+  title?: string;
+  children: ReactNode;
+  actions?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section
+      className={`panel filter-panel${className ? ` ${className}` : ""}`}
+      aria-label={title}
+    >
+      <div className="filter-panel-head">
+        <h2>{title}</h2>
+        {actions && <div className="filter-panel-actions">{actions}</div>}
+      </div>
+      <div className="filter-panel-body">{children}</div>
+    </section>
+  );
+}
+
+/** 篩選區塊的關鍵字欄位：左上標籤、輸入框固定 200px、[搜尋]按鈕緊接其右，與其他篩選器底部對齊。 */
+export function FilterSearchField({
+  label,
+  placeholder,
+  value,
+  onChange,
+  onSearch,
+  disabled,
+}: {
+  label: string;
+  placeholder?: string;
+  value: string;
+  onChange: (v: string) => void;
+  onSearch: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="form-field filter-search-field">
+      <label className="field-label">{label}</label>
+      <div className="filter-search-group">
+        <input
+          className="text-input filter-search-input"
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onSearch();
+          }}
+        />
+        <button
+          type="button"
+          className="button button-primary"
+          onClick={onSearch}
+          disabled={disabled}
+        >
+          <Search size={16} />
+          搜尋
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** 共用下拉欄位：標籤＋select-wrap＋箭頭。篩選區塊內的尺寸（150×50px）由
+ *  .filter-panel 的樣式統一控制，各頁不需再手寫 select-wrap 結構。
+ *  其餘屬性（value／onChange／disabled／aria-label…）原樣傳給 <select>。 */
+export function FormSelect({
+  label,
+  children,
+  className,
+  maxWidth,
+  ...selectProps
+}: SelectHTMLAttributes<HTMLSelectElement> & {
+  label?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  /** 表單／對話框內限制欄位寬度用；篩選區塊不要傳（下拉固定 150px） */
+  maxWidth?: number;
+}) {
+  return (
+    <div
+      className={`form-field${className ? ` ${className}` : ""}`}
+      style={maxWidth ? { maxWidth } : undefined}
+    >
+      {label ? <label className="field-label">{label}</label> : null}
+      <div className="select-wrap">
+        <select {...selectProps}>{children}</select>
+        <ChevronDown size={15} />
+      </div>
+    </div>
+  );
+}
+
+/** 列表區塊標題列（標題＋筆數＋右側操作）。需要自訂內容結構時可單獨使用。 */
+export function ListPanelHead({
+  title,
+  count,
+  actions,
+}: {
+  title: string;
+  count?: number;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="list-panel-head">
+      <div>
+        <h2>{title}</h2>
+        {count !== undefined && (
+          <span className="list-panel-count">共 {count} 筆</span>
+        )}
+      </div>
+      {actions && <div className="list-panel-actions">{actions}</div>}
+    </div>
+  );
+}
+
+/** 列表區塊：標題＋筆數＋工具列（新增／匯出等）＋可橫向捲動的表格。 */
+export function ListPanel({
+  title,
+  count,
+  actions,
+  children,
+}: {
+  title: string;
+  count?: number;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="panel data-panel list-panel" aria-label={title}>
+      <ListPanelHead title={title} count={count} actions={actions} />
+      <div className="table-scroll">{children}</div>
+    </section>
+  );
+}
+
+export type SortDirection = "asc" | "desc";
+export type SortState<K extends string> = { key: K; direction: SortDirection };
+export type SortValue = string | number | boolean | null | undefined;
+
+function compareSortValues(a: SortValue, b: SortValue): number {
+  const aEmpty = a === null || a === undefined || a === "";
+  const bEmpty = b === null || b === undefined || b === "";
+  if (aEmpty || bEmpty) return aEmpty === bEmpty ? 0 : aEmpty ? 1 : -1;
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  return String(a).localeCompare(String(b), "zh-Hant", { numeric: true });
+}
+
+/**
+ * 列表排序 hook。accessors 以欄位 key 對應取值函式；空值永遠排在最後，
+ * 中文用 zh-Hant、數字字串用 numeric 比較。點同一欄位切換升／降冪。
+ */
+export function useTableSort<T, K extends string>(
+  rows: readonly T[],
+  accessors: Record<K, (row: T) => SortValue>,
+  initial?: SortState<K>,
+) {
+  const [sort, setSort] = useState<SortState<K> | null>(initial ?? null);
+  const toggleSort = useCallback((key: K) => {
+    setSort((cur) =>
+      cur && cur.key === key
+        ? { key, direction: cur.direction === "asc" ? "desc" : "asc" }
+        : { key, direction: "asc" },
+    );
+  }, []);
+  // 資料量為單頁列表，每次 render 直接排序，accessor 依賴的外部資料（如姓名對照）
+  // 載入後才會即時反映。
+  const sortedRows = (() => {
+    if (!sort) return [...rows];
+    const get = accessors[sort.key];
+    if (!get) return [...rows];
+    const sign = sort.direction === "asc" ? 1 : -1;
+    const isEmpty = (v: SortValue) => v === null || v === undefined || v === "";
+    // 穩定排序：同值維持原順序；空值永遠排在最後，不受升降冪影響
+    return rows
+      .map((row, index) => ({ row, index, value: get(row) }))
+      .sort((x, y) => {
+        const xe = isEmpty(x.value);
+        const ye = isEmpty(y.value);
+        if (xe || ye) return xe === ye ? x.index - y.index : xe ? 1 : -1;
+        const c = compareSortValues(x.value, y.value);
+        return c !== 0 ? c * sign : x.index - y.index;
+      })
+      .map((x) => x.row);
+  })();
+  return { sortedRows, sort, toggleSort };
+}
+
+/**
+ * 只管「排序欄位＋方向」的狀態（排序比較邏輯由呼叫端自己決定時用，例如
+ * 沿用 lib 內的專用比較函式；通用列表請優先用 useTableSort）。
+ * 點同一欄位切換升／降冪，換欄位則回到升冪。tableSort 可直接傳給 SortableTh。
+ */
+export function useSortState<K extends string>(initialKey: K) {
+  const [state, setState] = useState<{ key: K; dir: 1 | -1 }>({
+    key: initialKey,
+    dir: 1,
+  });
+  const toggleSort = useCallback((key: K) => {
+    setState((prev) => ({
+      key,
+      dir: prev.key === key ? (prev.dir === 1 ? -1 : 1) : 1,
+    }));
+  }, []);
+  const tableSort: SortState<K> = {
+    key: state.key,
+    direction: state.dir === 1 ? "asc" : "desc",
+  };
+  return { sortKey: state.key, sortDir: state.dir, toggleSort, tableSort };
+}
+
+/** 手機／平板（寬度 ≤ 1024px）：列表改用精簡欄位時使用，會隨視窗大小即時切換。 */
+export const COMPACT_LAYOUT_QUERY = "(max-width: 1024px)";
+export function useCompactLayout(): boolean {
+  const [compact, setCompact] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(COMPACT_LAYOUT_QUERY).matches,
+  );
+  useEffect(() => {
+    const media = window.matchMedia(COMPACT_LAYOUT_QUERY);
+    const onChange = () => setCompact(media.matches);
+    onChange();
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
+  return compact;
+}
+
+/** 可排序表頭；sort 為 useTableSort／useSortState 回傳的狀態。 */
+export function SortableTh<K extends string>({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  className,
+}: {
+  label: string;
+  sortKey: K;
+  sort: SortState<K> | null;
+  onSort: (key: K) => void;
+  className?: string;
+}) {
+  const direction = sort && sort.key === sortKey ? sort.direction : null;
+  const Icon = direction ? (direction === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
+  return (
+    <th
+      className={className}
+      aria-sort={direction ? (direction === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <button type="button" className="th-sort" onClick={() => onSort(sortKey)}>
+        {label}
+        <Icon size={14} aria-hidden="true" />
+      </button>
+    </th>
   );
 }
