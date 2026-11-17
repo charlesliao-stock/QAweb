@@ -1166,6 +1166,9 @@ export function AuditPage({
 
   /** v1.65.2：進度取自摘要的列，按「檢視」時才讀該區間的原始紀錄 */
   async function openView(r: ActiveRow) {
+    setDetailListOpen(false);
+    setSelectedUnitFilter("");
+    setExpandedRecordId(null);
     if (!r.summarized) {
       setViewRow(r);
       return;
@@ -1875,6 +1878,27 @@ export function AuditPage({
                 </table>
               </div>
             )}
+            <div className="audit-unit-summary-cards" aria-label="單位審查摘要">
+              {viewUnitSummaries.map((summary) => (
+                <article className="audit-unit-summary-card" key={`mobile-${summary.unitId}`}>
+                  <h3>{summary.unitId === "" ? "NA（不限單位）" : viewRow.unitNameOf(summary.unitId)}</h3>
+                  <div className="audit-unit-summary-metrics">
+                    <div><span>已審／應審件數</span><b>{summary.count}／{summary.planned ?? "—"} 件</b></div>
+                    <div><span>平均正確率</span><b>{summary.average == null ? "—" : `${summary.average}%`}</b></div>
+                  </div>
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    onClick={() => {
+                      setSelectedUnitFilter(summary.unitId === "" ? "__na__" : summary.unitId);
+                      setDetailListOpen(true);
+                    }}
+                  >
+                    <Eye size={16} /> 檢視個人審查結果
+                  </button>
+                </article>
+              ))}
+            </div>
             <div className="form-actions">
               <button type="button" className="button button-ghost" onClick={() => setViewRow(null)}>
                 關閉

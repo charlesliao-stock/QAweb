@@ -1,5 +1,6 @@
 /* 品管審查清單：桌機保留表格，手機／平板改為易讀任務卡片。 */
-.audit-review-cards {
+.audit-review-cards,
+.audit-unit-summary-cards {
   display: none;
 }
 
@@ -37,12 +38,12 @@
 
   .audit-review-card-group {
     color: var(--muted, #71818a);
-    font-size: 13px;
+    font-size: 14px;
   }
 
   .audit-review-card-title b {
     color: var(--ink, #20313a);
-    font-size: 17px;
+    font-size: 18px;
     line-height: 1.45;
     overflow-wrap: anywhere;
   }
@@ -53,7 +54,7 @@
     border-radius: 999px;
     background: #eaf3f1;
     color: #176d68;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 700;
     white-space: nowrap;
   }
@@ -80,7 +81,7 @@
     gap: 7px;
     margin-top: 10px;
     color: var(--muted, #71818a);
-    font-size: 14px;
+    font-size: 16px;
   }
 
   .audit-review-card-progress {
@@ -96,7 +97,7 @@
     border-radius: 9px;
     background: var(--bg, #f5f7f8);
     color: var(--ink, #20313a);
-    font-size: 13px;
+    font-size: 15px;
     line-height: 1.5;
     overflow-wrap: anywhere;
   }
@@ -104,7 +105,7 @@
   .audit-review-card-alert {
     margin: 10px 0 0;
     color: #8b651b;
-    font-size: 13px;
+    font-size: 14px;
     line-height: 1.5;
   }
 
@@ -114,22 +115,78 @@
   }
 
   .audit-review-card-actions {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     margin-top: 13px;
   }
 
   .audit-review-card-actions .button {
-    min-height: 46px;
-    flex: 1 1 110px;
+    width: 100%;
+    min-width: 0;
+    min-height: 48px;
     justify-content: center;
-    font-size: 15px;
+    font-size: 16px;
   }
 
   .audit-review-card-actions .muted-text {
     align-self: center;
+    font-size: 15px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .reviewer-modal[aria-label="品管審查結果摘要"] .table-scroll {
+    display: none;
+  }
+
+  .audit-unit-summary-cards {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .audit-unit-summary-card {
+    padding: 14px;
+    border: 2px solid #b7c6cb;
+    border-radius: 10px;
+    background: var(--surface, #fff);
+  }
+
+  .audit-unit-summary-card h3 {
+    margin: 0 0 10px;
+    color: var(--ink, #20313a);
+    font-size: 17px;
+  }
+
+  .audit-unit-summary-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .audit-unit-summary-metrics > div {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .audit-unit-summary-metrics span {
+    color: var(--muted, #71818a);
     font-size: 14px;
+  }
+
+  .audit-unit-summary-metrics b {
+    color: var(--ink, #20313a);
+    font-size: 16px;
+  }
+
+  .audit-unit-summary-card > .button {
+    width: 100%;
+    min-height: 48px;
+    justify-content: center;
+    margin-top: 12px;
+    font-size: 16px;
   }
 }
 
@@ -138,12 +195,12 @@
     padding: 14px;
   }
 
-  .audit-review-card-progress {
-    grid-template-columns: minmax(0, 1fr);
+  .audit-review-card-title b {
+    font-size: 17px;
   }
 
-  .audit-review-card-actions .button {
-    flex-basis: 100%;
+  .audit-review-card-progress {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -167,4 +224,8 @@
     border-color: #526166;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
   }
+}
+
+:root[data-mode="dark"] .audit-unit-summary-card {
+  border-color: #526166;
 }
