@@ -1348,6 +1348,30 @@
   display: grid;
   gap: 14px;
 }
+/* v1.87.1：人員編輯表單欄位列——每格固定 200px，換行排列 */
+.user-form-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 18px;
+}
+.user-form-fields > .form-field {
+  flex: 0 0 200px;
+  width: 200px;
+  max-width: 200px;
+  min-width: 0;
+}
+.user-form-fields > .form-field.user-form-note {
+  flex: 1 1 100%;
+  width: auto;
+  max-width: none;
+}
+@media (max-width: 480px) {
+  .user-form-fields > .form-field {
+    flex: 1 1 100%;
+    width: auto;
+    max-width: none;
+  }
+}
 .user-form-step-nav {
   position: sticky;
   top: 0;

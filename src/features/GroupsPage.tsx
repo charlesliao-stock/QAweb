@@ -5793,7 +5793,8 @@ export function GroupsPage({
           )}
           <nav className="user-form-step-nav" aria-label="人員表單區段">
             <button type="button" onClick={() => document.getElementById("user-form-basic")?.scrollIntoView({ behavior: "smooth", block: "start" })}>1. 基本資料</button>
-            <button type="button" onClick={() => document.getElementById("user-form-roles")?.scrollIntoView({ behavior: "smooth", block: "start" })}>2. 品管組與角色</button>
+            <button type="button" onClick={() => document.getElementById("user-form-title")?.scrollIntoView({ behavior: "smooth", block: "start" })}>2. 職稱</button>
+            <button type="button" onClick={() => document.getElementById("user-form-roles")?.scrollIntoView({ behavior: "smooth", block: "start" })}>3. 品管組與角色</button>
           </nav>
           {(masterLoadError || titlesLoadError || rolesLoadError || levelsLoadError) && (
             <ErrorState
@@ -5804,7 +5805,7 @@ export function GroupsPage({
           )}
           <section id="user-form-basic" className="user-form-step" tabIndex={-1}>
             <SectionTitle title="基本資料" note="* 為必填欄位；可用上方區段導覽快速移動。" />
-            <div className="form-grid">
+            <div className="user-form-fields">
           <div className="form-field">
             <label className="field-label">職編 *</label>
             <input
@@ -5815,18 +5816,6 @@ export function GroupsPage({
               placeholder="例如 A12345（即登入帳號）"
               onChange={(e) =>
                 setUserForm((prev) => ({ ...prev, staffId: e.target.value }))
-              }
-            />
-          </div>
-          <div className="form-field">
-            <label className="field-label">姓名 *</label>
-            <input
-              className="text-input"
-              aria-required="true"
-              value={userForm.name}
-              placeholder="例如 王小明"
-              onChange={(e) =>
-                setUserForm((prev) => ({ ...prev, name: e.target.value }))
               }
             />
           </div>
@@ -5842,7 +5831,81 @@ export function GroupsPage({
                   </option>
                 ))}
               </FormSelect>
-          <FormSelect label="職稱層級" value={userTitleLevelId}
+          <div className="form-field">
+            <label className="field-label">姓名 *</label>
+            <input
+              className="text-input"
+              aria-required="true"
+              value={userForm.name}
+              placeholder="例如 王小明"
+              onChange={(e) =>
+                setUserForm((prev) => ({ ...prev, name: e.target.value }))
+              }
+            />
+          </div>
+          <div className="form-field">
+            <label className="field-label">Email</label>
+            <input
+              className="text-input"
+              type="email"
+              value={userForm.email}
+              placeholder="例如 name@example.com（供通知與重設密碼）"
+              onChange={(e) =>
+                setUserForm((prev) => ({ ...prev, email: e.target.value }))
+              }
+            />
+          </div>
+          <div className="form-field">
+            <label className="field-label">到職日</label>
+            <input
+              className="text-input"
+              type="date"
+              value={userForm.hireDate}
+              onChange={(e) =>
+                setUserForm((prev) => ({ ...prev, hireDate: e.target.value }))
+              }
+            />
+          </div>
+          <div className="form-field">
+            <label className="field-label">電話</label>
+            <input
+              className="text-input"
+              value={userForm.phone}
+              placeholder="例如 0912-345-678"
+              onChange={(e) =>
+                setUserForm((prev) => ({ ...prev, phone: e.target.value }))
+              }
+            />
+          </div>
+          {reviewerRoleSelected && (
+            <div className="form-field">
+              <label className="field-label" htmlFor="reviewer-access-expiry">審查員授權效期</label>
+              <input
+                id="reviewer-access-expiry"
+                className="text-input"
+                type="date"
+                value={userForm.reviewerAccessExpiresAt}
+                onChange={(event) => setUserForm((prev) => ({
+                  ...prev,
+                  reviewerAccessExpiresAt: event.target.value,
+                }))}
+              />
+              <p className="settings-note">留白為永久有效（預設）；設定日期後，審查員權限於該日結束後失效。</p>
+            </div>
+          )}
+          {!isUserEditing && (
+            <div className="form-field user-form-note">
+              <p className="settings-note">登入帳號為職編，認證信寄到「職編去掉開頭的 0＋@kmuh.org.tw」；新增後由每小時對帳建立登入帳號，該員在登入頁按「開通帳號」自行設定密碼；刪除或停用人員時，登入帳號也會一併刪除或停用。</p>
+            </div>
+          )}
+            </div>
+          </section>
+
+          <section id="user-form-title" className="user-form-step" tabIndex={-1}>
+            <SectionTitle title="職稱" note="先選層級，再選該層級的職稱。" />
+            {/* v1.87.0：督導負責單位已搬到職稱成員管理頁的督導頁設定，人員編輯不再設 */}
+            <div className="user-form-fields">
+          <FormSelect label="層級" value={userTitleLevelId}
                 onChange={(e) => {
                   setUserTitleLevelId(e.target.value);
                   setUserForm((prev) => ({ ...prev, titleId: "", title: "", titleUnitCodes: [] }));
@@ -5906,87 +5969,18 @@ export function GroupsPage({
               <p className="settings-note">可留白：新帳號預設為一般使用者，職稱與角色之後再賦予。</p>
             )}
           </div>
-          {/* v1.87.0：督導負責單位已搬到職稱成員管理頁的督導頁設定，人員編輯不再設 */}
-          <div className="form-field">
-            <label className="field-label">到職日</label>
-            <input
-              className="text-input"
-              type="date"
-              value={userForm.hireDate}
-              onChange={(e) =>
-                setUserForm((prev) => ({ ...prev, hireDate: e.target.value }))
-              }
-            />
-          </div>
-          <div className="form-field">
-            <label className="field-label">Email</label>
-            <input
-              className="text-input"
-              type="email"
-              value={userForm.email}
-              placeholder="例如 name@example.com（供通知與重設密碼）"
-              onChange={(e) =>
-                setUserForm((prev) => ({ ...prev, email: e.target.value }))
-              }
-            />
-          </div>
-          <div className="form-field">
-            <label className="field-label">電話</label>
-            <input
-              className="text-input"
-              value={userForm.phone}
-              placeholder="例如 0912-345-678"
-              onChange={(e) =>
-                setUserForm((prev) => ({ ...prev, phone: e.target.value }))
-              }
-            />
-          </div>
-          {reviewerRoleSelected && (
-            <div className="form-field">
-              <label className="field-label" htmlFor="reviewer-access-expiry">審查員授權效期</label>
-              <input
-                id="reviewer-access-expiry"
-                className="text-input"
-                type="date"
-                value={userForm.reviewerAccessExpiresAt}
-                onChange={(event) => setUserForm((prev) => ({
-                  ...prev,
-                  reviewerAccessExpiresAt: event.target.value,
-                }))}
-              />
-              <p className="settings-note">留白為永久有效（預設）；設定日期後，審查員權限於該日結束後失效。</p>
-            </div>
-          )}
-          {!isUserEditing && (
-            <div className="form-field">
-              <p className="settings-note">登入帳號為職編，認證信寄到「職編去掉開頭的 0＋@kmuh.org.tw」；新增後由每小時對帳建立登入帳號，該員在登入頁按「開通帳號」自行設定密碼；刪除或停用人員時，登入帳號也會一併刪除或停用。</p>
-            </div>
-          )}
             </div>
           </section>
 
           <section id="user-form-roles" className="user-form-step" tabIndex={-1}>
         <SectionTitle
-          title="品管組＋角色"
+          title="品管組與角色"
           note="上方加入、下方列表；每個品管組的角色與權限各自隔離，加入後即顯示於列表，按「儲存修改」才生效。"
         />
         {/* v1.52.0：分工表式——上方加入區＋下方角色列表（每群組一列，可編輯／刪除） */}
         <div className="panel" style={{ padding: 12, marginBottom: 8 }}>
-          <FormSelect label="品管組" value={membershipAddGroupId}
-                onChange={(e) => {
-                  // v1.51.0：切換群組不得清空已勾角色（加入區群組與角色為獨立 state）
-                  setMembershipAddGroupId(e.target.value);
-                  setMembershipError("");
-                }}>
-                <option value="">請選擇品管組</option>
-                {groups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
-                ))}
-              </FormSelect>
           {/* v1.57.0 A6：群組→層級→角色三層下拉；選角色後進下方已選列，可多重 */}
-          <div className="form-grid">
+          <div className="user-form-fields">
             <FormSelect label="層級" value={membershipAddLevelId}
                   onChange={(e) => {
                     setMembershipAddLevelId(e.target.value);
@@ -5999,6 +5993,19 @@ export function GroupsPage({
                     </option>
                   ))}
                   <option value="__ungrouped__">未分層級</option>
+                </FormSelect>
+            <FormSelect label="品管組" value={membershipAddGroupId}
+                  onChange={(e) => {
+                    // v1.51.0：切換群組不得清空已勾角色（加入區群組與角色為獨立 state）
+                    setMembershipAddGroupId(e.target.value);
+                    setMembershipError("");
+                  }}>
+                  <option value="">請選擇品管組</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
                 </FormSelect>
             <FormSelect label="角色" value={membershipAddRoleName}
                   disabled={!membershipAddLevelId}
