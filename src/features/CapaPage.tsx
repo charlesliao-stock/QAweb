@@ -3,6 +3,8 @@ import { Activity, AlertTriangle, Check, ChevronLeft, ChevronRight, ClipboardChe
 import { EmptyState, FilterPanel, FilterSearchField, FormSelect, ListPanel, MaskedNameInput, PageHeading, SortableTh } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import { usePermissions } from "../lib/usePermissions";
+import { loadRefCollection } from "../lib/refLoad";
+import { deriveCrossFlags, resolveDataScope } from "../lib/dataScope";
 import { CAPA_PROGRESS, DEFAULT_CAPA_SETTINGS, makeHistory, newId, progressOfStage, progressTimeOf, type CapaAction, type CapaApprovalStep, type CapaCase, type CapaProgress, type CapaSettings, type CapaStage, type CapaTemplate, type CapaTemplateType } from "./capa/model";
 import { loadCapaCases, loadCapaSettings, loadCapaTemplates, saveCapaCase, saveCapaSettings, saveCapaTemplate } from "./capa/store";
 import { findUnitPeople, listUnitPeople, type CapaPerson } from "./capa/people";
@@ -11,7 +13,7 @@ import { toErrorMessage } from "../lib/errors";
 import { maskName } from "../lib/mask";
 import { useOrgMeta } from "../lib/useOrgMeta";
 import { hasRoleCategory, titleFlagsOf } from "../lib/orgMeta";
-import { isConvenerRole, isOfficerRole } from "../lib/roleIdentity";
+import { isConvenerRole, isOfficerRole, isReviewerRole } from "../lib/roleIdentity";
 
 type LaunchContext = { indicatorId?: string; indicatorCode?: string; indicatorName?: string; threshold?: number; period?: string; periodKeys?: string[]; unitCode?: string; unitName?: string; rate?: number; summary?: string; snapshots?: Array<{ period: string; rate: number }>; caseId?: string };
 type ViewTab = "cases" | "settings" | "templates";
@@ -36,8 +38,38 @@ function makeCase(context: LaunchContext, staffId: string, staffName: string, un
 }
 
 export function CapaPage({ onAction, launchContext, onLaunchConsumed, managementOnly = false }: { onAction: (message: string) => void; launchContext?: LaunchContext | null; onLaunchConsumed?: () => void; managementOnly?: boolean }) {
-  const { user } = useAuth(); const { isAdmin } = usePermissions(); const orgMeta = useOrgMeta();
+  const { user } = useAuth(); const { isAdmin, catalog } = usePermissions(); const orgMeta = useOrgMeta();
   const [tab, setTab] = useState<ViewTab>(() => managementOnly ? "settings" : "cases"); const [cases, setCases] = useState<CapaCase[]>([]); const [settings, setSettings] = useState<CapaSettings>(DEFAULT_CAPA_SETTINGS); const [templates, setTemplates] = useState<CapaTemplate[]>([]);
+  // v1.88.4：範圍過濾用的單位對照（單位→所屬群組＋沿革；讀不到時退回空表，範圍退回本人單位）
+  const [scopeUnits, setScopeUnits] = useState<Array<{ code: string; groupId: string; mergedFromUnitCodes?: string[] }>>([]);
+  useEffect(() => { let alive = true; loadRefCollection("units").then((snap) => { if (!alive) return; setScopeUnits(snap.docs.map((d) => { const v = d.data() as Record<string, unknown>; return { code: d.id, groupId: typeof v.groupId === "string" ? v.groupId : "", mergedFromUnitCodes: Array.isArray(v.mergedFromUnitCodes) ? v.mergedFromUnitCodes.map(String).filter(Boolean) : [] }; })); }).catch(() => { if (alive) setScopeUnits([]); }); return () => { alive = false; }; }, []);
+  /** v1.88.4：與結果分析同一口徑的資料範圍（縱向從屬＋橫向 cross 取聯集） */
+  const dataScope = useMemo(() => {
+    if (!user) return null;
+    return resolveDataScope({
+      isAdmin,
+      roles: user.roles ?? [],
+      title: user.title ?? "",
+      titleFlags: titleFlagsOf(user.title ?? "", user.titleId, orgMeta.titleMeta, orgMeta.titleMetaById),
+      memberships: user.memberships ?? [],
+      unitCode: user.unitCode ?? "",
+      titleUnitCodes: user.titleUnitCodes ?? [],
+      units: scopeUnits,
+      unitGroups: catalog.unitGroups,
+      cross: deriveCrossFlags(catalog.templates, user.roles ?? [], user.title ?? ""),
+      isReviewer: isReviewerRole(user.roles ?? [], orgMeta.roleMeta),
+    });
+  }, [user, isAdmin, catalog, scopeUnits, orgMeta]);
+  /**
+   * v1.88.4：依 dataScope 過濾案件清單（前端過濾，沿用結果分析模式；未收緊
+   * rules，督導核准流程不受影響）。CAPA 無任務概念，審查員取靜態範圍
+   * （本人單位＋cross 放寬），不另對任務單位。
+   */
+  const scopedCases = useMemo(() => {
+    if (!dataScope || dataScope.kind === "all") return cases;
+    const visible = dataScope.unitCodes;
+    return cases.filter((item) => visible.has(item.unitCode));
+  }, [cases, dataScope]);
   const [selectedId, setSelectedId] = useState(""); const [keywordDraft, setKeywordDraft] = useState(""); const [keyword, setKeyword] = useState(""); const [progressFilter, setProgressFilter] = useState(""); const [sourceFilter, setSourceFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 } | null>(null);
   const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState(""); const [draft, setDraft] = useState<CapaCase | null>(null);
@@ -45,13 +77,22 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
   const [launch, setLaunch] = useState<LaunchContext | null>(null); const [createOpen, setCreateOpen] = useState(false); const [templateDraft, setTemplateDraft] = useState<CapaTemplate | null>(null); const [approvalNote, setApprovalNote] = useState("");
   const reload = useCallback(async () => { setLoading(true); setError(""); try { const [nextCases, nextSettings, nextTemplates] = await Promise.all([loadCapaCases(), loadCapaSettings(), loadCapaTemplates()]); setCases(nextCases); setSettings(nextSettings); setTemplates(nextTemplates); setSelectedId((current) => current && nextCases.some((item) => item.id === current) ? current : ""); } catch (cause) { setError(toErrorMessage(cause, "無法載入 CAPA 資料；請確認登入狀態與資料權限。")); } finally { setLoading(false); } }, []);
   useEffect(() => { void reload(); }, [reload]);
-  useEffect(() => { if (!launchContext) return; setTab("cases"); if (launchContext.caseId) { setSelectedId(launchContext.caseId); } else { setLaunch(launchContext); setCreateOpen(true); } onLaunchConsumed?.(); }, [launchContext, onLaunchConsumed]);
+  const [pendingCaseId, setPendingCaseId] = useState("");
+  useEffect(() => { if (!launchContext) return; setTab("cases"); if (launchContext.caseId) { setPendingCaseId(launchContext.caseId); } else { setLaunch(launchContext); setCreateOpen(true); } onLaunchConsumed?.(); }, [launchContext, onLaunchConsumed]);
+  // v1.88.4：launchContext 帶 caseId 時，案件載入後才確認是否在可見範圍內；
+  // 不在範圍內不自動開啟，並提示（避免直接以 id 直開他人案件詳情）。
+  useEffect(() => {
+    if (!pendingCaseId || loading) return;
+    if (scopedCases.some((item) => item.id === pendingCaseId)) setSelectedId(pendingCaseId);
+    else onAction("該 CAPA 案件不在您的可見範圍內");
+    setPendingCaseId("");
+  }, [pendingCaseId, loading, scopedCases, onAction]);
   const toggleSort = (key: SortKey) => setSort((current) => current?.key === key ? { key, dir: current.dir === 1 ? -1 : 1 } : { key, dir: 1 });
   const tableSort = sort ? { key: sort.key, direction: sort.dir === 1 ? "asc" as const : "desc" as const } : null;
   const SortTh = ({ label, k }: { label: string; k: SortKey }) => <SortableTh label={label} sortKey={k} sort={tableSort} onSort={toggleSort} />;
   const filtered = useMemo(() => {
     const word = keyword.trim().toLowerCase();
-    const list = cases.filter((item) => {
+    const list = scopedCases.filter((item) => {
       const text = `${item.caseNumber} ${item.unitCode} ${item.unitName} ${item.ownerName} ${item.indicatorCode} ${item.indicatorName} ${item.findingSummary} ${item.rootCause}`.toLowerCase();
       return (!word || text.includes(word)) && (!progressFilter || progressOfStage(item.stage) === progressFilter) && (!sourceFilter || item.source === sourceFilter);
     });
@@ -62,8 +103,8 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
       const result = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "zh-Hant", { numeric: true });
       return result * sort.dir || b.updatedAt.localeCompare(a.updatedAt);
     });
-  }, [cases, keyword, progressFilter, sourceFilter, sort]);
-  const selected = cases.find((item) => item.id === selectedId) ?? null;
+  }, [scopedCases, keyword, progressFilter, sourceFilter, sort]);
+  const selected = scopedCases.find((item) => item.id === selectedId) ?? null;
   useEffect(() => { setDraft(selected ? structuredClone(selected) : null); setApprovalNote(""); setWithdrawOpen(false); setWithdrawNote(""); }, [selectedId, selected]);
   const updateDraft = (patch: Partial<CapaCase>) => setDraft((current) => current ? { ...current, ...patch } : current);
   const actorId = user?.staffId ?? "demo"; const actorName = user?.name ?? "展示使用者"; const roles = user?.roles ?? [];
@@ -141,10 +182,10 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
     {!inDetail && <div className="capa-toolbar"><div className="capa-tabs" role="tablist" aria-label="CAPA 功能">{!managementOnly && <button className={tab === "cases" ? "active" : ""} onClick={() => setTab("cases")}><Activity size={15} />案件追蹤</button>}{isAdmin && <><button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}><Settings2 size={15} />系統設定</button><button className={tab === "templates" ? "active" : ""} onClick={() => setTab("templates")}><ClipboardCheck size={15} />範本維護</button></>}</div>{!managementOnly && <span className="capa-data-note"><ShieldCheck size={14} />依登入權限顯示案件</span>}</div>}
     {tab === "cases" && !inDetail && <>
       <div className="capa-stats">
-        <Stat label="待確認" value={cases.filter((item) => progressOfStage(item.stage) === "待確認").length} tone="blue" caption="CAPA 已觸發，待護理長確認知悉" />
-        <Stat label="分析撰寫中" value={cases.filter((item) => progressOfStage(item.stage) === "分析撰寫中").length} tone="amber" caption="確認知悉後、送出審核前" />
-        <Stat label="送審中" value={cases.filter((item) => progressOfStage(item.stage) === "送審中").length} tone="teal" caption="已送出結案審核，待核准" />
-        <Stat label="結案" value={cases.filter((item) => progressOfStage(item.stage) === "結案").length} tone="green" caption="結案核准完成" />
+        <Stat label="待確認" value={scopedCases.filter((item) => progressOfStage(item.stage) === "待確認").length} tone="blue" caption="CAPA 已觸發，待護理長確認知悉" />
+        <Stat label="分析撰寫中" value={scopedCases.filter((item) => progressOfStage(item.stage) === "分析撰寫中").length} tone="amber" caption="確認知悉後、送出審核前" />
+        <Stat label="送審中" value={scopedCases.filter((item) => progressOfStage(item.stage) === "送審中").length} tone="teal" caption="已送出結案審核，待核准" />
+        <Stat label="結案" value={scopedCases.filter((item) => progressOfStage(item.stage) === "結案").length} tone="green" caption="結案核准完成" />
       </div>
       <FilterPanel actions={(keyword || progressFilter || sourceFilter) && <button type="button" className="button button-outline" onClick={() => { setKeyword(""); setKeywordDraft(""); setProgressFilter(""); setSourceFilter(""); }}>清除篩選</button>}>
         <FormSelect label="進度" value={progressFilter} onChange={(event) => setProgressFilter(event.target.value)}><option value="">全部進度</option>{[...CAPA_PROGRESS, "已撤案" as CapaProgress].map((item) => <option key={item} value={item}>{item}</option>)}</FormSelect>
@@ -152,7 +193,7 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
         <FilterSearchField label="關鍵字" placeholder="搜尋編號、單位、負責人、指標或原因" value={keywordDraft} onChange={setKeywordDraft} onSearch={() => setKeyword(keywordDraft)} />
       </FilterPanel>
       <ListPanel title="改善案件" count={filtered.length} actions={<button className="icon-button" onClick={() => void reload()} title="重新載入案件" aria-label="重新載入案件"><Activity size={16} /></button>}>
-        {loading ? <p className="muted-text" role="status">正在載入案件資料…</p> : cases.length === 0 ? <EmptyState title="目前尚無 CAPA 案件" description="可由結果分析下探單位清單的「啟動CAPA」帶入指標脈絡，或人工開立改善追蹤。" /> : filtered.length === 0 ? <p className="muted-text">沒有符合篩選條件的案件。</p> :
+        {loading ? <p className="muted-text" role="status">正在載入案件資料…</p> : scopedCases.length === 0 ? <EmptyState title="目前尚無 CAPA 案件" description="可由結果分析下探單位清單的「啟動CAPA」帶入指標脈絡，或人工開立改善追蹤。" /> : filtered.length === 0 ? <p className="muted-text">沒有符合篩選條件的案件。</p> :
           <table className="data-table capa-list-table"><thead><tr><SortTh label="編號" k="number" /><SortTh label="單位" k="unit" /><SortTh label="負責人" k="owner" /><SortTh label="指標名稱" k="indicator" /><SortTh label="原因" k="reason" /><SortTh label="改善期限" k="due" /><SortTh label="進度／更新日期" k="progress" /></tr></thead>
             <tbody>{filtered.map((item) => { const itemProgress = progressOfStage(item.stage); return <tr key={item.id} className="capa-list-row" tabIndex={0} onClick={() => setSelectedId(item.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedId(item.id); } }}>
               <td><b>{item.caseNumber}</b></td>

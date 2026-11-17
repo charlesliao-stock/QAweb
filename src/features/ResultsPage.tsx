@@ -145,7 +145,7 @@ import {
   recordsForIndex,
   type RecordIndex,
 } from "../lib/resultsMatrix";
-import { unitHistoryCodes } from "../lib/unitHistory";
+import { deriveCrossFlags, resolveDataScope } from "../lib/dataScope";
 import {
   buildTempTaskKeys,
   columnTempNote,
@@ -436,7 +436,7 @@ export function ResultsPage({
   onAction: (message: string) => void;
 }) {
   const { user } = useAuth();
-  const { can } = usePermissions();
+  const { can, catalog } = usePermissions();
   const now = new Date();
   const [indicators, setIndicators] = useState<IndicatorOpt[]>([]);
   /** 指標／組別／單位參考資料是否已載入完成（v1.43.1：匯入面板據此決定是否顯示指標下拉為空的診斷提示，載入中不顯示、避免閃爍）。 */
@@ -559,38 +559,65 @@ export function ResultsPage({
   // 單位分析矩陣下方展開面板（曲線圖／選項明細）
   const [unitPanel, setUnitPanel] = useState<UnitPanel | null>(null);
 
-  // 資料範圍（沿用舊頁規則；v1.40.5 改以職稱旗標／角色類別判斷，不再比對名稱）
+  // 資料範圍（v1.88.4：改走共用 dataScope——縱向從屬＋橫向 cross 取聯集，
+  // 取代原先寫死的推導；護理長仍優先 staff 分支，沿用舊順序，保留摘要模式）
   const orgMeta = useOrgMeta();
   const isNurseLeader = !!user && (
     titleFlagsOf(user.title ?? "", user.titleId, orgMeta.titleMeta, orgMeta.titleMetaById).isUnitHead ||
     hasRoleCategory(user.roles ?? [], "unitHead", orgMeta.roleMeta)
   );
+  const isReviewer = !!user && isReviewerRole(user?.roles ?? [], orgMeta.roleMeta);
+  const dataScope = useMemo(() => {
+    if (!user) return null;
+    return resolveDataScope({
+      isAdmin: (user.roles ?? []).includes("系統管理員"),
+      roles: user.roles ?? [],
+      title: user.title ?? "",
+      titleFlags: titleFlagsOf(user.title ?? "", user.titleId, orgMeta.titleMeta, orgMeta.titleMetaById),
+      memberships: user.memberships ?? [],
+      unitCode: user.unitCode ?? "",
+      titleUnitCodes: user.titleUnitCodes ?? [],
+      units,
+      unitGroups: catalog.unitGroups,
+      cross: deriveCrossFlags(catalog.templates, user.roles ?? [], user.title ?? ""),
+      isReviewer,
+    });
+  }, [user, units, catalog, orgMeta.titleMeta, orgMeta.titleMetaById, isReviewer]);
+
   const scope = useMemo(() => {
     const roles = user?.roles ?? [];
     if (roles.includes("系統管理員")) return { kind: "admin" as const };
-    if (user && isNurseLeader)
+    if (!user) return { kind: "admin" as const };
+    if (dataScope?.kind === "all") return { kind: "admin" as const };
+    if (isNurseLeader)
       return { kind: "staff" as const, unitCode: user.unitCode };
-    if (user && isReviewerRole(roles, orgMeta.roleMeta))
+    if (isReviewer)
       return { kind: "reviewer" as const, staffId: user.staffId };
-    if (user) return { kind: "staff" as const, unitCode: user.unitCode };
-    return { kind: "admin" as const };
-  }, [user, isNurseLeader, orgMeta.roleMeta]);
+    return { kind: "staff" as const, unitCode: user.unitCode };
+  }, [user, isNurseLeader, isReviewer, dataScope]);
 
+  /**
+   * 靜態可見單位集合（dataScope 口徑；管理員沿用舊行為回空集合，
+   * 各過濾處對 admin 另有全量分支，不受影響）。
+   */
   const visibleUnitCodes = useMemo(() => {
-    if (scope.kind !== "staff") return new Set<string>();
-    return isNurseLeader
-      ? unitHistoryCodes(units, scope.unitCode)
-      : new Set([scope.unitCode]);
-  }, [scope, isNurseLeader, units]);
+    if (scope.kind === "admin") return new Set<string>();
+    if (!dataScope || dataScope.kind === "all") return new Set<string>();
+    return dataScope.unitCodes;
+  }, [scope.kind, dataScope]);
 
   /** 按年份快取的權限範圍鍵（與 scope 同義，格式見 resultsCache） */
   const cacheScope: ResultsCacheScope = useMemo(() => {
     if (scope.kind === "reviewer")
       return { kind: "reviewer", staffId: scope.staffId };
     if (scope.kind === "staff")
-      return { kind: "staff", unitCode: scope.unitCode };
+      return {
+        kind: "staff",
+        unitCode: scope.unitCode,
+        unitCodes: [...visibleUnitCodes].sort(),
+      };
     return { kind: "admin" };
-  }, [scope]);
+  }, [scope, visibleUnitCodes]);
 
   /**
    * v1.28 階段 7（B7）：單一指標限縮查詢的指標。
@@ -1104,17 +1131,24 @@ export function ResultsPage({
     setReloadNonce((n) => n + 1);
   }
   // 範圍內紀錄（依權限範圍過濾）
+  // v1.88.4：reviewer 分支保留，但與靜態範圍（dataScope）取聯集——
+  // 審查員除了自己負責任務的單位，也看得到其他身分放寬的單位。
+  const reviewerTaskUnitCodes = useMemo(() => {
+    if (scope.kind !== "reviewer") return new Set<string>();
+    return new Set(
+      tasks.filter((t) => t.reviewerId === scope.staffId).map((t) => t.unitId),
+    );
+  }, [tasks, scope]);
+
   const scopedRecords = useMemo(() => {
     if (scope.kind === "admin") return records;
     if (scope.kind === "staff")
       return records.filter((r) => visibleUnitCodes.has(r.unitId));
-    const unitIds = new Set(
-      tasks
-        .filter((t) => t.reviewerId === scope.staffId)
-        .map((t) => t.unitId),
+    return records.filter(
+      (r) =>
+        reviewerTaskUnitCodes.has(r.unitId) || visibleUnitCodes.has(r.unitId),
     );
-    return records.filter((r) => unitIds.has(r.unitId));
-  }, [records, tasks, scope, visibleUnitCodes]);
+  }, [records, tasks, scope, visibleUnitCodes, reviewerTaskUnitCodes]);
 
   /**
    * v1.59.0：加審任務月鍵集合（曲線圖標註反查用）。
@@ -1186,11 +1220,11 @@ export function ResultsPage({
     if (scope.kind === "admin") return historyExtra;
     if (scope.kind === "staff")
       return historyExtra.filter((r) => visibleUnitCodes.has(r.unitId));
-    const unitIds = new Set(
-      tasks.filter((t) => t.reviewerId === scope.staffId).map((t) => t.unitId),
+    return historyExtra.filter(
+      (r) =>
+        reviewerTaskUnitCodes.has(r.unitId) || visibleUnitCodes.has(r.unitId),
     );
-    return historyExtra.filter((r) => unitIds.has(r.unitId));
-  }, [historyExtra, tasks, scope, visibleUnitCodes]);
+  }, [historyExtra, tasks, scope, visibleUnitCodes, reviewerTaskUnitCodes]);
   const recordIndex = useMemo(
     () => buildRecordIndex(scopedHistory.length > 0 ? [...scopedRecords, ...scopedHistory] : scopedRecords),
     [scopedRecords, scopedHistory],
@@ -1371,12 +1405,8 @@ export function ResultsPage({
   const scopedUnitCodes = useMemo(() => {
     if (scope.kind === "admin") return new Set(units.map((u) => u.code));
     if (scope.kind === "staff") return visibleUnitCodes;
-    return new Set(
-      tasks
-        .filter((t) => t.reviewerId === scope.staffId)
-        .map((t) => t.unitId),
-    );
-  }, [units, tasks, scope, visibleUnitCodes]);
+    return new Set([...reviewerTaskUnitCodes, ...visibleUnitCodes]);
+  }, [units, tasks, scope, visibleUnitCodes, reviewerTaskUnitCodes]);
 
   const scopedUnits = useMemo(
     () => units.filter((u) => scopedUnitCodes.has(u.code)),
@@ -1413,6 +1443,18 @@ export function ResultsPage({
     const list = groups.filter((g) => gids.has(g.id));
     return list.length > 0 ? list : groups;
   }, [groups, scopedUnits, scope]);
+
+  /**
+   * v1.88.4：使用者所屬單位尚未歸屬品管組時，組別頁籤顯示明確提示而非「無指標」。
+   * 條件：staff 範圍、本人單位在 units 上存在但 groupId 為空、且可見單位中
+   * 沒有任何已歸組者（否則組別頁籤仍有可看的組別，不顯示此提示）。
+   */
+  const ownUnitUngrouped = useMemo(() => {
+    if (!user?.unitCode || scope.kind !== "staff") return false;
+    const own = units.find((u) => u.code === user.unitCode);
+    if (!own || own.groupId) return false;
+    return scopedUnits.every((u) => !u.groupId);
+  }, [user?.unitCode, scope.kind, units, scopedUnits]);
 
   // 選項預設（資料載入後補）
   useEffect(() => {
@@ -2334,6 +2376,11 @@ export function ResultsPage({
             />
           ) : loading ? (
             <EmptyState title="載入中" description="正在讀取審查紀錄…" />
+          ) : ownUnitUngrouped ? (
+            <EmptyState
+              title="所屬單位尚未歸屬品管組"
+              description="所屬單位尚未歸屬品管組，請先至「品管組與人員」→「品管組」頁籤設定，再查詢結果分析。"
+            />
           ) : groupIndicators.length === 0 ? (
             <EmptyState
               title="無指標"

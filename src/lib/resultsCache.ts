@@ -15,14 +15,23 @@
 export type ResultsCacheScope =
   | { kind: "admin" }
   | { kind: "reviewer"; staffId: string }
-  | { kind: "staff"; unitCode: string };
+  /**
+   * v1.88.4：staff 快取鍵須含完整可見單位集合（unitCodes），不只本人 unitCode——
+   * 同一 unitCode 的人可能因縱向從屬／橫向 cross 看到不同單位集合；
+   * 只用 unitCode 當鍵會讓窄範圍者吃到寬範圍者的快取而越權。
+   * unitCodes 缺省時退回舊鍵 `staff:<unitCode>`（舊呼叫端相容）。
+   */
+  | { kind: "staff"; unitCode: string; unitCodes?: string[] };
 
 export type ResultsCacheCollection = "reviewRecords" | "reviewTasks";
 
-/** 權限範圍鍵：admin／reviewer:<staffId>／staff:<unitCode> */
+/** 權限範圍鍵：admin／reviewer:<staffId>／staff:<排序後可見單位集合> */
 export function resultsScopeKey(scope: ResultsCacheScope): string {
   if (scope.kind === "admin") return "admin";
   if (scope.kind === "reviewer") return `reviewer:${scope.staffId}`;
+  if (scope.unitCodes && scope.unitCodes.length > 0) {
+    return `staff:${[...scope.unitCodes].sort().join(",")}`;
+  }
   return `staff:${scope.unitCode}`;
 }
 

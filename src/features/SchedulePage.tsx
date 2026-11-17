@@ -7,7 +7,7 @@
  */
 import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   CalendarPlus,
@@ -17,9 +17,11 @@ import {
   CircleCheck,
   CircleDashed,
   Copy,
+  Download,
   Eye,
   Plus,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, where } from "../lib/db";
@@ -45,7 +47,17 @@ import { useAuth } from "../lib/auth";
 import { isReviewerAccessActive } from "../lib/reviewerValidity";
 import { useOrgMeta } from "../lib/useOrgMeta";
 import { hasRoleCategory, titleFlagsOf } from "../lib/orgMeta";
-import { staffLabel } from "../lib/mask";
+import { isReviewerRole } from "../lib/roleIdentity";
+import { deriveCrossFlags, resolveDataScope } from "../lib/dataScope";
+import { countRecordsByTaskWithImports } from "../lib/dashboardStats";
+import {
+  buildTrackedRows,
+  reviewerSubtotals,
+  taskStatusLabel,
+} from "../lib/taskTracking";
+import { loadPeriodicQuotaCounts } from "./dashboard/periodicQuotaCounts";
+import { dbIndexedQueryApi, fetchYearDocs } from "../lib/indexedRecords";
+import { staffLabel, maskName } from "../lib/mask";
 import {
   academicYearOf,
   categoryLabel,
@@ -79,6 +91,7 @@ import {
   saveSchedule,
   scheduleReviewCalendarMonths,
   scheduleSetupComplete,
+  shouldAutoLinkReviewer,
   UNCATEGORIZED_GROUP_ID,
   YEAR_FILTER_OPTIONS,
   yearOptionLabel,
@@ -93,6 +106,15 @@ import {
   type BelowThresholdRow,
 } from "../lib/belowThreshold";
 import { pad2 } from "../lib/ym";
+import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
+import {
+  ASSIGNMENT_IMPORT_HEADER,
+  ASSIGNMENT_IMPORT_SAMPLE_ROWS,
+  mergeImportedAssignments,
+  validateAssignmentImportRows,
+  type ParsedAssignmentRow,
+  type ValidatedAssignmentRow,
+} from "../lib/assignmentImport";
 
 /** Firestore Timestamp → 本地時間字串；解析失敗回 "—" */
 function fmtTs(ts: unknown): string {
@@ -108,6 +130,28 @@ function fmtTs(ts: unknown): string {
     /* ignore */
   }
   return "—";
+}
+
+/** Firestore Timestamp／ISO 字串 → ISO 字串（缺值回 ""；查閱彈窗完成時間用） */
+function tsToIso(ts: unknown): string {
+  if (typeof ts === "string") return ts;
+  try {
+    const t = ts as { toDate?: () => Date };
+    if (t && typeof t.toDate === "function") {
+      const d = t.toDate();
+      if (d instanceof Date && !Number.isNaN(d.getTime())) return d.toISOString();
+    }
+  } catch {
+    /* ignore */
+  }
+  return "";
+}
+
+/** ISO 時間字串 → 本地顯示（查閱彈窗完成時間用；解析失敗回 "—"） */
+function formatIsoTs(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("zh-TW", { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 /** v1.88.3：組別 id 轉顯示名稱；審查員名單的未分類顯示為「未分類」，而非原始 id */
@@ -137,6 +181,7 @@ interface UnitLite {
   code: string;
   name: string;
   groupId: string;
+  mergedFromUnitCodes?: string[];
 }
 
 interface UserLite {
@@ -147,6 +192,8 @@ interface UserLite {
   reviewerAccessActive: boolean;
   /** 已開通帳號（曾成功登入，users.activatedAt 有值）；false＝尚未開通，無法自行登入 */
   activated: boolean;
+  /** 角色名清單（分工表匯入驗證「具審查員角色」用） */
+  roles: string[];
 }
 
 interface ReviewerLite {
@@ -319,7 +366,7 @@ export function defaultAddAuditReviewers(
 }
 
 export function SchedulePage({ onAction }: { onAction: (message: string) => void }) {
-  const { can } = usePermissions();
+  const { can, catalog } = usePermissions();
   const { user } = useAuth();
   // 排程編輯權限依角色＋職稱矩陣交集判斷；不再以舊角色名稱繞過設定。
   const canEdit = can("manageSchedule");
@@ -380,6 +427,40 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     () => new Set(users.filter((u) => !u.activated && u.status !== "停用").map((u) => u.id)),
     [users],
   );
+  // v1.88.4：具審查員角色且效期有效的職編（分工表批次匯入驗證用；
+  // reviewReviewers 名單內的職編另由 reviewersByGroup 判定，兩者任一成立即可）
+  const reviewerRoleIds = useMemo(
+    () =>
+      new Set(
+        users
+          .filter(
+            (u) =>
+              u.reviewerAccessActive &&
+              shouldAutoLinkReviewer(u.roles, orgMeta.roleMeta),
+          )
+          .map((u) => u.id),
+      ),
+    [users, orgMeta.roleMeta],
+  );
+  // v1.88.4：查閱彈窗任務追蹤的可見單位（與結果分析／CAPA 同一 dataScope 口徑；
+  // kind all 時為 null＝全看；審查員本人的任務在彈窗內另行放行）
+  const detailScopeUnits = useMemo(() => {
+    if (!user) return null;
+    const scope = resolveDataScope({
+      isAdmin: (user.roles ?? []).includes("系統管理員"),
+      roles: user.roles ?? [],
+      title: user.title ?? "",
+      titleFlags: titleFlagsOf(user.title ?? "", user.titleId, orgMeta.titleMeta, orgMeta.titleMetaById),
+      memberships: user.memberships ?? [],
+      unitCode: user.unitCode ?? "",
+      titleUnitCodes: user.titleUnitCodes ?? [],
+      units,
+      unitGroups: catalog.unitGroups,
+      cross: deriveCrossFlags(catalog.templates, user.roles ?? [], user.title ?? ""),
+      isReviewer: isReviewerRole(user.roles ?? [], orgMeta.roleMeta),
+    });
+    return scope.kind === "all" ? null : scope.unitCodes;
+  }, [user, units, catalog, orgMeta]);
   const unitNameOf = useCallback(
     (code: string) => units.find((u) => u.code === code)?.name ?? code,
     [units],
@@ -495,6 +576,9 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               code: d.id,
               name: typeof data.name === "string" ? data.name : d.id,
               groupId: typeof data.groupId === "string" ? data.groupId : "",
+              mergedFromUnitCodes: Array.isArray(data.mergedFromUnitCodes)
+                ? data.mergedFromUnitCodes.map(String).filter(Boolean)
+                : [],
             };
           })
           .sort((a, b) => a.code.localeCompare(b.code, "zh-Hant")),
@@ -510,6 +594,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             status: typeof data.status === "string" ? data.status : "在職",
             reviewerAccessActive: isReviewerAccessActive(data.reviewerAccessExpiresAt),
             activated: typeof data.activatedAt === "string" && data.activatedAt !== "",
+            roles: Array.isArray(data.roles) ? data.roles.map(String) : [],
           };
         }),
       );
@@ -1241,6 +1326,8 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             usersMap={usersMap}
             inactiveIds={inactiveIds}
             unitNameOf={unitNameOf}
+            visibleUnitCodes={detailScopeUnits}
+            viewerStaffId={user?.staffId ?? ""}
             canEdit={canEdit}
             actor={actor}
             onAction={onAction}
@@ -1312,6 +1399,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               units={units}
               groupMap={groupMap}
               usersMap={usersMap}
+              reviewerRoleIds={reviewerRoleIds}
               inactiveIds={inactiveIds}
               initial={assignments.get(indicator.id) ?? null}
               canEdit={canEdit}
@@ -2958,6 +3046,7 @@ function SelfAuditDialog({
 /* ================= 查閱：設定內容＋任務（v1.18 彈窗） ================= */
 
 interface TaskLite {
+  id: string;
   year: number;
   month: number;
   unitId: string;
@@ -2965,6 +3054,15 @@ interface TaskLite {
   status: string;
   deadline: string;
   caseCount: number | null;
+  /** 完成時間（ISO 字串；未完成為 ""） */
+  completedAt: string;
+  /** 週期共用配額（v1.88.4 追蹤進度用；無值＝非配額任務） */
+  quotaVersion?: number;
+  quotaGroupId?: string;
+  quotaIntervalStartYear?: number;
+  quotaIntervalStartMonth?: number;
+  quotaIntervalEndYear?: number;
+  quotaIntervalEndMonth?: number;
 }
 
 function ScheduleDetailModal({
@@ -2973,6 +3071,8 @@ function ScheduleDetailModal({
   usersMap,
   inactiveIds,
   unitNameOf,
+  visibleUnitCodes,
+  viewerStaffId,
   canEdit,
   actor,
   onAction,
@@ -2984,6 +3084,9 @@ function ScheduleDetailModal({
   usersMap: Map<string, string>;
   inactiveIds: Set<string>;
   unitNameOf: (code: string) => string;
+  /** v1.88.4：任務追蹤的可見單位（null＝全看）；審查員本人的任務另行放行 */
+  visibleUnitCodes: ReadonlySet<string> | null;
+  viewerStaffId: string;
   /** v1.60.0：manageSchedule 才顯示刪除入口 */
   canEdit: boolean;
   actor: { id: string; name: string };
@@ -3030,6 +3133,14 @@ function ScheduleDetailModal({
   const isTemp = row.category === "temp";
   const [tasks, setTasks] = useState<TaskLite[]>([]);
   const [loading, setLoading] = useState(true);
+  // v1.88.4：任務追蹤進度（配額感知計數；見 lib/taskTracking）
+  const [recordCounts, setRecordCounts] = useState<Map<string, number>>(new Map());
+  const [quotaCounts, setQuotaCounts] = useState<Map<string, number>>(new Map());
+  const [quotaFailed, setQuotaFailed] = useState<Set<string>>(new Set());
+  const [progressUnknown, setProgressUnknown] = useState(false);
+  const [progressLoading, setProgressLoading] = useState(false);
+  const [trackUnit, setTrackUnit] = useState("");
+  const [trackStatus, setTrackStatus] = useState("");
 
   const ymSet = useMemo(() => {
     if (!sched) return new Set<string>();
@@ -3059,6 +3170,7 @@ function ScheduleDetailModal({
           const mo = Number(v.month ?? 0);
           if (!ymSet.has(`${y}-${mo}`)) return;
           list.push({
+            id: d.id,
             year: y,
             month: mo,
             unitId: String(v.unitId ?? ""),
@@ -3069,6 +3181,29 @@ function ScheduleDetailModal({
               typeof v.caseCount === "number" && v.caseCount >= 1
                 ? v.caseCount
                 : null,
+            completedAt: tsToIso(v.completedAt),
+            quotaVersion:
+              typeof v.quotaVersion === "number" ? v.quotaVersion : undefined,
+            quotaGroupId:
+              typeof v.quotaGroupId === "string" && v.quotaGroupId
+                ? v.quotaGroupId
+                : undefined,
+            quotaIntervalStartYear:
+              typeof v.quotaIntervalStartYear === "number"
+                ? v.quotaIntervalStartYear
+                : undefined,
+            quotaIntervalStartMonth:
+              typeof v.quotaIntervalStartMonth === "number"
+                ? v.quotaIntervalStartMonth
+                : undefined,
+            quotaIntervalEndYear:
+              typeof v.quotaIntervalEndYear === "number"
+                ? v.quotaIntervalEndYear
+                : undefined,
+            quotaIntervalEndMonth:
+              typeof v.quotaIntervalEndMonth === "number"
+                ? v.quotaIntervalEndMonth
+                : undefined,
           });
         });
         list.sort(
@@ -3088,6 +3223,152 @@ function ScheduleDetailModal({
       cancelled = true;
     };
   }, [sched, row.indicatorId, ymSet, onAction]);
+
+  // v1.88.4：任務追蹤進度——任務載入後，按（指標，年）讀回審查紀錄，
+  // 以 countRecordsByTaskWithImports 計非配額任務已審件數（含匯入紀錄），
+  // 再以 loadPeriodicQuotaCounts 計週期共用配額群組的整組已審件數。
+  // 僅顯示用，不寫回任務狀態。
+  useEffect(() => {
+    if (loading) return;
+    if (tasks.length === 0) {
+      setRecordCounts(new Map());
+      setQuotaCounts(new Map());
+      setQuotaFailed(new Set());
+      setProgressUnknown(false);
+      setProgressLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setProgressLoading(true);
+      setProgressUnknown(false);
+      try {
+        const db = getFirebaseDb();
+        const years = [...new Set(tasks.map((t) => t.year))].sort((a, b) => a - b);
+        const snaps = await Promise.all(
+          years.map((y) =>
+            fetchYearDocs(dbIndexedQueryApi, collection(db, "reviewRecords"), {
+              indicatorId: row.indicatorId,
+              year: y,
+            }),
+          ),
+        );
+        if (cancelled) return;
+        const recs = snaps.flatMap((snap) =>
+          snap.docs.map((d) => {
+            const v = d.data() as Record<string, unknown>;
+            return {
+              id: d.id,
+              taskId: typeof v.taskId === "string" ? v.taskId : "",
+              indicatorId:
+                typeof v.indicatorId === "string" ? v.indicatorId : "",
+              unitId: typeof v.unitId === "string" ? v.unitId : "",
+              year: Number(v.year ?? 0),
+              month: Number(v.month ?? 0),
+              source: typeof v.source === "string" ? v.source : undefined,
+            };
+          }),
+        );
+        const dashTasks = tasks.map((t) => ({
+          id: t.id,
+          indicatorId: row.indicatorId,
+          unitId: t.unitId,
+          year: t.year,
+          month: t.month,
+        }));
+        setRecordCounts(countRecordsByTaskWithImports(recs, dashTasks));
+        const quotaTasks = tasks
+          .filter((t) => t.quotaVersion === 1 && t.quotaGroupId)
+          .map((t) => ({
+            id: t.id,
+            indicatorId: row.indicatorId,
+            unitId: t.unitId,
+            reviewerId: t.reviewerId,
+            year: t.year,
+            month: t.month,
+            caseCount: t.caseCount,
+            deadline: t.deadline,
+            status: "pending" as const,
+            doneCount: 0,
+            quotaVersion: 1 as const,
+            quotaGroupId: t.quotaGroupId,
+            quotaIntervalStartYear: t.quotaIntervalStartYear,
+            quotaIntervalStartMonth: t.quotaIntervalStartMonth,
+            quotaIntervalEndYear: t.quotaIntervalEndYear,
+            quotaIntervalEndMonth: t.quotaIntervalEndMonth,
+          }));
+        if (quotaTasks.length > 0) {
+          try {
+            const { counts, failedGroups } = await loadPeriodicQuotaCounts(
+              db,
+              quotaTasks,
+            );
+            if (cancelled) return;
+            setQuotaCounts(counts);
+            setQuotaFailed(failedGroups);
+          } catch {
+            if (!cancelled) {
+              setQuotaFailed(
+                new Set(quotaTasks.map((t) => t.quotaGroupId!)),
+              );
+            }
+          }
+        }
+      } catch {
+        if (!cancelled) setProgressUnknown(true);
+      } finally {
+        if (!cancelled) setProgressLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, tasks, row.indicatorId]);
+
+  // v1.88.4：追蹤列（配額感知計數＋狀態校正）→ 範圍過濾 → 篩選
+  const trackedRows = useMemo(
+    () =>
+      buildTrackedRows(tasks, recordCounts, quotaCounts, quotaFailed, progressUnknown),
+    [tasks, recordCounts, quotaCounts, quotaFailed, progressUnknown],
+  );
+  const scopedTrackedRows = useMemo(() => {
+    if (visibleUnitCodes == null) return trackedRows;
+    return trackedRows.filter(
+      (r) => visibleUnitCodes.has(r.unitId) || r.reviewerId === viewerStaffId,
+    );
+  }, [trackedRows, visibleUnitCodes, viewerStaffId]);
+  const trackUnitOptions = useMemo(
+    () =>
+      [...new Set(scopedTrackedRows.map((r) => r.unitId))].sort((a, b) =>
+        a.localeCompare(b, "zh-Hant"),
+      ),
+    [scopedTrackedRows],
+  );
+  const filteredTrackedRows = useMemo(
+    () =>
+      scopedTrackedRows.filter(
+        (r) =>
+          (!trackUnit || r.unitId === trackUnit) &&
+          (!trackStatus || r.status === trackStatus),
+      ),
+    [scopedTrackedRows, trackUnit, trackStatus],
+  );
+  const trackSummary = useMemo(() => {
+    let done = 0;
+    let pending = 0;
+    let locked = 0;
+    for (const r of scopedTrackedRows) {
+      if (r.status === "done") done += 1;
+      else if (r.status === "locked") locked += 1;
+      else pending += 1;
+    }
+    return { total: scopedTrackedRows.length, done, pending, locked };
+  }, [scopedTrackedRows]);
+  /** 分工表審查員小計（本期已審／應審；只計可見範圍內任務） */
+  const subtotals = useMemo(
+    () => reviewerSubtotals(scopedTrackedRows),
+    [scopedTrackedRows],
+  );
 
   // 臨時排程：審核員由任務推導（臨時排程不存分工表）
   const tempReviewers = useMemo(() => {
@@ -3247,10 +3528,18 @@ function ScheduleDetailModal({
               </tr>
             </thead>
             <tbody>
-              {assignment.items.map((it) => (
+              {assignment.items.map((it) => {
+                const sub = subtotals.get(it.reviewerId);
+                return (
                 <tr key={it.reviewerId}>
                   <td data-label="審查員">
                     <b>{staffLabel(it.reviewerId, usersMap.get(it.reviewerId) ?? "")}</b>
+                    {sub && (
+                      <div className="muted-text">
+                        本期{sub.done == null ? "—" : sub.done}/{sub.required}
+                        {sub.unknown ? "（部分進度未知）" : ""}
+                      </div>
+                    )}
                   </td>
                   <td data-label="負責單位">
                     {it.unlimitedUnits === true
@@ -3260,12 +3549,99 @@ function ScheduleDetailModal({
                           .join("、")}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
       ) : (
         <p className="settings-note">尚未設定分工表</p>
+      )}
+
+      <SectionTitle
+        title="任務追蹤／審查進度"
+        note="每列一筆任務（指標×月×單位×審查員）；已審件數為配額感知計數，週期共用配額以整組區間計、匯入紀錄亦計入。只顯示您可見範圍內的任務。"
+      />
+      {loading || progressLoading ? (
+        <p className="settings-note" role="status">讀取任務進度中…</p>
+      ) : scopedTrackedRows.length === 0 ? (
+        <p className="settings-note">
+          {tasks.length === 0 ? "此排程尚無任務。" : "您的可見範圍內尚無任務。"}
+        </p>
+      ) : (
+        <>
+          <FilterPanel title="追蹤篩選">
+            <FormSelect label="單位" value={trackUnit} onChange={(e) => setTrackUnit(e.target.value)}>
+              <option value="">全部單位</option>
+              {trackUnitOptions.map((code) => (
+                <option key={code} value={code}>
+                  {code === "" ? "NA（不限單位）" : `${unitNameOf(code)}（${code}）`}
+                </option>
+              ))}
+            </FormSelect>
+            <FormSelect label="狀態" value={trackStatus} onChange={(e) => setTrackStatus(e.target.value)}>
+              <option value="">全部狀態</option>
+              <option value="pending">待完成</option>
+              <option value="done">已完成</option>
+              <option value="locked">逾期鎖定</option>
+            </FormSelect>
+          </FilterPanel>
+          <p className="settings-note">
+            共 {trackSummary.total} 筆任務・已完成 {trackSummary.done}・待完成 {trackSummary.pending}・逾期鎖定 {trackSummary.locked}
+            {progressUnknown ? "・部分進度因紀錄讀取失敗未知（顯示 —）" : ""}
+          </p>
+          {filteredTrackedRows.length === 0 ? (
+            <p className="settings-note">沒有符合篩選條件的任務。</p>
+          ) : (
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>年月／區間</th>
+                    <th>單位</th>
+                    <th>審查員</th>
+                    <th>應審</th>
+                    <th>已審</th>
+                    <th>進度</th>
+                    <th>狀態</th>
+                    <th>截止日</th>
+                    <th>完成時間</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredTrackedRows.map((r) => (
+                    <tr key={r.id}>
+                      <td data-label="年月／區間">
+                        {r.year}/{pad2(r.month)}
+                        {r.quotaInterval && (
+                          <div className="muted-text">
+                            共用配額 {r.quotaInterval.startYear}/{pad2(r.quotaInterval.startMonth)}–{r.quotaInterval.endYear}/{pad2(r.quotaInterval.endMonth)}
+                          </div>
+                        )}
+                      </td>
+                      <td data-label="單位">
+                        {r.unitId === "" ? "NA（不限單位）" : `${unitNameOf(r.unitId)}（${r.unitId}）`}
+                      </td>
+                      <td data-label="審查員">{staffLabel(r.reviewerId, usersMap.get(r.reviewerId) ?? "")}</td>
+                      <td data-label="應審">{r.required}</td>
+                      <td data-label="已審">{r.done == null ? "—" : r.done}</td>
+                      <td data-label="進度">{r.pct == null ? "—" : `${r.pct}%`}</td>
+                      <td data-label="狀態">
+                        <span className={`status-pill ${r.status === "done" ? "success" : r.status === "locked" ? "danger" : "muted"}`}>
+                          {taskStatusLabel(r.status)}
+                        </span>
+                      </td>
+                      <td data-label="截止日">{r.deadline || "—"}</td>
+                      <td data-label="完成時間">
+                        {r.status === "done" && r.completedAt ? formatIsoTs(r.completedAt) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
 
       <div className="form-actions">
@@ -3287,12 +3663,231 @@ function ScheduleDetailModal({
 }
 /* ================= 審查員／單位設定（v1.18：組別篩選＋搜尋多選） ================= */
 
+/* ================= 分工表批次匯入（v1.88.4；比照 GroupsPage BatchImporter 模式） =================
+ * 範本欄位：審查員職編／審查員姓名／負責單位（多單位以「、」分隔；填「不限單位」
+ * 為不限單位項目）。驗證走 lib/assignmentImport 純函式；匯入只寫進分工表 state，
+ * 須按「儲存分工表」才寫入 Firestore。
+ */
+function AssignmentBatchImporter({
+  reviewersByGroup,
+  usersMap,
+  reviewerRoleIds,
+  units,
+  onImport,
+  onAction,
+}: {
+  reviewersByGroup: Map<string, ReviewerLite[]>;
+  usersMap: Map<string, string>;
+  reviewerRoleIds: Set<string>;
+  units: UnitLite[];
+  onImport: (rows: ParsedAssignmentRow[]) => void;
+  onAction: (m: string) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState<ValidatedAssignmentRow[] | null>(null);
+  const [fileError, setFileError] = useState("");
+  const [result, setResult] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [readingFile, setReadingFile] = useState(false);
+
+  const lookup = useMemo(
+    () => ({
+      userNames: usersMap,
+      reviewerIds: new Set(
+        [...reviewersByGroup.values()].flat().map((r) => r.personId),
+      ),
+      reviewerRoleIds,
+      units: units.map((u) => ({ code: u.code, name: u.name })),
+    }),
+    [reviewersByGroup, usersMap, reviewerRoleIds, units],
+  );
+
+  function handlePick() {
+    setFileError("");
+    setResult("");
+    fileRef.current?.click();
+  }
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    setPreview(null);
+    setResult("");
+    setReadingFile(true);
+    try {
+      const rows = await readSheetFile(f);
+      if (rows.length === 0) {
+        setFileError("檔案為空");
+        return;
+      }
+      const head = rows[0].map((c) => c.trim());
+      const header = [...ASSIGNMENT_IMPORT_HEADER];
+      const matched =
+        head.length === header.length &&
+        head.every((h, i) => h === header[i]);
+      if (!matched) {
+        setFileError(
+          `標題列不符（應為：${header.join("、")}），請下載範例檔重新填寫`,
+        );
+        return;
+      }
+      const data = rows.slice(1);
+      if (data.length === 0) {
+        setFileError("檔案中沒有資料列");
+        return;
+      }
+      setPreview(validateAssignmentImportRows(data, lookup));
+    } catch (error) {
+      setFileError(`讀取檔案失敗：${toErrorMessage(error)}`);
+    } finally {
+      setReadingFile(false);
+    }
+  }
+
+  function handleConfirm() {
+    if (!preview) return;
+    const valid = preview.filter((p) => p.ok);
+    if (valid.length === 0) {
+      setFileError("沒有可匯入的資料列");
+      return;
+    }
+    setImporting(true);
+    setFileError("");
+    try {
+      const parsed = valid.map((p) => p.parsed!);
+      onImport(parsed);
+      const skipped = preview.length - valid.length;
+      const message = `匯入完成：${valid.length} 筆已加入分工表${skipped > 0 ? `，跳過 ${skipped} 筆（資料有誤）` : ""}；尚未儲存，儲存分工表後才寫入`;
+      setResult(message);
+      onAction(message);
+      setPreview(null);
+    } catch (error) {
+      setFileError(`匯入失敗：${toErrorMessage(error)}`);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  const okCount = preview?.filter((p) => p.ok).length ?? 0;
+
+  return (
+    <>
+      <div className="form-actions">
+        <button
+          className="button button-outline"
+          onClick={() => {
+            void downloadTemplate(ASSIGNMENT_IMPORT_SAMPLE_ROWS, "範本", "分工表匯入範例").then(
+              (fmt) => {
+                if (fmt === "csv")
+                  onAction("Excel 元件載入失敗，已改下載 CSV 範例檔");
+              },
+            );
+          }}
+        >
+          <Download size={14} />
+          下載範例檔
+        </button>
+        <button
+          className="button button-outline"
+          onClick={handlePick}
+          disabled={readingFile || importing}
+        >
+          <Upload size={14} />
+          批次上傳
+        </button>
+      </div>
+      <p className="settings-note batch-sample-note">
+        匯入只寫進分工表畫面，須按「儲存分工表」才寫入；審查件數仍在「排程／單位設定」中設定。
+      </p>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        hidden
+        onChange={handleFile}
+      />
+      {fileError && <div className="login-error">{fileError}</div>}
+      {readingFile && (
+        <p className="settings-note" role="status">
+          讀取檔案中…
+        </p>
+      )}
+      {result && <p className="settings-note">{result}</p>}
+      {preview && (
+        <section className="panel data-panel import-preview">
+          <div className="panel-inset">
+            <SectionTitle
+              title={`匯入預覽（共 ${preview.length} 筆，可匯入 ${okCount} 筆）`}
+              note="僅「通過」的資料列會被匯入"
+            />
+          </div>
+          <div className="table-scroll">
+            <table className="permission-table">
+              <thead>
+                <tr>
+                  <th>列</th>
+                  {[...ASSIGNMENT_IMPORT_HEADER].map((h) => (
+                    <th key={h}>{h}</th>
+                  ))}
+                  <th>狀態</th>
+                  <th>原因</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.map((p) => (
+                  <tr key={p.index}>
+                    <td>{p.index}</td>
+                    {[...ASSIGNMENT_IMPORT_HEADER].map((h, i) => (
+                      <td key={i}>
+                        {h === "審查員姓名"
+                          ? maskName(String(p.values[i] ?? ""))
+                          : (p.values[i] ?? "")}
+                      </td>
+                    ))}
+                    <td>
+                      <span
+                        className={`status-pill ${p.ok ? "success" : "danger"}`}
+                      >
+                        {p.ok ? "通過" : "錯誤"}
+                      </span>
+                    </td>
+                    <td>{p.error || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="panel-inset">
+            <div className="form-actions">
+              <button
+                className="button button-primary"
+                disabled={importing || okCount === 0}
+                onClick={handleConfirm}
+              >
+                {importing ? "匯入中…" : `確認匯入（${okCount} 筆）`}
+              </button>
+              <button
+                className="button button-outline"
+                onClick={() => setPreview(null)}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+    </>
+  );
+}
+
 function AssignmentEditor({
   indicatorId,
   reviewersByGroup,
   units,
   groupMap,
   usersMap,
+  reviewerRoleIds,
   inactiveIds,
   initial,
   canEdit,
@@ -3304,6 +3899,7 @@ function AssignmentEditor({
   units: UnitLite[];
   groupMap: Map<string, string>;
   usersMap: Map<string, string>;
+  reviewerRoleIds: Set<string>;
   inactiveIds: Set<string>;
   initial: IndicatorAssignment | null;
   canEdit: boolean;
@@ -3415,6 +4011,11 @@ function AssignmentEditor({
     setItems((prev) => prev.filter((it) => it.reviewerId !== reviewerId));
   }
 
+  // v1.88.4：批次匯入併入分工表 state（只改畫面，儲存時才寫入 Firestore）
+  function importAssignments(parsed: ParsedAssignmentRow[]) {
+    setItems((prev) => mergeImportedAssignments(prev, parsed));
+  }
+
   async function handleSave() {
     if (items.length === 0) {
       onAction("分工表尚無資料，請先加入審查員與單位");
@@ -3514,6 +4115,16 @@ function AssignmentEditor({
               <Plus size={15} /> 加入分工表
             </button>
           </div>
+        )}
+        {canEdit && (
+          <AssignmentBatchImporter
+            reviewersByGroup={reviewersByGroup}
+            usersMap={usersMap}
+            reviewerRoleIds={reviewerRoleIds}
+            units={units}
+            onImport={importAssignments}
+            onAction={onAction}
+          />
         )}
       </section>
 
