@@ -74,19 +74,23 @@ import {
 import { deriveRoleScope } from "../lib/roleDerivation";
 import {
   canDeleteLevel,
-  canonicalTitleName,
   groupByLevel,
   isSupervisorTitleName,
   levelIdByName,
+  nextInLevel,
+  nextOrderInLevel,
   nextLevelOrder,
+  seedOrderForRole,
+  seedOrderForTitle,
+  sortByOrder,
   sortedLevels,
-  subordinateTitleNames,
   type OrgLevel,
 } from "../lib/orgLevels";
 import {
   migrateOrgLevels,
   migrateTitleLevelsV187,
   migrateTitleLevelsV188,
+  migrateTitleRoleOrderV188,
 } from "../lib/levelMigration";
 import { wouldCreateUnitHistoryCycle } from "../lib/unitHistory";
 import {
@@ -134,6 +138,8 @@ interface TitleRow extends TitleFlags {
   name: string;
   /** v1.55.0：所屬層級 id（空＝未分層級） */
   levelId: string;
+  /** v1.88.8 補項：層級內順序（小在上；上下順序即階層，下屬鏈讀此欄位） */
+  order: number;
   userCount: number | null;
 }
 
@@ -157,6 +163,8 @@ interface RoleRow {
   name: string;
   /** v1.55.0：所屬層級 id（空＝未分層級） */
   levelId: string;
+  /** v1.88.8 補項：層級內順序（小在上；上下順序即階層，下屬鏈讀此欄位） */
+  order: number;
   /** 適用範圍（由層級推導：group＝群組角色；unit＝單位角色，v1.57.0 A3） */
   scope: RoleScope;
   memberCount: number | null;
@@ -168,6 +176,8 @@ interface OptionItem {
   scope?: RoleScope;
   /** v1.55.0：所屬層級 id（空＝未分層級） */
   levelId?: string;
+  /** v1.88.8 補項：層級內順序（小在上） */
+  order?: number;
 }
 
 interface GroupForm {
@@ -896,6 +906,7 @@ export function GroupsPage({
         name: r.name,
         scope: r.scope ?? "group",
         levelId: r.levelId ?? "",
+        order: r.order ?? Number.MAX_SAFE_INTEGER,
         memberCount:
           users.length > 0
             ? users.filter(
@@ -1037,18 +1048,28 @@ export function GroupsPage({
         }),
       );
       setRoleOptions(
-        snap.docs.map((d) => {
-          const data = d.data();
-          const name = typeof data.name === "string" ? data.name : d.id;
-          const m = meta.get(name);
-          return {
-            id: d.id,
-            name,
-            scope: m?.scope,
-            levelId:
-              typeof data.levelId === "string" ? data.levelId : "",
-          };
-        }),
+        snap.docs
+          .map((d) => {
+            const data = d.data();
+            const name = typeof data.name === "string" ? data.name : d.id;
+            const m = meta.get(name);
+            return {
+              id: d.id,
+              name,
+              scope: m?.scope,
+              levelId:
+                typeof data.levelId === "string" ? data.levelId : "",
+              // v1.88.8 補項：層級內順序（無欄位時以種子順序退回，再無則排最後）
+              order:
+                typeof data.order === "number"
+                  ? data.order
+                  : (seedOrderForRole(name) ?? Number.MAX_SAFE_INTEGER),
+            };
+          })
+          .sort(
+            (a, b) =>
+              a.order - b.order || a.name.localeCompare(b.name, "zh-Hant"),
+          ),
       );
     } catch (error) {
       setRoleOptions([]);
@@ -1179,7 +1200,13 @@ export function GroupsPage({
             name: typeof data.name === "string" ? data.name : "",
             levelId:
               typeof data.levelId === "string" ? data.levelId : "",
-            // 職稱主管層級旗標（有欄位時以欄位為準；舊資料無欄位時以名稱推導）
+            // v1.88.8 補項：層級內順序（無欄位時以種子順序退回，再無則排最後）
+            order:
+              typeof data.order === "number"
+                ? data.order
+                : (seedOrderForTitle(
+                    typeof data.name === "string" ? data.name : "",
+                  ) ?? Number.MAX_SAFE_INTEGER),
             ...legacyTitleFlags(
               typeof data.name === "string" ? data.name : "",
             ),
@@ -1200,7 +1227,11 @@ export function GroupsPage({
               : {}),
           };
         })
-        .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+        // v1.88.8 補項：層級內按 order 排（小在上），同 order 再按名稱
+        .sort(
+          (a, b) =>
+            a.order - b.order || a.name.localeCompare(b.name, "zh-Hant"),
+        );
       // 各職稱使用人數（僅管理員可查 users；舊人員無 titleId 者以職稱名稱比對）
       const titleCounts = new Map<string, number>();
       const legacyTitleCounts = new Map<string, number>();
@@ -1370,6 +1401,22 @@ export function GroupsPage({
                 onAction(`職稱層級併回完成：${parts188.join("、")}`);
             } catch (error) {
               onAction(`職稱層級併回失敗：${toErrorMessage(error)}`);
+            }
+            // v1.88.8 補項：職稱／角色順序回填（order 欄位初值；旗標防重跑）
+            try {
+              const resOrder = await migrateTitleRoleOrderV188(
+                getFirebaseDb(),
+                user.staffId,
+              );
+              const partsOrder: string[] = [];
+              if (resOrder.titlesBackfilled > 0)
+                partsOrder.push(`職稱順序回填 ${resOrder.titlesBackfilled} 筆`);
+              if (resOrder.rolesBackfilled > 0)
+                partsOrder.push(`角色順序回填 ${resOrder.rolesBackfilled} 筆`);
+              if (partsOrder.length > 0)
+                onAction(`職稱／角色順序回填完成：${partsOrder.join("、")}`);
+            } catch (error) {
+              onAction(`職稱／角色順序回填失敗：${toErrorMessage(error)}`);
             }
             await loadLevels();
             await loadTitles();
@@ -1692,6 +1739,8 @@ export function GroupsPage({
         batch.set(titleRef, {
           name,
           levelId: titleForm.levelId,
+          // v1.88.8 補項：層級內順序（新職稱排在該層最後）
+          order: nextOrderInLevel(titles, titleForm.levelId),
           // v1.40.5：職稱建立即寫入主管層級旗標，身分判斷不再比對名稱
           isUnitHead: titleForm.isUnitHead,
           isDistrictHead: titleForm.isDistrictHead,
@@ -2006,6 +2055,44 @@ export function GroupsPage({
       });
       await batch.commit();
       await loadLevels();
+    } catch (error) {
+      onAction(`排序失敗：${toErrorMessage(error)}`);
+    }
+  }
+
+  /** v1.88.8 補項：職稱／角色層級內排序（上移／下移）：同一層級內按
+   * (order, 名稱) 排好後交換位置，再把整層重編為 0..n-1 寫回
+   * （順便正規化重複／缺失的 order；上下順序即階層）。 */
+  async function handleItemMove(
+    target: "title" | "role",
+    id: string,
+    dir: 1 | -1,
+  ) {
+    if (!user) return;
+    const items = target === "title" ? titles : roleRows;
+    const current = items.find((t) => t.id === id);
+    if (!current) return;
+    const levelItems = sortByOrder(
+      items.filter((t) => (t.levelId ?? "") === (current.levelId ?? "")),
+    );
+    const idx = levelItems.findIndex((t) => t.id === id);
+    const swapIdx = idx + dir;
+    if (idx < 0 || swapIdx < 0 || swapIdx >= levelItems.length) return;
+    const next = [...levelItems];
+    [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+    try {
+      const db = getFirebaseDb();
+      const coll = target === "title" ? "titles" : "roles";
+      const batch = writeBatch(db);
+      next.forEach((item, i) => {
+        batch.update(doc(db, coll, item.id), {
+          order: i,
+          ...auditFields(user.staffId, false),
+        });
+      });
+      await batch.commit();
+      if (target === "title") await loadTitles();
+      else await loadRoles();
     } catch (error) {
       onAction(`排序失敗：${toErrorMessage(error)}`);
     }
@@ -2779,6 +2866,8 @@ export function GroupsPage({
         description: "",
         // v1.57.0 A3：不再寫入 category／kind；身分由名稱關鍵字、範圍由層級推導
         levelId: newRoleLevelId,
+        // v1.88.8 補項：層級內順序（新角色排在該層最後）
+        order: nextOrderInLevel(roleRows, newRoleLevelId),
         ...auditFields(user?.staffId ?? "", true),
       });
       batch.set(doc(collection(db, "auditLogs")), {
@@ -3119,15 +3208,17 @@ export function GroupsPage({
 
   // ================= 職稱下層／督導負責單位（v1.87.0） =================
 
-  /** v1.88.8：職稱下層職稱（按職稱順序對照，不再按層級 order——併層後
-   * 部級內無層級次序）。主任→副主任、副主任→督導、督導→單位清單
-   * （無人員下層）、護理長/副護理長→護理師＋護士、護理師／護士無下層。 */
+  /** v1.88.8 補項：職稱下層＝同層級內 order 緊鄰的下一個（讀 order，不寫死職稱名）。
+   * 部級最末（督導）無人員下層，其下屬為單位清單；護理長/副護理長→護理師、護理師→護士。 */
   function childTitlesFor(title: TitleRow): TitleRow[] {
-    return subordinateTitleNames(title.name)
-      .map((name) =>
-        titles.find((t) => canonicalTitleName(t.name) === name),
-      )
-      .filter((t): t is TitleRow => Boolean(t));
+    const next = nextInLevel(titles, title);
+    return next ? [next] : [];
+  }
+
+  /** v1.88.8 補項：角色下層＝同層級內 order 緊鄰的下一個（與職稱同規則）。 */
+  function childRolesFor(role: RoleRow): RoleRow[] {
+    const next = nextInLevel(roleRows, role);
+    return next ? [next] : [];
   }
 
   /** v1.87.0：督導負責單位（titleUnitCodes 對應的單位清單） */
@@ -3997,17 +4088,27 @@ export function GroupsPage({
 
 
   // ---- v1.55.0：職稱／角色按層級分組 ----
-  const sortedTitleRows = sortedRows(
-    titles,
-    listSortKey,
-    (row, key) => (key === "title-count" ? (row.userCount ?? -1) : row.name),
-  );
+  // v1.88.8 補項：未點本表欄位時按層級內 order 排（上下順序即階層）；
+  // 點了職稱名稱／使用人數才改按該欄位排（上移／下移只認 order，不認畫面列序）。
+  const sortedTitleRows =
+    listSortKey === "title-name" || listSortKey === "title-count"
+      ? sortedRows(
+          titles,
+          listSortKey,
+          (row, key) =>
+            key === "title-count" ? (row.userCount ?? -1) : row.name,
+        )
+      : sortByOrder(titles);
   const titleSections = groupByLevel(sortedTitleRows, titleLevels);
-  const sortedRoleRows = sortedRows(
-    roleRows,
-    listSortKey,
-    (row, key) => (key === "role-count" ? (row.memberCount ?? -1) : row.name),
-  );
+  const sortedRoleRows =
+    listSortKey === "role-name" || listSortKey === "role-count"
+      ? sortedRows(
+          roleRows,
+          listSortKey,
+          (row, key) =>
+            key === "role-count" ? (row.memberCount ?? -1) : row.name,
+        )
+      : sortByOrder(roleRows);
   const roleSections = groupByLevel(sortedRoleRows, roleLevels);
 
   /** 層級區段標題（層級名＋人數小計＋更名／排序／刪除；未分層級不顯示操作） */
@@ -4158,7 +4259,7 @@ export function GroupsPage({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {rows.map((row, i) => (
               <tr key={row.id}>
                 <td>
                   <b>{row.name}</b>
@@ -4168,6 +4269,20 @@ export function GroupsPage({
                 </td>
                 {isAdmin && (
                   <td>
+                    <button
+                      className="text-button"
+                      disabled={i === 0}
+                      onClick={() => handleItemMove("title", row.id, -1)}
+                    >
+                      上移
+                    </button>{" "}
+                    <button
+                      className="text-button"
+                      disabled={i === rows.length - 1}
+                      onClick={() => handleItemMove("title", row.id, 1)}
+                    >
+                      下移
+                    </button>{" "}
                     <button
                       className="text-button"
                       onClick={() => openTitleEdit(row.id)}
@@ -4212,7 +4327,7 @@ export function GroupsPage({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {rows.map((row, i) => (
               <tr key={row.id}>
                 <td>
                   <b>{row.name}</b>
@@ -4223,6 +4338,20 @@ export function GroupsPage({
                 <td>
                   {isAdmin ? (
                     <>
+                      <button
+                        className="text-button"
+                        disabled={i === 0}
+                        onClick={() => handleItemMove("role", row.id, -1)}
+                      >
+                        上移
+                      </button>{" "}
+                      <button
+                        className="text-button"
+                        disabled={i === rows.length - 1}
+                        onClick={() => handleItemMove("role", row.id, 1)}
+                      >
+                        下移
+                      </button>{" "}
                       <button
                         className="text-button"
                         onClick={() => openRoleEdit(row.id)}
@@ -4261,6 +4390,12 @@ export function GroupsPage({
     const roleLevel = roleLevels.find((l) => l.id === managingRole.levelId);
     const committeeLevel =
       managingRole.levelId === "rl-committee" || roleLevel?.name === "委員會";
+    // v1.88.8 補項：下層角色＝同層級內 order 緊鄰的下一個（與職稱同規則）
+    const childRoles = childRolesFor(managingRole);
+    const parentRoleName =
+      memberPage?.parent?.kind === "role"
+        ? (roleRows.find((r) => r.id === memberPage.parent!.id)?.name ?? "")
+        : "";
     const roleImportHeader =
       managingRole.scope === "unit" ? ROLE_MEMBER_UNIT_HEADER : ROLE_MEMBER_HEADER;
     const roleImportSample =
@@ -4442,12 +4577,40 @@ export function GroupsPage({
           removeLabel="批次移出"
           busy={roleBusy}
         />
+        {/* v1.88.8 補項：角色下層（同層級內 order 緊鄰的下一個；上在上管下在下） */}
+        {childRoles.length > 0 ? (
+          <div className="form-field">
+            <label className="field-label">下層成員管理</label>
+            <p className="settings-note">
+              加入即把人指定為下層角色。
+            </p>
+            <div className="form-actions">
+              {childRoles.map((child) => (
+                <button
+                  key={child.id}
+                  className="button button-outline"
+                  onClick={() =>
+                    onOpenMemberPage?.({
+                      kind: "role",
+                      id: child.id,
+                      parent: { kind: "role", id: managingRole.id },
+                    })
+                  }
+                >
+                  「{child.name}」成員管理
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <div className="form-actions">
           <button
             className="button button-outline"
             onClick={() => onBackToGroups?.()}
           >
-            返回人員管理
+            {parentRoleName
+              ? `返回「${parentRoleName}」成員管理`
+              : "返回人員管理"}
           </button>
         </div>
         </div>
@@ -4457,7 +4620,7 @@ export function GroupsPage({
 
   function renderTitleMemberPanel() {
     if (!managingTitle) return null;
-    // v1.88.8：下層職稱（按職稱順序；護理長/副護理長同時管護理師與護士）
+    // v1.88.8：下層職稱（同層級內 order 緊鄰的下一個；護理長/副護理長→護理師、護理師→護士）
     const childTitles = childTitlesFor(managingTitle);
     // v1.88.8：督導以職稱名稱認定（層級已併回部級，不再認層級 id）
     const isSupervisorTitle =
@@ -4499,7 +4662,7 @@ export function GroupsPage({
             removeLabel="批次移出"
             busy={titleBusy}
           />
-          {/* v1.88.8：職稱下層（按職稱順序；護理長/副護理長可同時管護理師與護士） */}
+          {/* v1.88.8 補項：職稱下層（同層級內 order 緊鄰的下一個；護理長/副護理長→護理師、護理師→護士） */}
           {childTitles.length > 0 ? (
             <div className="form-field">
               <label className="field-label">下層成員管理</label>

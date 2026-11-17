@@ -36,6 +36,8 @@ import {
   OLD_ROLE_REPLACEMENT,
   planHeadNurseMerge,
   roleLevelIdForName,
+  seedOrderForRole,
+  seedOrderForTitle,
   titleLevelIdForName,
 } from "./orgLevels";
 
@@ -46,6 +48,9 @@ export const TITLE_LEVELS_MIGRATION_MARKER = "configs/titleLevelsV187";
 
 /** v1.88.8：職稱層級併回遷移旗標（主任／副主任／督導／單位→部級／單位） */
 export const TITLE_LEVELS_V188_MIGRATION_MARKER = "configs/titleLevelsV188";
+
+/** v1.88.8 補項：職稱／角色順序回填遷移旗標（order 欄位初值） */
+export const TITLE_ROLE_ORDER_MIGRATION_MARKER = "configs/titleRoleOrderV188";
 
 export interface TitleLevelsMigrationResult {
   levelsCreated: string[];
@@ -569,6 +574,93 @@ export async function migrateTitleLevelsV187(
     if (deptSnap.exists()) {
       await deleteDoc(deptRef);
       result.deptLevelRemoved = true;
+    }
+  }
+
+  // 全部成功才寫旗標
+  await setDoc(markerRef, {
+    done: true,
+    migratedAt: serverTimestamp(),
+    migratedBy: staffId,
+  });
+  return result;
+}
+
+export interface TitleRoleOrderMigrationResult {
+  titlesBackfilled: number;
+  rolesBackfilled: number;
+}
+
+/**
+ * v1.88.8 補項：職稱／角色順序回填（order 欄位初值）。
+ *
+ * 僅補沒有 order 欄位的職稱／角色文件（已有 order 者不動，管理員調過的
+ * 順序不會被蓋掉）。同一層級內：定案清單上的名稱取種子順序
+ * （seedOrderForTitle／seedOrderForRole）；清單外的自訂名稱排在已知
+ * 名稱之後、按名稱排序；「護理部」變體與本名同階（鏈推導只認嚴格
+ * 更大的 order，同階變體不會成為下一個）。
+ *
+ * 防重跑：configs/titleRoleOrderV188 { done: true }；各步驟本身具等冪性，
+ * 旗標只在全部成功後才寫入，失敗時下次開頁重試。
+ */
+export async function migrateTitleRoleOrderV188(
+  db: any,
+  staffId: string,
+): Promise<TitleRoleOrderMigrationResult> {
+  const markerRef = doc(db, TITLE_ROLE_ORDER_MIGRATION_MARKER);
+  const markerSnap = await getDoc(markerRef);
+  if (markerSnap.exists() && markerSnap.data()?.done === true) {
+    return { titlesBackfilled: 0, rolesBackfilled: 0 };
+  }
+
+  const result: TitleRoleOrderMigrationResult = {
+    titlesBackfilled: 0,
+    rolesBackfilled: 0,
+  };
+
+  for (const [coll, seedFn, key] of [
+    ["titles", seedOrderForTitle, "titlesBackfilled"],
+    ["roles", seedOrderForRole, "rolesBackfilled"],
+  ] as const) {
+    const snap = await getDocsFromServer(collection(db, coll));
+    const docs = snap.docs.map((d) => {
+      const data = d.data() as Record<string, unknown>;
+      return {
+        id: d.id,
+        name: typeof data.name === "string" ? data.name : "",
+        levelId: typeof data.levelId === "string" ? data.levelId : "",
+        order: typeof data.order === "number" ? data.order : undefined,
+      };
+    });
+    // 按層級分組；組內按（種子順序、名稱）排
+    const byLevel = new Map<string, typeof docs>();
+    for (const docItem of docs) {
+      const list = byLevel.get(docItem.levelId) ?? [];
+      list.push(docItem);
+      byLevel.set(docItem.levelId, list);
+    }
+    for (const group of byLevel.values()) {
+      const knownMax = group.reduce(
+        (max, docItem) => Math.max(max, seedFn(docItem.name) ?? -1),
+        -1,
+      );
+      let unknownIdx = 0;
+      const sorted = [...group].sort(
+        (a, b) =>
+          (seedFn(a.name) ?? Number.POSITIVE_INFINITY) -
+            (seedFn(b.name) ?? Number.POSITIVE_INFINITY) ||
+          a.name.localeCompare(b.name, "zh-Hant"),
+      );
+      for (const docItem of sorted) {
+        if (docItem.order !== undefined) continue;
+        const seed = seedFn(docItem.name);
+        const order = seed ?? knownMax + 1 + unknownIdx++;
+        await updateDoc(doc(db, coll, docItem.id), {
+          order,
+          ...auditFields(staffId, false),
+        });
+        result[key] += 1;
+      }
     }
   }
 

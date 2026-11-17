@@ -69,22 +69,103 @@ export function titleLevelIdForName(name: string): string {
 export const MERGED_HEAD_NURSE_TITLE = "護理長/副護理長";
 
 /**
- * 職稱下屬對照（v1.88.8：按職稱順序，不按層級 order——併層後部級內無層級次序）。
- * 主任→副主任、副主任→督導、督導→單位清單（無人員下層，由 titleUnitCodes 處理）、
- * 護理長/副護理長→護理師＋護士、護理師／護士為末端。
+ * 層級內排序（v1.88.8 補項）：order 小在上；無 order 者排最後，再按名稱。
+ * order 是職稱／角色文件上的欄位，由管理員在頁面以上移／下移調整，
+ * 層級內的上下順序即階層（組織由大到小、同一層級內上管下）。
  */
-export const TITLE_SUBORDINATES: Record<string, string[]> = {
-  主任: ["副主任"],
-  副主任: ["督導"],
-  督導: [],
-  "護理長/副護理長": ["護理師", "護士"],
-  護理師: [],
-  護士: [],
+export interface OrderableItem {
+  id: string;
+  name: string;
+  levelId?: string;
+  order?: number;
+}
+
+export function sortByOrder<T extends { order?: number; name: string }>(
+  items: T[],
+): T[] {
+  return [...items].sort(
+    (a, b) =>
+      (a.order ?? Number.POSITIVE_INFINITY) -
+        (b.order ?? Number.POSITIVE_INFINITY) ||
+      a.name.localeCompare(b.name, "zh-Hant"),
+  );
+}
+
+/**
+ * 同層級內的下一個（v1.88.8 補項：下屬鏈改讀 order，不寫死職稱名）。
+ * 同 levelId 且 order 嚴格大於本項者中 order 最小者（同 order 者以名稱排序取先）；
+ * 無更大 order 者回傳 undefined（該項為該層最末，下屬另議——督導→單位清單）。
+ */
+export function nextInLevel<T extends OrderableItem>(
+  items: T[],
+  current: T,
+): T | undefined {
+  const cur = current.order ?? Number.POSITIVE_INFINITY;
+  const candidates = items.filter(
+    (t) =>
+      t.id !== current.id &&
+      (t.levelId ?? "") === (current.levelId ?? "") &&
+      (t.order ?? Number.POSITIVE_INFINITY) > cur,
+  );
+  if (candidates.length === 0) return undefined;
+  return sortByOrder(candidates)[0];
+}
+
+/** 同層級內新增項目的 order（現有最大值＋1；無有效值時為 0） */
+export function nextOrderInLevel(
+  items: Array<{ levelId?: string; order?: number }>,
+  levelId: string,
+): number {
+  const orders = items
+    .filter((t) => (t.levelId ?? "") === levelId)
+    .map((t) => t.order ?? Number.NEGATIVE_INFINITY)
+    .filter((o) => Number.isFinite(o) && o < Number.MAX_SAFE_INTEGER);
+  return orders.length === 0 ? 0 : Math.max(...orders) + 1;
+}
+
+/**
+ * 順序初值對照（v1.88.8 補項：僅供遷移回填與載入退回的一次性初值；
+ * 鏈的推導只讀 order 欄位，不讀名稱。管理員之後以頁面上移／下移調整，
+ * 調整後 order 即為準）。
+ * 部級：主任 0、副主任 1、督導 2（「護理部」變體與本名同階）；
+ * 單位：護理長/副護理長 0、護理師 1、護士 2。
+ */
+export const TITLE_SEED_ORDER: Record<string, number> = {
+  主任: 0,
+  副主任: 1,
+  督導: 2,
+  護理部主任: 0,
+  護理部副主任: 1,
+  護理部督導: 2,
+  "護理長/副護理長": 0,
+  護理長: 0,
+  副護理長: 0,
+  護理師: 1,
+  護士: 2,
 };
 
-/** 某職稱的下層職稱名（正規名；督導回空陣列——其下屬是單位清單） */
-export function subordinateTitleNames(name: string): string[] {
-  return [...(TITLE_SUBORDINATES[canonicalTitleName(name)] ?? [])];
+export function seedOrderForTitle(name: string): number | undefined {
+  return TITLE_SEED_ORDER[name] ?? TITLE_SEED_ORDER[canonicalTitleName(name)];
+}
+
+/** 角色順序初值（委員會／品管組／單位三層，依 2026-11-12 定案清單順序） */
+export const ROLE_SEED_ORDER: Record<string, number> = {
+  委員會召集人: 0,
+  委員會執行秘書: 1,
+  委員會執行幹事: 2,
+  品管組召集人: 0,
+  品管組副召集人: 1,
+  品管組執行幹事: 2,
+  品管組組長: 3,
+  品管組審查員: 4,
+  單位召集人: 0,
+  單位執行幹事: 1,
+  單位組長: 2,
+  單位審查員: 3,
+};
+
+export function seedOrderForRole(name: string): number | undefined {
+  return ROLE_SEED_ORDER[name];
 }
 
 /** 是否為督導職稱（正規名為「督導」；含「護理部督導」變體） */
