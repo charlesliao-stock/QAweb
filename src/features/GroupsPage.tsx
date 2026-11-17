@@ -2049,6 +2049,13 @@ export function GroupsPage({
     const row = userForm.memberships.find((m) => m.groupId === groupId);
     if (!row) return;
     setMembershipAddGroupId(row.groupId);
+    // v1.88.1：編輯委員會列（groupId "ALL"）時把層級帶回委員會，加入區不顯示品管組下拉
+    if (groupId === COMMITTEE_GROUP_ID) {
+      const committeeLevel = roleLevels.find(
+        (l) => l.id === "rl-committee" || l.name === "委員會",
+      );
+      if (committeeLevel) setMembershipAddLevelId(committeeLevel.id);
+    }
     setMembershipAddRoles([...row.roles]);
     setMembershipEditingGroupId(groupId);
     setMembershipError("");
@@ -2058,9 +2065,16 @@ export function GroupsPage({
     resetMembershipAddArea();
   }
 
+  /** v1.88.1：委員會在品管組之上（層級 id rl-committee 或層級名「委員會」），選委員會層級不選品管組 */
+  const membershipAddIsCommittee =
+    membershipAddLevelId === "rl-committee" ||
+    roleLevels.find((l) => l.id === membershipAddLevelId)?.name === "委員會";
+
   /** [加入]／[更新]：加入時同群組合併、零勾選擋下；編輯到零角色刪列 */
   function handleMembershipAddOrUpdate() {
-    if (!membershipAddGroupId) {
+    // v1.88.1：委員會層級以 groupId "ALL" 登記一列，不要求選品管組（與 v1.87.0 角色成員管理頁一致）
+    const gid = membershipAddIsCommittee ? COMMITTEE_GROUP_ID : membershipAddGroupId;
+    if (!gid) {
       setMembershipError("請先選擇品管組");
       return;
     }
@@ -2072,11 +2086,11 @@ export function GroupsPage({
       ...prev,
       memberships:
         membershipEditingGroupId === null
-          ? mergeMembership(prev.memberships, membershipAddGroupId, membershipAddRoles)
+          ? mergeMembership(prev.memberships, gid, membershipAddRoles)
           : applyMembershipEdit(
               prev.memberships,
               membershipEditingGroupId,
-              membershipAddGroupId,
+              gid,
               membershipAddRoles,
             ),
     }));
@@ -5988,8 +6002,16 @@ export function GroupsPage({
           <div className="user-form-fields">
             <FormSelect label="層級" value={membershipAddLevelId}
                   onChange={(e) => {
-                    setMembershipAddLevelId(e.target.value);
+                    const next = e.target.value;
+                    setMembershipAddLevelId(next);
                     setMembershipAddRoleName("");
+                    // v1.88.1：切到委員會層級不選品管組，清掉殘留的品管組選擇
+                    if (
+                      next === "rl-committee" ||
+                      roleLevels.find((l) => l.id === next)?.name === "委員會"
+                    ) {
+                      setMembershipAddGroupId("");
+                    }
                   }}>
                   <option value="">請選擇層級</option>
                   {roleLevels.map((l) => (
@@ -5999,6 +6021,8 @@ export function GroupsPage({
                   ))}
                   <option value="__ungrouped__">未分層級</option>
                 </FormSelect>
+            {/* v1.88.1：委員會在品管組之上，選委員會層級不顯示品管組下拉、不要求選擇 */}
+            {!membershipAddIsCommittee && (
             <FormSelect label="品管組" value={membershipAddGroupId}
                   onChange={(e) => {
                     // v1.51.0：切換群組不得清空已勾角色（加入區群組與角色為獨立 state）
@@ -6012,6 +6036,7 @@ export function GroupsPage({
                     </option>
                   ))}
                 </FormSelect>
+            )}
             <FormSelect label="角色" value={membershipAddRoleName}
                   disabled={!membershipAddLevelId}
                   onChange={(e) => {
