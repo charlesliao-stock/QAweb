@@ -7,7 +7,7 @@ import {
   hasPendingEditRequest,
 } from "../lib/editRequests";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { ArrowLeft, Camera, Check, ChevronLeft, ChevronRight, ListChecks, Pencil, ScanLine } from "lucide-react";
+import { ArrowLeft, Camera, Check, ChevronLeft, ChevronRight, ListChecks, Pencil } from "lucide-react";
 import {
   collection,
   doc,
@@ -2219,7 +2219,7 @@ export function ReviewExecutePage({
                           onClick={() => setPersonBarcodeOpen(true)}
                           aria-label="掃描受審人員職編條碼或 QR Code"
                         >
-                          <ScanLine size={17} />
+                          <Camera size={21} strokeWidth={2.5} />
                           <span>掃描職編</span>
                         </button>
                       </div>
