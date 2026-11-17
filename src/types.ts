@@ -8,6 +8,7 @@ export type PageId =
   | "role-members"
   | "title-members"
   | "group-units"
+  | "unit-members"
   | "handoff"
   | "capa"
   | "admin"

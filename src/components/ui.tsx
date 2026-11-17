@@ -60,6 +60,11 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
       title: "群組單位管理",
       description: "管理此群組的所屬單位",
     },
+    // v1.86.1：單位成員管理獨立頁（由人員管理的單位頁籤「成員管理」按鈕跳轉進入）
+    "unit-members": {
+      title: "單位成員管理",
+      description: "管理此單位的成員（加入／移出）",
+    },
     handoff: {
       title: "任務交接",
       description: "將原審查員尚未完成的品管審查任務交接給新審查員",

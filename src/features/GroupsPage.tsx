@@ -94,9 +94,9 @@ import type { PageId } from "../types";
 type Tab = "users" | "units" | "roles" | "titles" | "groups";
 export type GroupsTab = Tab;
 
-/** v1.86.0：成員／單位管理獨立頁的目標（角色／職稱／群組各一頁） */
+/** v1.86.0：成員／單位管理獨立頁的目標（角色／職稱／群組各一頁）；v1.86.1：單位也改跳獨立頁 */
 export interface OrgMemberTarget {
-  kind: "role" | "title" | "group";
+  kind: "role" | "title" | "group" | "unit";
   id: string;
 }
 
@@ -758,8 +758,10 @@ export function GroupsPage({
   const [roleAddChecked, setRoleAddChecked] = useState<string[]>([]);
   const [roleBusy, setRoleBusy] = useState(false);
 
-  // ---- 單位成員管理（v1.21） ----
-  const [managingUnitCode, setManagingUnitCode] = useState("");
+  // ---- 單位成員管理（v1.21；v1.86.1：只在獨立頁由 memberPage 帶入）
+  const [managingUnitCode] = useState(
+    memberPage?.kind === "unit" ? memberPage.id : "",
+  );
   const [unitMemberChecked, setUnitMemberChecked] = useState<string[]>([]);
   const [unitAddSearch, setUnitAddSearch] = useState("");
   const [unitBusy, setUnitBusy] = useState(false);
@@ -3972,6 +3974,94 @@ export function GroupsPage({
     );
   }
 
+  /** v1.86.1：單位成員管理改跳獨立頁（原內嵌面板已移入 renderUnitMemberPanel） */
+  function renderUnitMemberPanel() {
+    if (!managingUnitCode) return null;
+    return (
+      <section className="panel data-panel">
+        <div className="panel-inset divided">
+          <MemberChecklist
+            title={`單位 ${managingUnitCode} 的成員`}
+            note="加入／移除人員（改 person.unitCode）"
+            items={unitMembers.map((u) => ({
+              id: u.staffId,
+              label: maskName(u.name),
+              sub: u.title || undefined,
+            }))}
+            checked={unitMemberChecked}
+            onToggle={(id, next) =>
+              setUnitMemberChecked((prev) =>
+                next ? [...prev, id] : prev.filter((x) => x !== id),
+              )
+            }
+            onToggleAll={(next) =>
+              setUnitMemberChecked(
+                next ? unitMembers.map((u) => u.staffId) : [],
+              )
+            }
+            onRemoveSelected={handleUnitMembersRemove}
+            removeLabel="批次移出"
+            busy={unitBusy}
+          />
+          <div className="form-field" style={{ maxWidth: 320 }}>
+            <label className="field-label">加入人員</label>
+            <input
+              className="text-input"
+              placeholder="輸入職編或姓名搜尋"
+              value={unitAddSearch}
+              onChange={(e) => setUnitAddSearch(e.target.value)}
+            />
+          </div>
+          {unitAddSearch.trim() !== "" &&
+            (unitCandidates.length === 0 ? (
+              <p className="settings-note">無符合的在職人員。</p>
+            ) : (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>職編</th>
+                      <th>姓名</th>
+                      <th>所屬單位</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {unitCandidates.map((u) => (
+                      <tr key={u.staffId}>
+                        <td>{u.staffId}</td>
+                        <td>{maskName(u.name)}</td>
+                        <td>{u.unitCode || "—"}</td>
+                        <td>
+                          <button
+                            className="text-button"
+                            disabled={unitBusy}
+                            onClick={() =>
+                              handleUnitMemberAdd(u.staffId)
+                            }
+                          >
+                            <Plus size={13} /> 加入
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          <div className="form-actions">
+            <button
+              className="button button-outline"
+              onClick={() => onBackToGroups?.()}
+            >
+              返回人員管理
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   // ================= 版面 =================
 
   const isGroupEditing = groupView.kind === "edit";
@@ -4015,12 +4105,16 @@ export function GroupsPage({
         ? "role-members"
         : memberPage.kind === "title"
           ? "title-members"
-          : "group-units";
+          : memberPage.kind === "group"
+            ? "group-units"
+            : "unit-members";
     const targetMissing =
       (memberPage.kind === "role" && !managingRole) ||
       (memberPage.kind === "title" && !managingTitle) ||
       (memberPage.kind === "group" &&
-        !groups.some((g) => g.id === memberPage.id));
+        !groups.some((g) => g.id === memberPage.id)) ||
+      (memberPage.kind === "unit" &&
+        !units.some((u) => u.code === memberPage.id));
     return (
       <>
         <button
@@ -4042,14 +4136,16 @@ export function GroupsPage({
         ) : targetMissing ? (
           <EmptyState
             title="找不到此項目"
-            description="該角色／職稱／群組可能已被刪除，請返回人員管理重新選擇。"
+            description="該角色／職稱／群組／單位可能已被刪除，請返回人員管理重新選擇。"
           />
         ) : memberPage.kind === "role" ? (
           renderRoleMemberPanel()
         ) : memberPage.kind === "title" ? (
           renderTitleMemberPanel()
-        ) : (
+        ) : memberPage.kind === "group" ? (
           renderGroupUnitPanel()
+        ) : (
+          renderUnitMemberPanel()
         )}
       </>
     );
@@ -4447,15 +4543,12 @@ export function GroupsPage({
                           {isAdmin && (
                             <button
                               className="text-button"
-                              onClick={() => {
-                                setManagingUnitCode(
-                                  managingUnitCode === row.code
-                                    ? ""
-                                    : row.code,
-                                );
-                                setUnitMemberChecked([]);
-                                setUnitAddSearch("");
-                              }}
+                              onClick={() =>
+                                onOpenMemberPage?.({
+                                  kind: "unit",
+                                  id: row.code,
+                                })
+                              }
                             >
                               成員管理
                             </button>
@@ -4473,87 +4566,6 @@ export function GroupsPage({
                 </tbody>
               </table>
             </div>
-            {managingUnitCode && isAdmin && (
-              <div className="panel-inset divided">
-                <MemberChecklist
-                  title={`單位 ${managingUnitCode} 的成員`}
-                  note="加入／移除人員（改 person.unitCode）"
-                  items={unitMembers.map((u) => ({
-                    id: u.staffId,
-                    label: maskName(u.name),
-                    sub: u.title || undefined,
-                  }))}
-                  checked={unitMemberChecked}
-                  onToggle={(id, next) =>
-                    setUnitMemberChecked((prev) =>
-                      next ? [...prev, id] : prev.filter((x) => x !== id),
-                    )
-                  }
-                  onToggleAll={(next) =>
-                    setUnitMemberChecked(
-                      next ? unitMembers.map((u) => u.staffId) : [],
-                    )
-                  }
-                  onRemoveSelected={handleUnitMembersRemove}
-                  removeLabel="批次移出"
-                  busy={unitBusy}
-                />
-                <div className="form-field" style={{ maxWidth: 320 }}>
-                  <label className="field-label">加入人員</label>
-                  <input
-                    className="text-input"
-                    placeholder="輸入職編或姓名搜尋"
-                    value={unitAddSearch}
-                    onChange={(e) => setUnitAddSearch(e.target.value)}
-                  />
-                </div>
-                {unitAddSearch.trim() !== "" &&
-                  (unitCandidates.length === 0 ? (
-                    <p className="settings-note">無符合的在職人員。</p>
-                  ) : (
-                    <div className="table-scroll">
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>職編</th>
-                            <th>姓名</th>
-                            <th>所屬單位</th>
-                            <th>操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {unitCandidates.map((u) => (
-                            <tr key={u.staffId}>
-                              <td>{u.staffId}</td>
-                              <td>{maskName(u.name)}</td>
-                              <td>{u.unitCode || "—"}</td>
-                              <td>
-                                <button
-                                  className="text-button"
-                                  disabled={unitBusy}
-                                  onClick={() =>
-                                    handleUnitMemberAdd(u.staffId)
-                                  }
-                                >
-                                  <Plus size={13} /> 加入
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ))}
-                <div className="form-actions">
-                  <button
-                    className="button button-outline"
-                    onClick={() => setManagingUnitCode("")}
-                  >
-                    關閉
-                  </button>
-                </div>
-              </div>
-            )}
 
           </section>
         )

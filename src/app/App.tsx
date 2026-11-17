@@ -609,7 +609,9 @@ function Shell() {
       ? "role-members"
       : memberTarget.kind === "title"
         ? "title-members"
-        : "group-units"
+        : memberTarget.kind === "group"
+          ? "group-units"
+          : "unit-members"
     : null;
   const openMemberPage = useCallback((target: OrgMemberTarget) => {
     setMemberTarget(target);
@@ -618,7 +620,9 @@ function Shell() {
         ? "role-members"
         : target.kind === "title"
           ? "title-members"
-          : "group-units",
+          : target.kind === "group"
+            ? "group-units"
+            : "unit-members",
     );
   }, []);
   const closeMemberPage = useCallback(() => {

@@ -14,6 +14,7 @@ export const PAGE_PERMISSION_KEYS = {
   "role-members": "page.groups",
   "title-members": "page.groups",
   "group-units": "page.groups",
+  "unit-members": "page.groups",
   handoff: "page.handoff",
   admin: "page.admin",
   permissions: "page.permissions",
