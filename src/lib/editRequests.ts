@@ -16,6 +16,7 @@ import {
   writeBatch,
 } from "./db";
 import { SUMMARY_COLLECTION } from "./summaryStore";
+import { stripInternalIdPrefix } from "./indicators";
 import { writeAuditLog } from "./audit";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -127,7 +128,7 @@ export async function createEditRequest(
     action: "申請修改已封存審查結果",
     targetType: "reviewRecord",
     targetId: req.recordId,
-    detail: `指標「${req.indicatorId}」／單位「${req.unitId}」；異動欄位：${Object.keys(req.changes).join("、")}；原因：${req.reason}`,
+    detail: `指標「${stripInternalIdPrefix(req.indicatorId)}」／單位「${req.unitId}」；異動欄位：${Object.keys(req.changes).join("、")}；原因：${req.reason}`,
     createdAt: serverTimestamp(),
   });
   await batch.commit();
@@ -213,7 +214,7 @@ export async function approveEditRequest(
     action: "核准修改已封存審查結果",
     targetType: "reviewRecord",
     targetId: req.recordId,
-    detail: `申請人 ${req.requestedByName}；指標「${req.indicatorId}」／單位「${req.unitId}」；異動欄位：${Object.keys(req.changes).join("、")}`,
+    detail: `申請人 ${req.requestedByName}；指標「${stripInternalIdPrefix(req.indicatorId)}」／單位「${req.unitId}」；異動欄位：${Object.keys(req.changes).join("、")}`,
     before: Object.fromEntries(Object.entries(req.changes).map(([k, v]) => [k, v.before])),
     after: Object.fromEntries(Object.entries(req.changes).map(([k, v]) => [k, v.after])),
     createdAt: serverTimestamp(),

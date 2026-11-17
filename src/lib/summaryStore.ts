@@ -14,7 +14,7 @@ import {
 } from "./db";
 import { dbIndexedQueryApi, fetchIndicatorMonths } from "./indexedRecords";
 import { writeAuditLog } from "./audit";
-import { effectiveThreshold, normalizeQuestions } from "./indicators";
+import { effectiveThreshold, normalizeQuestions, stripInternalIdPrefix } from "./indicators";
 import type { AnalysisRecord } from "./analysisRates";
 import {
   buildReviewSummary,
@@ -186,7 +186,7 @@ export async function archiveInterval(
     action: "封存摘要",
     targetType: "reviewSummary",
     targetId: id,
-    detail: `${target.indicatorId}・${target.start.year}/${target.start.month}～${target.end.year}/${target.end.month}：${records.length} 筆紀錄`,
+    detail: `${stripInternalIdPrefix(target.indicatorId)}・${target.start.year}/${target.start.month}～${target.end.year}/${target.end.month}：${records.length} 筆紀錄`,
   }).catch(() => undefined);
   return {
     ...summary,

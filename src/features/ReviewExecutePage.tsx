@@ -1590,7 +1590,7 @@ export function ReviewExecutePage({
             action: "修改正式審查結果",
             targetType: "reviewRecord",
             targetId: editId,
-            detail: `指標「${task.indicatorId}」／單位「${task.unitId}」；異動欄位：${Object.keys(changes).join("、")}`,
+            detail: `指標「${indicatorCodeOf(task.indicatorId)}」／單位「${task.unitId}」；異動欄位：${Object.keys(changes).join("、")}`,
             before: Object.fromEntries(Object.entries(changes).map(([key, value]) => [key, value.before])),
             after: Object.fromEntries(Object.entries(changes).map(([key, value]) => [key, value.after])),
             createdAt: serverTimestamp(),

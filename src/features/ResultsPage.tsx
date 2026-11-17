@@ -3264,7 +3264,7 @@ function ReviewResultManager({
           action: "批次刪除審查結果",
           targetType: "reviewRecords",
           targetId: `${start}～${end}・${chunk.length} 筆`,
-          detail: `篩選條件：單位 ${criteria.unitId ?? "全部"}；組別 ${criteria.groupId ?? "全部"}；指標 ${criteria.indicatorId ?? "全部"}；文件 ID：${chunk.join(", ")}`,
+          detail: `篩選條件：單位 ${criteria.unitId ?? "全部"}；組別 ${criteria.groupId ?? "全部"}；指標 ${criteria.indicatorId ? stripInternalIdPrefix(criteria.indicatorId) : "全部"}；文件 ID：${chunk.join(", ")}`,
           criteria,
           documentIds: chunk,
           count: chunk.length,
