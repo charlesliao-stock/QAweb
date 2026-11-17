@@ -79,6 +79,7 @@ import {
   saveSchedule,
   scheduleReviewCalendarMonths,
   scheduleSetupComplete,
+  UNCATEGORIZED_GROUP_ID,
   YEAR_FILTER_OPTIONS,
   yearOptionLabel,
   type AssignmentItem,
@@ -107,6 +108,12 @@ function fmtTs(ts: unknown): string {
     /* ignore */
   }
   return "—";
+}
+
+/** v1.88.3：組別 id 轉顯示名稱；審查員名單的未分類顯示為「未分類」，而非原始 id */
+function groupDisplayName(groupMap: Map<string, string>, gid: string): string {
+  if (gid === UNCATEGORIZED_GROUP_ID) return "未分類";
+  return groupMap.get(gid) ?? gid;
 }
 
 /** 排程 → 全部審查曆年月（起始月＋區間月數展開；v1.23） */
@@ -2196,7 +2203,7 @@ function AddAuditDialog({
         .map(([id, m]) => ({
           id,
           label: staffLabel(id, m.name),
-          sub: m.groupId ? (groupMap.get(m.groupId) ?? m.groupId) : "分工表",
+          sub: m.groupId ? groupDisplayName(groupMap, m.groupId) : "分工表",
           groupId: m.groupId,
         }))
         .sort((a, b) => a.id.localeCompare(b.id, "zh-Hant")),
@@ -2208,7 +2215,7 @@ function AddAuditDialog({
       units.map((u) => ({
         id: u.code,
         label: `${u.name}（${u.code}）`,
-        sub: groupMap.get(u.groupId) ?? u.groupId,
+        sub: groupDisplayName(groupMap, u.groupId),
         groupId: u.groupId,
       })),
     [units, groupMap],
@@ -3328,7 +3335,7 @@ function AssignmentEditor({
         out.push({
           id: r.personId,
           label: staffLabel(r.personId, r.name),
-          sub: groupMap.get(gid) ?? gid,
+          sub: groupDisplayName(groupMap, gid),
           groupId: gid,
         });
       }
@@ -3341,7 +3348,7 @@ function AssignmentEditor({
       units.map((u) => ({
         id: u.code,
         label: `${u.name}（${u.code}）`,
-        sub: groupMap.get(u.groupId) ?? u.groupId,
+        sub: groupDisplayName(groupMap, u.groupId),
         groupId: u.groupId,
       })),
     [units, groupMap],

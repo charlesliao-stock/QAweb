@@ -3524,6 +3524,7 @@ export function GroupsPage({
     const committeeLevel =
       role.levelId === "rl-committee" || roleLevel?.name === "委員會";
     const ops: Array<(b: WriteBatch) => void> = [];
+    const finalRoles: { staffId: string; roles: string[] }[] = [];
     let count = 0;
     for (const r of rows) {
       const staffId = (r.values[0] ?? "").trim();
@@ -3544,10 +3545,32 @@ export function GroupsPage({
         gid = group.id;
       }
       ops.push(addRoleToUser(person, role.name, gid));
+      // v1.88.3：以匯入後的最終角色同步審查員名單（比照直接加入成員的做法）
+      finalRoles.push({
+        staffId,
+        roles: deriveStoredRoles(
+          gid ? mergeMembership(person.memberships, gid, [role.name]) : person.memberships,
+          person.roles,
+        ),
+      });
       count += 1;
     }
     await commitInBatches(ops);
     await loadUsers();
+    // v1.88.3：角色成員匯入後同步審查員名單（v1.87.0 新增此匯入路徑時漏接）
+    try {
+      const db = getFirebaseDb();
+      let linked = 0;
+      for (const { staffId, roles } of finalRoles) {
+        const result = await syncReviewerDoc(db, staffId, roles, roleMeta);
+        if (result === "linked") linked += 1;
+      }
+      if (linked > 0) {
+        onAction(`已將 ${linked} 位自動加入審查員名單（未分類）`);
+      }
+    } catch {
+      onAction("審查員名單連動失敗，請聯絡系統管理員手動調整");
+    }
     return `角色成員匯入完成：成功 ${count} 筆`;
   }
 
