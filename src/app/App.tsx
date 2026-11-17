@@ -81,6 +81,7 @@ const SchedulePage = lazy(() =>
   })),
 );
 import type { PageId } from "../types";
+import type { GroupsTab, OrgMemberTarget } from "../features/GroupsPage";
 import { toErrorMessage } from "../lib/errors";
 
 type CapaLaunchContext = {
@@ -600,6 +601,33 @@ function Shell() {
   const { user, loading, needsPasswordChange, logout } = useAuth();
   const { can, ready: permissionsReady } = usePermissions();
   const [page, setPage] = useState<PageId>("dashboard");
+  // v1.86.0：人員管理頁籤（獨立頁返回時回到原本頁籤）＋成員／單位管理獨立頁目標
+  const [groupsTab, setGroupsTab] = useState<GroupsTab>("users");
+  const [memberTarget, setMemberTarget] = useState<OrgMemberTarget | null>(null);
+  const memberPageId: PageId | null = memberTarget
+    ? memberTarget.kind === "role"
+      ? "role-members"
+      : memberTarget.kind === "title"
+        ? "title-members"
+        : "group-units"
+    : null;
+  const openMemberPage = useCallback((target: OrgMemberTarget) => {
+    setMemberTarget(target);
+    setPage(
+      target.kind === "role"
+        ? "role-members"
+        : target.kind === "title"
+          ? "title-members"
+          : "group-units",
+    );
+  }, []);
+  const closeMemberPage = useCallback(() => {
+    setMemberTarget(null);
+    setPage("groups");
+  }, []);
+  // 獨立頁是「群組與人員」的子頁：側邊欄／手機導覽仍標示群組與人員為使用中
+  const navPage: PageId =
+    memberPageId && page === memberPageId ? "groups" : page;
   const [capaLaunch, setCapaLaunch] = useState<CapaLaunchContext | null>(null);
   const clearCapaLaunch = useCallback(() => setCapaLaunch(null), []);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -723,7 +751,7 @@ function Shell() {
   return (
     <div className={`app-shell${sidebarHidden ? " sidebar-hidden" : ""}`}>
       <Sidebar
-        page={page}
+        page={navPage}
         canViewPage={canViewPage}
         onPage={setPage}
         onExit={() => void logout()}
@@ -795,7 +823,22 @@ function Shell() {
                 {page === "schedule" && <SchedulePage onAction={notify} />}
                 {page === "audit" && <AuditPage onAction={notify} />}
                 {page === "results" && <ResultsPage onAction={notify} />}
-                {page === "groups" && <GroupsPage onAction={notify} />}
+                {page === "groups" && (
+                  <GroupsPage
+                    onAction={notify}
+                    initialTab={groupsTab}
+                    onTabChange={setGroupsTab}
+                    onOpenMemberPage={openMemberPage}
+                  />
+                )}
+                {memberTarget && memberPageId && page === memberPageId && (
+                  <GroupsPage
+                    onAction={notify}
+                    initialTab={groupsTab}
+                    memberPage={memberTarget}
+                    onBackToGroups={closeMemberPage}
+                  />
+                )}
                 {page === "handoff" && <TaskHandoffPage onAction={notify} />}
                 {page === "capa" && <CapaPage onAction={notify} launchContext={capaLaunch} onLaunchConsumed={clearCapaLaunch} />}
                 {page === "admin" && <AdminPage onAction={notify} />}
@@ -828,7 +871,7 @@ function Shell() {
           return (
             <button
               key={item.id}
-              className={page === item.id ? "active" : ""}
+              className={navPage === item.id ? "active" : ""}
               onClick={() => setPage(item.id as PageId)}
             >
               <Icon size={19} />

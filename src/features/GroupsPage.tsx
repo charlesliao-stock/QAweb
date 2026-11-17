@@ -3,6 +3,7 @@ import { toErrorMessage } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
+  ChevronLeft,
   Download,
   Pencil,
   Plus,
@@ -87,9 +88,17 @@ import {
   validateUserRows as validateUserRowsLib,
 } from "../lib/orgImport";
 import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
+import type { PageId } from "../types";
 
 /** v1.21：組織與設定重整為五區（人員／單位／角色／職稱／群組） */
 type Tab = "users" | "units" | "roles" | "titles" | "groups";
+export type GroupsTab = Tab;
+
+/** v1.86.0：成員／單位管理獨立頁的目標（角色／職稱／群組各一頁） */
+export interface OrgMemberTarget {
+  kind: "role" | "title" | "group";
+  id: string;
+}
 
 interface GroupRow {
   id: string;
@@ -591,14 +600,29 @@ function MemberChecklist({
 
 export function GroupsPage({
   onAction,
+  initialTab,
+  memberPage,
+  onTabChange,
+  onOpenMemberPage,
+  onBackToGroups,
 }: {
   onAction: (message: string) => void;
+  /** 返回人員管理時要回到原本的頁籤（App 記住上次頁籤；預設人員） */
+  initialTab?: Tab;
+  /** v1.86.0：指定時只渲染該成員／單位管理獨立頁（不顯示頁籤與清單） */
+  memberPage?: OrgMemberTarget | null;
+  /** 頁籤切換時回報 App（供獨立頁返回時回到原本頁籤） */
+  onTabChange?: (tab: Tab) => void;
+  /** v1.86.0：成員／單位管理改跳獨立頁（App 切換 PageId） */
+  onOpenMemberPage?: (target: OrgMemberTarget) => void;
+  /** v1.86.0：獨立頁返回人員管理 */
+  onBackToGroups?: () => void;
 }) {
   const { user } = useAuth();
   // v1.56.0：組織與設定整區塊只限系統管理員（原管理員或品管執行幹事可維護已收掉）。
   const isAdmin = (user?.roles ?? []).includes("系統管理員");
 
-  const [tab, setTab] = useState<Tab>("users");
+  const [tab, setTab] = useState<Tab>(initialTab ?? "users");
   const { sortKey: listSortKey, sortDir: listSortDir, toggleSort, tableSort } = useSortState<string>("");
   const [userUnitFilter, setUserUnitFilter] = useState("");
   const [userSearch, setUserSearch] = useState("");
@@ -722,8 +746,10 @@ export function GroupsPage({
   const [newRoleLevelId, setNewRoleLevelId] = useState("");
   const [roleCreateError, setRoleCreateError] = useState("");
   const [roleCreateSaving, setRoleCreateSaving] = useState(false);
-  /** 正在管理成員的角色 id（""＝未開啟） */
-  const [managingRoleId, setManagingRoleId] = useState("");
+  /** 正在管理成員的角色 id（""＝未開啟；v1.86.0：只在獨立頁由 memberPage 帶入） */
+  const [managingRoleId, setManagingRoleId] = useState(
+    memberPage?.kind === "role" ? memberPage.id : "",
+  );
   /** v1.57.0 A4：正在編輯的角色 id（""＝彈窗未開啟；與成員管理面板分開） */
   const [editingRoleId, setEditingRoleId] = useState("");
   const [roleMemberChecked, setRoleMemberChecked] = useState<string[]>([]);
@@ -738,15 +764,19 @@ export function GroupsPage({
   const [unitAddSearch, setUnitAddSearch] = useState("");
   const [unitBusy, setUnitBusy] = useState(false);
 
-  // ---- 職稱成員管理（v1.21） ----
-  const [managingTitleId, setManagingTitleId] = useState("");
+  // ---- 職稱成員管理（v1.21；v1.86.0：只在獨立頁由 memberPage 帶入） ----
+  const [managingTitleId] = useState(
+    memberPage?.kind === "title" ? memberPage.id : "",
+  );
   const [titleMemberChecked, setTitleMemberChecked] = useState<string[]>([]);
   const [titleAddSearch, setTitleAddSearch] = useState("");
   const [titleAddChecked, setTitleAddChecked] = useState<string[]>([]);
   const [titleBusy, setTitleBusy] = useState(false);
 
-  // ---- 群組單位管理（v1.21） ----
-  const [managingGroupId, setManagingGroupId] = useState("");
+  // ---- 群組單位管理（v1.21；v1.86.0：只在獨立頁由 memberPage 帶入） ----
+  const [managingGroupId] = useState(
+    memberPage?.kind === "group" ? memberPage.id : "",
+  );
   const [groupUnitChecked, setGroupUnitChecked] = useState<string[]>([]);
   const [groupUnitAddSearch, setGroupUnitAddSearch] = useState("");
   const [groupBusy, setGroupBusy] = useState(false);
@@ -1246,6 +1276,11 @@ export function GroupsPage({
       loadUsers();
     }
   }, [tab, isAdmin, users.length, loadUsers]);
+
+  // v1.86.0：頁籤切換時回報 App，獨立頁返回時回到原本頁籤（掛載時亦回報 initialTab）
+  useEffect(() => {
+    onTabChange?.(tab);
+  }, [tab, onTabChange]);
 
   // ================= 群組 =================
 
@@ -2324,12 +2359,9 @@ export function GroupsPage({
     setRoleEditError("");
   }
 
+  /** v1.86.0：角色成員管理改跳獨立頁（原內嵌面板已移入 renderRoleMemberPanel） */
   function openRoleMembers(roleId: string) {
-    setManagingRoleId(roleId);
-    setRoleMemberChecked([]);
-    setRoleAddSearch("");
-    setRoleAddGroupId("");
-    setRoleAddChecked([]);
+    onOpenMemberPage?.({ kind: "role", id: roleId });
   }
 
   async function handleRoleMembersRemove() {
@@ -3500,14 +3532,9 @@ export function GroupsPage({
                     {isAdmin && (
                       <button
                         className="text-button"
-                        onClick={() => {
-                          setManagingTitleId(
-                            managingTitleId === row.id ? "" : row.id,
-                          );
-                          setTitleMemberChecked([]);
-                          setTitleAddSearch("");
-                          setTitleAddChecked([]);
-                        }}
+                        onClick={() =>
+                          onOpenMemberPage?.({ kind: "title", id: row.id })
+                        }
                       >
                         成員管理
                       </button>
@@ -3582,6 +3609,369 @@ export function GroupsPage({
     );
   }
 
+  // v1.86.0：成員／單位管理改跳獨立頁（App 以 PageId 切頁進入；以下三者只在獨立頁渲染，寫入邏輯不變）
+  function renderRoleMemberPanel() {
+    if (!managingRole) return null;
+    return (
+      <section className="panel data-panel">
+        <div className="panel-inset">
+        <MemberChecklist
+          title={`角色「${managingRole.name}」的成員`}
+          note="勾選＋全選可批次移除（同時從 memberships 移除該角色）"
+          idLabel="職編"
+          nameLabel="姓名"
+          columns={[
+            { key: "unitGroup", label: "單位／群組" },
+            { key: "role", label: "角色" },
+          ]}
+          items={roleMembers.map((u) => ({
+            id: u.staffId,
+            label: maskName(u.name),
+            fields: {
+              unitGroup: [
+                unitLabelOf(u.unitCode),
+                [...new Set(
+                  u.memberships
+                    .filter((membership) => membership.roles.includes(managingRole.name))
+                    .map((membership) => groupNameOf(membership.groupId)),
+                )].join("、"),
+              ].filter(Boolean).join("／"),
+              role: managingRole.name,
+            },
+          }))}
+          checked={roleMemberChecked}
+          onToggle={(id, next) =>
+            setRoleMemberChecked((prev) =>
+              next ? [...prev, id] : prev.filter((x) => x !== id),
+            )
+          }
+          onToggleAll={(next) =>
+            setRoleMemberChecked(
+              next ? roleMembers.map((u) => u.staffId) : [],
+            )
+          }
+          onRemoveSelected={handleRoleMembersRemove}
+          removeLabel="批次移出"
+          busy={roleBusy}
+        />
+        <div className="form-field" style={{ maxWidth: 320 }}>
+          <label className="field-label">加入人員（搜尋＋全選）</label>
+          <input
+            className="text-input"
+            placeholder="輸入職編或姓名搜尋"
+            value={roleAddSearch}
+            onChange={(e) => setRoleAddSearch(e.target.value)}
+          />
+        </div>
+        {/* v1.40.3：非單位級角色一律可指定群組加入，不再只對寫死名單顯示群組選單 */}
+        {managingRole.scope !== "unit" && (
+            <FormSelect label="適用群組 *" maxWidth={320} value={roleAddGroupId}
+                  onChange={(e) => setRoleAddGroupId(e.target.value)}>
+                  <option value="">請選擇群組</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </FormSelect>
+          )}
+        {managingRole.scope === "unit" && (
+          <p className="settings-note">
+            單位級角色：加入時以各人所屬單位的群組計（無所屬單位群組者無法加入）。
+          </p>
+        )}
+        {roleAddSearch.trim() !== "" &&
+          (roleCandidates.length === 0 ? (
+            <p className="settings-note">無符合的在職人員。</p>
+          ) : (
+            <>
+              <div className="table-scroll">
+                <table className="permission-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 36 }}>
+                        <input
+                          type="checkbox"
+                          checked={
+                            roleCandidates.length > 0 &&
+                            roleCandidates.every((u) =>
+                              roleAddChecked.includes(u.staffId),
+                            )
+                          }
+                          onChange={(e) =>
+                            setRoleAddChecked(
+                              e.target.checked
+                                ? roleCandidates.map((u) => u.staffId)
+                                : [],
+                            )
+                          }
+                          aria-label="全選"
+                        />
+                      </th>
+                      <th>職編</th>
+                      <th>姓名</th>
+                      <th>所屬單位</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {roleCandidates.map((u) => (
+                      <tr key={u.staffId}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={roleAddChecked.includes(u.staffId)}
+                            onChange={(e) =>
+                              setRoleAddChecked((prev) =>
+                                e.target.checked
+                                  ? [...prev, u.staffId]
+                                  : prev.filter((x) => x !== u.staffId),
+                              )
+                            }
+                            aria-label={`選擇 ${u.staffId}`}
+                          />
+                        </td>
+                        <td>{u.staffId}</td>
+                        <td>{maskName(u.name)}</td>
+                        <td>{u.unitCode || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="form-actions">
+                <button
+                  className="button button-primary"
+                  disabled={roleAddChecked.length === 0 || roleBusy}
+                  onClick={handleRoleMembersAdd}
+                >
+                  加入所選（{roleAddChecked.length}）
+                </button>
+              </div>
+            </>
+        ))}
+        <div className="form-actions">
+          <button
+            className="button button-outline"
+            onClick={() => onBackToGroups?.()}
+          >
+            返回人員管理
+          </button>
+        </div>
+        </div>
+      </section>
+    );
+  }
+
+  function renderTitleMemberPanel() {
+    if (!managingTitle) return null;
+    return (
+      <section className="panel data-panel">
+        <div className="panel-inset divided">
+          <MemberChecklist
+            title={`職稱「${managingTitle.name}」的成員`}
+            note="加入即轉任此職稱（一人一職稱）；移除即清除職稱"
+            idLabel="職編"
+            nameLabel="姓名"
+            columns={[
+              { key: "unit", label: "單位" },
+              { key: "title", label: "職稱" },
+            ]}
+            items={titleMembers.map((u) => ({
+              id: u.staffId,
+              label: maskName(u.name),
+              fields: { unit: unitLabelOf(u.unitCode), title: u.title || managingTitle.name },
+            }))}
+            checked={titleMemberChecked}
+            onToggle={(id, next) =>
+              setTitleMemberChecked((prev) =>
+                next ? [...prev, id] : prev.filter((x) => x !== id),
+              )
+            }
+            onToggleAll={(next) =>
+              setTitleMemberChecked(
+                next ? titleMembers.map((u) => u.staffId) : [],
+              )
+            }
+            onRemoveSelected={handleTitleMembersRemove}
+            removeLabel="批次移出"
+            busy={titleBusy}
+          />
+          <div className="form-field" style={{ maxWidth: 320 }}>
+            <label className="field-label">加入人員（搜尋＋全選）</label>
+            <input
+              className="text-input"
+              placeholder="輸入職編或姓名搜尋"
+              value={titleAddSearch}
+              onChange={(e) => setTitleAddSearch(e.target.value)}
+            />
+          </div>
+          {titleAddSearch.trim() !== "" &&
+            (titleCandidates.length === 0 ? (
+              <p className="settings-note">無符合的在職人員。</p>
+            ) : (
+              <>
+                <div className="table-scroll">
+                  <table className="permission-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 36 }}>
+                          <input
+                            type="checkbox"
+                            checked={
+                              titleCandidates.length > 0 &&
+                              titleCandidates.every((u) =>
+                                titleAddChecked.includes(u.staffId),
+                              )
+                            }
+                            onChange={(e) =>
+                              setTitleAddChecked(
+                                e.target.checked
+                                  ? titleCandidates.map((u) => u.staffId)
+                                  : [],
+                              )
+                            }
+                            aria-label="全選"
+                          />
+                        </th>
+                        <th>職編</th>
+                        <th>姓名</th>
+                        <th>現職稱</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {titleCandidates.map((u) => (
+                        <tr key={u.staffId}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={titleAddChecked.includes(u.staffId)}
+                              onChange={(e) =>
+                                setTitleAddChecked((prev) =>
+                                  e.target.checked
+                                    ? [...prev, u.staffId]
+                                    : prev.filter((x) => x !== u.staffId),
+                                )
+                              }
+                              aria-label={`選擇 ${u.staffId}`}
+                            />
+                          </td>
+                          <td>{u.staffId}</td>
+                          <td>{maskName(u.name)}</td>
+                          <td>{u.title || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="form-actions">
+                  <button
+                    className="button button-primary"
+                    disabled={titleAddChecked.length === 0 || titleBusy}
+                    onClick={handleTitleMembersAdd}
+                  >
+                    加入所選（{titleAddChecked.length}）
+                  </button>
+                </div>
+              </>
+            ))}
+          <div className="form-actions">
+            <button
+              className="button button-outline"
+              onClick={() => onBackToGroups?.()}
+            >
+              返回人員管理
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  function renderGroupUnitPanel() {
+    if (!managingGroupId) return null;
+    return (
+      <section className="panel data-panel">
+        <div className="panel-inset divided">
+          <MemberChecklist
+            title={`群組「${groups.find((g) => g.id === managingGroupId)?.name ?? ""}」的單位`}
+            note="加入／移除單位（改 unit.groupId）"
+            emptyText="此群組尚無單位。"
+            items={groupUnits.map((u) => ({
+              id: u.code,
+              label: u.name,
+            }))}
+            checked={groupUnitChecked}
+            onToggle={(id, next) =>
+              setGroupUnitChecked((prev) =>
+                next
+                  ? [...prev, id]
+                  : prev.filter((x) => x !== id),
+              )
+            }
+            onToggleAll={(next) =>
+              setGroupUnitChecked(
+                next ? groupUnits.map((u) => u.code) : [],
+              )
+            }
+            onRemoveSelected={handleGroupUnitsRemove}
+            removeLabel="批次移出"
+            busy={groupBusy}
+          />
+          <div className="form-field" style={{ maxWidth: 320 }}>
+            <label className="field-label">加入單位</label>
+            <input
+              className="text-input"
+              placeholder="輸入單位代號或名稱搜尋"
+              value={groupUnitAddSearch}
+              onChange={(e) => setGroupUnitAddSearch(e.target.value)}
+            />
+          </div>
+          {groupUnitAddSearch.trim() !== "" &&
+            (groupUnitCandidates.length === 0 ? (
+              <p className="settings-note">無符合的單位。</p>
+            ) : (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>單位代號</th>
+                      <th>單位名稱</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groupUnitCandidates.map((u) => (
+                      <tr key={u.code}>
+                        <td>{u.code}</td>
+                        <td>{u.name}</td>
+                        <td>
+                          <button
+                            className="text-button"
+                            disabled={groupBusy}
+                            onClick={() => handleGroupUnitAdd(u.code)}
+                          >
+                            <Plus size={13} /> 加入
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          <div className="form-actions">
+            <button
+              className="button button-outline"
+              onClick={() => onBackToGroups?.()}
+            >
+                    返回人員管理
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   // ================= 版面 =================
 
   const isGroupEditing = groupView.kind === "edit";
@@ -3617,6 +4007,53 @@ export function GroupsPage({
       )
       .slice(0, 20);
   }, [titleUnitSearch, units, userForm.titleUnitCodes]);
+
+  // v1.86.0：成員／單位管理獨立頁（App 以 PageId 切頁進入；只顯示該管理面板，不顯示頁籤與清單）
+  if (memberPage) {
+    const memberPageId: PageId =
+      memberPage.kind === "role"
+        ? "role-members"
+        : memberPage.kind === "title"
+          ? "title-members"
+          : "group-units";
+    const targetMissing =
+      (memberPage.kind === "role" && !managingRole) ||
+      (memberPage.kind === "title" && !managingTitle) ||
+      (memberPage.kind === "group" &&
+        !groups.some((g) => g.id === memberPage.id));
+    return (
+      <>
+        <button
+          type="button"
+          className="button button-ghost button-sm"
+          onClick={() => onBackToGroups?.()}
+        >
+          <ChevronLeft size={15} />
+          返回人員管理
+        </button>
+        <PageHeading page={memberPageId} />
+        {!isAdmin ? (
+          <section className="panel">
+            <div className="empty-state-block">
+              <b>僅系統管理員可管理</b>
+              <p>如需新增或異動，請聯絡系統管理員。</p>
+            </div>
+          </section>
+        ) : targetMissing ? (
+          <EmptyState
+            title="找不到此項目"
+            description="該角色／職稱／群組可能已被刪除，請返回人員管理重新選擇。"
+          />
+        ) : memberPage.kind === "role" ? (
+          renderRoleMemberPanel()
+        ) : memberPage.kind === "title" ? (
+          renderTitleMemberPanel()
+        ) : (
+          renderGroupUnitPanel()
+        )}
+      </>
+    );
+  }
 
   const headingAction = (() => {
     const back = (reset: () => void) => (
@@ -3661,7 +4098,6 @@ export function GroupsPage({
           setRoleCreateOpen(false);
           setRoleCreateError("");
         });
-      if (managingRoleId) return back(() => setManagingRoleId(""));
       return isAdmin ? (
         <button
           className="button button-primary"
@@ -3936,13 +4372,9 @@ export function GroupsPage({
                           </button>{" "}
                           <button
                             className="text-button"
-                            onClick={() => {
-                              setManagingGroupId(
-                                managingGroupId === row.id ? "" : row.id,
-                              );
-                              setGroupUnitChecked([]);
-                              setGroupUnitAddSearch("");
-                            }}
+                            onClick={() =>
+                              onOpenMemberPage?.({ kind: "group", id: row.id })
+                            }
                           >
                             單位管理
                           </button>{" "}
@@ -3959,85 +4391,6 @@ export function GroupsPage({
                 </tbody>
               </table>
             </div>
-            {managingGroupId && isAdmin && (
-              <div className="panel-inset divided">
-                <MemberChecklist
-                  title={`群組「${groups.find((g) => g.id === managingGroupId)?.name ?? ""}」的單位`}
-                  note="加入／移除單位（改 unit.groupId）"
-                  emptyText="此群組尚無單位。"
-                  items={groupUnits.map((u) => ({
-                    id: u.code,
-                    label: u.name,
-                  }))}
-                  checked={groupUnitChecked}
-                  onToggle={(id, next) =>
-                    setGroupUnitChecked((prev) =>
-                      next
-                        ? [...prev, id]
-                        : prev.filter((x) => x !== id),
-                    )
-                  }
-                  onToggleAll={(next) =>
-                    setGroupUnitChecked(
-                      next ? groupUnits.map((u) => u.code) : [],
-                    )
-                  }
-                  onRemoveSelected={handleGroupUnitsRemove}
-                  removeLabel="批次移出"
-                  busy={groupBusy}
-                />
-                <div className="form-field" style={{ maxWidth: 320 }}>
-                  <label className="field-label">加入單位</label>
-                  <input
-                    className="text-input"
-                    placeholder="輸入單位代號或名稱搜尋"
-                    value={groupUnitAddSearch}
-                    onChange={(e) => setGroupUnitAddSearch(e.target.value)}
-                  />
-                </div>
-                {groupUnitAddSearch.trim() !== "" &&
-                  (groupUnitCandidates.length === 0 ? (
-                    <p className="settings-note">無符合的單位。</p>
-                  ) : (
-                    <div className="table-scroll">
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>單位代號</th>
-                            <th>單位名稱</th>
-                            <th>操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {groupUnitCandidates.map((u) => (
-                            <tr key={u.code}>
-                              <td>{u.code}</td>
-                              <td>{u.name}</td>
-                              <td>
-                                <button
-                                  className="text-button"
-                                  disabled={groupBusy}
-                                  onClick={() => handleGroupUnitAdd(u.code)}
-                                >
-                                  <Plus size={13} /> 加入
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ))}
-                <div className="form-actions">
-                  <button
-                    className="button button-outline"
-                    onClick={() => setManagingGroupId("")}
-                  >
-                    關閉
-                  </button>
-                </div>
-              </div>
-            )}
 
           </section>
         )
@@ -4231,125 +4584,6 @@ export function GroupsPage({
                 {renderTitleTable(section.items)}
               </div>
             ))}
-            {managingTitle && isAdmin && (
-              <div className="panel-inset divided">
-                <MemberChecklist
-                  title={`職稱「${managingTitle.name}」的成員`}
-                  note="加入即轉任此職稱（一人一職稱）；移除即清除職稱"
-                  idLabel="職編"
-                  nameLabel="姓名"
-                  columns={[
-                    { key: "unit", label: "單位" },
-                    { key: "title", label: "職稱" },
-                  ]}
-                  items={titleMembers.map((u) => ({
-                    id: u.staffId,
-                    label: maskName(u.name),
-                    fields: { unit: unitLabelOf(u.unitCode), title: u.title || managingTitle.name },
-                  }))}
-                  checked={titleMemberChecked}
-                  onToggle={(id, next) =>
-                    setTitleMemberChecked((prev) =>
-                      next ? [...prev, id] : prev.filter((x) => x !== id),
-                    )
-                  }
-                  onToggleAll={(next) =>
-                    setTitleMemberChecked(
-                      next ? titleMembers.map((u) => u.staffId) : [],
-                    )
-                  }
-                  onRemoveSelected={handleTitleMembersRemove}
-                  removeLabel="批次移出"
-                  busy={titleBusy}
-                />
-                <div className="form-field" style={{ maxWidth: 320 }}>
-                  <label className="field-label">加入人員（搜尋＋全選）</label>
-                  <input
-                    className="text-input"
-                    placeholder="輸入職編或姓名搜尋"
-                    value={titleAddSearch}
-                    onChange={(e) => setTitleAddSearch(e.target.value)}
-                  />
-                </div>
-                {titleAddSearch.trim() !== "" &&
-                  (titleCandidates.length === 0 ? (
-                    <p className="settings-note">無符合的在職人員。</p>
-                  ) : (
-                    <>
-                      <div className="table-scroll">
-                        <table className="permission-table">
-                          <thead>
-                            <tr>
-                              <th style={{ width: 36 }}>
-                                <input
-                                  type="checkbox"
-                                  checked={
-                                    titleCandidates.length > 0 &&
-                                    titleCandidates.every((u) =>
-                                      titleAddChecked.includes(u.staffId),
-                                    )
-                                  }
-                                  onChange={(e) =>
-                                    setTitleAddChecked(
-                                      e.target.checked
-                                        ? titleCandidates.map((u) => u.staffId)
-                                        : [],
-                                    )
-                                  }
-                                  aria-label="全選"
-                                />
-                              </th>
-                              <th>職編</th>
-                              <th>姓名</th>
-                              <th>現職稱</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {titleCandidates.map((u) => (
-                              <tr key={u.staffId}>
-                                <td>
-                                  <input
-                                    type="checkbox"
-                                    checked={titleAddChecked.includes(u.staffId)}
-                                    onChange={(e) =>
-                                      setTitleAddChecked((prev) =>
-                                        e.target.checked
-                                          ? [...prev, u.staffId]
-                                          : prev.filter((x) => x !== u.staffId),
-                                      )
-                                    }
-                                    aria-label={`選擇 ${u.staffId}`}
-                                  />
-                                </td>
-                                <td>{u.staffId}</td>
-                                <td>{maskName(u.name)}</td>
-                                <td>{u.title || "—"}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                      <div className="form-actions">
-                        <button
-                          className="button button-primary"
-                          disabled={titleAddChecked.length === 0 || titleBusy}
-                          onClick={handleTitleMembersAdd}
-                        >
-                          加入所選（{titleAddChecked.length}）
-                        </button>
-                      </div>
-                    </>
-                  ))}
-                <div className="form-actions">
-                  <button
-                    className="button button-outline"
-                    onClick={() => setManagingTitleId("")}
-                  >
-                    返回職稱清單
-                  </button>
-                </div>
-              </div>
-            )}
             <div className="panel-inset">
               <p className="settings-note">
                 職稱以名稱唯一；可在此新增職稱、管理成員或刪除職稱。職稱權限請到「組織與設定 → 權限管理」設定（按名稱共用）。
@@ -4492,153 +4726,6 @@ export function GroupsPage({
               <button className="button button-outline" onClick={() => setRoleCreateOpen(false)}>
                 取消
               </button>
-            </div>
-          </section>
-        ) : managingRole ? (
-          <section className="panel data-panel">
-            <div className="panel-inset">
-            <MemberChecklist
-              title={`角色「${managingRole.name}」的成員`}
-              note="勾選＋全選可批次移除（同時從 memberships 移除該角色）"
-              idLabel="職編"
-              nameLabel="姓名"
-              columns={[
-                { key: "unitGroup", label: "單位／群組" },
-                { key: "role", label: "角色" },
-              ]}
-              items={roleMembers.map((u) => ({
-                id: u.staffId,
-                label: maskName(u.name),
-                fields: {
-                  unitGroup: [
-                    unitLabelOf(u.unitCode),
-                    [...new Set(
-                      u.memberships
-                        .filter((membership) => membership.roles.includes(managingRole.name))
-                        .map((membership) => groupNameOf(membership.groupId)),
-                    )].join("、"),
-                  ].filter(Boolean).join("／"),
-                  role: managingRole.name,
-                },
-              }))}
-              checked={roleMemberChecked}
-              onToggle={(id, next) =>
-                setRoleMemberChecked((prev) =>
-                  next ? [...prev, id] : prev.filter((x) => x !== id),
-                )
-              }
-              onToggleAll={(next) =>
-                setRoleMemberChecked(
-                  next ? roleMembers.map((u) => u.staffId) : [],
-                )
-              }
-              onRemoveSelected={handleRoleMembersRemove}
-              removeLabel="批次移出"
-              busy={roleBusy}
-            />
-            <div className="form-field" style={{ maxWidth: 320 }}>
-              <label className="field-label">加入人員（搜尋＋全選）</label>
-              <input
-                className="text-input"
-                placeholder="輸入職編或姓名搜尋"
-                value={roleAddSearch}
-                onChange={(e) => setRoleAddSearch(e.target.value)}
-              />
-            </div>
-            {/* v1.40.3：非單位級角色一律可指定群組加入，不再只對寫死名單顯示群組選單 */}
-            {managingRole.scope !== "unit" && (
-                <FormSelect label="適用群組 *" maxWidth={320} value={roleAddGroupId}
-                      onChange={(e) => setRoleAddGroupId(e.target.value)}>
-                      <option value="">請選擇群組</option>
-                      {groups.map((g) => (
-                        <option key={g.id} value={g.id}>
-                          {g.name}
-                        </option>
-                      ))}
-                    </FormSelect>
-              )}
-            {managingRole.scope === "unit" && (
-              <p className="settings-note">
-                單位級角色：加入時以各人所屬單位的群組計（無所屬單位群組者無法加入）。
-              </p>
-            )}
-            {roleAddSearch.trim() !== "" &&
-              (roleCandidates.length === 0 ? (
-                <p className="settings-note">無符合的在職人員。</p>
-              ) : (
-                <>
-                  <div className="table-scroll">
-                    <table className="permission-table">
-                      <thead>
-                        <tr>
-                          <th style={{ width: 36 }}>
-                            <input
-                              type="checkbox"
-                              checked={
-                                roleCandidates.length > 0 &&
-                                roleCandidates.every((u) =>
-                                  roleAddChecked.includes(u.staffId),
-                                )
-                              }
-                              onChange={(e) =>
-                                setRoleAddChecked(
-                                  e.target.checked
-                                    ? roleCandidates.map((u) => u.staffId)
-                                    : [],
-                                )
-                              }
-                              aria-label="全選"
-                            />
-                          </th>
-                          <th>職編</th>
-                          <th>姓名</th>
-                          <th>所屬單位</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {roleCandidates.map((u) => (
-                          <tr key={u.staffId}>
-                            <td>
-                              <input
-                                type="checkbox"
-                                checked={roleAddChecked.includes(u.staffId)}
-                                onChange={(e) =>
-                                  setRoleAddChecked((prev) =>
-                                    e.target.checked
-                                      ? [...prev, u.staffId]
-                                      : prev.filter((x) => x !== u.staffId),
-                                  )
-                                }
-                                aria-label={`選擇 ${u.staffId}`}
-                              />
-                            </td>
-                            <td>{u.staffId}</td>
-                            <td>{maskName(u.name)}</td>
-                            <td>{u.unitCode || "—"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="form-actions">
-                    <button
-                      className="button button-primary"
-                      disabled={roleAddChecked.length === 0 || roleBusy}
-                      onClick={handleRoleMembersAdd}
-                    >
-                      加入所選（{roleAddChecked.length}）
-                    </button>
-                  </div>
-                </>
-            ))}
-            <div className="form-actions">
-              <button
-                className="button button-outline"
-                onClick={() => setManagingRoleId("")}
-              >
-                返回角色清單
-              </button>
-            </div>
             </div>
           </section>
         ) : rolesLoading || levelsLoading ? (

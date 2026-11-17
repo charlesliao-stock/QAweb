@@ -10,6 +10,10 @@ export const PAGE_PERMISSION_KEYS = {
   results: "page.results",
   capa: "page.capa",
   groups: "page.groups",
+  // v1.86.0：成員／單位管理獨立頁沿用「群組與人員」權限（不新增權限鍵，權限模型不變）
+  "role-members": "page.groups",
+  "title-members": "page.groups",
+  "group-units": "page.groups",
   handoff: "page.handoff",
   admin: "page.admin",
   permissions: "page.permissions",

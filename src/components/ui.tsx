@@ -47,6 +47,19 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
       title: "人員管理",
       description: "群組、單位、職稱與人員主檔維護（含批次上傳）",
     },
+    // v1.86.0：成員／單位管理獨立頁（由人員管理的成員管理／單位管理按鈕跳轉進入）
+    "role-members": {
+      title: "角色成員管理",
+      description: "管理此角色的成員（加入／移出）",
+    },
+    "title-members": {
+      title: "職稱成員管理",
+      description: "管理此職稱的成員（加入即轉任此職稱）",
+    },
+    "group-units": {
+      title: "群組單位管理",
+      description: "管理此群組的所屬單位",
+    },
     handoff: {
       title: "任務交接",
       description: "將原審查員尚未完成的品管審查任務交接給新審查員",
