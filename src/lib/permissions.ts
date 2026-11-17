@@ -10,11 +10,13 @@ export const PAGE_PERMISSION_KEYS = {
   results: "page.results",
   capa: "page.capa",
   groups: "page.groups",
-  // v1.86.0：成員／單位管理獨立頁沿用「群組與人員」權限（不新增權限鍵，權限模型不變）
+  // v1.86.0：成員／單位管理獨立頁沿用「品管組與人員」權限（不新增權限鍵，權限模型不變）
   "role-members": "page.groups",
   "title-members": "page.groups",
   "group-units": "page.groups",
   "unit-members": "page.groups",
+  // v1.87.0：督導負責單位管理獨立頁（職稱成員管理下層），同樣沿用「品管組與人員」權限
+  "title-units": "page.groups",
   handoff: "page.handoff",
   admin: "page.admin",
   permissions: "page.permissions",
@@ -27,7 +29,7 @@ export const PAGE_PERMISSION_ITEMS = [
   { key: "page.audit", label: "品管審查" },
   { key: "page.results", label: "結果分析" },
   { key: "page.capa", label: "CAPA 改善追蹤" },
-  { key: "page.groups", label: "群組與人員" },
+  { key: "page.groups", label: "品管組與人員" },
   { key: "page.handoff", label: "任務交接" },
   { key: "page.admin", label: "系統管理" },
   { key: "page.permissions", label: "權限管理" },

@@ -28,6 +28,7 @@ import { deriveStoredRoles } from "./roleIdentity";
 import {
   DEFAULT_ROLE_LEVELS,
   DEFAULT_TITLE_LEVELS,
+  LEGACY_DEPT_TITLE_LEVEL_ID,
   NEW_ROLES,
   OLD_ROLE_NAME,
   OLD_ROLE_REPLACEMENT,
@@ -36,6 +37,16 @@ import {
 } from "./orgLevels";
 
 export const ORG_LEVELS_MIGRATION_MARKER = "configs/orgLevelsV155";
+
+/** v1.87.0：職稱層級拆分遷移旗標（部級→主任／副主任／督導／單位） */
+export const TITLE_LEVELS_MIGRATION_MARKER = "configs/titleLevelsV187";
+
+export interface TitleLevelsMigrationResult {
+  levelsCreated: string[];
+  titlesRemapped: number;
+  /** 舊部級層級文件是否已刪除（無職稱再引用時才刪） */
+  deptLevelRemoved: boolean;
+}
 
 export interface OrgLevelMigrationResult {
   levelsCreated: string[];
@@ -254,6 +265,89 @@ export async function migrateOrgLevels(
       after: null,
       createdAt: serverTimestamp(),
     });
+  }
+
+  // 全部成功才寫旗標
+  await setDoc(markerRef, {
+    done: true,
+    migratedAt: serverTimestamp(),
+    migratedBy: staffId,
+  });
+  return result;
+}
+
+/**
+ * v1.87.0：職稱層級拆分（部級→主任／副主任／督導／單位）。
+ *
+ * 1. 建立新層級文件（主任／副主任／督導；已存在的不動；單位層級沿用既有）。
+ * 2. 既有職稱 levelId 為舊部級（tl-dept）者，按名稱重對照為新層級
+ *    （主任／副主任／督導；對不上名稱的自訂職稱不動）。
+ * 3. 重對照後若已無職稱引用舊部級層級，刪除 tl-dept 層級文件；
+ *    仍有引用時保留（管理員可自行移轉後刪除）。
+ *
+ * 防重跑：configs/titleLevelsV187 { done: true }；各步驟本身具等冪性，
+ * 旗標只在全部成功後才寫入，失敗時下次開頁重試。
+ */
+export async function migrateTitleLevelsV187(
+  db: any,
+  staffId: string,
+): Promise<TitleLevelsMigrationResult> {
+  const markerRef = doc(db, TITLE_LEVELS_MIGRATION_MARKER);
+  const markerSnap = await getDoc(markerRef);
+  if (markerSnap.exists() && markerSnap.data()?.done === true) {
+    return { levelsCreated: [], titlesRemapped: 0, deptLevelRemoved: false };
+  }
+
+  const result: TitleLevelsMigrationResult = {
+    levelsCreated: [],
+    titlesRemapped: 0,
+    deptLevelRemoved: false,
+  };
+
+  // 1. 新層級文件（缺的才建）
+  for (const level of DEFAULT_TITLE_LEVELS) {
+    const ref = doc(db, "titleLevels", level.id);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      await setDoc(ref, {
+        name: level.name,
+        order: level.order,
+        ...auditFields(staffId, true),
+      });
+      result.levelsCreated.push(level.name);
+    }
+  }
+
+  // 2. 舊部級職稱按名稱重對照
+  const titleSnap = await getDocsFromServer(collection(db, "titles"));
+  for (const d of titleSnap.docs) {
+    const data = d.data() as Record<string, unknown>;
+    if (data.levelId !== LEGACY_DEPT_TITLE_LEVEL_ID) continue;
+    const name = typeof data.name === "string" ? data.name : "";
+    const levelId = titleLevelIdForName(name);
+    if (!levelId || levelId === LEGACY_DEPT_TITLE_LEVEL_ID) continue;
+    await updateDoc(doc(db, "titles", d.id), {
+      levelId,
+      ...auditFields(staffId, false),
+    });
+    result.titlesRemapped += 1;
+  }
+
+  // 3. 無人再引用舊部級層級時刪除該層級文件
+  // （步驟 2 後仍引用者只有對不上名稱的自訂職稱，屆時保留層級文件；
+  // titleSnap 是步驟 2 之前讀的快照，故重新讀取一次再判斷）
+  const freshSnap = await getDocsFromServer(collection(db, "titles"));
+  const stillReferenced = freshSnap.docs.some((d) => {
+    const data = d.data() as Record<string, unknown>;
+    return data.levelId === LEGACY_DEPT_TITLE_LEVEL_ID;
+  });
+  if (!stillReferenced) {
+    const deptRef = doc(db, "titleLevels", LEGACY_DEPT_TITLE_LEVEL_ID);
+    const deptSnap = await getDoc(deptRef);
+    if (deptSnap.exists()) {
+      await deleteDoc(deptRef);
+      result.deptLevelRemoved = true;
+    }
   }
 
   // 全部成功才寫旗標

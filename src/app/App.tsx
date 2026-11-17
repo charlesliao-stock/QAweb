@@ -119,7 +119,7 @@ const NAV_GROUPS = [
   {
     label: "組織與設定",
     items: [
-      { id: "groups", label: "群組與人員", icon: GitBranch },
+      { id: "groups", label: "品管組與人員", icon: GitBranch },
       { id: "admin", label: "系統管理", icon: Settings2 },
       { id: "permissions", label: "權限管理", icon: ShieldCheck },
     ],
@@ -602,7 +602,7 @@ function Shell() {
   const { can, ready: permissionsReady } = usePermissions();
   const [page, setPage] = useState<PageId>("dashboard");
   // v1.86.0：人員管理頁籤（獨立頁返回時回到原本頁籤）＋成員／單位管理獨立頁目標
-  const [groupsTab, setGroupsTab] = useState<GroupsTab>("users");
+  const [groupsTab, setGroupsTab] = useState<GroupsTab>("groups");
   const [memberTarget, setMemberTarget] = useState<OrgMemberTarget | null>(null);
   const memberPageId: PageId | null = memberTarget
     ? memberTarget.kind === "role"
@@ -611,7 +611,9 @@ function Shell() {
         ? "title-members"
         : memberTarget.kind === "group"
           ? "group-units"
-          : "unit-members"
+          : memberTarget.kind === "title-units"
+            ? "title-units"
+            : "unit-members"
     : null;
   const openMemberPage = useCallback((target: OrgMemberTarget) => {
     setMemberTarget(target);
@@ -622,14 +624,24 @@ function Shell() {
           ? "title-members"
           : target.kind === "group"
             ? "group-units"
-            : "unit-members",
+            : target.kind === "title-units"
+              ? "title-units"
+              : "unit-members",
     );
   }, []);
   const closeMemberPage = useCallback(() => {
     setMemberTarget(null);
     setPage("groups");
   }, []);
-  // 獨立頁是「群組與人員」的子頁：側邊欄／手機導覽仍標示群組與人員為使用中
+  // v1.87.0：成員管理下層頁（職稱下層／督導單位）的返回先回上層，沒有上層才回人員管理
+  const handleMemberBack = useCallback(() => {
+    if (memberTarget?.parent) {
+      openMemberPage(memberTarget.parent);
+      return;
+    }
+    closeMemberPage();
+  }, [memberTarget, openMemberPage, closeMemberPage]);
+  // 獨立頁是「品管組與人員」的子頁：側邊欄／手機導覽仍標示品管組與人員為使用中
   const navPage: PageId =
     memberPageId && page === memberPageId ? "groups" : page;
   const [capaLaunch, setCapaLaunch] = useState<CapaLaunchContext | null>(null);
@@ -837,10 +849,14 @@ function Shell() {
                 )}
                 {memberTarget && memberPageId && page === memberPageId && (
                   <GroupsPage
+                    // v1.87.0：成員管理下層頁跳轉時以 key 強制重新掛載，
+                    // 使 managing* state 從新的 memberPage 重新帶入
+                    key={`${memberPageId}:${memberTarget.id}`}
                     onAction={notify}
                     initialTab={groupsTab}
                     memberPage={memberTarget}
-                    onBackToGroups={closeMemberPage}
+                    onOpenMemberPage={openMemberPage}
+                    onBackToGroups={handleMemberBack}
                   />
                 )}
                 {page === "handoff" && <TaskHandoffPage onAction={notify} />}

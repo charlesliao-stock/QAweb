@@ -519,6 +519,8 @@ export function AuditPage({
               ],
           user.unitCode ? unitGroup.get(user.unitCode) : undefined,
           orgMeta.roleMeta,
+          // v1.87.0：委員會 "ALL" 列展開為全部品管組
+          [...groupName.keys()],
         );
         setEditableGroupIds(myConvenerGroupIds);
 

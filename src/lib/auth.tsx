@@ -94,7 +94,7 @@ export interface StaffProfile {
   /** 僅保留明確儲存的群組成員角色，不把舊角色聯集擴散至多個群組。 */
   memberships: Membership[];
   reviewerAccessExpiresAt: string;
-  /** v1.58.0：督導負責的單位代碼（僅部級職稱為督導時設定；承接舊督導轄區群組） */
+  /** v1.58.0：督導負責的單位代碼（僅督導職稱時設定；承接舊督導轄區群組）；v1.87.0：改由職稱成員管理頁的督導頁設定 */
   titleUnitCodes: string[];
   mustChangePassword: boolean;
   /** 首次成功登入時間（ISO；空字串＝尚未開通／從未登入） */

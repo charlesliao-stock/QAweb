@@ -129,6 +129,8 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
                 : scheduleScopeRoleNames(orgMeta.roleMeta),
               undefined,
               orgMeta.roleMeta,
+              // v1.87.0：委員會 "ALL" 列展開為全部品管組
+              groupSnap.docs.map((d) => d.id),
             ),
       );
       setGroups(groupSnap.docs.map((d) => ({ id: d.id, name: String(d.data().name ?? d.id) })));

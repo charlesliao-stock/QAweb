@@ -13,10 +13,12 @@ export interface OrgLevel {
   order: number;
 }
 
-/** 預設職稱層級：部級→單位 */
+/** 預設職稱層級：主任→副主任→督導→單位（v1.87.0：部級拆為主任／副主任／督導三層） */
 export const DEFAULT_TITLE_LEVELS: OrgLevel[] = [
-  { id: "tl-dept", name: "部級", order: 0 },
-  { id: "tl-unit", name: "單位", order: 1 },
+  { id: "tl-director", name: "主任", order: 0 },
+  { id: "tl-deputy", name: "副主任", order: 1 },
+  { id: "tl-supervisor", name: "督導", order: 2 },
+  { id: "tl-unit", name: "單位", order: 3 },
 ];
 
 /** 預設角色層級：委員會→品管組→單位 */
@@ -26,15 +28,18 @@ export const DEFAULT_ROLE_LEVELS: OrgLevel[] = [
   { id: "rl-unit", name: "單位", order: 2 },
 ];
 
-/** 職稱遷移對照（按名） */
+/** 職稱遷移對照（按名；v1.87.0：部級拆為主任／副主任／督導三層） */
 export const TITLE_LEVEL_ID_BY_NAME: Record<string, string> = {
-  主任: "tl-dept",
-  副主任: "tl-dept",
-  督導: "tl-dept",
+  主任: "tl-director",
+  副主任: "tl-deputy",
+  督導: "tl-supervisor",
   護理長: "tl-unit",
   副護理長: "tl-unit",
   護理師: "tl-unit",
 };
+
+/** v1.87.0：舊部級層級 id（遷移後不再新建，僅供既有資料對照） */
+export const LEGACY_DEPT_TITLE_LEVEL_ID = "tl-dept";
 
 export function titleLevelIdForName(name: string): string {
   return TITLE_LEVEL_ID_BY_NAME[name] ?? "";

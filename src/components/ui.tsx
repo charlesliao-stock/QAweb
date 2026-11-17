@@ -45,7 +45,7 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
     },
     groups: {
       title: "人員管理",
-      description: "群組、單位、職稱與人員主檔維護（含批次上傳）",
+      description: "品管組、單位、職稱與人員主檔維護（含批次上傳）",
     },
     // v1.86.0：成員／單位管理獨立頁（由人員管理的成員管理／單位管理按鈕跳轉進入）
     "role-members": {
@@ -57,13 +57,18 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
       description: "管理此職稱的成員（加入即轉任此職稱）",
     },
     "group-units": {
-      title: "群組單位管理",
-      description: "管理此群組的所屬單位",
+      title: "品管組單位管理",
+      description: "管理此品管組的所屬單位",
     },
     // v1.86.1：單位成員管理獨立頁（由人員管理的單位頁籤「成員管理」按鈕跳轉進入）
     "unit-members": {
       title: "單位成員管理",
       description: "管理此單位的成員（加入／移出）",
+    },
+    // v1.87.0：督導負責單位管理獨立頁（由職稱成員管理頁的督導成員「單位管理」跳轉進入）
+    "title-units": {
+      title: "督導負責單位管理",
+      description: "管理此督導的負責單位（加入／移出）",
     },
     handoff: {
       title: "任務交接",
@@ -76,7 +81,7 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
     admin: { title: "系統管理", description: "角色權限與系統參數展示設定" },
     permissions: {
       title: "權限管理",
-      description: "依群組角色與單位職稱設定頁面及功能權限",
+      description: "依品管組角色與單位職稱設定頁面及功能權限",
     },
     reviewers: {
       title: "審查員管理",

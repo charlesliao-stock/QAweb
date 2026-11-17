@@ -69,6 +69,13 @@ export function isUnitLevelRole(
 
 /* ================= 人員多群組模型（v1.21.0） ================= */
 
+/**
+ * v1.87.0：委員會角色的 memberships 特殊群組值——委員會層級在品管組之上，
+ * 成員管理不選品管組，改以此值登記一列 { groupId: "ALL", roles: [...] }。
+ * 不是真實群組：deriveGroupIds 與群組列表須排除，畫面顯示為「全院」。
+ */
+export const COMMITTEE_GROUP_ID = "ALL";
+
 /** 人員群組成員資格：一人可屬多群組，各群組角色可不同 */
 export interface Membership {
   groupId: string;
@@ -79,7 +86,9 @@ export interface Membership {
 export function deriveGroupIds(memberships: Membership[]): string[] {
   const out: string[] = [];
   for (const m of memberships) {
-    if (m.groupId && !out.includes(m.groupId)) out.push(m.groupId);
+    // v1.87.0：「ALL」是委員會特殊值，不是真實群組，不寫入 groupIds
+    if (m.groupId && m.groupId !== COMMITTEE_GROUP_ID && !out.includes(m.groupId))
+      out.push(m.groupId);
   }
   return out;
 }
@@ -262,6 +271,11 @@ export function groupsForRoles(
   roleNames: string[],
   unitGroupId?: string,
   roleMeta?: RoleMetaMap,
+  /**
+   * v1.87.0：委員會特殊值 "ALL" 的展開對象（全部真實群組 id）。
+   * 傳入時，"ALL" 列展開為全部群組；未傳入時維持原樣回傳 "ALL"。
+   */
+  allGroupIds?: string[],
 ): string[] {
   const out: string[] = [];
   const push = (g: string) => {
@@ -273,6 +287,9 @@ export function groupsForRoles(
       if (isUnitLevelRole(r, roleMeta)) {
         // 單位級角色以其單位所屬群組計；單位未知時退回該筆 membership 的群組
         push(unitGroupId ?? m.groupId);
+      } else if (m.groupId === COMMITTEE_GROUP_ID) {
+        // v1.87.0：委員會角色持有 "ALL"，代表全部品管組
+        for (const g of allGroupIds ?? [COMMITTEE_GROUP_ID]) push(g);
       } else {
         push(m.groupId);
       }
