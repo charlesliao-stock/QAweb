@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, Eye, RotateCcw } from "lucide-react";
 import { PageHeading } from "../components/ui";
+import { maskName } from "../lib/mask";
 import { useAuth } from "../lib/auth";
 import { useOrgMeta } from "../lib/useOrgMeta";
 import { getFirebaseDb } from "../lib/firebase";
@@ -205,7 +206,7 @@ export function DashboardPage({
         <div>
           <span className="welcome-kicker">QUALITY SNAPSHOT</span>
           <h2>本月品質查核進度總覽</h2>
-          <p>{user?.name ? `${user.name}，` : ""}{welcomeText}</p>
+          <p>{user?.name ? `${maskName(user.name)}，` : ""}{welcomeText}</p>
         </div>
         <div className="welcome-art" aria-hidden="true">
           <div className="art-ring ring-one" />

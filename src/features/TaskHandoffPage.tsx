@@ -17,7 +17,7 @@ import {
 } from "../components/ui";
 import { groupsForRoles, parseMemberships } from "../lib/roleIdentity";
 import { useOrgMeta } from "../lib/useOrgMeta";
-import { displayUnitCode, staffLabel } from "../lib/mask";
+import { displayUnitCode, maskName, staffLabel } from "../lib/mask";
 import { useStaffNameMap } from "../lib/useStaffNames";
 import { scheduleScopeRoleNames } from "../lib/orgMeta";
 import { deriveRoleCategory, deriveRoleScope } from "../lib/roleDerivation";
@@ -366,10 +366,10 @@ export function TaskHandoffPage({ onAction }: { onAction: (message: string) => v
         </div>
         {newReviewerNotFound && <p className="settings-note" style={{ color: "var(--danger, #c0392b)" }}>查無此人：職編 {newReviewerSearch.trim()} 不存在，請重新輸入。</p>}
         {newReviewerCandidate && !newReviewer && (
-          <div className="table-scroll" style={{ marginTop: 12 }}><table className="data-table"><thead><tr><th>職編</th><th>姓名</th><th>職稱</th><th>單位</th><th>選取</th></tr></thead><tbody><tr><td>{newReviewerCandidate.staffId}</td><td>{newReviewerCandidate.name}</td><td>{newReviewerCandidate.title || "—"}</td><td>{unitNameOf(newReviewerCandidate.unitCode) || "—"}</td><td><button type="button" className="button button-outline" onClick={() => setNewReviewer(newReviewerCandidate)}>選取</button></td></tr></tbody></table></div>
+          <div className="table-scroll" style={{ marginTop: 12 }}><table className="data-table"><thead><tr><th>職編</th><th>姓名</th><th>職稱</th><th>單位</th><th>選取</th></tr></thead><tbody><tr><td>{newReviewerCandidate.staffId}</td><td>{maskName(newReviewerCandidate.name)}</td><td>{newReviewerCandidate.title || "—"}</td><td>{unitNameOf(newReviewerCandidate.unitCode) || "—"}</td><td><button type="button" className="button button-outline" onClick={() => setNewReviewer(newReviewerCandidate)}>選取</button></td></tr></tbody></table></div>
         )}
         {newReviewer && (
-          <p className="settings-note" style={{ marginTop: 12 }}>已選新審查員：{newReviewer.staffId} {newReviewer.name}{newReviewer.title ? `（${newReviewer.title}）` : ""}{newReviewer.unitCode ? `／${unitNameOf(newReviewer.unitCode)}` : ""} <button type="button" className="button button-ghost" onClick={() => { setNewReviewer(null); setNewReviewerCandidate(null); }}><X size={14} />更換</button></p>
+          <p className="settings-note" style={{ marginTop: 12 }}>已選新審查員：{staffLabel(newReviewer.staffId, newReviewer.name)}{newReviewer.title ? `（${newReviewer.title}）` : ""}{newReviewer.unitCode ? `／${unitNameOf(newReviewer.unitCode)}` : ""} <button type="button" className="button button-ghost" onClick={() => { setNewReviewer(null); setNewReviewerCandidate(null); }}><X size={14} />更換</button></p>
         )}
       </section>
       <section className="panel">

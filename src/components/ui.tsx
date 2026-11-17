@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import type { PageId } from "../types";
+import { maskName } from "../lib/mask";
 
 export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
   {
@@ -450,6 +451,39 @@ export function FormSelect({
         <ChevronDown size={15} />
       </div>
     </div>
+  );
+}
+
+/**
+ * 遮罩姓名輸入框（v1.88.0）：顯示遮罩、儲存全名。
+ * - value 傳入／onChange 傳出皆為全名（state 與資料庫寫入不受影響）。
+ * - 平時顯示 maskName(value)（王小明 → 王O明）；點入編輯時（focus）顯示全名
+ *   才能修改，離開（blur）後立即恢復遮罩顯示。編輯中看到全名是為了能改，
+ *   靜置狀態一律遮罩。
+ */
+export function MaskedNameInput({
+  value,
+  onChange,
+  ...inputProps
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange"> & {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <input
+      {...inputProps}
+      value={focused ? value : maskName(value)}
+      onFocus={(event) => {
+        setFocused(true);
+        inputProps.onFocus?.(event);
+      }}
+      onBlur={(event) => {
+        setFocused(false);
+        inputProps.onBlur?.(event);
+      }}
+      onChange={(event) => onChange(event.target.value)}
+    />
   );
 }
 

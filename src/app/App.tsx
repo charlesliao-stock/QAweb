@@ -35,6 +35,7 @@ import {
   type FontSizeOption,
 } from "../lib/uiPrefs";
 import { BrandMark } from "../components/ui";
+import { maskName } from "../lib/mask";
 import { VERSION_LABEL } from "../version";
 import { pagePermissionKey } from "../lib/permissions";
 import { usePermissions } from "../lib/usePermissions";
@@ -197,7 +198,7 @@ function LoginScreen() {
         <div className="login-brand">
           <BrandMark />
           <span>
-            護理品質<span>管理系統</span>
+            護理品質<span>管理資訊系統</span>
           </span>
         </div>
         {needsPasswordChange ? (
@@ -302,7 +303,7 @@ function LoginScreen() {
         ) : (
           <>
             <div className="login-eyebrow">
-              <span className="live-dot" /> 護理品質指標管理
+              <span className="live-dot" /> 護理品質管理資訊
             </div>
             <h1>
               讓品質改善
@@ -370,7 +371,7 @@ function LoginScreen() {
         )}
       </section>
       <aside className="login-side-copy">
-        <span>護理品質指標管理</span>
+        <span>護理品質管理資訊</span>
         <strong>
           把日常查核，
           <br />
@@ -476,7 +477,7 @@ function Sidebar({
           <BrandMark />
           <div>
             <b>護理品質</b>
-            <span>指標管理系統</span>
+            <span>管理資訊系統</span>
           </div>
           <button
             className="sidebar-close"
@@ -574,7 +575,7 @@ function Sidebar({
               {displayName.slice(0, 1) || "使"}
             </div>
             <div className="profile-info">
-              <b>{displayName}</b>
+              <b>{maskName(displayName)}</b>
               <span>
                 {staffId}
                 {unitName ? ` · ${unitName}` : ""}
@@ -751,7 +752,7 @@ function Shell() {
           <div className="login-brand">
             <BrandMark />
             <span>
-              護理品質<span>管理系統</span>
+              護理品質<span>管理資訊系統</span>
             </span>
           </div>
           <p className="login-lead">載入中…</p>

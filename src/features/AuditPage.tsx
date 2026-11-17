@@ -76,7 +76,7 @@ import {
   type EditRequest,
 } from "../lib/editRequests";
 import { usePermissions } from "../lib/usePermissions";
-import { staffLabel } from "../lib/mask";
+import { maskName, staffLabel } from "../lib/mask";
 import {
   normalizeAssignmentItem,
   parseIndicatorSchedule,
@@ -2044,7 +2044,11 @@ export function AuditPage({
                         : "時間未記錄";
                       return (
                         <article className="review-edit-history-item" key={`${String(entry.editedAt)}-${index}`}>
-                          <b>{String(entry.actorName ?? entry.actorId ?? "未知修改者")}</b>
+                          <b>
+                            {entry.actorName
+                              ? maskName(String(entry.actorName))
+                              : String(entry.actorId ?? "未知修改者")}
+                          </b>
                           <span>{stamp}</span>
                           <ul>
                             {Object.entries(changes).map(([key, change]) => (
@@ -2055,6 +2059,12 @@ export function AuditPage({
                                     <summary>查看逐題內容前後差異</summary>
                                     <pre>{JSON.stringify(change, null, 2)}</pre>
                                   </details>
+                                ) : key === "reviewerName" ||
+                                  key === "reviewedPersonName" ? (
+                                  <span>
+                                    {maskName(String(change.before ?? ""))} →{" "}
+                                    {maskName(String(change.after ?? ""))}
+                                  </span>
                                 ) : (
                                   <span>{JSON.stringify(change.before)} → {JSON.stringify(change.after)}</span>
                                 )}

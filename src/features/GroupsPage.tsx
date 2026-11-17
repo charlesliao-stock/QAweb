@@ -34,6 +34,7 @@ import {
   FilterSearchField,
   ListPanelHead,
   LoadingState,
+  MaskedNameInput,
   Modal,
   PageHeading,
   SectionTitle,
@@ -462,8 +463,12 @@ function BatchImporter({
                 {preview.map((p) => (
                   <tr key={p.index}>
                     <td>{p.index}</td>
-                    {header.map((_, i) => (
-                      <td key={i}>{p.values[i] ?? ""}</td>
+                    {header.map((h, i) => (
+                      <td key={i}>
+                        {h === "姓名"
+                          ? maskName(String(p.values[i] ?? ""))
+                          : (p.values[i] ?? "")}
+                      </td>
                     ))}
                     <td>
                       <span
@@ -2291,7 +2296,7 @@ export function GroupsPage({
       return;
     }
     const ok = window.confirm(
-      `確定將 ${row.staffId}（${row.name}）設為「${next}」？` +
+      `確定將 ${row.staffId}（${maskName(row.name)}）設為「${next}」？` +
         (next === "停用" ? "停用後該人員將無法登入。" : ""),
     );
     if (!ok) return;
@@ -3054,14 +3059,14 @@ export function GroupsPage({
         action: "督導負責單位異動",
         targetType: "user",
         targetId: sup.staffId,
-        detail: `職編 ${sup.staffId}（${sup.name}）新增負責單位 ${targets
+        detail: `職編 ${sup.staffId}（${maskName(sup.name)}）新增負責單位 ${targets
           .map((u) => `${u.code} ${u.name}`)
           .join("、")}`,
         before: { titleUnitCodes: sup.titleUnitCodes ?? [] },
         after: { titleUnitCodes: next },
         createdAt: serverTimestamp(),
       });
-      onAction(`已為 ${sup.name} 新增負責單位 ${targets.length} 個`);
+      onAction(`已為 ${maskName(sup.name)} 新增負責單位 ${targets.length} 個`);
       setTitleUnitAddChecked([]);
       setTitleUnitAddSearch("");
       await loadUsers();
@@ -3077,7 +3082,7 @@ export function GroupsPage({
     const sup = titleUnitSupervisor;
     if (!sup || titleUnitChecked.length === 0) return;
     const ok = window.confirm(
-      `確定將 ${titleUnitChecked.length} 個單位移出 ${sup.name} 的負責單位？`,
+      `確定將 ${titleUnitChecked.length} 個單位移出 ${maskName(sup.name)} 的負責單位？`,
     );
     if (!ok) return;
     setTitleUnitBusy(true);
@@ -3096,7 +3101,7 @@ export function GroupsPage({
         action: "督導負責單位異動",
         targetType: "user",
         targetId: sup.staffId,
-        detail: `職編 ${sup.staffId}（${sup.name}）移除負責單位 ${titleUnitChecked.join("、")}`,
+        detail: `職編 ${sup.staffId}（${maskName(sup.name)}）移除負責單位 ${titleUnitChecked.join("、")}`,
         before: { titleUnitCodes: sup.titleUnitCodes ?? [] },
         after: { titleUnitCodes: next },
         createdAt: serverTimestamp(),
@@ -3376,7 +3381,7 @@ export function GroupsPage({
     const name = (row[1] ?? "").trim();
     if (!name) return { ok: false, error: "姓名不可空白" };
     if (name !== person.name)
-      return { ok: false, error: `姓名與人員資料不符（應為 ${person.name}）` };
+      return { ok: false, error: `姓名與人員資料不符（應為 ${maskName(person.name)}）` };
     return { ok: true, error: "", person };
   }
 
@@ -3658,7 +3663,7 @@ export function GroupsPage({
       action: "督導負責單位異動",
       targetType: "user",
       targetId: sup.staffId,
-      detail: `職編 ${sup.staffId}（${sup.name}）批次新增負責單位 ${codes.join("、")}`,
+      detail: `職編 ${sup.staffId}（${maskName(sup.name)}）批次新增負責單位 ${codes.join("、")}`,
       before: { titleUnitCodes: sup.titleUnitCodes ?? [] },
       after: { titleUnitCodes: next },
       createdAt: serverTimestamp(),
@@ -4826,7 +4831,7 @@ export function GroupsPage({
           )}
           <div className="form-actions">
             <BatchImporter
-              sampleBaseName={`督導「${sup.name}」負責單位範例`}
+              sampleBaseName={`督導「${maskName(sup.name)}」負責單位範例`}
               sampleRows={[TITLE_UNIT_HEADER, ["加護病房", "加護病房"]]}
               header={TITLE_UNIT_HEADER}
               validateRows={validateTitleUnitRows}
@@ -5833,13 +5838,13 @@ export function GroupsPage({
               </FormSelect>
           <div className="form-field">
             <label className="field-label">姓名 *</label>
-            <input
+            <MaskedNameInput
               className="text-input"
               aria-required="true"
               value={userForm.name}
-              placeholder="例如 王小明"
-              onChange={(e) =>
-                setUserForm((prev) => ({ ...prev, name: e.target.value }))
+              placeholder="例如 王O明"
+              onChange={(next) =>
+                setUserForm((prev) => ({ ...prev, name: next }))
               }
             />
           </div>
