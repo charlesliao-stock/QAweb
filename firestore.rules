@@ -604,9 +604,7 @@ service cloud.firestore {
         || request.resource.data.get('writerId', '') == staffId();
       allow update: if isAdmin() || canManageSchedule() || hasRole('督導')
         || resource.data.get('ownerId', '') == staffId()
-        || resource.data.get('writerId', '') == staffId()
-        || request.resource.data.get('ownerId', '') == staffId()
-        || request.resource.data.get('writerId', '') == staffId();
+        || resource.data.get('writerId', '') == staffId();
       allow delete: if isAdmin();
     }
     match /reportTemplates/{id} {

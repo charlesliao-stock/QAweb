@@ -1,4 +1,4 @@
-// P0 rules 回歸測試（v1.85.5）：對 Firestore emulator 跑真實規則。
+// P0 rules 回歸測試（v1.85.5）；v1.86.2 補 P0.1 capa update 自認 owner 回歸測試（6 項）。
 //
 // 執行方式（本機需有 Java 11+ 與 firebase-tools；一次性安裝測試依賴）：
 //   1. pnpm add -D @firebase/rules-unit-testing@4.0.1
@@ -90,6 +90,7 @@ async function main() {
     await setDoc(doc(db, "users", "1111111"), { staffId: "1111111", roles: ["召集人"], name: "召集人A" });
     await setDoc(doc(db, "users", "2222222"), { staffId: "2222222", roles: [], name: "審查員A", title: "護理師", titleId: "T1", unitCode: "U1", memberships: [] });
     await setDoc(doc(db, "users", "3333333"), { staffId: "3333333", roles: [], name: "審查員B" });
+    await setDoc(doc(db, "users", "4444444"), { staffId: "4444444", roles: ["督導"], name: "督導A" });
     await setDoc(doc(db, "users", "admin"), { staffId: "admin", roles: ["系統管理員"], name: "管理員" });
     await setDoc(doc(db, "reviewQuotaGroups", "g1"), {
       quotaGroupId: "g1",
@@ -113,17 +114,21 @@ async function main() {
       createdAt: serverTimestamp(),
     });
     await setDoc(doc(db, "schedules", "schedDel"), { indicatorId: "IND1", category: "temp", period: "x" });
+    await setDoc(doc(db, "capa", "capaOwner"), { ownerId: "2222222", writerId: "3333333", title: "案A" });
+    await setDoc(doc(db, "capa", "capaOther"), { ownerId: "2222222", writerId: "2222222", title: "案B" });
   });
 
   const unauth = testEnv.unauthenticatedContext();
   const ctxA = testEnv.authenticatedContext("2222222", { email: "2222222@kmuh.org.tw", staffId: "2222222" });
   const ctxB = testEnv.authenticatedContext("3333333", { email: "3333333@kmuh.org.tw", staffId: "3333333" });
   const ctxMgr = testEnv.authenticatedContext("1111111", { email: "1111111@kmuh.org.tw", staffId: "1111111" });
+  const ctxSup = testEnv.authenticatedContext("4444444", { email: "4444444@kmuh.org.tw", staffId: "4444444" });
   const ctxAdmin = testEnv.authenticatedContext("admin", { email: "admin@kmuh.org.tw", staffId: "admin" });
   const dbU = unauth.firestore();
   const dbA = ctxA.firestore();
   const dbB = ctxB.firestore();
   const dbM = ctxMgr.firestore();
+  const dbSup = ctxSup.firestore();
   const dbAdmin = ctxAdmin.firestore();
 
   console.log("== 未登入 ==");
@@ -177,6 +182,13 @@ async function main() {
   await check("管理員刪 schedules 應放行", assertSucceeds(deleteDoc(doc(dbAdmin, "schedules", "schedDel"))));
   await check("案件負責人建 capa 應放行", assertSucceeds(setDoc(doc(dbA, "capa", "c1"), { ownerId: "2222222", writerId: "3333333", title: "案" })));
   await check("無關人員建 capa 應擋", assertFails(setDoc(doc(dbB, "capa", "c2"), { ownerId: "2222222", writerId: "2222222", title: "案" })));
+  // P0.1（v1.86.2）：capa update 只認原文件 owner／writer，自認 owner 應擋
+  await check("非 owner 更新含自認 owner 的 capa 應擋（N1）", assertFails(updateDoc(doc(dbB, "capa", "capaOther"), { ownerId: "3333333", title: "竄改" })));
+  await check("無關人員改他人 capa 應擋", assertFails(updateDoc(doc(dbB, "capa", "capaOther"), { title: "竄改" })));
+  await check("原 owner 改自己 capa 應放行", assertSucceeds(updateDoc(doc(dbA, "capa", "capaOther"), { title: "修正" })));
+  await check("原 writer 改 capa 應放行", assertSucceeds(updateDoc(doc(dbB, "capa", "capaOwner"), { title: "修正" })));
+  await check("督導改他人 capa 應放行", assertSucceeds(updateDoc(doc(dbSup, "capa", "capaOther"), { title: "督導修正" })));
+  await check("排程管理者改他人 capa 應放行", assertSucceeds(updateDoc(doc(dbM, "capa", "capaOther"), { title: "管理者修正" })));
 
   console.log("== 管理員全權 ==");
   await check("管理員建他人 reviewTasks 應放行", assertSucceeds(setDoc(doc(dbAdmin, "reviewTasks", "t-admin"), baseTask({ reviewerId: "3333333" }))));
