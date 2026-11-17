@@ -59,14 +59,7 @@ import {
   scheduleInvolvesUnit,
   splitAssignmentItemsByUnit,
 } from "../lib/dataScope";
-import { countRecordsByTaskWithImports } from "../lib/dashboardStats";
-import {
-  buildTrackedRows,
-  reviewerSubtotals,
-  taskStatusLabel,
-} from "../lib/taskTracking";
-import { loadPeriodicQuotaCounts } from "./dashboard/periodicQuotaCounts";
-import { dbIndexedQueryApi, fetchYearDocs } from "../lib/indexedRecords";
+import { ScheduleDetailPage } from "./ScheduleDetailPage";
 import { staffLabel, maskName } from "../lib/mask";
 import {
   academicYearOf,
@@ -90,14 +83,12 @@ import {
   frequencyLabel,
   getSchedule,
   INTERVAL_OPTIONS,
-  intervalLabel,
   intervalRangeLabels,
   listSchedules,
   normalizeAssignmentItem,
   parseCaseCount,
   periodForFilter,
   previousPeriodSchedule,
-  resolveIntervalMonths,
   saveSchedule,
   scheduleReviewCalendarMonths,
   scheduleSetupComplete,
@@ -140,28 +131,6 @@ function fmtTs(ts: unknown): string {
     /* ignore */
   }
   return "—";
-}
-
-/** Firestore Timestamp／ISO 字串 → ISO 字串（缺值回 ""；查閱彈窗完成時間用） */
-function tsToIso(ts: unknown): string {
-  if (typeof ts === "string") return ts;
-  try {
-    const t = ts as { toDate?: () => Date };
-    if (t && typeof t.toDate === "function") {
-      const d = t.toDate();
-      if (d instanceof Date && !Number.isNaN(d.getTime())) return d.toISOString();
-    }
-  } catch {
-    /* ignore */
-  }
-  return "";
-}
-
-/** ISO 時間字串 → 本地顯示（查閱彈窗完成時間用；解析失敗回 "—"） */
-function formatIsoTs(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString("zh-TW", { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 /** v1.88.3：組別 id 轉顯示名稱；審查員名單的未分類顯示為「未分類」，而非原始 id */
@@ -235,7 +204,14 @@ type View =
       category: "year" | "academic";
       year: number;
     }
-  | { kind: "assignment"; indicatorId: string };
+  | { kind: "assignment"; indicatorId: string }
+  /** v1.88.6：查閱改整頁式（ScheduleDetailPage），不再用彈窗 */
+  | {
+      kind: "detail";
+      indicatorId: string;
+      category: CycleCategory;
+      period: string;
+    };
 
 const PILL_OK = "status-pill success";
 const PILL_NONE = "status-pill muted";
@@ -427,7 +403,6 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
   const [generatingKey, setGeneratingKey] = useState<string | null>(null);
   const [addAuditRow, setAddAuditRow] = useState<RowItem | null>(null);
   const [selfAuditOpen, setSelfAuditOpen] = useState(false);
-  const [detailRow, setDetailRow] = useState<RowItem | null>(null);
 
   const usersMap = useMemo(() => {
     const m = new Map<string, string>();
@@ -454,7 +429,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
       ),
     [users, orgMeta.roleMeta],
   );
-  // v1.88.4：查閱彈窗任務追蹤的可見單位（與結果分析／CAPA 同一 dataScope 口徑；
+  // v1.88.4：查閱頁任務追蹤的可見單位（與結果分析／CAPA 同一 dataScope 口徑；
   // kind all 時為 null＝全看；審查員本人的任務在彈窗內另行放行）
   const detailScopeUnits = useMemo(() => {
     if (!user) return null;
@@ -493,7 +468,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
           : null,
     [isUnitScheduler, myUnitCode],
   );
-  // 查閱彈窗用：單位排程者不論 cross 皆只看自己單位；其餘沿用 dataScope。
+  // 查閱頁用：單位排程者不論 cross 皆只看自己單位；其餘沿用 dataScope。
   const scheduleScopeUnits = scheduleRestrictedUnits ?? detailScopeUnits;
   const unitNameOf = useCallback(
     (code: string) => units.find((u) => u.code === code)?.name ?? code,
@@ -897,7 +872,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     loadData();
   }
 
-  /** v1.60.0：刪除排程（主清單／查閱視窗共用）：排程文件＋其未完成任務；已完成任務與已提交紀錄保留 */
+  /** v1.60.0：刪除排程（主清單）：排程文件＋其未完成任務；已完成任務與已提交紀錄保留 */
   async function handleDeleteSchedule(row: RowItem) {
     const sched = row.schedule;
     if (!sched) return;
@@ -928,7 +903,6 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
       onAction(
         `已刪除${label}排程（刪除 ${deletedTasks} 筆未完成任務，已完成 ${keptDoneTasks} 筆保留）`,
       );
-      setDetailRow(null);
       loadData();
     } catch (error) {
       onAction(`刪除失敗：${toErrorMessage(error)}`);
@@ -1360,7 +1334,14 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                               {!!sched && (
                                 <button
                                   className="button button-outline button-sm"
-                                  onClick={() => setDetailRow(r)}
+                                  onClick={() =>
+                                    setView({
+                                      kind: "detail",
+                                      indicatorId: r.indicatorId,
+                                      category: r.category,
+                                      period: r.period,
+                                    })
+                                  }
                                   title="查閱設定內容"
                                 >
                                   <Eye size={14} /> 查閱
@@ -1433,26 +1414,6 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             }}
           />
         )}
-        {detailRow && (
-          <ScheduleDetailModal
-            row={detailRow}
-            assignment={assignments.get(detailRow.indicatorId) ?? null}
-            usersMap={usersMap}
-            inactiveIds={inactiveIds}
-            unitNameOf={unitNameOf}
-            visibleUnitCodes={scheduleScopeUnits}
-            viewerStaffId={user?.staffId ?? ""}
-            canEdit={canEdit}
-            canDelete={detailRow ? canDeleteRow(detailRow) : false}
-            actor={actor}
-            onAction={onAction}
-            onClose={() => setDetailRow(null)}
-            onDeleted={() => {
-              setDetailRow(null);
-              loadData();
-            }}
-          />
-        )}
         {selfAuditOpen && (
           <SelfAuditDialog
             indicators={indicators}
@@ -1477,6 +1438,16 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
   // ================= 子畫面 =================
   const subView = view as Exclude<View, { kind: "list" }>;
   const indicator = indicatorOf(subView.indicatorId);
+  // v1.88.6：查閱整頁式的列（指標＋類別＋週期鍵定位；找不到即顯示「找不到排程」）
+  const detailRow =
+    view.kind === "detail"
+      ? (rows.find(
+          (r) =>
+            r.indicatorId === view.indicatorId &&
+            r.category === view.category &&
+            r.period === view.period,
+        ) ?? null)
+      : null;
   return (
     <>
       <PageHeading page="schedule" />
@@ -1526,6 +1497,24 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               onSaved={backToList}
             />
           )}
+          {view.kind === "detail" &&
+            (detailRow && detailRow.schedule ? (
+              <ScheduleDetailPage
+                row={detailRow}
+                assignment={assignments.get(detailRow.indicatorId) ?? null}
+                usersMap={usersMap}
+                unitNameOf={unitNameOf}
+                visibleUnitCodes={scheduleScopeUnits}
+                viewerStaffId={user?.staffId ?? ""}
+                deadlineDay={deadlineDay}
+                onAction={onAction}
+              />
+            ) : (
+              <EmptyState
+                title="找不到排程"
+                description="該排程可能已被刪除，或尚未建立。"
+              />
+            ))}
         </>
       )}
     </>
@@ -3288,676 +3277,6 @@ function SelfAuditDialog({
   );
 }
 
-/* ================= 查閱：設定內容＋任務（v1.18 彈窗） ================= */
-
-interface TaskLite {
-  id: string;
-  year: number;
-  month: number;
-  unitId: string;
-  reviewerId: string;
-  status: string;
-  deadline: string;
-  caseCount: number | null;
-  /** 完成時間（ISO 字串；未完成為 ""） */
-  completedAt: string;
-  /** 週期共用配額（v1.88.4 追蹤進度用；無值＝非配額任務） */
-  quotaVersion?: number;
-  quotaGroupId?: string;
-  quotaIntervalStartYear?: number;
-  quotaIntervalStartMonth?: number;
-  quotaIntervalEndYear?: number;
-  quotaIntervalEndMonth?: number;
-}
-
-function ScheduleDetailModal({
-  row,
-  assignment,
-  usersMap,
-  inactiveIds,
-  unitNameOf,
-  visibleUnitCodes,
-  viewerStaffId,
-  canEdit,
-  canDelete,
-  actor,
-  onAction,
-  onClose,
-  onDeleted,
-}: {
-  row: RowItem;
-  assignment: IndicatorAssignment | null;
-  usersMap: Map<string, string>;
-  inactiveIds: Set<string>;
-  unitNameOf: (code: string) => string;
-  /** v1.88.4：任務追蹤的可見單位（null＝全看）；審查員本人的任務另行放行 */
-  visibleUnitCodes: ReadonlySet<string> | null;
-  viewerStaffId: string;
-  /** v1.60.0：manageSchedule 才顯示刪除入口 */
-  canEdit: boolean;
-  /**
-   * v1.88.5：能否刪除此排程（父層依單位排程者規則判定：含其他單位
-   * 或不限單位者，單位排程者不得刪除）。未傳入時預設與 canEdit 相同。
-   */
-  canDelete: boolean;
-  actor: { id: string; name: string };
-  onAction: (m: string) => void;
-  onClose: () => void;
-  onDeleted: () => void;
-}) {
-  const [deleting, setDeleting] = useState(false);
-
-  /** v1.60.0：刪除此排程（文件＋其未完成任務；已完成任務與審查紀錄保留） */
-  async function handleDelete() {
-    const sched = row.schedule;
-    if (!sched || deleting) return;
-    // v1.88.5：防護——單位排程者不得刪除含其他單位的排程。
-    if (!canDelete) {
-      onAction("此排程包含其他單位，僅能由管理員刪除");
-      return;
-    }
-    const label = sched.selfReview
-      ? "自審"
-      : sched.category === "temp"
-        ? "加審"
-        : periodLabel(sched.category, sched.period);
-    const ok = window.confirm(
-      `確定刪除「${label}」排程（${row.name}）？將一併刪除該排程的未完成任務；已完成任務與已提交的審查紀錄不受影響。`,
-    );
-    if (!ok) return;
-    setDeleting(true);
-    try {
-      const db = getFirebaseDb();
-      const { deletedTasks, keptDoneTasks } = await deleteScheduleWithTasks(
-        db,
-        row.indicatorId,
-        sched.category,
-        sched.period,
-        actor,
-      );
-      onAction(
-        `已刪除${label}排程（刪除 ${deletedTasks} 筆未完成任務，已完成 ${keptDoneTasks} 筆保留）`,
-      );
-      onDeleted();
-    } catch (error) {
-      onAction(`刪除失敗：${toErrorMessage(error)}`);
-    } finally {
-      setDeleting(false);
-    }
-  }
-  const sched = row.schedule;
-  const isTemp = row.category === "temp";
-  const [tasks, setTasks] = useState<TaskLite[]>([]);
-  const [loading, setLoading] = useState(true);
-  // v1.88.4：任務追蹤進度（配額感知計數；見 lib/taskTracking）
-  const [recordCounts, setRecordCounts] = useState<Map<string, number>>(new Map());
-  const [quotaCounts, setQuotaCounts] = useState<Map<string, number>>(new Map());
-  const [quotaFailed, setQuotaFailed] = useState<Set<string>>(new Set());
-  const [progressUnknown, setProgressUnknown] = useState(false);
-  const [progressLoading, setProgressLoading] = useState(false);
-  const [trackUnit, setTrackUnit] = useState("");
-  const [trackStatus, setTrackStatus] = useState("");
-
-  const ymSet = useMemo(() => {
-    if (!sched) return new Set<string>();
-    return new Set(
-      scheduleCalendarMonths(sched).map(({ year, month }) => `${year}-${month}`),
-    );
-  }, [sched]);
-
-  useEffect(() => {
-    if (!sched) return;
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const db = getFirebaseDb();
-        const snap = await getDocs(
-          query(
-            collection(db, "reviewTasks"),
-            where("indicatorId", "==", row.indicatorId),
-          ),
-        );
-        if (cancelled) return;
-        const list: TaskLite[] = [];
-        snap.docs.forEach((d) => {
-          const v = d.data() as Record<string, unknown>;
-          const y = Number(v.year ?? 0);
-          const mo = Number(v.month ?? 0);
-          if (!ymSet.has(`${y}-${mo}`)) return;
-          list.push({
-            id: d.id,
-            year: y,
-            month: mo,
-            unitId: String(v.unitId ?? ""),
-            reviewerId: String(v.reviewerId ?? ""),
-            status: String(v.status ?? "pending"),
-            deadline: String(v.deadline ?? ""),
-            caseCount:
-              typeof v.caseCount === "number" && v.caseCount >= 1
-                ? v.caseCount
-                : null,
-            completedAt: tsToIso(v.completedAt),
-            quotaVersion:
-              typeof v.quotaVersion === "number" ? v.quotaVersion : undefined,
-            quotaGroupId:
-              typeof v.quotaGroupId === "string" && v.quotaGroupId
-                ? v.quotaGroupId
-                : undefined,
-            quotaIntervalStartYear:
-              typeof v.quotaIntervalStartYear === "number"
-                ? v.quotaIntervalStartYear
-                : undefined,
-            quotaIntervalStartMonth:
-              typeof v.quotaIntervalStartMonth === "number"
-                ? v.quotaIntervalStartMonth
-                : undefined,
-            quotaIntervalEndYear:
-              typeof v.quotaIntervalEndYear === "number"
-                ? v.quotaIntervalEndYear
-                : undefined,
-            quotaIntervalEndMonth:
-              typeof v.quotaIntervalEndMonth === "number"
-                ? v.quotaIntervalEndMonth
-                : undefined,
-          });
-        });
-        list.sort(
-          (a, b) =>
-            a.year - b.year ||
-            a.month - b.month ||
-            a.unitId.localeCompare(b.unitId, "zh-Hant"),
-        );
-        setTasks(list);
-      } catch (error) {
-        if (!cancelled) onAction(`讀取任務失敗：${toErrorMessage(error)}`);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [sched, row.indicatorId, ymSet, onAction]);
-
-  // v1.88.4：任務追蹤進度——任務載入後，按（指標，年）讀回審查紀錄，
-  // 以 countRecordsByTaskWithImports 計非配額任務已審件數（含匯入紀錄），
-  // 再以 loadPeriodicQuotaCounts 計週期共用配額群組的整組已審件數。
-  // 僅顯示用，不寫回任務狀態。
-  useEffect(() => {
-    if (loading) return;
-    if (tasks.length === 0) {
-      setRecordCounts(new Map());
-      setQuotaCounts(new Map());
-      setQuotaFailed(new Set());
-      setProgressUnknown(false);
-      setProgressLoading(false);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      setProgressLoading(true);
-      setProgressUnknown(false);
-      try {
-        const db = getFirebaseDb();
-        const years = [...new Set(tasks.map((t) => t.year))].sort((a, b) => a - b);
-        const snaps = await Promise.all(
-          years.map((y) =>
-            fetchYearDocs(dbIndexedQueryApi, collection(db, "reviewRecords"), {
-              indicatorId: row.indicatorId,
-              year: y,
-            }),
-          ),
-        );
-        if (cancelled) return;
-        const recs = snaps.flatMap((snap) =>
-          snap.docs.map((d) => {
-            const v = d.data() as Record<string, unknown>;
-            return {
-              id: d.id,
-              taskId: typeof v.taskId === "string" ? v.taskId : "",
-              indicatorId:
-                typeof v.indicatorId === "string" ? v.indicatorId : "",
-              unitId: typeof v.unitId === "string" ? v.unitId : "",
-              year: Number(v.year ?? 0),
-              month: Number(v.month ?? 0),
-              source: typeof v.source === "string" ? v.source : undefined,
-            };
-          }),
-        );
-        const dashTasks = tasks.map((t) => ({
-          id: t.id,
-          indicatorId: row.indicatorId,
-          unitId: t.unitId,
-          year: t.year,
-          month: t.month,
-        }));
-        setRecordCounts(countRecordsByTaskWithImports(recs, dashTasks));
-        const quotaTasks = tasks
-          .filter((t) => t.quotaVersion === 1 && t.quotaGroupId)
-          .map((t) => ({
-            id: t.id,
-            indicatorId: row.indicatorId,
-            unitId: t.unitId,
-            reviewerId: t.reviewerId,
-            year: t.year,
-            month: t.month,
-            caseCount: t.caseCount,
-            deadline: t.deadline,
-            status: "pending" as const,
-            doneCount: 0,
-            quotaVersion: 1 as const,
-            quotaGroupId: t.quotaGroupId,
-            quotaIntervalStartYear: t.quotaIntervalStartYear,
-            quotaIntervalStartMonth: t.quotaIntervalStartMonth,
-            quotaIntervalEndYear: t.quotaIntervalEndYear,
-            quotaIntervalEndMonth: t.quotaIntervalEndMonth,
-          }));
-        if (quotaTasks.length > 0) {
-          try {
-            const { counts, failedGroups } = await loadPeriodicQuotaCounts(
-              db,
-              quotaTasks,
-            );
-            if (cancelled) return;
-            setQuotaCounts(counts);
-            setQuotaFailed(failedGroups);
-          } catch {
-            if (!cancelled) {
-              setQuotaFailed(
-                new Set(quotaTasks.map((t) => t.quotaGroupId!)),
-              );
-            }
-          }
-        }
-      } catch {
-        if (!cancelled) setProgressUnknown(true);
-      } finally {
-        if (!cancelled) setProgressLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [loading, tasks, row.indicatorId]);
-
-  // v1.88.4：追蹤列（配額感知計數＋狀態校正）→ 範圍過濾 → 篩選
-  const trackedRows = useMemo(
-    () =>
-      buildTrackedRows(tasks, recordCounts, quotaCounts, quotaFailed, progressUnknown),
-    [tasks, recordCounts, quotaCounts, quotaFailed, progressUnknown],
-  );
-  const scopedTrackedRows = useMemo(() => {
-    if (visibleUnitCodes == null) return trackedRows;
-    return trackedRows.filter(
-      (r) => visibleUnitCodes.has(r.unitId) || r.reviewerId === viewerStaffId,
-    );
-  }, [trackedRows, visibleUnitCodes, viewerStaffId]);
-  const trackUnitOptions = useMemo(
-    () =>
-      [...new Set(scopedTrackedRows.map((r) => r.unitId))].sort((a, b) =>
-        a.localeCompare(b, "zh-Hant"),
-      ),
-    [scopedTrackedRows],
-  );
-  const filteredTrackedRows = useMemo(
-    () =>
-      scopedTrackedRows.filter(
-        (r) =>
-          (!trackUnit || r.unitId === trackUnit) &&
-          (!trackStatus || r.status === trackStatus),
-      ),
-    [scopedTrackedRows, trackUnit, trackStatus],
-  );
-  const trackSummary = useMemo(() => {
-    let done = 0;
-    let pending = 0;
-    let locked = 0;
-    for (const r of scopedTrackedRows) {
-      if (r.status === "done") done += 1;
-      else if (r.status === "locked") locked += 1;
-      else pending += 1;
-    }
-    return { total: scopedTrackedRows.length, done, pending, locked };
-  }, [scopedTrackedRows]);
-  /** 分工表審查員小計（本期已審／應審；只計可見範圍內任務） */
-  const subtotals = useMemo(
-    () => reviewerSubtotals(scopedTrackedRows),
-    [scopedTrackedRows],
-  );
-
-  // v1.88.5：查閱內容依可見單位過濾（null＝全看）。不限單位排程／項目
-  // 涵蓋自己單位，照常顯示「不限單位」；其餘只顯示可見單位。
-  const displayUnitIds = useMemo(() => {
-    if (!sched || sched.unlimitedUnits) return [];
-    if (visibleUnitCodes == null) return sched.unitIds;
-    return sched.unitIds.filter((c) => visibleUnitCodes.has(c));
-  }, [sched, visibleUnitCodes]);
-  const displayItems = useMemo(() => {
-    const items = assignment?.items ?? [];
-    if (visibleUnitCodes == null) return items;
-    return items
-      .filter(
-        (it) =>
-          it.unlimitedUnits === true ||
-          it.units.some((u) => visibleUnitCodes.has(u.unitId)),
-      )
-      .map((it) =>
-        it.unlimitedUnits === true
-          ? it
-          : {
-              ...it,
-              units: it.units.filter((u) => visibleUnitCodes.has(u.unitId)),
-            },
-      );
-  }, [assignment, visibleUnitCodes]);
-
-  // 臨時排程：審核員由任務推導（臨時排程不存分工表）
-  const tempReviewers = useMemo(() => {
-    if (!isTemp) return [];
-    const m = new Map<string, string>();
-    for (const t of tasks) {
-      // v1.88.5：只列可見範圍內的任務的審查員（不限單位任務 unitId "" 屬
-      // 涵蓋自己單位，照常列入；本人任務另行放行，與追蹤表同口徑）。
-      if (
-        visibleUnitCodes != null &&
-        t.unitId !== "" &&
-        !visibleUnitCodes.has(t.unitId) &&
-        t.reviewerId !== viewerStaffId
-      ) {
-        continue;
-      }
-      if (!m.has(t.reviewerId))
-        m.set(t.reviewerId, usersMap.get(t.reviewerId) ?? t.reviewerId);
-    }
-    return [...m.entries()].sort((a, b) =>
-      a[0].localeCompare(b[0], "zh-Hant"),
-    );
-  }, [isTemp, tasks, usersMap, visibleUnitCodes, viewerStaffId]);
-
-  const monthLabels = useMemo(() => {
-    if (!sched) return "";
-    return [...sched.months]
-      .sort((a, b) => a - b)
-      .map((m) => MONTH_LABELS[m - 1])
-      .join("、");
-  }, [sched]);
-
-  // v1.23：年度／學年度顯示各期區間（例：8-9月、12-1月、4-5月）；臨時／舊排程顯示起始月份
-  const intervalRangeText = useMemo(() => {
-    if (!sched || sched.category === "temp") return "";
-    const len = resolveIntervalMonths(sched.frequency, sched.intervalMonths);
-    if (len == null) return "";
-    const order = cycleMonths(sched.category, sched.period);
-    const starts = [...sched.months].sort(
-      (a, b) => order.indexOf(a) - order.indexOf(b),
-    );
-    return intervalRangeLabels(starts, len).join("、");
-  }, [sched]);
-
-  if (!sched) return null;
-  return (
-    <Modal
-      title={`查閱：${row.name}`}
-      note={`${isTemp ? (sched.selfReview ? "自審" : "加審") : categoryLabel(row.category)}・${sched.periodLabel}`}
-      onClose={onClose}
-      wide
-    >
-      <SectionTitle title="排程／單位設定" />
-      <div className="table-scroll">
-        <table className="data-table">
-          <tbody>
-            <tr>
-              <td style={{ whiteSpace: "nowrap" }}><b>期間</b></td>
-              <td data-label="期間">
-                {sched.periodLabel}
-                {isTemp &&
-                  !sched.selfReview &&
-                  sched.refYear != null &&
-                  `（${sched.refYear}年加審）`}
-              </td>
-            </tr>
-            <tr>
-              <td style={{ whiteSpace: "nowrap" }}><b>審查月份</b></td>
-              <td data-label="審查月份">{intervalRangeText || monthLabels || "—"}</td>
-            </tr>
-            {!isTemp && (
-              <>
-                <tr>
-                  <td style={{ whiteSpace: "nowrap" }}><b>審查頻次</b></td>
-                  <td data-label="審查頻次">
-                    {sched.frequency != null
-                      ? frequencyLabel(sched.frequency)
-                      : "—"}
-                  </td>
-                </tr>
-                <tr>
-                  <td style={{ whiteSpace: "nowrap" }}><b>審查區間</b></td>
-                  <td data-label="審查區間">
-                    {sched.intervalMonths != null
-                      ? intervalLabel(sched.intervalMonths)
-                      : "—"}
-                  </td>
-                </tr>
-              </>
-            )}
-            <tr>
-              <td style={{ whiteSpace: "nowrap" }}><b>受審單位</b></td>
-              <td data-label="受審單位">
-                {sched.unlimitedUnits
-                  ? "不限單位"
-                  : displayUnitIds.length === 0
-                    ? "—"
-                    : displayUnitIds
-                        .map(
-                          (c) => `${unitNameOf(c)}（${c}）`,
-                        )
-                        .join("、")}
-              </td>
-            </tr>
-            <tr>
-              <td style={{ whiteSpace: "nowrap" }}><b>審查件數</b></td>
-              <td data-label="審查件數">
-                {sched.caseCount != null
-                  ? sched.category === "temp"
-                    ? `${sched.caseCount} 件/輪`
-                    : sched.unlimitedUnits
-                      ? `${sched.caseCount} 件/每區間（跨月份、區間內審查員共用）`
-                      : `${sched.caseCount} 件/每單位每區間（跨月份、同單位審查員共用）`
-                  : "—"}
-              </td>
-            </tr>
-            {sched.notes && (
-              <tr>
-                <td style={{ whiteSpace: "nowrap" }}><b>備註</b></td>
-                <td data-label="備註">{sched.notes}</td>
-              </tr>
-            )}
-            <tr>
-              <td style={{ whiteSpace: "nowrap" }}><b>最後編輯</b></td>
-              <td data-label="最後編輯">
-                {sched.updatedByName || "—"}・{fmtTs(sched.updatedAt)}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <SectionTitle
-        title="審查員／單位設定"
-        note={isTemp ? "臨時排程不存分工表" : undefined}
-      />
-      <InactiveReviewerNotice
-        reviewerIds={
-          isTemp
-            ? tempReviewers.map(([id]) => id)
-            : displayItems.map((it) => it.reviewerId)
-        }
-        inactiveIds={inactiveIds}
-        nameOf={(id) => usersMap.get(id) ?? ""}
-      />
-      {isTemp ? (
-        loading ? (
-          <p className="settings-note">讀取中…</p>
-        ) : tempReviewers.length === 0 ? (
-          <p className="settings-note">尚無任務</p>
-        ) : (
-          <p>
-            {tempReviewers.map(([id, name]) => (
-              <span key={id} className="chip" style={{ marginRight: 6 }}>
-                {staffLabel(id, name)}
-              </span>
-            ))}
-          </p>
-        )
-      ) : displayItems.length > 0 ? (
-        <div className="table-scroll">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>審查員</th>
-                <th>負責單位</th>
-              </tr>
-            </thead>
-            <tbody>
-              {displayItems.map((it) => {
-                const sub = subtotals.get(it.reviewerId);
-                return (
-                <tr key={it.reviewerId}>
-                  <td data-label="審查員">
-                    <b>{staffLabel(it.reviewerId, usersMap.get(it.reviewerId) ?? "")}</b>
-                    {sub && (
-                      <div className="muted-text">
-                        本期{sub.done == null ? "—" : sub.done}/{sub.required}
-                        {sub.unknown ? "（部分進度未知）" : ""}
-                      </div>
-                    )}
-                  </td>
-                  <td data-label="負責單位">
-                    {it.unlimitedUnits === true
-                      ? "不限單位"
-                      : it.units
-                          .map((u) => `${unitNameOf(u.unitId)}（${u.unitId}）`)
-                          .join("、")}
-                  </td>
-                </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <p className="settings-note">尚未設定分工表</p>
-      )}
-
-      <SectionTitle
-        title="任務追蹤／審查進度"
-        note="每列一筆任務（指標×月×單位×審查員）；已審件數為配額感知計數，週期共用配額以整組區間計、匯入紀錄亦計入。只顯示您可見範圍內的任務。"
-      />
-      {loading || progressLoading ? (
-        <p className="settings-note" role="status">讀取任務進度中…</p>
-      ) : scopedTrackedRows.length === 0 ? (
-        <p className="settings-note">
-          {tasks.length === 0 ? "此排程尚無任務。" : "您的可見範圍內尚無任務。"}
-        </p>
-      ) : (
-        <>
-          <FilterPanel title="追蹤篩選">
-            <FormSelect label="單位" value={trackUnit} onChange={(e) => setTrackUnit(e.target.value)}>
-              <option value="">全部單位</option>
-              {trackUnitOptions.map((code) => (
-                <option key={code} value={code}>
-                  {code === "" ? "NA（不限單位）" : `${unitNameOf(code)}（${code}）`}
-                </option>
-              ))}
-            </FormSelect>
-            <FormSelect label="狀態" value={trackStatus} onChange={(e) => setTrackStatus(e.target.value)}>
-              <option value="">全部狀態</option>
-              <option value="pending">待完成</option>
-              <option value="done">已完成</option>
-              <option value="locked">逾期鎖定</option>
-            </FormSelect>
-          </FilterPanel>
-          <p className="settings-note">
-            共 {trackSummary.total} 筆任務・已完成 {trackSummary.done}・待完成 {trackSummary.pending}・逾期鎖定 {trackSummary.locked}
-            {progressUnknown ? "・部分進度因紀錄讀取失敗未知（顯示 —）" : ""}
-          </p>
-          {filteredTrackedRows.length === 0 ? (
-            <p className="settings-note">沒有符合篩選條件的任務。</p>
-          ) : (
-            <div className="table-scroll">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>年月／區間</th>
-                    <th>單位</th>
-                    <th>審查員</th>
-                    <th>應審</th>
-                    <th>已審</th>
-                    <th>進度</th>
-                    <th>狀態</th>
-                    <th>截止日</th>
-                    <th>完成時間</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredTrackedRows.map((r) => (
-                    <tr key={r.id}>
-                      <td data-label="年月／區間">
-                        {r.year}/{pad2(r.month)}
-                        {r.quotaInterval && (
-                          <div className="muted-text">
-                            共用配額 {r.quotaInterval.startYear}/{pad2(r.quotaInterval.startMonth)}–{r.quotaInterval.endYear}/{pad2(r.quotaInterval.endMonth)}
-                          </div>
-                        )}
-                      </td>
-                      <td data-label="單位">
-                        {r.unitId === "" ? "NA（不限單位）" : `${unitNameOf(r.unitId)}（${r.unitId}）`}
-                      </td>
-                      <td data-label="審查員">{staffLabel(r.reviewerId, usersMap.get(r.reviewerId) ?? "")}</td>
-                      <td data-label="應審">{r.required}</td>
-                      <td data-label="已審">{r.done == null ? "—" : r.done}</td>
-                      <td data-label="進度">{r.pct == null ? "—" : `${r.pct}%`}</td>
-                      <td data-label="狀態">
-                        <span className={`status-pill ${r.status === "done" ? "success" : r.status === "locked" ? "danger" : "muted"}`}>
-                          {taskStatusLabel(r.status)}
-                        </span>
-                      </td>
-                      <td data-label="截止日">{r.deadline || "—"}</td>
-                      <td data-label="完成時間">
-                        {r.status === "done" && r.completedAt ? formatIsoTs(r.completedAt) : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      )}
-
-      <div className="form-actions">
-        {canDelete && (
-          <button
-            className="button button-ghost"
-            disabled={deleting}
-            onClick={handleDelete}
-          >
-            <Trash2 size={15} /> {deleting ? "刪除中…" : "刪除此排程"}
-          </button>
-        )}
-        {canEdit && row.schedule && !canDelete && (
-          <span className="settings-note">
-            此排程包含其他單位，僅能由管理員刪除。
-          </span>
-        )}
-        <button className="button button-outline" onClick={onClose}>
-          關閉
-        </button>
-      </div>
-    </Modal>
-  );
-}
 /* ================= 審查員／單位設定（v1.18：組別篩選＋搜尋多選） ================= */
 
 /* ================= 分工表批次匯入（v1.88.4；比照 GroupsPage BatchImporter 模式） =================

@@ -27,7 +27,7 @@ import {
 } from "./reviewProgress";
 import type { ReviewTaskStatus } from "./scheduling";
 
-/** 追蹤表輸入的任務（ScheduleDetailModal 的 TaskLite 形狀） */
+/** 追蹤表輸入的任務（ScheduleDetailPage 的 TaskLite 形狀） */
 export interface TrackedTaskInput {
   id: string;
   year: number;
