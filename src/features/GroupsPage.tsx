@@ -2056,6 +2056,22 @@ export function GroupsPage({
       );
       if (committeeLevel) setMembershipAddLevelId(committeeLevel.id);
     }
+    // v1.88.2：編輯單位角色列時把層級帶回單位（僅當該列角色皆為單位層級；
+    // 混層級列維持原行為，避免改動其他層級角色的歸屬）
+    if (groupId !== COMMITTEE_GROUP_ID && row.roles.length > 0) {
+      const unitLevel = roleLevels.find(
+        (l) => l.id === "rl-unit" || l.name === "單位",
+      );
+      const allUnitLevel = row.roles.every((r) => {
+        const opt = roleOptions.find((o) => o.name === r);
+        if (!opt?.levelId) return false;
+        return (
+          opt.levelId === "rl-unit" ||
+          roleLevels.find((l) => l.id === opt.levelId)?.name === "單位"
+        );
+      });
+      if (unitLevel && allUnitLevel) setMembershipAddLevelId(unitLevel.id);
+    }
     setMembershipAddRoles([...row.roles]);
     setMembershipEditingGroupId(groupId);
     setMembershipError("");
@@ -2070,10 +2086,33 @@ export function GroupsPage({
     membershipAddLevelId === "rl-committee" ||
     roleLevels.find((l) => l.id === membershipAddLevelId)?.name === "委員會";
 
+  /** v1.88.2：單位層級（層級 id rl-unit 或層級名「單位」），選單位層級不選品管組，
+   * 範圍以人員基本資料的所屬單位為準（見 handleMembershipAddOrUpdate 的推導） */
+  const membershipAddIsUnit =
+    membershipAddLevelId === "rl-unit" ||
+    roleLevels.find((l) => l.id === membershipAddLevelId)?.name === "單位";
+
   /** [加入]／[更新]：加入時同群組合併、零勾選擋下；編輯到零角色刪列 */
   function handleMembershipAddOrUpdate() {
     // v1.88.1：委員會層級以 groupId "ALL" 登記一列，不要求選品管組（與 v1.87.0 角色成員管理頁一致）
-    const gid = membershipAddIsCommittee ? COMMITTEE_GROUP_ID : membershipAddGroupId;
+    // v1.88.2：單位層級不選品管組，範圍以人員基本資料的所屬單位為準，
+    // 以該單位所屬品管組（品管組頁籤設定，unit.groupId）登記一列；
+    // can() 的單位角色不跨單位判斷即認此群組（permissions.ts unitRoleTemplateAllows：
+    // 以本人 unitCode 查所屬群組，要求該群組的 membership 持有此角色），故推導結果與權限一致，
+    // 與 v1.87.0 角色成員管理頁的單位級加入（unitGroupOf）同一作法，不需新欄位。
+    let gid = membershipAddIsCommittee ? COMMITTEE_GROUP_ID : membershipAddGroupId;
+    if (membershipAddIsUnit) {
+      if (!userForm.unitCode.trim()) {
+        setMembershipError("請先填寫基本資料的單位");
+        return;
+      }
+      gid =
+        units.find((u) => u.code === userForm.unitCode.trim())?.groupId ?? "";
+      if (!gid) {
+        setMembershipError("所屬單位尚未歸屬品管組，請先到品管組頁籤設定");
+        return;
+      }
+    }
     if (!gid) {
       setMembershipError("請先選擇品管組");
       return;
@@ -5810,11 +5849,7 @@ export function GroupsPage({
               <span>{userError}</span>
             </div>
           )}
-          <nav className="user-form-step-nav" aria-label="人員表單區段">
-            <button type="button" onClick={() => document.getElementById("user-form-basic")?.scrollIntoView({ behavior: "smooth", block: "start" })}>1. 基本資料</button>
-            <button type="button" onClick={() => document.getElementById("user-form-title")?.scrollIntoView({ behavior: "smooth", block: "start" })}>2. 職稱</button>
-            <button type="button" onClick={() => document.getElementById("user-form-roles")?.scrollIntoView({ behavior: "smooth", block: "start" })}>3. 品管組與角色</button>
-          </nav>
+          {/* v1.88.2：三區塊編號導覽列（1. 基本資料／2. 職稱／3. 品管組與角色）已拿掉 */}
           {(masterLoadError || titlesLoadError || rolesLoadError || levelsLoadError) && (
             <ErrorState
               title="人員表單參考資料載入失敗"
@@ -5823,7 +5858,7 @@ export function GroupsPage({
             />
           )}
           <section id="user-form-basic" className="user-form-step" tabIndex={-1}>
-            <SectionTitle title="基本資料" note="* 為必填欄位；可用上方區段導覽快速移動。" />
+            <SectionTitle title="基本資料" note="* 為必填欄位。" />
             <div className="user-form-fields">
           <div className="form-field">
             <label className="field-label">職編 *</label>
@@ -6006,9 +6041,12 @@ export function GroupsPage({
                     setMembershipAddLevelId(next);
                     setMembershipAddRoleName("");
                     // v1.88.1：切到委員會層級不選品管組，清掉殘留的品管組選擇
+                    // v1.88.2：切到單位層級亦不選品管組，比照清除
                     if (
                       next === "rl-committee" ||
-                      roleLevels.find((l) => l.id === next)?.name === "委員會"
+                      next === "rl-unit" ||
+                      roleLevels.find((l) => l.id === next)?.name === "委員會" ||
+                      roleLevels.find((l) => l.id === next)?.name === "單位"
                     ) {
                       setMembershipAddGroupId("");
                     }
@@ -6021,8 +6059,9 @@ export function GroupsPage({
                   ))}
                   <option value="__ungrouped__">未分層級</option>
                 </FormSelect>
-            {/* v1.88.1：委員會在品管組之上，選委員會層級不顯示品管組下拉、不要求選擇 */}
-            {!membershipAddIsCommittee && (
+            {/* v1.88.1：委員會在品管組之上，選委員會層級不顯示品管組下拉、不要求選擇
+                v1.88.2：單位層級亦不顯示，範圍以基本資料的所屬單位為準 */}
+            {!membershipAddIsCommittee && !membershipAddIsUnit && (
             <FormSelect label="品管組" value={membershipAddGroupId}
                   onChange={(e) => {
                     // v1.51.0：切換群組不得清空已勾角色（加入區群組與角色為獨立 state）
