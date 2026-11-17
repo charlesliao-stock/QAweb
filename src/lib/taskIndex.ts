@@ -37,3 +37,38 @@ export function buildTaskIndex(
   });
   return idx;
 }
+
+/**
+ * 任務單位索引（v1.88.5）：與 buildTaskIndex 同一批文件，多保留 unitId 維度，
+ * 供排程頁對單位排程者只計自己單位的任務數（unitId ""＝不限單位任務）。
+ * 指標 → "年-月" → 單位代碼 → { pending, done }。
+ */
+export type TaskUnitIndex = Map<
+  string,
+  Map<string, Map<string, TaskIndexEntry>>
+>;
+
+export function buildTaskUnitIndex(
+  docs: Array<{ data: () => Record<string, unknown> }>,
+): TaskUnitIndex {
+  const idx: TaskUnitIndex = new Map();
+  docs.forEach((d) => {
+    const v = d.data();
+    const iid = typeof v.indicatorId === "string" ? v.indicatorId : "";
+    if (!iid) return;
+    const y = Number(v.year ?? 0);
+    const mo = Number(v.month ?? 0);
+    if (!y || !mo) return;
+    const unitId = typeof v.unitId === "string" ? v.unitId : "";
+    const byYm = idx.get(iid) ?? new Map<string, Map<string, TaskIndexEntry>>();
+    const k = `${y}-${mo}`;
+    const byUnit = byYm.get(k) ?? new Map<string, TaskIndexEntry>();
+    const e = byUnit.get(unitId) ?? { pending: 0, done: 0 };
+    if (v.status === "done") e.done += 1;
+    else e.pending += 1;
+    byUnit.set(unitId, e);
+    byYm.set(k, byUnit);
+    idx.set(iid, byYm);
+  });
+  return idx;
+}

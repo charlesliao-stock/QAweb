@@ -41,14 +41,24 @@ import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
 import { getDocCacheFirst } from "../lib/cacheFirst";
 import { indicatorCodeOf, effectiveThreshold } from "../lib/indicators";
-import { buildTaskIndex } from "../lib/taskIndex";
+import { buildTaskIndex, buildTaskUnitIndex, type TaskUnitIndex } from "../lib/taskIndex";
 import { usePermissions } from "../lib/usePermissions";
 import { useAuth } from "../lib/auth";
 import { isReviewerAccessActive } from "../lib/reviewerValidity";
 import { useOrgMeta } from "../lib/useOrgMeta";
 import { hasRoleCategory, titleFlagsOf } from "../lib/orgMeta";
 import { isReviewerRole } from "../lib/roleIdentity";
-import { deriveCrossFlags, resolveDataScope } from "../lib/dataScope";
+import {
+  assignmentItemInvolvesUnit,
+  deriveCrossFlags,
+  isUnitSchedulerRole,
+  mergeAssignmentItemsByReviewer,
+  resolveDataScope,
+  rowHasOwnUnitScheduleContent,
+  scheduleDeletableByUnit,
+  scheduleInvolvesUnit,
+  splitAssignmentItemsByUnit,
+} from "../lib/dataScope";
 import { countRecordsByTaskWithImports } from "../lib/dashboardStats";
 import {
   buildTrackedRows,
@@ -400,6 +410,8 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
   const [taskIndex, setTaskIndex] = useState<
     Map<string, Map<string, { pending: number; done: number }>>
   >(new Map());
+  /** v1.88.5：任務單位索引（與 taskIndex 同一批文件；單位排程者只計自己單位的任務數，unitId ""＝不限單位任務） */
+  const [taskUnitIndex, setTaskUnitIndex] = useState<TaskUnitIndex>(new Map());
   const [deadlineDay, setDeadlineDay] = useState(10);
 
   // 篩選（v1.18）：年份／年別（鎖定系統統計週期）／組別／關鍵字／顯示加審
@@ -461,6 +473,28 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     });
     return scope.kind === "all" ? null : scope.unitCodes;
   }, [user, units, catalog, orgMeta]);
+  // v1.88.5：單位排程者（單位召集人／單位執行幹事，不論 cross）——
+  // 只能幫自己單位排程、只看得到自己單位的排程內容；指標不設限（見 rows
+  // 與各編輯器）。系統管理員不受限；其餘角色依上節 dataScope 不變。
+  const isUnitScheduler = useMemo(
+    () =>
+      isUnitSchedulerRole(
+        user?.roles ?? [],
+        (user?.roles ?? []).includes("系統管理員"),
+      ),
+    [user],
+  );
+  const scheduleRestrictedUnits = useMemo(
+    () =>
+      isUnitScheduler && myUnitCode
+        ? new Set<string>([myUnitCode])
+        : isUnitScheduler
+          ? new Set<string>()
+          : null,
+    [isUnitScheduler, myUnitCode],
+  );
+  // 查閱彈窗用：單位排程者不論 cross 皆只看自己單位；其餘沿用 dataScope。
+  const scheduleScopeUnits = scheduleRestrictedUnits ?? detailScopeUnits;
   const unitNameOf = useCallback(
     (code: string) => units.find((u) => u.code === code)?.name ?? code,
     [units],
@@ -657,9 +691,18 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             }>,
           ),
         );
+        // v1.88.5：同一批文件多建單位維度索引（不另讀取），供單位排程者計數。
+        setTaskUnitIndex(
+          buildTaskUnitIndex(
+            tsnap.docs as unknown as Array<{
+              data: () => Record<string, unknown>;
+            }>,
+          ),
+        );
       } catch {
         /* 任務索引讀取失敗：索引留空，任務數顯示為 0，不影響其他資料 */
         if (!cancelled) setTaskIndex(new Map());
+        if (!cancelled) setTaskUnitIndex(new Map());
       }
     })();
     return () => {
@@ -732,22 +775,38 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
         }
       }
     }
-    return out.sort(
+    const sorted = out.sort(
       (a, b) =>
         a.groupName.localeCompare(b.groupName, "zh-Hant") ||
         a.name.localeCompare(b.name, "zh-Hant") ||
         (a.category === "temp" ? 1 : 0) - (b.category === "temp" ? 1 : 0) ||
         b.period.localeCompare(a.period),
     );
+    // v1.88.5：單位排程者只看得到自己單位的排程列。未排（無排程、無分工表）
+    // 的列保留，以便為自己單位新建排程；指標本身不設限（可來自各品管組）。
+    if (!isUnitScheduler || !myUnitCode) {
+      return isUnitScheduler ? [] : sorted;
+    }
+    return sorted.filter((r) =>
+      rowHasOwnUnitScheduleContent(
+        r.schedule,
+        assignments.get(r.indicatorId)?.items ?? [],
+        myUnitCode,
+        r.category === "temp",
+      ),
+    );
   }, [
     indicators,
     schedules,
+    assignments,
     groupMap,
     cycle,
     period,
     filterGroup,
     filterKeyword,
     showTemp,
+    isUnitScheduler,
+    myUnitCode,
   ]);
 
   const compact = useCompactLayout();
@@ -775,15 +834,43 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     const m = new Map<string, number>();
     for (const s of schedules) {
       if (s.category !== "temp" || s.selfReview) continue;
+      // v1.88.5：單位排程者只計涵蓋自己單位的加審。
+      if (
+        isUnitScheduler &&
+        myUnitCode &&
+        !scheduleInvolvesUnit(s, myUnitCode)
+      ) {
+        continue;
+      }
       m.set(s.indicatorId, (m.get(s.indicatorId) ?? 0) + 1);
     }
     return m;
-  }, [schedules]);
+  }, [schedules, isUnitScheduler, myUnitCode]);
 
   /** 該列排程曆年月已產生的任務數（未執行／已完成） */
   function taskCountsFor(row: RowItem): { pending: number; done: number } {
     const s = row.schedule;
     if (!s) return { pending: 0, done: 0 };
+    // v1.88.5：單位排程者只計自己單位的任務（unitId ""＝不限單位任務，
+    // 其排程涵蓋自己單位，計入）；其餘沿用全量索引。
+    if (isUnitScheduler && myUnitCode) {
+      const idx = taskUnitIndex.get(row.indicatorId);
+      if (!idx) return { pending: 0, done: 0 };
+      let pending = 0;
+      let done = 0;
+      for (const { year, month } of scheduleCalendarMonths(s)) {
+        const byUnit = idx.get(`${year}-${month}`);
+        if (!byUnit) continue;
+        for (const unitId of [myUnitCode, ""]) {
+          const e = byUnit.get(unitId);
+          if (e) {
+            pending += e.pending;
+            done += e.done;
+          }
+        }
+      }
+      return { pending, done };
+    }
     const idx = taskIndex.get(row.indicatorId);
     if (!idx) return { pending: 0, done: 0 };
     let pending = 0;
@@ -798,6 +885,13 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
     return { pending, done };
   }
 
+  /** v1.88.5：該列排程能否由單位排程者刪除——僅限排程只含自己單位時；含其他單位（或不限單位）者僅能由管理員刪除 */
+  function canDeleteRow(row: RowItem): boolean {
+    if (!canEdit) return false;
+    if (!isUnitScheduler) return true;
+    return scheduleDeletableByUnit(row.schedule, myUnitCode);
+  }
+
   function backToList() {
     setView({ kind: "list" });
     loadData();
@@ -807,6 +901,12 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
   async function handleDeleteSchedule(row: RowItem) {
     const sched = row.schedule;
     if (!sched) return;
+    // v1.88.5：單位排程者僅能刪除只含自己單位的排程（防護，正常流程下
+    // 含其他單位的列根本看不到刪除按鈕）。
+    if (isUnitScheduler && !scheduleDeletableByUnit(sched, myUnitCode)) {
+      onAction("此排程包含其他單位，僅能由管理員刪除");
+      return;
+    }
     const label = sched.selfReview
       ? "自審"
       : sched.category === "temp"
@@ -1019,9 +1119,21 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                 <tbody>
                   {sortedRows.map((r) => {
                     const sched = r.schedule;
-                    const schedDone = schedulePillState(sched) === "done";
+                    // v1.88.5：單位排程者的 pill 只反映自己單位的設定狀態。
+                    const schedDone =
+                      schedulePillState(sched) === "done" &&
+                      (!isUnitScheduler ||
+                        !sched ||
+                        scheduleInvolvesUnit(sched, myUnitCode));
                     const asg = assignments.get(r.indicatorId);
-                    const asgDone = assignmentPillState(asg) === "done";
+                    const asgOwnItems = (
+                      isUnitScheduler && myUnitCode
+                        ? (asg?.items ?? []).filter((it) =>
+                            assignmentItemInvolvesUnit(it, myUnitCode),
+                          )
+                        : (asg?.items ?? [])
+                    );
+                    const asgDone = asgOwnItems.length > 0;
                     const { pending, done } = taskCountsFor(r);
                     const hasTasks = pending + done > 0;
                     // v1.18：產生排程需兩邊設定都完成（排程／單位設定：
@@ -1145,15 +1257,15 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                               )}
                             </span>
                           </button>
-                          {asgDone && asg && (
+                          {asgDone && (
                             <div className="muted-text">
-                              {asg.items.length} 位審查員・
-                              {asg.items.reduce(
+                              {asgOwnItems.length} 位審查員・
+                              {asgOwnItems.reduce(
                                 (n, it) => n + it.units.length,
                                 0,
                               )}{" "}
                               單位
-                              {asg.items.some(
+                              {asgOwnItems.some(
                                 (it) => it.unlimitedUnits === true,
                               ) && "（含不限單位）"}
                             </div>
@@ -1263,7 +1375,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                                 gap: 2,
                               }}
                             >
-                              {!!sched && canEdit && (
+                              {!!sched && canDeleteRow(r) && (
                                 <button
                                   className="button button-outline button-sm"
                                   onClick={() => handleDeleteSchedule(r)}
@@ -1302,6 +1414,8 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             groupMap={groupMap}
             reviewersByGroup={reviewersByGroup}
             assignment={assignments.get(addAuditRow.indicatorId) ?? null}
+            restrictedUnitCodes={scheduleRestrictedUnits}
+            restrictedUnitName={unitNameOf(myUnitCode)}
             actor={actor}
             deadlineDay={deadlineDay}
             filterYear={filterYear}
@@ -1326,9 +1440,10 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             usersMap={usersMap}
             inactiveIds={inactiveIds}
             unitNameOf={unitNameOf}
-            visibleUnitCodes={detailScopeUnits}
+            visibleUnitCodes={scheduleScopeUnits}
             viewerStaffId={user?.staffId ?? ""}
             canEdit={canEdit}
+            canDelete={detailRow ? canDeleteRow(detailRow) : false}
             actor={actor}
             onAction={onAction}
             onClose={() => setDetailRow(null)}
@@ -1386,6 +1501,8 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               initialYear={view.year}
               units={units}
               groupMap={groupMap}
+              restrictedUnitCodes={scheduleRestrictedUnits}
+              restrictedUnitName={unitNameOf(myUnitCode)}
               canEdit={canEdit}
               actor={actor}
               onAction={onAction}
@@ -1402,6 +1519,8 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
               reviewerRoleIds={reviewerRoleIds}
               inactiveIds={inactiveIds}
               initial={assignments.get(indicator.id) ?? null}
+              restrictedUnitCodes={scheduleRestrictedUnits}
+              restrictedUnitName={unitNameOf(myUnitCode)}
               canEdit={canEdit}
               onAction={onAction}
               onSaved={backToList}
@@ -1818,6 +1937,8 @@ function ScheduleEditor({
   initialYear,
   units,
   groupMap,
+  restrictedUnitCodes,
+  restrictedUnitName,
   canEdit,
   actor,
   onAction,
@@ -1829,11 +1950,19 @@ function ScheduleEditor({
   initialYear: number;
   units: UnitLite[];
   groupMap: Map<string, string>;
+  /**
+   * v1.88.5：單位排程者（單位召集人／執行幹事）的可排單位集合
+   * （僅自己單位；null＝不設限）。設定時沿用同一集合。
+   */
+  restrictedUnitCodes: ReadonlySet<string> | null;
+  /** 受限時顯示用（自己單位名稱；未設單位時為單位代碼本身） */
+  restrictedUnitName: string;
   canEdit: boolean;
   actor: { id: string; name: string };
   onAction: (m: string) => void;
   onSaved: () => void;
 }) {
+  const restricted = restrictedUnitCodes != null;
   const [year, setYear] = useState(initialYear);
   const period = periodForFilter(category, year);
   const [months, setMonths] = useState<number[]>([]);
@@ -1843,6 +1972,9 @@ function ScheduleEditor({
     useState<1 | 2 | 3>(DEFAULT_INTERVAL_MONTHS);
   const caseCount = useCaseCountInput();
   const [unitIds, setUnitIds] = useState<string[]>([]);
+  // v1.88.5：受限時，載入的既有單位中不屬於自己的部分另外保存，
+  // 儲存時併回（只改自己單位，不刪其他單位的既有設定）。
+  const [otherUnitIds, setOtherUnitIds] = useState<string[]>([]);
   // v1.51.0：不限單位（不固定單位、沒有單位限制；勾選時單位清單忽略）
   const [unlimited, setUnlimited] = useState(false);
   const [notes, setNotes] = useState("");
@@ -1886,7 +2018,19 @@ function ScheduleEditor({
         caseCount.setValue(
           s?.caseCount != null ? String(s.caseCount) : "3",
         );
-        setUnitIds(s?.unitIds ?? []);
+        // v1.88.5：受限時只載入自己單位的選擇；其他單位保留在 otherUnitIds，
+        // 儲存時併回，不因編輯而刪除。
+        const loadedUnitIds = s?.unitIds ?? [];
+        setUnitIds(
+          restricted
+            ? loadedUnitIds.filter((c) => restrictedUnitCodes!.has(c))
+            : loadedUnitIds,
+        );
+        setOtherUnitIds(
+          restricted
+            ? loadedUnitIds.filter((c) => !restrictedUnitCodes!.has(c))
+            : [],
+        );
         setUnlimited(s?.unlimitedUnits === true);
         setNotes(s?.notes ?? "");
         setPrev(pv);
@@ -1916,8 +2060,14 @@ function ScheduleEditor({
     caseCount.setValue(
       prev.caseCount != null ? String(prev.caseCount) : "3",
     );
-    setUnitIds([...prev.unitIds]);
-    setUnlimited(prev.unlimitedUnits === true);
+    // v1.88.5：受限時只帶入自己單位；不限單位旗標與其他單位保留現況，
+    // 不由前一期帶入。
+    setUnitIds(
+      restricted
+        ? [...prev.unitIds].filter((c) => restrictedUnitCodes!.has(c))
+        : [...prev.unitIds],
+    );
+    if (!restricted) setUnlimited(prev.unlimitedUnits === true);
     setNotes(prev.notes);
     onAction(`已帶入前一期（${prev.periodLabel}）設定，請確認後儲存`);
   }
@@ -1953,7 +2103,9 @@ function ScheduleEditor({
           intervalMonths: interval,
           refYear: null,
           caseCount: parseCaseCount(cc),
-          unitIds: unlimited ? [] : [...unitIds],
+          // v1.88.5：受限時併回其他單位的既有設定（只改自己單位）；
+          // 不限單位時 unitIds 為空（與既有行為一致）。
+          unitIds: unlimited ? [] : [...new Set([...unitIds, ...otherUnitIds])],
           unlimitedUnits: unlimited,
           notes: notes.trim(),
           selfReview: false,
@@ -1975,6 +2127,12 @@ function ScheduleEditor({
   }
 
   async function handleDelete() {
+    // v1.88.5：單位排程者僅能刪除只含自己單位的期間設定；含其他單位
+    // （或不限單位）者僅能由管理員刪除（防護，正常流程下該按鈕不顯示）。
+    if (restricted && (otherUnitIds.length > 0 || unlimited)) {
+      onAction("此排程包含其他單位，僅能由管理員刪除");
+      return;
+    }
     const ok = window.confirm(
       `確定刪除 ${periodLabel(category, period)} 的排程設定？將一併刪除該排程的未完成任務；已完成任務與已提交的審查紀錄不受影響。`,
     );
@@ -2048,16 +2206,36 @@ function ScheduleEditor({
                 <input
                   type="checkbox"
                   checked={unlimited}
-                  disabled={!canEdit}
+                  // v1.88.5：單位排程者不提供不限單位（不限單位等於幫所有
+                  // 單位排）；既有不限單位排程的旗標維持現況、不可切換。
+                  disabled={!canEdit || restricted}
                   onChange={(e) => setUnlimited(e.target.checked)}
                 />
                 <b>不限單位</b>
                 <span className="muted-text">
                   （不固定單位、沒有單位限制；單位顯示為 NA，審查時不用選單位）
+                  {restricted && "；單位召集人／執行幹事僅能為自己單位排程，不提供此選項"}
                 </span>
               </label>
+              {restricted && (
+                <p className="settings-note">
+                  僅能為自己單位（{restrictedUnitName || "尚未設定所屬單位"}）排程
+                  {otherUnitIds.length > 0 &&
+                    "；其他單位的既有設定會保留，不會因儲存而刪除"}
+                  。月份、頻次、件數為該指標該期間共用設定。
+                </p>
+              )}
+              {restricted && restrictedUnitCodes!.size === 0 && (
+                <p className="settings-note">
+                  尚未設定所屬單位，請先至「群組與人員」→「人員」設定單位。
+                </p>
+              )}
               <UnitTreePicker
-                units={units}
+                units={
+                  restricted
+                    ? units.filter((u) => restrictedUnitCodes!.has(u.code))
+                    : units
+                }
                 groupMap={groupMap}
                 selected={unitIds}
                 onChange={setUnitIds}
@@ -2188,10 +2366,15 @@ function ScheduleEditor({
                   {saving ? "儲存中…" : "儲存設定"}
                 </button>
               )}
-              {canEdit && exists && (
+              {canEdit && exists && !(restricted && (otherUnitIds.length > 0 || unlimited)) && (
                 <button className="button button-ghost" onClick={handleDelete}>
                   <Trash2 size={15} /> 刪除此期間設定
                 </button>
+              )}
+              {canEdit && exists && restricted && (otherUnitIds.length > 0 || unlimited) && (
+                <span className="settings-note">
+                  此排程包含其他單位，僅能由管理員刪除。
+                </span>
               )}
             </div>
           </>
@@ -2210,6 +2393,8 @@ function AddAuditDialog({
   groupMap,
   reviewersByGroup,
   assignment,
+  restrictedUnitCodes,
+  restrictedUnitName,
   actor,
   deadlineDay,
   filterYear,
@@ -2225,6 +2410,12 @@ function AddAuditDialog({
   groupMap: Map<string, string>;
   reviewersByGroup: Map<string, ReviewerLite[]>;
   assignment: IndicatorAssignment | null;
+  /**
+   * v1.88.5：單位排程者的可排單位集合（僅自己單位；null＝不設限）。
+   */
+  restrictedUnitCodes: ReadonlySet<string> | null;
+  /** 受限時顯示用（自己單位名稱） */
+  restrictedUnitName: string;
   actor: { id: string; name: string };
   deadlineDay: number;
   filterYear: number;
@@ -2235,15 +2426,28 @@ function AddAuditDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const restricted = restrictedUnitCodes != null;
+  const restrictedUnitCode = restricted
+    ? [...restrictedUnitCodes!][0] ?? ""
+    : "";
   const monthOrder = useMemo(() => cycleMonths(cycle, ""), [cycle]);
   const [months, setMonths] = useState<number[]>([]);
   const caseCount = useCaseCountInput();
-  const [selUnits, setSelUnits] = useState<string[]>(
-    () => row.schedule?.unitIds ?? [],
-  );
+  const [selUnits, setSelUnits] = useState<string[]>(() => {
+    const ids = row.schedule?.unitIds ?? [];
+    if (!restricted) return ids;
+    // 受限時只帶入自己單位；原排程為不限單位或不含自己單位時預設自己單位。
+    const own = ids.filter((c) => restrictedUnitCodes!.has(c));
+    return own.length > 0
+      ? own
+      : restrictedUnitCode
+        ? [restrictedUnitCode]
+        : [];
+  });
   // v1.51.0：不限單位（NA 排程的加審預設為不限單位模式）
+  // v1.88.5：單位排程者不提供不限單位。
   const [unlimited, setUnlimited] = useState(
-    () => row.schedule?.unlimitedUnits === true,
+    () => !restricted && row.schedule?.unlimitedUnits === true,
   );
   const [selReviewers, setSelReviewers] = useState<string[]>(() =>
     row.schedule?.unlimitedUnits === true
@@ -2300,13 +2504,16 @@ function AddAuditDialog({
 
   const unitOptions: PickerOption[] = useMemo(
     () =>
-      units.map((u) => ({
-        id: u.code,
-        label: `${u.name}（${u.code}）`,
-        sub: groupDisplayName(groupMap, u.groupId),
-        groupId: u.groupId,
-      })),
-    [units, groupMap],
+      units
+        // v1.88.5：單位排程者只看得到自己單位可選。
+        .filter((u) => !restricted || restrictedUnitCodes!.has(u.code))
+        .map((u) => ({
+          id: u.code,
+          label: `${u.name}（${u.code}）`,
+          sub: groupDisplayName(groupMap, u.groupId),
+          groupId: u.groupId,
+        })),
+    [units, groupMap, restricted, restrictedUnitCodes],
   );
 
   const reviewerNameOf = useCallback(
@@ -2377,14 +2584,27 @@ function AddAuditDialog({
                 : undefined,
           };
         });
+        // v1.88.5：單位排程者的未達閾值挑選只列自己單位的列。
+        const builtRows = buildBelowThresholdRows({
+          records,
+          tasks,
+          indicatorId: row.indicatorId,
+          threshold,
+          tempSchedules: existingTemps,
+        });
         setPickerRows(
-          buildBelowThresholdRows({
-            records,
-            tasks,
-            indicatorId: row.indicatorId,
-            threshold,
-            tempSchedules: existingTemps,
-          }),
+          restricted
+            ? builtRows
+                .filter((r) =>
+                  r.units.some((u) => u.unitId === restrictedUnitCode),
+                )
+                .map((r) => ({
+                  ...r,
+                  units: r.units.filter(
+                    (u) => u.unitId === restrictedUnitCode,
+                  ),
+                }))
+            : builtRows,
         );
       } catch (error) {
         if (!cancelled)
@@ -2403,7 +2623,19 @@ function AddAuditDialog({
     const target = nextCalendarMonth(r.year, r.month);
     setMonths([target.month]);
     setPickedYear(target.year);
-    setSelUnits(r.units.map((u) => u.unitId));
+    // v1.88.5：單位排程者只帶入自己單位。
+    const ownUnits = restricted
+      ? r.units
+          .map((u) => u.unitId)
+          .filter((c) => restrictedUnitCodes!.has(c))
+      : r.units.map((u) => u.unitId);
+    setSelUnits(
+      ownUnits.length > 0
+        ? ownUnits
+        : restricted && restrictedUnitCode
+          ? [restrictedUnitCode]
+          : [],
+    );
     setUnlimited(false);
     setPickerOpen(false);
   }
@@ -2415,6 +2647,11 @@ function AddAuditDialog({
   function applyToTable() {
     if (selReviewers.length === 0) {
       onAction("請先選擇審核員");
+      return;
+    }
+    // v1.88.5：防護——單位排程者不得以不限單位加入分工表。
+    if (restricted && unlimited) {
+      onAction("僅能為自己單位建立加審，不提供不限單位");
       return;
     }
     if (unlimited) {
@@ -2589,13 +2826,21 @@ function AddAuditDialog({
         <input
           type="checkbox"
           checked={unlimited}
+          // v1.88.5：單位排程者不提供不限單位。
+          disabled={restricted}
           onChange={(e) => setUnlimited(e.target.checked)}
         />
         <b>不限單位</b>
         <span className="muted-text">
           （不固定單位；單位顯示為 NA，審查時不用選單位）
+          {restricted && "；單位召集人／執行幹事僅能為自己單位排程，不提供此選項"}
         </span>
       </label>
+      {restricted && (
+        <p className="settings-note">
+          僅能為自己單位（{restrictedUnitName || "尚未設定所屬單位"}）建立加審。
+        </p>
+      )}
 
       <OptionMultiPicker
         title="選擇受審單位"
@@ -3074,6 +3319,7 @@ function ScheduleDetailModal({
   visibleUnitCodes,
   viewerStaffId,
   canEdit,
+  canDelete,
   actor,
   onAction,
   onClose,
@@ -3089,6 +3335,11 @@ function ScheduleDetailModal({
   viewerStaffId: string;
   /** v1.60.0：manageSchedule 才顯示刪除入口 */
   canEdit: boolean;
+  /**
+   * v1.88.5：能否刪除此排程（父層依單位排程者規則判定：含其他單位
+   * 或不限單位者，單位排程者不得刪除）。未傳入時預設與 canEdit 相同。
+   */
+  canDelete: boolean;
   actor: { id: string; name: string };
   onAction: (m: string) => void;
   onClose: () => void;
@@ -3100,6 +3351,11 @@ function ScheduleDetailModal({
   async function handleDelete() {
     const sched = row.schedule;
     if (!sched || deleting) return;
+    // v1.88.5：防護——單位排程者不得刪除含其他單位的排程。
+    if (!canDelete) {
+      onAction("此排程包含其他單位，僅能由管理員刪除");
+      return;
+    }
     const label = sched.selfReview
       ? "自審"
       : sched.category === "temp"
@@ -3370,18 +3626,54 @@ function ScheduleDetailModal({
     [scopedTrackedRows],
   );
 
+  // v1.88.5：查閱內容依可見單位過濾（null＝全看）。不限單位排程／項目
+  // 涵蓋自己單位，照常顯示「不限單位」；其餘只顯示可見單位。
+  const displayUnitIds = useMemo(() => {
+    if (!sched || sched.unlimitedUnits) return [];
+    if (visibleUnitCodes == null) return sched.unitIds;
+    return sched.unitIds.filter((c) => visibleUnitCodes.has(c));
+  }, [sched, visibleUnitCodes]);
+  const displayItems = useMemo(() => {
+    const items = assignment?.items ?? [];
+    if (visibleUnitCodes == null) return items;
+    return items
+      .filter(
+        (it) =>
+          it.unlimitedUnits === true ||
+          it.units.some((u) => visibleUnitCodes.has(u.unitId)),
+      )
+      .map((it) =>
+        it.unlimitedUnits === true
+          ? it
+          : {
+              ...it,
+              units: it.units.filter((u) => visibleUnitCodes.has(u.unitId)),
+            },
+      );
+  }, [assignment, visibleUnitCodes]);
+
   // 臨時排程：審核員由任務推導（臨時排程不存分工表）
   const tempReviewers = useMemo(() => {
     if (!isTemp) return [];
     const m = new Map<string, string>();
     for (const t of tasks) {
+      // v1.88.5：只列可見範圍內的任務的審查員（不限單位任務 unitId "" 屬
+      // 涵蓋自己單位，照常列入；本人任務另行放行，與追蹤表同口徑）。
+      if (
+        visibleUnitCodes != null &&
+        t.unitId !== "" &&
+        !visibleUnitCodes.has(t.unitId) &&
+        t.reviewerId !== viewerStaffId
+      ) {
+        continue;
+      }
       if (!m.has(t.reviewerId))
         m.set(t.reviewerId, usersMap.get(t.reviewerId) ?? t.reviewerId);
     }
     return [...m.entries()].sort((a, b) =>
       a[0].localeCompare(b[0], "zh-Hant"),
     );
-  }, [isTemp, tasks, usersMap]);
+  }, [isTemp, tasks, usersMap, visibleUnitCodes, viewerStaffId]);
 
   const monthLabels = useMemo(() => {
     if (!sched) return "";
@@ -3454,9 +3746,9 @@ function ScheduleDetailModal({
               <td data-label="受審單位">
                 {sched.unlimitedUnits
                   ? "不限單位"
-                  : sched.unitIds.length === 0
+                  : displayUnitIds.length === 0
                     ? "—"
-                    : sched.unitIds
+                    : displayUnitIds
                         .map(
                           (c) => `${unitNameOf(c)}（${c}）`,
                         )
@@ -3499,7 +3791,7 @@ function ScheduleDetailModal({
         reviewerIds={
           isTemp
             ? tempReviewers.map(([id]) => id)
-            : (assignment?.items ?? []).map((it) => it.reviewerId)
+            : displayItems.map((it) => it.reviewerId)
         }
         inactiveIds={inactiveIds}
         nameOf={(id) => usersMap.get(id) ?? ""}
@@ -3518,7 +3810,7 @@ function ScheduleDetailModal({
             ))}
           </p>
         )
-      ) : assignment && assignment.items.length > 0 ? (
+      ) : displayItems.length > 0 ? (
         <div className="table-scroll">
           <table className="data-table">
             <thead>
@@ -3528,7 +3820,7 @@ function ScheduleDetailModal({
               </tr>
             </thead>
             <tbody>
-              {assignment.items.map((it) => {
+              {displayItems.map((it) => {
                 const sub = subtotals.get(it.reviewerId);
                 return (
                 <tr key={it.reviewerId}>
@@ -3645,7 +3937,7 @@ function ScheduleDetailModal({
       )}
 
       <div className="form-actions">
-        {canEdit && row.schedule && (
+        {canDelete && (
           <button
             className="button button-ghost"
             disabled={deleting}
@@ -3653,6 +3945,11 @@ function ScheduleDetailModal({
           >
             <Trash2 size={15} /> {deleting ? "刪除中…" : "刪除此排程"}
           </button>
+        )}
+        {canEdit && row.schedule && !canDelete && (
+          <span className="settings-note">
+            此排程包含其他單位，僅能由管理員刪除。
+          </span>
         )}
         <button className="button button-outline" onClick={onClose}>
           關閉
@@ -3673,6 +3970,8 @@ function AssignmentBatchImporter({
   usersMap,
   reviewerRoleIds,
   units,
+  restrictedUnitCodes,
+  restrictedUnitName,
   onImport,
   onAction,
 }: {
@@ -3680,6 +3979,12 @@ function AssignmentBatchImporter({
   usersMap: Map<string, string>;
   reviewerRoleIds: Set<string>;
   units: UnitLite[];
+  /**
+   * v1.88.5：單位排程者的可匯入單位集合（僅自己單位；未設＝不設限）。
+   */
+  restrictedUnitCodes?: ReadonlySet<string> | null;
+  /** 受限時顯示用（自己單位名稱） */
+  restrictedUnitName?: string;
   onImport: (rows: ParsedAssignmentRow[]) => void;
   onAction: (m: string) => void;
 }) {
@@ -3698,8 +4003,10 @@ function AssignmentBatchImporter({
       ),
       reviewerRoleIds,
       units: units.map((u) => ({ code: u.code, name: u.name })),
+      // v1.88.5：受限時只允許自己單位的列；「不限單位」列亦不通過。
+      allowedUnitCodes: restrictedUnitCodes ?? undefined,
     }),
-    [reviewersByGroup, usersMap, reviewerRoleIds, units],
+    [reviewersByGroup, usersMap, reviewerRoleIds, units, restrictedUnitCodes],
   );
 
   function handlePick() {
@@ -3799,6 +4106,8 @@ function AssignmentBatchImporter({
       </div>
       <p className="settings-note batch-sample-note">
         匯入只寫進分工表畫面，須按「儲存分工表」才寫入；審查件數仍在「排程／單位設定」中設定。
+        {restrictedUnitCodes != null &&
+          `僅能匯入自己單位（${restrictedUnitName || "尚未設定所屬單位"}），「不限單位」不開放。`}
       </p>
       <input
         ref={fileRef}
@@ -3890,6 +4199,8 @@ function AssignmentEditor({
   reviewerRoleIds,
   inactiveIds,
   initial,
+  restrictedUnitCodes,
+  restrictedUnitName,
   canEdit,
   onAction,
   onSaved,
@@ -3902,20 +4213,44 @@ function AssignmentEditor({
   reviewerRoleIds: Set<string>;
   inactiveIds: Set<string>;
   initial: IndicatorAssignment | null;
+  /**
+   * v1.88.5：單位排程者的可排單位集合（僅自己單位；null＝不設限）。
+   */
+  restrictedUnitCodes: ReadonlySet<string> | null;
+  /** 受限時顯示用（自己單位名稱） */
+  restrictedUnitName: string;
   canEdit: boolean;
   onAction: (m: string) => void;
   onSaved: () => void;
 }) {
+  const restricted = restrictedUnitCodes != null;
+  const restrictedUnitCode = restricted
+    ? [...restrictedUnitCodes!][0] ?? ""
+    : "";
+  // v1.88.5：受限時，初始分工表按單位拆分——state 只留自己單位的部分
+  // （不限單位項目整筆保留、鎖定），其餘部分另存，儲存時合併還原，
+  // 不因編輯而刪除其他單位的分工。
+  const splitInitial = useMemo(
+    () =>
+      restricted
+        ? splitAssignmentItemsByUnit(initial?.items ?? [], restrictedUnitCode)
+        : {
+            own: initial?.items ?? [],
+            other: [] as AssignmentItem[],
+          },
+    // initial 只在掛載時讀取（與既有 items state 相同語意）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const [otherItems] = useState<AssignmentItem[]>(splitInitial.other);
   const [items, setItems] = useState<AssignmentItem[]>(
-    initial
-      ? initial.items.map((it) => ({
-          reviewerId: it.reviewerId,
-          units: it.units.map((u) => ({ ...u })),
-          ...(it.unlimitedUnits === true
-            ? { unlimitedUnits: true as const }
-            : {}),
-        }))
-      : [],
+    splitInitial.own.map((it) => ({
+      reviewerId: it.reviewerId,
+      units: it.units.map((u) => ({ ...u })),
+      ...(it.unlimitedUnits === true
+        ? { unlimitedUnits: true as const }
+        : {}),
+    })),
   );
   const [selReviewers, setSelReviewers] = useState<string[]>([]);
   const [selUnits, setSelUnits] = useState<string[]>([]);
@@ -3941,13 +4276,16 @@ function AssignmentEditor({
 
   const unitOptions: PickerOption[] = useMemo(
     () =>
-      units.map((u) => ({
-        id: u.code,
-        label: `${u.name}（${u.code}）`,
-        sub: groupDisplayName(groupMap, u.groupId),
-        groupId: u.groupId,
-      })),
-    [units, groupMap],
+      units
+        // v1.88.5：單位排程者只看得到自己單位可選。
+        .filter((u) => !restricted || restrictedUnitCodes!.has(u.code))
+        .map((u) => ({
+          id: u.code,
+          label: `${u.name}（${u.code}）`,
+          sub: groupDisplayName(groupMap, u.groupId),
+          groupId: u.groupId,
+        })),
+    [units, groupMap, restricted, restrictedUnitCodes],
   );
 
   const reviewerName = useCallback(
@@ -3987,6 +4325,11 @@ function AssignmentEditor({
       onAction("請先選擇審查員");
       return;
     }
+    // v1.88.5：防護——單位排程者不得以不限單位加入分工表。
+    if (restricted && unlimited) {
+      onAction("僅能為自己單位排程，不提供不限單位");
+      return;
+    }
     if (unlimited) {
       setItems((prev) => mergeItemsUnlimited(prev, selReviewers));
       onAction(
@@ -4008,20 +4351,41 @@ function AssignmentEditor({
   }
 
   function removeItem(reviewerId: string) {
-    setItems((prev) => prev.filter((it) => it.reviewerId !== reviewerId));
+    // v1.88.5：受限時不限單位項目鎖定（涵蓋所有單位，單位排程者不得移除）。
+    setItems((prev) =>
+      prev.filter(
+        (it) =>
+          it.reviewerId !== reviewerId ||
+          (restricted && it.unlimitedUnits === true),
+      ),
+    );
   }
 
   // v1.88.4：批次匯入併入分工表 state（只改畫面，儲存時才寫入 Firestore）
   function importAssignments(parsed: ParsedAssignmentRow[]) {
-    setItems((prev) => mergeImportedAssignments(prev, parsed));
+    setItems((prev) => {
+      const merged = mergeImportedAssignments(prev, parsed);
+      if (!restricted) return merged;
+      // v1.88.5：匯入不得把鎖定的不限單位項目改回指定單位項目。
+      const locked = new Map(
+        prev
+          .filter((it) => it.unlimitedUnits === true)
+          .map((it) => [it.reviewerId, it]),
+      );
+      return merged.map((it) => locked.get(it.reviewerId) ?? it);
+    });
   }
 
   async function handleSave() {
-    if (items.length === 0) {
+    // v1.88.5：受限時把其他單位的部分合併還原後再寫入（只改自己單位）。
+    const mergedItems = restricted
+      ? mergeAssignmentItemsByReviewer(items, otherItems)
+      : items;
+    if (mergedItems.length === 0) {
       onAction("分工表尚無資料，請先加入審查員與單位");
       return;
     }
-    const dups = findDuplicateUnits(items);
+    const dups = findDuplicateUnits(mergedItems);
     if (dups.size > 0) {
       const lines = [...dups.entries()].map(
         ([u, rs]) => `${u}：${rs.map((r) => reviewerName(r)).join("、")}`,
@@ -4036,7 +4400,7 @@ function AssignmentEditor({
       const db = getFirebaseDb();
       await setDoc(doc(db, "indicatorAssignments", indicatorId), {
         indicatorId,
-        items,
+        items: mergedItems,
         updatedAt: serverTimestamp(),
       });
       onAction("已儲存審查員／單位分工表");
@@ -4079,14 +4443,24 @@ function AssignmentEditor({
           <input
             type="checkbox"
             checked={unlimited}
-            disabled={!canEdit}
+            // v1.88.5：單位排程者不提供不限單位。
+            disabled={!canEdit || restricted}
             onChange={(e) => setUnlimited(e.target.checked)}
           />
           <b>不限單位</b>
           <span className="muted-text">
             （勾選後不選負責單位；單位顯示為 NA，審查時不用選單位）
+            {restricted && "；單位召集人／執行幹事僅能為自己單位排程，不提供此選項"}
           </span>
         </label>
+        {restricted && (
+          <p className="settings-note">
+            僅能為自己單位（{restrictedUnitName || "尚未設定所屬單位"}）設定分工表
+            {otherItems.length > 0 &&
+              "；其他單位的既有分工會保留，不會因儲存而刪除"}
+            。
+          </p>
+        )}
         <OptionMultiPicker
           title="2. 選擇負責單位"
           options={unitOptions}
@@ -4122,6 +4496,8 @@ function AssignmentEditor({
             usersMap={usersMap}
             reviewerRoleIds={reviewerRoleIds}
             units={units}
+            restrictedUnitCodes={restrictedUnitCodes}
+            restrictedUnitName={restrictedUnitName}
             onImport={importAssignments}
             onAction={onAction}
           />
@@ -4187,12 +4563,21 @@ function AssignmentEditor({
                     </td>
                     {canEdit && (
                       <td>
-                        <button
-                          className="text-button"
-                          onClick={() => removeItem(it.reviewerId)}
-                        >
-                          <Trash2 size={13} /> 移除
-                        </button>
+                        {restricted && it.unlimitedUnits === true ? (
+                          <span
+                            className="muted-text"
+                            title="不限單位項目涵蓋所有單位，單位排程者不得移除"
+                          >
+                            鎖定
+                          </span>
+                        ) : (
+                          <button
+                            className="text-button"
+                            onClick={() => removeItem(it.reviewerId)}
+                          >
+                            <Trash2 size={13} /> 移除
+                          </button>
+                        )}
                       </td>
                     )}
                   </tr>

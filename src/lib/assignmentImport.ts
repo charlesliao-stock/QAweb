@@ -51,6 +51,11 @@ export interface AssignmentImportLookup {
   reviewerRoleIds: Set<string>;
   /** 單位對照（代碼／名稱皆可比對） */
   units: Array<{ code: string; name: string }>;
+  /**
+   * v1.88.5：允許匯入的單位代碼（單位排程者＝僅自己單位；未設＝不設限）。
+   * 「不限單位」列對受限者一律不通過（不限單位等於幫所有單位排）。
+   */
+  allowedUnitCodes?: ReadonlySet<string>;
 }
 
 export interface ParsedAssignmentRow {
@@ -137,6 +142,18 @@ export function validateAssignmentImportRows(
     }
     const parsedUnits = parseAssignedUnits(row[2] ?? "", lookup.units);
     if (parsedUnits.error) return fail(parsedUnits.error);
+    // v1.88.5：單位排程者僅能匯入自己單位；「不限單位」列亦不通過。
+    if (lookup.allowedUnitCodes) {
+      if (parsedUnits.unlimited) {
+        return fail("僅能為自己單位匯入，「不限單位」不開放");
+      }
+      const outside = parsedUnits.unitIds.filter(
+        (c) => !lookup.allowedUnitCodes!.has(c),
+      );
+      if (outside.length > 0) {
+        return fail(`僅能為自己單位匯入（不可匯入 ${outside.join("、")}）`);
+      }
+    }
     return {
       index,
       values,
