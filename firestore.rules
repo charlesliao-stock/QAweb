@@ -135,6 +135,177 @@ service cloud.firestore {
         || isAdmin();
     }
 
+    // ---------- P0（v1.85.5）：寫入濫用收緊 ----------
+    // 規則語言沒有速率限制原語；此處能做的是「誰能寫」＋「寫什麼欄位」＋
+    // 「欄位多大」。單筆文件上限仍是平台 1 MiB；巢狀內容（answers／
+    // editHistory／before／after 內層）規則無法逐項量測，僅限件數，見各集合註解。
+    function strOk(v, m) {
+      return v is string && v.size() <= m;
+    }
+    function optStr(data, key, m) {
+      return !(key in data) || strOk(data.get(key, ''), m);
+    }
+    function optNum(data, key) {
+      return !(key in data) || data.get(key, null) is number;
+    }
+    function optTs(data, key) {
+      return !(key in data) || data.get(key, null) is timestamp;
+    }
+
+    // reviewTasks 欄位白名單（建立時整份文件；更新時以異動鍵比對，見下）
+    function taskKeysValid(data) {
+      return data.keys().hasOnly([
+          'indicatorId', 'year', 'month', 'unitId', 'reviewerId', 'caseCount',
+          'deadline', 'status', 'quotaVersion', 'quotaGroupId', 'quotaCategory',
+          'quotaIntervalStartYear', 'quotaIntervalStartMonth',
+          'quotaIntervalEndYear', 'quotaIntervalEndMonth',
+          'scheduleCategory', 'schedulePeriod',
+          'indicatorVersionAtSchedule', 'thresholdAtSchedule', 'thresholdRuleAtSchedule',
+          'scheduleStartYear', 'scheduleStartMonth', 'scheduleEndYear', 'scheduleEndMonth',
+          'createdAt', 'completedAt', 'assignmentStatus', 'reassignedAt', 'reassignedBy'])
+        && strOk(data.get('indicatorId', ''), 128)
+        && strOk(data.get('unitId', ''), 128)
+        && strOk(data.get('reviewerId', ''), 32)
+        && optStr(data, 'deadline', 32)
+        && optStr(data, 'status', 32)
+        && optStr(data, 'assignmentStatus', 32)
+        && optStr(data, 'reassignedBy', 32)
+        && optStr(data, 'scheduleCategory', 32)
+        && optStr(data, 'schedulePeriod', 64)
+        && optStr(data, 'quotaGroupId', 256)
+        && optStr(data, 'quotaCategory', 32)
+        && optStr(data, 'thresholdRuleAtSchedule', 8)
+        && optStr(data, 'indicatorVersionAtSchedule', 64)
+        && optNum(data, 'year') && optNum(data, 'month')
+        && optNum(data, 'thresholdAtSchedule')
+        && optNum(data, 'quotaIntervalStartYear') && optNum(data, 'quotaIntervalStartMonth')
+        && optNum(data, 'quotaIntervalEndYear') && optNum(data, 'quotaIntervalEndMonth')
+        && optNum(data, 'scheduleStartYear') && optNum(data, 'scheduleStartMonth')
+        && optNum(data, 'scheduleEndYear') && optNum(data, 'scheduleEndMonth')
+        && optNum(data, 'quotaVersion')
+        && (data.get('caseCount', null) == null || data.get('caseCount', null) is number)
+        && optTs(data, 'createdAt') && optTs(data, 'completedAt') && optTs(data, 'reassignedAt');
+    }
+    // reviewTasks 更新只許動這幾個鍵（舊文件若帶有白名單外欄位，更新不受影響）
+    function taskUpdateKeysValid() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'status', 'completedAt', 'reviewerId', 'assignmentStatus',
+        'reassignedAt', 'reassignedBy']);
+    }
+    function taskUpdateValuesValid() {
+      let d = request.resource.data;
+      return optStr(d, 'status', 32) && optStr(d, 'assignmentStatus', 32)
+        && optStr(d, 'reviewerId', 32) && optStr(d, 'reassignedBy', 32)
+        && optTs(d, 'completedAt') && optTs(d, 'reassignedAt');
+    }
+    // 週期共用配額同步（ReviewExecutePage syncPeriodicQuotaTaskStatus）：
+    // 同配額組的任務由不同審查員持有，提交者須同步整組任務狀態；
+    // 規則看不到「呼叫者的任務」，故僅限「只改 status／completedAt」的更新，
+    // 且新狀態只能是 done／pending。殘留風險：任一登入者可翻動配額任務的
+    // 狀態顯示；審查紀錄本身仍以 reviewRecords 為準，不受影響。
+    function quotaTaskStatusSync() {
+      return resource.data.get('quotaGroupId', '') is string
+        && resource.data.get('quotaGroupId', '') != ''
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'completedAt'])
+        && request.resource.data.get('status', '') in ['done', 'pending']
+        && (request.resource.data.get('completedAt', null) == null
+          || request.resource.data.get('completedAt', null) is timestamp);
+    }
+
+    // reviewRecords 欄位白名單（建立時整份文件；更新時以異動鍵比對，見下）
+    function recordKeysValid(data) {
+      return data.keys().hasOnly([
+          'taskId', 'indicatorId', 'unitId', 'reviewerId', 'year', 'month',
+          'indicatorVersionAtSchedule', 'thresholdAtSchedule', 'thresholdRuleAtSchedule',
+          'scheduleStartYear', 'scheduleStartMonth', 'scheduleEndYear', 'scheduleEndMonth',
+          'caseSeq', 'reviewDate', 'reviewerEmpNo', 'reviewerName',
+          'reviewedPersonEmpNo', 'reviewedPersonName', 'uniqueKey', 'bedNo', 'auditItem',
+          'answers', 'totalScore', 'maxScore', 'rate', 'submittedAt', 'submittedBy',
+          'quotaGroupId', 'quotaCaseNo', 'quotaSlotDocId', 'version',
+          'editHistory', 'lastModifiedAt', 'lastModifiedBy', 'lastModifiedByName'])
+        && strOk(data.get('taskId', ''), 128)
+        && strOk(data.get('indicatorId', ''), 128)
+        && strOk(data.get('unitId', ''), 128)
+        && strOk(data.get('reviewerId', ''), 32)
+        && optStr(data, 'reviewDate', 32)
+        && optStr(data, 'reviewerEmpNo', 32)
+        && optStr(data, 'reviewerName', 50)
+        && optStr(data, 'reviewedPersonEmpNo', 32)
+        && optStr(data, 'reviewedPersonName', 50)
+        && optStr(data, 'uniqueKey', 200)
+        && optStr(data, 'bedNo', 32)
+        && optStr(data, 'auditItem', 200)
+        && optStr(data, 'thresholdRuleAtSchedule', 8)
+        && optStr(data, 'indicatorVersionAtSchedule', 64)
+        && optStr(data, 'quotaGroupId', 256)
+        && optStr(data, 'quotaSlotDocId', 256)
+        && optStr(data, 'submittedBy', 32)
+        && optStr(data, 'lastModifiedBy', 32)
+        && optStr(data, 'lastModifiedByName', 50)
+        && optNum(data, 'year') && optNum(data, 'month')
+        && optNum(data, 'caseSeq') && optNum(data, 'totalScore')
+        && optNum(data, 'maxScore') && optNum(data, 'rate')
+        && optNum(data, 'thresholdAtSchedule')
+        && optNum(data, 'quotaCaseNo') && optNum(data, 'version')
+        && optNum(data, 'scheduleStartYear') && optNum(data, 'scheduleStartMonth')
+        && optNum(data, 'scheduleEndYear') && optNum(data, 'scheduleEndMonth')
+        && optTs(data, 'submittedAt') && optTs(data, 'lastModifiedAt')
+        && (!('answers' in data) || (data.get('answers', []) is list && data.get('answers', []).size() <= 100))
+        && (!('editHistory' in data) || (data.get('editHistory', []) is list && data.get('editHistory', []).size() <= 100));
+    }
+    // reviewRecords 更新只許動這幾個鍵
+    function recordUpdateKeysValid() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'answers', 'totalScore', 'maxScore', 'rate', 'reviewDate',
+        'reviewerEmpNo', 'reviewerName', 'reviewedPersonEmpNo', 'reviewedPersonName',
+        'uniqueKey', 'bedNo', 'auditItem',
+        'indicatorVersionAtSchedule', 'thresholdAtSchedule',
+        'scheduleStartYear', 'scheduleStartMonth', 'scheduleEndYear', 'scheduleEndMonth',
+        'version', 'editHistory', 'lastModifiedAt', 'lastModifiedBy', 'lastModifiedByName']);
+    }
+    function recordUpdateValuesValid() {
+      let d = request.resource.data;
+      return optStr(d, 'reviewDate', 32)
+        && optStr(d, 'reviewerEmpNo', 32) && optStr(d, 'reviewerName', 50)
+        && optStr(d, 'reviewedPersonEmpNo', 32) && optStr(d, 'reviewedPersonName', 50)
+        && optStr(d, 'uniqueKey', 200) && optStr(d, 'bedNo', 32)
+        && optStr(d, 'auditItem', 200)
+        && optStr(d, 'thresholdRuleAtSchedule', 8)
+        && optStr(d, 'indicatorVersionAtSchedule', 64)
+        && optStr(d, 'lastModifiedBy', 32) && optStr(d, 'lastModifiedByName', 50)
+        && optNum(d, 'totalScore') && optNum(d, 'maxScore') && optNum(d, 'rate')
+        && optNum(d, 'thresholdAtSchedule')
+        && optNum(d, 'version')
+        && optTs(d, 'lastModifiedAt')
+        && (!('answers' in d) || (d.get('answers', []) is list && d.get('answers', []).size() <= 100))
+        && (!('editHistory' in d) || (d.get('editHistory', []) is list && d.get('editHistory', []).size() <= 100));
+    }
+    // 配額名額文件 ID 形如 {quotaGroupId}__slot__{n}；佔用這種 ID 的紀錄
+    // 必須帶有效的 quotaGroupId，否則就是不帶配額欄位搶佔名額。
+    function isQuotaSlotId(id) {
+      return id.matches('.*__slot__.*');
+    }
+
+    // auditLogs 欄位白名單（28 處寫入點的鍵聯集；before／after／criteria
+    // 為對照快照 map，僅限鍵數；內層巢狀內容規則無法逐項量測）
+    function auditLogValid(data) {
+      return data.keys().hasOnly([
+          'actor', 'actorName', 'action', 'targetType', 'targetId', 'detail',
+          'createdAt', 'before', 'after', 'criteria', 'documentIds', 'count'])
+        && strOk(data.get('actor', ''), 32)
+        && optStr(data, 'actorName', 50)
+        && optStr(data, 'action', 100)
+        && optStr(data, 'targetType', 50)
+        && optStr(data, 'targetId', 500)
+        && optStr(data, 'detail', 10000)
+        && data.get('createdAt', null) == request.time
+        && (!('before' in data) || (data.get('before', {}) is map && data.get('before', {}).keys().size() <= 100))
+        && (!('after' in data) || (data.get('after', {}) is map && data.get('after', {}).keys().size() <= 100))
+        && (!('criteria' in data) || (data.get('criteria', {}) is map && data.get('criteria', {}).keys().size() <= 50))
+        && (!('documentIds' in data) || (data.get('documentIds', []) is list && data.get('documentIds', []).size() <= 500))
+        && (!('count' in data) || data.get('count', null) is number);
+    }
+
     // 人員主檔：本人可讀寫自己（不可改 roles/status）；管理員全權
     // 幹事可查人員清單（建指標選負責人用），但不可新增/刪除
     match /users/{id} {
@@ -143,7 +314,13 @@ service cloud.firestore {
       allow create: if isAdmin();
       allow update: if isAuthed() && (isAdmin() || (id == staffId()
         && request.resource.data.get('roles', []) == resource.data.get('roles', [])
-        && request.resource.data.get('status', '') == resource.data.get('status', '')));
+        && request.resource.data.get('status', '') == resource.data.get('status', '')
+        // v1.85.5：本人亦不得改職稱／單位／分工表（異動只許管理員改，避免
+        // 透過改 title 改變前端權限顯示、污染人員主檔與單位統計）
+        && request.resource.data.get('title', null) == resource.data.get('title', null)
+        && request.resource.data.get('titleId', null) == resource.data.get('titleId', null)
+        && request.resource.data.get('unitCode', null) == resource.data.get('unitCode', null)
+        && request.resource.data.get('memberships', null) == resource.data.get('memberships', null)));
       allow delete: if isAdmin();
     }
 
@@ -196,10 +373,12 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
-    // 稽核軌跡：僅允許新增（append-only），查詢限管理員
+    // 稽核軌跡：僅允許新增（append-only），查詢限管理員。
+    // v1.85.5：create 加欄位白名單＋字串長度上限＋createdAt 須為伺服器時間，
+    // 任一登入者仍可寫（稽核寫入點遍布各頁），但寫不進 1 MiB 假紀錄。
     match /auditLogs/{id} {
       allow get, list: if isAdmin();
-      allow create: if isAuthed();
+      allow create: if isAuthed() && auditLogValid(request.resource.data);
       allow update, delete: if false;
     }
 
@@ -268,10 +447,30 @@ service cloud.firestore {
       allow write: if isGanShi();
     }
 
-    // 指標排程（v1.8.0）：審查任務為業務資料，第一階段登入者可讀寫
+    // 指標排程（v1.8.0）：審查任務。
+    // v1.85.5：create 限排程管理者（幫審查員建任務）或本人（自審／自派）；
+    // update 限本人或排程管理者＋快照不變，換審查員只許排程管理者；
+    // delete 限管理員或排程管理者（排程產生／刪除排程時須清舊任務；
+    // 任務無 createdBy 欄位，無法以建立者判斷）。週期配額整組狀態
+    // 同步另見 quotaTaskStatusSync()。
     match /reviewTasks/{id} {
-      allow read, create, delete: if isAuthed();
-      allow update: if isAuthed() && preservesTaskSnapshot();
+      allow read: if isAuthed();
+      allow create: if isAuthed()
+        && (canManageSchedule() || request.resource.data.get('reviewerId', '') == staffId())
+        && 'indicatorId' in request.resource.data
+        && 'reviewerId' in request.resource.data
+        && 'year' in request.resource.data
+        && 'month' in request.resource.data
+        && 'status' in request.resource.data
+        && taskKeysValid(request.resource.data);
+      allow update: if isAuthed() && (quotaTaskStatusSync()
+        || ((resource.data.get('reviewerId', '') == staffId() || canManageSchedule())
+          && preservesTaskSnapshot()
+          && (request.resource.data.get('reviewerId', '') == resource.data.get('reviewerId', '')
+            || canManageSchedule())
+          && taskUpdateKeysValid()
+          && taskUpdateValuesValid()));
+      allow delete: if isAdmin() || canManageSchedule();
     }
 
     // 週期排程共用配額名額清單：不含個人審查資料，排程幹事以上維護。
@@ -281,13 +480,31 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // 審查執行紀錄（v1.10.0）：業務資料，第一階段登入者可讀寫
+    // 審查執行紀錄（v1.10.0）。
+    // v1.85.5：create 限本人（reviewerId 與 submittedBy 皆須為本人）＋
+    // 欄位白名單；uniqueKey 鍵不可省略（部分指標不需受審人員，值可為空字串，
+    // 有值時須有預約鎖）；quotaGroupId 不可省略的邏輯改為「佔用配額名額
+    // 文件 ID（__slot__）時必須帶有效 quotaGroupId」——非配額紀錄本來就
+    // 沒有 quotaGroupId，全面強制會擋掉正常送出。update 限本人或排程管理者
+    // （封存修改核准由執行幹事代為套用）＋快照不變＋異動鍵白名單。
     match /reviewRecords/{id} {
       allow read: if isAuthed();
       allow create: if isAuthed()
+        && request.resource.data.get('reviewerId', '') == staffId()
+        && request.resource.data.get('submittedBy', '') == staffId()
+        && recordKeysValid(request.resource.data)
+        && 'taskId' in request.resource.data
+        && 'indicatorId' in request.resource.data
+        && 'year' in request.resource.data
+        && 'month' in request.resource.data
+        && 'uniqueKey' in request.resource.data
+        && request.resource.data.get('submittedAt', null) == request.time
         && (!('quotaGroupId' in request.resource.data) || validQuotaSlot(id))
-        && (!('uniqueKey' in request.resource.data) || recordHasReservation(id, request.resource.data));
-      allow update: if isAuthed() && preservesReviewSnapshot() && (
+        && (!isQuotaSlotId(id) || (('quotaGroupId' in request.resource.data) && validQuotaSlot(id)))
+        && (request.resource.data.get('uniqueKey', '') == '' || recordHasReservation(id, request.resource.data));
+      allow update: if isAuthed()
+        && (resource.data.get('reviewerId', '') == staffId() || canManageSchedule())
+        && preservesReviewSnapshot() && (
         (!('quotaGroupId' in resource.data)
           && !('quotaGroupId' in request.resource.data))
         || ('quotaGroupId' in resource.data
@@ -295,7 +512,9 @@ service cloud.firestore {
           && request.resource.data.get('quotaSlotDocId', '') == id
           && resource.data.get('quotaSlotDocId', '') == id
           && request.resource.data.get('version', 0) == resource.data.get('version', 0) + 1)
-      ) && (!('uniqueKey' in request.resource.data) || recordHasReservation(id, request.resource.data));
+      ) && (!('uniqueKey' in request.resource.data) || recordHasReservation(id, request.resource.data))
+        && recordUpdateKeysValid()
+        && recordUpdateValuesValid();
       allow delete: if isAdmin();
     }
 
@@ -345,7 +564,12 @@ service cloud.firestore {
         && request.resource.data.get('uniqueKey', '') == id
         && request.resource.data.get('ownerId', '') == resource.data.get('ownerId', '')
         && reservationTargetMatches(id, request.resource.data);
-      allow delete: if isAuthed();
+      // v1.85.5：刪除補擁有者檢查（舊鎖須由本人或排程管理者清；
+      // 封存修改核准會由執行幹事刪舊鎖）。未補之前任一登入者可刪他人
+      // 唯一鍵鎖，刪完即可重複建立同一審查紀錄。
+      allow delete: if isAuthed()
+        && (isAdmin() || canManageSchedule()
+          || resource.data.get('ownerId', '') == staffId());
     }
 
     // 解鎖申請（v1.15.0）：登入者可讀；申請人（requestedBy＝本人職編）可建立；
@@ -359,18 +583,36 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // 業務資料：第一階段登入者可讀寫（第二階段按單位/角色收緊）
+    // 業務資料：v1.85.5 收緊。schedules／reviews 為舊版集合，前端已無寫入點；
+    // reportTemplates 前端亦無寫入點；三者寫入限排程管理者、刪除限管理員。
+    // capa 寫入限管理員／排程管理者／督導（結案核准人）／案件負責人／撰寫人；
+    // 院／區主管等職稱層級寫入（titleFlags，非 roles）規則無法判斷，見報告。
     match /schedules/{id} {
-      allow read, write: if isAuthed();
+      allow read: if isAuthed();
+      allow create, update: if canManageSchedule();
+      allow delete: if isAdmin();
     }
     match /reviews/{id} {
-      allow read, write: if isAuthed();
+      allow read: if isAuthed();
+      allow create, update: if canManageSchedule();
+      allow delete: if isAdmin();
     }
     match /capa/{id} {
-      allow read, write: if isAuthed();
+      allow read: if isAuthed();
+      allow create: if isAdmin() || canManageSchedule() || hasRole('督導')
+        || request.resource.data.get('ownerId', '') == staffId()
+        || request.resource.data.get('writerId', '') == staffId();
+      allow update: if isAdmin() || canManageSchedule() || hasRole('督導')
+        || resource.data.get('ownerId', '') == staffId()
+        || resource.data.get('writerId', '') == staffId()
+        || request.resource.data.get('ownerId', '') == staffId()
+        || request.resource.data.get('writerId', '') == staffId();
+      allow delete: if isAdmin();
     }
     match /reportTemplates/{id} {
-      allow read, write: if isAuthed();
+      allow read: if isAuthed();
+      allow create, update: if canManageSchedule();
+      allow delete: if isAdmin();
     }
   }
 }
