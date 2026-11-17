@@ -53,6 +53,18 @@ export function staffMailLocal(staffId: string): string {
   return stripped === "" ? id : stripped;
 }
 
+/**
+ * 查人用的職編正規化（v1.88.10）：先 normalizeStaffId，再去掉開頭的 0
+ * （例如條碼掃到 0930462 → 930462；人員檔職編本來就不帶開頭 0，掃描／手輸含 0
+ * 會比對不到）。全是 0 時保留一位 0，避免變成空字串。
+ */
+export function canonicalStaffId(input: string): string {
+  const id = normalizeStaffId(input);
+  if (id === "") return "";
+  const stripped = id.replace(/^0+/, "");
+  return stripped === "" ? "0" : stripped;
+}
+
 /** 登入用 email 合成規則：信箱＝職編去掉開頭 0＋@kmuh.org.tw（認證連結也寄到此信箱） */
 export function staffEmail(staffId: string): string {
   return `${staffMailLocal(staffId)}@${STAFF_MAIL_DOMAIN}`;

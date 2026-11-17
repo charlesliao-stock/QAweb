@@ -1,150 +1,138 @@
 /* 行動端品管審查加大字級：限定執行審查表單，桌機版不變。 */
-@media (max-width: 1100px) {
-  .review-execute-page {
+/* v1.88.10 — 原 1100px 寬度媒體查詢區塊：改由 :root[data-layout="mobile"] 判斷，
+   手動切換移動版時在寬螢幕也生效；自動模式由 JS 依寬度加／移除該屬性。 */
+:root[data-layout="mobile"] .review-execute-page{
     font-size: 16px;
     line-height: 1.55;
   }
 
-  .review-execute-page .field-label,
-  .review-execute-page .review-mobile-basic .field-label,
-  .review-execute-page .review-note-label {
+:root[data-layout="mobile"] .review-execute-page .field-label, :root[data-layout="mobile"] .review-execute-page .review-mobile-basic .field-label, :root[data-layout="mobile"] .review-execute-page .review-note-label{
     font-size: 16px !important;
     line-height: 1.45;
   }
 
-  .review-execute-page .text-input,
-  .review-execute-page input:not([type="radio"]):not([type="checkbox"]),
-  .review-execute-page select,
-  .review-execute-page textarea {
+:root[data-layout="mobile"] .review-execute-page .text-input, :root[data-layout="mobile"] .review-execute-page input:not([type="radio"]):not([type="checkbox"]), :root[data-layout="mobile"] .review-execute-page select, :root[data-layout="mobile"] .review-execute-page textarea{
     min-height: 50px;
     font-size: 16px !important;
   }
 
-  .review-execute-page .review-mobile-basic .form-field > p {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-basic .form-field > p{
     font-size: 17px;
     line-height: 1.5;
   }
 
-  .review-execute-page .review-mobile-card-heading > div {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-card-heading > div{
     font-size: 18px;
   }
 
-  .review-execute-page .review-mobile-card-heading > small {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-card-heading > small{
     font-size: 14px;
     line-height: 1.5;
   }
 
-  .review-execute-page .review-mobile-step-copy b {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-step-copy b{
     font-size: 15px;
   }
 
-  .review-execute-page .review-mobile-step-copy small,
-  .review-execute-page .review-mobile-step-current {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-step-copy small, :root[data-layout="mobile"] .review-execute-page .review-mobile-step-current{
     font-size: 13px;
   }
 
-  .review-execute-page .review-question-mobile-nav-head > b {
+:root[data-layout="mobile"] .review-execute-page .review-question-mobile-nav-head > b{
     font-size: 15px;
   }
 
-  .review-execute-page .review-question-mobile-nav-head > span {
+:root[data-layout="mobile"] .review-execute-page .review-question-mobile-nav-head > span{
     font-size: 13px;
   }
 
-  .review-execute-page .review-question-nav-grid .review-question-nav-item {
+:root[data-layout="mobile"] .review-execute-page .review-question-nav-grid .review-question-nav-item{
     flex-basis: 48px;
     width: 48px;
     min-width: 48px;
     min-height: 50px;
   }
 
-  .review-execute-page .review-question-nav-grid .review-nav-number {
+:root[data-layout="mobile"] .review-execute-page .review-question-nav-grid .review-nav-number{
     font-size: 15px;
   }
 
-  .review-execute-page .review-qrow.is-active .q-text {
+:root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .q-text{
     font-size: clamp(19px, 2.2vw, 21px);
     line-height: 1.55;
   }
 
-  .review-execute-page .review-qrow.is-active .review-q-number {
+:root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .review-q-number{
     font-size: 14px;
   }
 
-  .review-execute-page .review-qrow.is-active .q-guidance {
+:root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .q-guidance{
     font-size: 16px;
     line-height: 1.65;
   }
 
-  .review-execute-page .review-answer-options .check-row,
-  .review-execute-page .common-error-options label {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .check-row, :root[data-layout="mobile"] .review-execute-page .common-error-options label{
     min-height: 62px;
     font-size: 16px;
     line-height: 1.4;
   }
 
-  .review-execute-page .review-answer-options .review-option-icon:not(:empty) {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .review-option-icon:not(:empty){
     width: 28px;
     height: 28px;
   }
 
-  .review-execute-page .review-option-subtitle {
+:root[data-layout="mobile"] .review-execute-page .review-option-subtitle{
     font-size: 13px;
   }
 
-  .review-execute-page .review-note-textarea {
+:root[data-layout="mobile"] .review-execute-page .review-note-textarea{
     min-height: 110px;
     font-size: 16px;
     line-height: 1.55;
   }
 
-  .review-execute-page .review-note-privacy,
-  .review-execute-page .review-note-photo-status,
-  .review-execute-page .review-live-score,
-  .review-execute-page .review-unit-warning,
-  .review-execute-page .settings-note,
-  .review-execute-page .muted-text {
+:root[data-layout="mobile"] .review-execute-page .review-note-privacy, :root[data-layout="mobile"] .review-execute-page .review-note-photo-status, :root[data-layout="mobile"] .review-execute-page .review-live-score, :root[data-layout="mobile"] .review-execute-page .review-unit-warning, :root[data-layout="mobile"] .review-execute-page .settings-note, :root[data-layout="mobile"] .review-execute-page .muted-text{
     font-size: 14px;
     line-height: 1.55;
   }
 
-  .review-execute-page .review-note-photo-links {
+:root[data-layout="mobile"] .review-execute-page .review-note-photo-links{
     font-size: 14px;
   }
 
-  .review-execute-page .button,
-  .review-execute-page .text-button {
+:root[data-layout="mobile"] .review-execute-page .button, :root[data-layout="mobile"] .review-execute-page .text-button{
     font-size: 16px;
   }
 
-  .review-execute-page .review-submit-actions > .button {
+:root[data-layout="mobile"] .review-execute-page .review-submit-actions > .button{
     min-height: 50px;
   }
 
-  .review-execute-page .review-mobile-footer > .button {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-footer > .button{
     min-height: 54px;
     padding-inline: 10px;
     font-size: 16px;
   }
 
-  .review-execute-page .review-mobile-footer-note {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-footer-note{
     font-size: 13px;
   }
 
-  /* 受審人員掃描：不再把小圖示疊在輸入框裡，改成獨立、高對比按鈕。 */
-  .review-execute-page .employee-id-input-row {
+/* 受審人員掃描：不再把小圖示疊在輸入框裡，改成獨立、高對比按鈕。 */
+  :root[data-layout="mobile"] .review-execute-page .employee-id-input-row{
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: stretch;
     gap: 8px;
   }
 
-  .review-execute-page .employee-id-input-row > .text-input {
+:root[data-layout="mobile"] .review-execute-page .employee-id-input-row > .text-input{
     min-width: 0;
     padding-right: 12px;
   }
 
-  .review-execute-page .employee-barcode-trigger {
+:root[data-layout="mobile"] .review-execute-page .employee-barcode-trigger{
     position: static;
     display: inline-flex;
     width: auto;
@@ -164,65 +152,70 @@
     white-space: nowrap;
   }
 
-  .review-execute-page .employee-barcode-trigger > svg {
+:root[data-layout="mobile"] .review-execute-page .employee-barcode-trigger > svg{
     width: 22px;
     height: 22px;
     flex: none;
     stroke-width: 2.5;
   }
 
-  .review-execute-page .employee-barcode-trigger > span {
+:root[data-layout="mobile"] .review-execute-page .employee-barcode-trigger > span{
     display: inline;
   }
-}
 
 @media (max-width: 640px) {
-  .review-execute-page .review-question-mobile-nav-head > span {
+  :root[data-layout="mobile"] .review-execute-page .review-question-mobile-nav-head > span{
     font-size: 12px;
   }
 
-  .review-execute-page .review-mobile-step-copy b {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-step-copy b{
     font-size: 14px;
   }
 
-  .review-execute-page .review-mobile-step-copy small {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-step-copy small{
     display: none;
   }
 
-  .review-execute-page .review-qrow.is-active .q-text {
+
+  :root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .q-text{
     font-size: 19px;
   }
 
-  .review-execute-page .review-answer-options .radio-group {
+
+  :root[data-layout="mobile"] .review-execute-page .review-answer-options .radio-group{
     gap: 7px;
   }
 
-  .review-execute-page .review-answer-options .check-row {
+
+  :root[data-layout="mobile"] .review-execute-page .review-answer-options .check-row{
     min-height: 70px;
     padding: 9px 5px;
     font-size: 15px;
   }
 
-  .review-execute-page .review-mobile-footer > .button {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-footer > .button{
     font-size: 15px;
-  }
-}
+  }}
 
 @media (max-width: 420px) {
-  .review-execute-page .employee-id-input-row {
+  :root[data-layout="mobile"] .review-execute-page .employee-id-input-row{
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .review-execute-page .employee-barcode-trigger {
+
+  :root[data-layout="mobile"] .review-execute-page .employee-barcode-trigger{
     width: 100%;
     min-height: 50px;
   }
 
-  .review-execute-page .review-mobile-footer > .button {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-footer > .button{
     padding-inline: 7px;
     font-size: 14px;
-  }
-}
+  }}
 
 :root[data-mode="dark"] .review-execute-page .employee-barcode-trigger {
   border-color: #40b9aa;

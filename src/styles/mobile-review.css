@@ -34,16 +34,91 @@
   resize: vertical;
 }
 
-@media (max-width: 1100px) {
-  :root[data-review-form-active="true"] .mobile-bottom-nav {
+/* v1.88.10 — 基本資料：審查單位／審查日期／稽核月份橫向三欄並列（手機／平板／桌機共用）。 */
+.review-execute-page .review-mobile-basic .review-basic-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.review-execute-page .review-mobile-basic .review-basic-row .form-field {
+  min-width: 0;
+}
+
+.review-execute-page .review-mobile-basic .review-basic-row .field-label {
+  white-space: nowrap;
+}
+
+.review-execute-page .review-mobile-basic .review-basic-row .text-input,
+.review-execute-page .review-mobile-basic .review-basic-row select.text-input {
+  min-height: 42px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.review-execute-page .review-mobile-basic .review-basic-row .form-field > p {
+  min-height: 42px;
+}
+
+/* v1.88.10 — 版面切換（右上角）：自動／電腦版／移動版；選擇記在本機，下次開啟沿用。 */
+.review-layout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.review-layout-toggle {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line, #dfe8e6);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+}
+
+.review-layout-toggle > span {
+  padding: 0 4px 0 8px;
+  color: var(--muted, #71817e);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.review-layout-toggle > button {
+  min-height: 32px;
+  padding: 4px 11px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted, #667773);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.review-layout-toggle > button[aria-pressed="true"] {
+  background: var(--accent, #126b63);
+  color: #fff;
+}
+
+/* v1.88.10 — 原 1100px 寬度媒體查詢區塊：改由 :root[data-layout="mobile"] 判斷，
+   手動切換移動版時在寬螢幕也生效；自動模式由 JS 依寬度加／移除該屬性。 */
+:root[data-layout="mobile"][data-review-form-active="true"] .mobile-bottom-nav{
     display: none !important;
   }
 
-  :root[data-review-form-active="true"] .main-area {
+:root[data-layout="mobile"][data-review-form-active="true"] .main-area{
     padding-bottom: 0 !important;
   }
 
-  .review-execute-page {
+:root[data-layout="mobile"] .review-execute-page{
     box-sizing: border-box;
     width: 100%;
     max-width: 100%;
@@ -51,21 +126,21 @@
     padding-bottom: calc(108px + env(safe-area-inset-bottom));
   }
 
-  .review-execute-page .review-mobile-steps {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-steps{
     display: grid;
     grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr) auto;
     align-items: center;
     gap: 7px;
     width: 100%;
-    margin: 0 0 14px;
-    padding: 10px 12px;
+    margin: 0 0 10px;
+    padding: 8px 12px;
     border: 1px solid var(--line, #dfe8e6);
     border-radius: 14px;
     background: var(--surface, #fff);
     box-shadow: 0 3px 12px rgba(15, 55, 51, 0.05);
   }
 
-  .review-execute-page .review-mobile-step {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-step{
     display: flex;
     min-width: 0;
     min-height: 48px;
@@ -81,22 +156,22 @@
     touch-action: manipulation;
   }
 
-  .review-execute-page .review-mobile-step.active {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-step.active{
     color: var(--accent, #126b63);
   }
 
-  .review-execute-page .review-mobile-step.complete .review-mobile-step-number {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-step.complete .review-mobile-step-number{
     background: #e4f2ea;
     color: #23704d;
   }
 
-  .review-execute-page .review-mobile-step.active .review-mobile-step-number {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-step.active .review-mobile-step-number{
     background: var(--accent, #126b63);
     color: #fff;
     box-shadow: 0 0 0 4px rgba(18, 107, 99, 0.1);
   }
 
-  .review-execute-page .review-mobile-step-number {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-step-number{
     display: grid;
     flex: none;
     width: 30px;
@@ -109,13 +184,13 @@
     font-weight: 750;
   }
 
-  .review-execute-page .review-mobile-step-copy {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-step-copy{
     display: grid;
     min-width: 0;
     gap: 2px;
   }
 
-  .review-execute-page .review-mobile-step-copy b {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-step-copy b{
     overflow: hidden;
     font-size: 13px;
     line-height: 1.25;
@@ -123,7 +198,7 @@
     white-space: nowrap;
   }
 
-  .review-execute-page .review-mobile-step-copy small {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-step-copy small{
     overflow: hidden;
     color: var(--muted, #71817e);
     font-size: 10px;
@@ -132,13 +207,13 @@
     white-space: nowrap;
   }
 
-  .review-execute-page .review-mobile-step-connector {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-step-connector{
     width: 18px;
     height: 1px;
     background: #cbd9d6;
   }
 
-  .review-execute-page .review-mobile-step-current {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-step-current{
     padding: 5px 8px;
     border-radius: 999px;
     background: #e9f4f1;
@@ -148,21 +223,21 @@
     white-space: nowrap;
   }
 
-  .review-execute-page .review-mobile-page.is-inactive {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-page.is-inactive{
     display: none;
   }
 
-  .review-execute-page .review-mobile-card-heading {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-card-heading{
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    margin: -2px 0 14px;
-    padding-bottom: 12px;
+    margin: -2px 0 10px;
+    padding-bottom: 8px;
     border-bottom: 1px solid #e8efed;
   }
 
-  .review-execute-page .review-mobile-card-heading > div {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-card-heading > div{
     display: flex;
     align-items: center;
     gap: 8px;
@@ -170,39 +245,39 @@
     font-size: 16px;
   }
 
-  .review-execute-page .review-mobile-card-heading svg {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-card-heading svg{
     flex: none;
     color: #168477;
   }
 
-  .review-execute-page .review-mobile-card-heading > small {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-card-heading > small{
     color: var(--muted, #71817e);
     font-size: 11px;
     text-align: right;
   }
 
-  .review-execute-page .review-mobile-basic {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-basic{
     box-sizing: border-box;
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    padding: 18px;
+    padding: 14px 16px;
     border: 1px solid var(--line, #dfe8e6);
     border-radius: 15px;
     background: var(--surface, #fff);
     box-shadow: 0 5px 18px rgba(15, 55, 51, 0.05);
   }
 
-  .review-execute-page .review-mobile-basic .form-grid {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-basic .form-grid{
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
+    gap: 10px;
   }
 
-  .review-execute-page .review-mobile-basic .form-field {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-basic .form-field{
     min-width: 0;
   }
 
-  .review-execute-page .review-mobile-basic .field-label {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-basic .field-label{
     display: block;
     margin-bottom: 6px;
     color: #52635f;
@@ -210,8 +285,7 @@
     font-weight: 650;
   }
 
-  .review-execute-page .review-mobile-basic .text-input,
-  .review-execute-page .review-mobile-basic select.text-input {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-basic .text-input, :root[data-layout="mobile"] .review-execute-page .review-mobile-basic select.text-input{
     box-sizing: border-box;
     width: 100%;
     min-width: 0;
@@ -220,7 +294,7 @@
     font-size: 14px;
   }
 
-  .review-execute-page .review-mobile-basic .form-field > p {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-basic .form-field > p{
     min-height: 46px;
     margin: 0;
     display: flex;
@@ -229,35 +303,35 @@
     overflow-wrap: anywhere;
   }
 
-  .review-execute-page .audit-item-selection {
+:root[data-layout="mobile"] .review-execute-page .audit-item-selection{
     box-sizing: border-box;
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    margin-top: 12px;
-    padding: 16px 18px;
+    margin-top: 8px;
+    padding: 12px 16px;
     border: 1px solid var(--line, #dfe8e6);
     border-radius: 15px;
     background: var(--surface, #fff);
   }
 
-  .review-execute-page .audit-item-selection .text-input {
+:root[data-layout="mobile"] .review-execute-page .audit-item-selection .text-input{
     width: 100%;
     min-height: 46px;
   }
 
-  .review-execute-page .employee-id-input-row {
+:root[data-layout="mobile"] .review-execute-page .employee-id-input-row{
     position: relative;
     display: block;
     width: 100%;
   }
 
-  .review-execute-page .employee-id-input-row > .text-input {
+:root[data-layout="mobile"] .review-execute-page .employee-id-input-row > .text-input{
     width: 100%;
     padding-right: 52px;
   }
 
-  .review-execute-page .employee-barcode-trigger {
+:root[data-layout="mobile"] .review-execute-page .employee-barcode-trigger{
     position: absolute;
     top: 3px;
     right: 3px;
@@ -271,11 +345,11 @@
     color: #13766d;
   }
 
-  .review-execute-page .employee-barcode-trigger > span {
+:root[data-layout="mobile"] .review-execute-page .employee-barcode-trigger > span{
     display: none;
   }
 
-  .review-execute-page .review-question-mobile-nav {
+:root[data-layout="mobile"] .review-execute-page .review-question-mobile-nav{
     position: sticky;
     z-index: 12;
     top: 0;
@@ -291,7 +365,7 @@
     box-shadow: 0 3px 12px rgba(15, 55, 51, 0.06);
   }
 
-  .review-execute-page .review-question-mobile-nav-head {
+:root[data-layout="mobile"] .review-execute-page .review-question-mobile-nav-head{
     display: flex;
     min-height: 42px;
     align-items: center;
@@ -300,17 +374,17 @@
     color: #31534e;
   }
 
-  .review-execute-page .review-question-mobile-nav-head > svg {
+:root[data-layout="mobile"] .review-execute-page .review-question-mobile-nav-head > svg{
     flex: none;
     color: #158074;
   }
 
-  .review-execute-page .review-question-mobile-nav-head > b {
+:root[data-layout="mobile"] .review-execute-page .review-question-mobile-nav-head > b{
     flex: none;
     font-size: 12px;
   }
 
-  .review-execute-page .review-question-mobile-nav-head > span {
+:root[data-layout="mobile"] .review-execute-page .review-question-mobile-nav-head > span{
     overflow: hidden;
     margin-left: auto;
     color: var(--muted, #71817e);
@@ -319,7 +393,7 @@
     white-space: nowrap;
   }
 
-  .review-execute-page .review-question-nav-grid {
+:root[data-layout="mobile"] .review-execute-page .review-question-nav-grid{
     display: flex;
     box-sizing: border-box;
     width: 100%;
@@ -337,7 +411,7 @@
     -webkit-overflow-scrolling: touch;
   }
 
-  .review-execute-page .review-question-nav-grid .review-question-nav-item {
+:root[data-layout="mobile"] .review-execute-page .review-question-nav-grid .review-question-nav-item{
     position: relative;
     display: flex;
     flex: 0 0 44px;
@@ -355,20 +429,20 @@
     touch-action: manipulation;
   }
 
-  .review-execute-page .review-question-nav-grid .review-question-nav-item.answered {
+:root[data-layout="mobile"] .review-execute-page .review-question-nav-grid .review-question-nav-item.answered{
     border-color: #c8e3d2;
     background: #eaf5ee;
     color: #256b49;
   }
 
-  .review-execute-page .review-question-nav-grid .review-question-nav-item.active {
+:root[data-layout="mobile"] .review-execute-page .review-question-nav-grid .review-question-nav-item.active{
     border-color: #178478;
     background: #e6f4f1;
     color: #11675f;
     box-shadow: 0 0 0 2px rgba(23, 132, 120, 0.12);
   }
 
-  .review-execute-page .review-question-nav-grid .review-nav-number {
+:root[data-layout="mobile"] .review-execute-page .review-question-nav-grid .review-nav-number{
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -378,49 +452,44 @@
     line-height: 1;
   }
 
-  .review-execute-page .review-question-nav-grid .review-nav-number svg {
+:root[data-layout="mobile"] .review-execute-page .review-question-nav-grid .review-nav-number svg{
     width: 11px;
     height: 11px;
     color: #167c70;
   }
 
-  .review-execute-page .review-question-nav-grid .review-nav-label,
-  .review-execute-page .review-question-nav-grid .review-nav-state {
+:root[data-layout="mobile"] .review-execute-page .review-question-nav-grid .review-nav-label, :root[data-layout="mobile"] .review-execute-page .review-question-nav-grid .review-nav-state{
     display: none;
   }
 
-  .review-execute-page .review-workspace-layout,
-  .review-execute-page .review-question-navigator,
-  .review-execute-page .review-workspace-main,
-  .review-execute-page .review-group-box {
+:root[data-layout="mobile"] .review-execute-page .review-workspace-layout, :root[data-layout="mobile"] .review-execute-page .review-question-navigator, :root[data-layout="mobile"] .review-execute-page .review-workspace-main, :root[data-layout="mobile"] .review-execute-page .review-group-box{
     box-sizing: border-box;
     width: 100%;
     max-width: 100%;
     min-width: 0;
   }
 
-  .review-execute-page .review-workspace-layout {
+:root[data-layout="mobile"] .review-execute-page .review-workspace-layout{
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
 
-  .review-execute-page .review-question-sidebar {
+:root[data-layout="mobile"] .review-execute-page .review-question-sidebar{
     display: none;
   }
 
-  .review-execute-page .review-workspace-main {
+:root[data-layout="mobile"] .review-execute-page .review-workspace-main{
     display: flex;
     flex-direction: column;
     gap: 10px;
   }
 
-  .review-execute-page .review-photo-notice,
-  .review-execute-page .review-mobile-next-wrap {
+:root[data-layout="mobile"] .review-execute-page .review-photo-notice, :root[data-layout="mobile"] .review-execute-page .review-mobile-next-wrap{
     display: none !important;
   }
 
-  .review-execute-page .review-group-box {
+:root[data-layout="mobile"] .review-execute-page .review-group-box{
     padding: 3px 16px 14px;
     border: 1px solid var(--line, #dfe8e6);
     border-radius: 15px;
@@ -428,33 +497,33 @@
     box-shadow: 0 5px 18px rgba(15, 55, 51, 0.05);
   }
 
-  .review-execute-page .review-qrow:not(.is-active) {
+:root[data-layout="mobile"] .review-execute-page .review-qrow:not(.is-active){
     display: none;
   }
 
-  .review-execute-page .review-group-box:not(:has(.review-qrow.is-active)) {
+:root[data-layout="mobile"] .review-execute-page .review-group-box:not(:has(.review-qrow.is-active)){
     display: none;
   }
 
-  .review-execute-page .review-group-label {
+:root[data-layout="mobile"] .review-execute-page .review-group-label{
     display: none;
   }
 
-  .review-execute-page .review-qrow.is-active {
+:root[data-layout="mobile"] .review-execute-page .review-qrow.is-active{
     display: block;
     padding: 13px 0 2px;
     border-bottom: 0;
     scroll-margin-top: 112px;
   }
 
-  .review-execute-page .review-qrow.is-active .q-main {
+:root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .q-main{
     display: flex;
     flex-direction: column;
     align-items: stretch;
     gap: 14px;
   }
 
-  .review-execute-page .review-qrow.is-active .q-text {
+:root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .q-text{
     display: flex;
     align-items: flex-start;
     gap: 7px;
@@ -464,7 +533,7 @@
     line-height: 1.5;
   }
 
-  .review-execute-page .review-qrow.is-active .q-text-btn {
+:root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .q-text-btn{
     display: inline-flex;
     align-items: flex-start;
     gap: 5px;
@@ -476,21 +545,21 @@
     line-height: inherit;
   }
 
-  .review-execute-page .review-qrow.is-active .q-caret {
+:root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .q-caret{
     flex: none;
     margin: 1px 0 0;
     color: #16796f;
     font-size: 15px;
   }
 
-  .review-execute-page .review-qrow.is-active .review-q-number {
+:root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .review-q-number{
     min-width: 22px;
     margin: 2px 0 0;
     color: #71817e;
     font-size: 11px;
   }
 
-  .review-execute-page .review-qrow.is-active .q-guidance {
+:root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .q-guidance{
     width: 100%;
     margin: -5px 0 0;
     padding: 12px 14px;
@@ -504,27 +573,26 @@
     animation: review-guidance-in 160ms ease-out both;
   }
 
-  .review-execute-page .review-qrow.is-active .q-options,
-  .review-execute-page .review-qrow.is-active .q-note {
+:root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .q-options, :root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .q-note{
     box-sizing: border-box;
     width: 100%;
     min-width: 0;
     padding: 0;
   }
 
-  .review-execute-page .review-answer-options {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options{
     display: block;
     width: 100%;
   }
 
-  .review-execute-page .review-answer-options .radio-group {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .radio-group{
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
     width: 100%;
   }
 
-  .review-execute-page .review-answer-options .check-row {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .check-row{
     position: relative;
     display: flex;
     min-width: 0;
@@ -546,23 +614,23 @@
     touch-action: manipulation;
   }
 
-  /* v1.88.9 手機／平板：選項未選中即帶淡底，方便一眼分辨（是淡綠／否淡粉紅／不適用灰） */
-  .review-execute-page .review-answer-options .review-option-positive {
+/* v1.88.9 手機／平板：選項未選中即帶淡底，方便一眼分辨（是淡綠／否淡粉紅／不適用灰） */
+  :root[data-layout="mobile"] .review-execute-page .review-answer-options .review-option-positive{
     border-color: #c9e8d5;
     background: #e8f6ee;
   }
 
-  .review-execute-page .review-answer-options .review-option-negative {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .review-option-negative{
     border-color: #f2cfcc;
     background: #fdecea;
   }
 
-  .review-execute-page .review-answer-options .review-option-not-applicable {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .review-option-not-applicable{
     border-color: #d8dfe2;
     background: #eef1f2;
   }
 
-  .review-execute-page .review-answer-options .check-row input[type="radio"] {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .check-row input[type="radio"]{
     position: absolute;
     width: 1px;
     height: 1px;
@@ -570,7 +638,7 @@
     pointer-events: none;
   }
 
-  .review-execute-page .review-answer-options .review-option-icon:not(:empty) {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .review-option-icon:not(:empty){
     display: inline-flex;
     flex: none;
     width: 25px;
@@ -582,48 +650,48 @@
     color: #188253;
   }
 
-  .review-execute-page .review-answer-options .review-option-negative .review-option-icon:not(:empty) {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .review-option-negative .review-option-icon:not(:empty){
     background: #fcebea;
     color: #bc3430;
   }
 
-  .review-execute-page .review-answer-options .review-option-not-applicable .review-option-icon:not(:empty) {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .review-option-not-applicable .review-option-icon:not(:empty){
     background: #edf1f3;
     color: #69757e;
   }
 
-  .review-execute-page .review-answer-options .check-row:has(input:checked) {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .check-row:has(input:checked){
     border-color: #168477;
     background: #eef8f4;
     color: #185d4c;
     box-shadow: 0 0 0 1px rgba(22, 132, 119, 0.12);
   }
 
-  .review-execute-page .review-answer-options .review-option-positive:has(input:checked) {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .review-option-positive:has(input:checked){
     border-color: #168477;
     background: #d5edde;
     color: #185d4c;
   }
 
-  .review-execute-page .review-answer-options .review-option-negative:has(input:checked) {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .review-option-negative:has(input:checked){
     border-color: #c5453e;
     background: #f9dddb;
     color: #a62a23;
   }
 
-  /* 不適用選中時用灰底，不沿用通用選中態的綠底 */
-  .review-execute-page .review-answer-options .review-option-not-applicable:has(input:checked) {
+/* 不適用選中時用灰底，不沿用通用選中態的綠底 */
+  :root[data-layout="mobile"] .review-execute-page .review-answer-options .review-option-not-applicable:has(input:checked){
     border-color: #6b7d84;
     background: #dde4e7;
     color: #45565e;
   }
 
-  .review-execute-page .review-answer-options .check-row:has(input:focus-visible) {
+:root[data-layout="mobile"] .review-execute-page .review-answer-options .check-row:has(input:focus-visible){
     outline: var(--focus-ring);
     outline-offset: var(--focus-offset);
   }
 
-  .review-execute-page .review-option-subtitle {
+:root[data-layout="mobile"] .review-execute-page .review-option-subtitle{
     display: block;
     color: #75817f;
     font-size: 9px;
@@ -631,33 +699,33 @@
     line-height: 1.2;
   }
 
-  .review-execute-page .review-note-entry {
+:root[data-layout="mobile"] .review-execute-page .review-note-entry{
     display: grid;
     gap: 6px;
     width: 100%;
     min-width: 0;
   }
 
-  .review-execute-page .review-note-label {
+:root[data-layout="mobile"] .review-execute-page .review-note-label{
     display: block;
     color: #536662;
     font-size: 12px;
     font-weight: 700;
   }
 
-  .review-execute-page .review-note-label > span {
+:root[data-layout="mobile"] .review-execute-page .review-note-label > span{
     color: #83918e;
     font-weight: 500;
   }
 
-  .review-execute-page .review-note-input-row {
+:root[data-layout="mobile"] .review-execute-page .review-note-input-row{
     position: relative;
     display: block;
     width: 100%;
     min-width: 0;
   }
 
-  .review-execute-page .review-note-textarea {
+:root[data-layout="mobile"] .review-execute-page .review-note-textarea{
     display: block;
     box-sizing: border-box;
     width: 100%;
@@ -674,11 +742,11 @@
     resize: vertical;
   }
 
-  .review-execute-page .review-note-textarea::placeholder {
+:root[data-layout="mobile"] .review-execute-page .review-note-textarea::placeholder{
     color: #9aa7a4;
   }
 
-  .review-execute-page .review-note-camera {
+:root[data-layout="mobile"] .review-execute-page .review-note-camera{
     position: absolute;
     top: 8px;
     right: 8px;
@@ -695,58 +763,58 @@
     color: #16776e;
   }
 
-  .review-execute-page .review-note-camera-label {
+:root[data-layout="mobile"] .review-execute-page .review-note-camera-label{
     display: none;
   }
 
-  .review-execute-page .review-note-privacy {
+:root[data-layout="mobile"] .review-execute-page .review-note-privacy{
     display: block;
     color: #788783;
     font-size: 10px;
     line-height: 1.45;
   }
 
-  .review-execute-page .review-note-photo-links {
+:root[data-layout="mobile"] .review-execute-page .review-note-photo-links{
     margin-top: 3px;
     font-size: 11px;
   }
 
-  .review-execute-page .review-note-photo-status {
+:root[data-layout="mobile"] .review-execute-page .review-note-photo-status{
     display: block;
     margin-top: 3px;
     color: #657a74;
     font-size: 10px;
   }
 
-  .review-execute-page .review-question-stepper {
+:root[data-layout="mobile"] .review-execute-page .review-question-stepper{
     display: none !important;
   }
 
-  .review-execute-page .review-live-score {
+:root[data-layout="mobile"] .review-execute-page .review-live-score{
     margin: 2px 2px 8px;
     color: var(--muted, #71817e);
     font-size: 11px;
     line-height: 1.45;
   }
 
-  .review-execute-page .review-submit-actions {
+:root[data-layout="mobile"] .review-execute-page .review-submit-actions{
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
     margin: 0 0 10px !important;
   }
 
-  .review-execute-page .review-submit-actions > .button {
+:root[data-layout="mobile"] .review-execute-page .review-submit-actions > .button{
     flex: 1 1 130px;
     min-height: 44px;
     justify-content: center;
   }
 
-  .review-execute-page .review-submit-actions > .review-submit-primary {
+:root[data-layout="mobile"] .review-execute-page .review-submit-actions > .review-submit-primary{
     display: none !important;
   }
 
-  .review-execute-page .review-mobile-footer {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-footer{
     position: fixed;
     z-index: 31;
     right: 0;
@@ -763,7 +831,7 @@
     backdrop-filter: blur(12px);
   }
 
-  .review-execute-page .review-mobile-footer > .button {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-footer > .button{
     display: inline-flex;
     min-width: 0;
     min-height: 48px;
@@ -777,7 +845,7 @@
     touch-action: manipulation;
   }
 
-  .review-execute-page .review-mobile-footer-note {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-footer-note{
     display: block;
     overflow: hidden;
     color: #6e7d79;
@@ -788,16 +856,16 @@
     white-space: nowrap;
   }
 
-  .review-execute-page .review-mobile-footer-next {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-footer-next{
     box-shadow: 0 4px 10px rgba(15, 118, 110, 0.16);
   }
 
-  .review-execute-page .review-mobile-footer-next:disabled {
+:root[data-layout="mobile"] .review-execute-page .review-mobile-footer-next:disabled{
     cursor: not-allowed;
     opacity: 0.62;
   }
 
-  .review-execute-page .review-unit-warning {
+:root[data-layout="mobile"] .review-execute-page .review-unit-warning{
     margin-top: 8px;
     padding: 9px 10px;
     border-radius: 9px;
@@ -805,289 +873,310 @@
     line-height: 1.5;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-mobile-steps,
-  :root[data-mode="dark"] .review-execute-page .review-mobile-basic,
-  :root[data-mode="dark"] .review-execute-page .audit-item-selection,
-  :root[data-mode="dark"] .review-execute-page .review-question-mobile-nav,
-  :root[data-mode="dark"] .review-execute-page .review-group-box {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-mobile-steps, :root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-mobile-basic, :root[data-layout="mobile"][data-mode="dark"] .review-execute-page .audit-item-selection, :root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-question-mobile-nav, :root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-group-box{
     border-color: var(--line, #3d4a49);
     background: var(--surface, #202726);
     box-shadow: none;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-mobile-card-heading {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-mobile-card-heading{
     border-bottom-color: #3d4a49;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-mobile-card-heading > div,
-  :root[data-mode="dark"] .review-execute-page .review-qrow.is-active .q-text {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-mobile-card-heading > div, :root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-qrow.is-active .q-text{
     color: #d6e1de;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-mobile-step-connector {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-mobile-step-connector{
     background: #465856;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-mobile-step-current {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-mobile-step-current{
     background: #273c38;
     color: #a6e0d4;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-question-mobile-nav-head {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-question-mobile-nav-head{
     color: #c8d4d0;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-question-nav-grid {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-question-nav-grid{
     border-top-color: #35423f;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-question-nav-grid .review-question-nav-item {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-question-nav-grid .review-question-nav-item{
     border-color: #465856;
     background: #232d2b;
     color: #c3cdca;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-question-nav-grid .review-question-nav-item.answered {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-question-nav-grid .review-question-nav-item.answered{
     border-color: #456855;
     background: #24372d;
     color: #a9d8b9;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-question-nav-grid .review-question-nav-item.active {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-question-nav-grid .review-question-nav-item.active{
     border-color: #218f83;
     background: #273c38;
     color: #a6e0d4;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-qrow.is-active .q-guidance {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-qrow.is-active .q-guidance{
     border-color: #3a625b;
     border-left-color: #42b7a7;
     background: #24332f;
     color: #c6d7d2;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-answer-options .check-row {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-answer-options .check-row{
     border-color: #465856;
     background: #202726;
     color: #cbd6d2;
   }
 
-  /* v1.88.9 深色模式：未選中亦帶淡底（綠／粉紅／灰），文字維持淺色可讀 */
-  :root[data-mode="dark"] .review-execute-page .review-answer-options .review-option-positive {
+/* v1.88.9 深色模式：未選中亦帶淡底（綠／粉紅／灰），文字維持淺色可讀 */
+  :root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-answer-options .review-option-positive{
     border-color: #3a5a4b;
     background: #22342c;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-answer-options .review-option-negative {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-answer-options .review-option-negative{
     border-color: #5c3a38;
     background: #382726;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-answer-options .review-option-not-applicable {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-answer-options .review-option-not-applicable{
     border-color: #414d52;
     background: #272e31;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-answer-options .check-row:has(input:checked) {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-answer-options .check-row:has(input:checked){
     border-color: #218f83;
     background: #273c38;
     color: #b4e2d8;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-answer-options .review-option-positive:has(input:checked) {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-answer-options .review-option-positive:has(input:checked){
     border-color: #218f83;
     background: #2a463a;
     color: #b4e2d8;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-answer-options .review-option-negative:has(input:checked) {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-answer-options .review-option-negative:has(input:checked){
     border-color: #a44743;
     background: #472e2c;
     color: #ffaaa4;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-answer-options .review-option-not-applicable:has(input:checked) {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-answer-options .review-option-not-applicable:has(input:checked){
     border-color: #7b8f96;
     background: #333d41;
     color: #d4dde0;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-note-textarea {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-note-textarea{
     border-color: #465856;
     background: #202726;
     color: #d2ddda;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-note-camera {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-note-camera{
     border-color: #465856;
     background: #273c38;
     color: #a6e0d4;
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-mobile-footer {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-mobile-footer{
     border-top-color: #3d4a49;
     background: rgba(31, 40, 39, 0.97);
     box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.22);
   }
 
-  :root[data-mode="dark"] .review-execute-page .review-mobile-footer-note,
-  :root[data-mode="dark"] .review-execute-page .review-note-privacy {
+:root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-mobile-footer-note, :root[data-layout="mobile"][data-mode="dark"] .review-execute-page .review-note-privacy{
     color: #a6b4b0;
   }
-}
 
 @media (max-width: 640px) {
-  .review-execute-page {
+  :root[data-layout="mobile"] .review-execute-page{
     padding-bottom: calc(82px + env(safe-area-inset-bottom));
   }
 
-  .review-execute-page .review-mobile-steps {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-steps{
     grid-template-columns: minmax(0, 1fr) 11px minmax(0, 1fr);
     gap: 4px;
     padding: 8px 9px;
   }
 
-  .review-execute-page .review-mobile-step-current {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-step-current{
     display: none;
   }
 
-  .review-execute-page .review-mobile-step {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-step{
     min-height: 44px;
     gap: 6px;
   }
 
-  .review-execute-page .review-mobile-step-number {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-step-number{
     width: 27px;
     height: 27px;
     font-size: 12px;
   }
 
-  .review-execute-page .review-mobile-step-copy b {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-step-copy b{
     font-size: 12px;
   }
 
-  .review-execute-page .review-mobile-step-copy small {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-step-copy small{
     display: none;
   }
 
-  .review-execute-page .review-mobile-step-connector {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-step-connector{
     width: 11px;
   }
 
-  .review-execute-page .review-mobile-step-current {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-step-current{
     padding: 5px 7px;
     font-size: 9px;
   }
 
-  .review-execute-page .review-mobile-card-heading {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-card-heading{
     align-items: flex-start;
     flex-direction: column;
     gap: 5px;
   }
 
-  .review-execute-page .review-mobile-card-heading > small {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-card-heading > small{
     text-align: left;
   }
 
-  .review-execute-page .review-mobile-basic {
-    padding: 15px 13px;
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-basic{
+    padding: 12px 13px;
   }
 
-  .review-execute-page .review-mobile-basic .form-grid {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-basic .form-grid{
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
   }
 
-  .review-execute-page .audit-item-selection {
+
+  :root[data-layout="mobile"] .review-execute-page .audit-item-selection{
     padding: 14px 13px;
   }
 
-  .review-execute-page .review-question-mobile-nav-head {
+
+  :root[data-layout="mobile"] .review-execute-page .review-question-mobile-nav-head{
     min-height: 39px;
     padding: 6px 9px;
   }
 
-  .review-execute-page .review-question-mobile-nav-head > svg {
+
+  :root[data-layout="mobile"] .review-execute-page .review-question-mobile-nav-head > svg{
     width: 15px;
     height: 15px;
   }
 
-  .review-execute-page .review-question-mobile-nav-head > span {
+
+  :root[data-layout="mobile"] .review-execute-page .review-question-mobile-nav-head > span{
     font-size: 9px;
   }
 
-  .review-execute-page .review-question-nav-grid {
+
+  :root[data-layout="mobile"] .review-execute-page .review-question-nav-grid{
     gap: 6px;
     padding: 7px 8px 9px;
   }
 
-  .review-execute-page .review-question-nav-grid .review-question-nav-item {
+
+  :root[data-layout="mobile"] .review-execute-page .review-question-nav-grid .review-question-nav-item{
     flex-basis: 42px;
     width: 42px;
     min-width: 42px;
     min-height: 44px;
   }
 
-  .review-execute-page .review-qrow.is-active .q-text {
+
+  :root[data-layout="mobile"] .review-execute-page .review-qrow.is-active .q-text{
     font-size: 17px;
   }
 
-  .review-execute-page .review-answer-options .radio-group {
+
+  :root[data-layout="mobile"] .review-execute-page .review-answer-options .radio-group{
     gap: 6px;
   }
 
-  .review-execute-page .review-answer-options .check-row {
+
+  :root[data-layout="mobile"] .review-execute-page .review-answer-options .check-row{
     min-height: 72px;
     gap: 6px;
     padding: 8px 3px;
     font-size: 12px;
   }
 
-  .review-execute-page .review-answer-options .review-option-icon:not(:empty) {
+
+  :root[data-layout="mobile"] .review-execute-page .review-answer-options .review-option-icon:not(:empty){
     width: 23px;
     height: 23px;
   }
 
-  .review-execute-page .review-note-label {
+
+  :root[data-layout="mobile"] .review-execute-page .review-note-label{
     font-size: 12px;
   }
 
-  .review-execute-page .review-note-textarea {
+
+  :root[data-layout="mobile"] .review-execute-page .review-note-textarea{
     min-height: 96px;
     padding: 11px 54px 11px 11px;
     font-size: 13px;
   }
 
-  .review-execute-page .review-mobile-footer {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-footer{
     grid-template-columns: minmax(84px, auto) minmax(0, 1fr) minmax(105px, auto);
     gap: 6px;
     padding-right: 10px;
     padding-left: 10px;
   }
 
-  .review-execute-page .review-mobile-footer > .button {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-footer > .button{
     min-height: 48px;
     padding-inline: 7px;
     font-size: 12px;
   }
 
-  .review-execute-page .review-mobile-footer-note {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-footer-note{
     font-size: 9px;
-  }
-}
+  }}
 
 @media (max-width: 560px) {
-  .review-execute-page .review-note-input-row {
+  :root[data-layout="mobile"] .review-execute-page .review-note-input-row{
     display: flex;
     flex-direction: column;
     gap: 8px;
   }
 
-  .review-execute-page .review-note-textarea {
+
+  :root[data-layout="mobile"] .review-execute-page .review-note-textarea{
     padding-right: 11px;
   }
 
-  .review-execute-page .review-note-camera {
+
+  :root[data-layout="mobile"] .review-execute-page .review-note-camera{
     position: static;
     width: 100%;
     min-height: 46px;
@@ -1096,35 +1185,48 @@
     background: #f1f8f6;
   }
 
-  .review-execute-page .review-note-camera-label {
+
+  :root[data-layout="mobile"] .review-execute-page .review-note-camera-label{
     display: inline;
     font-size: 13px;
     font-weight: 650;
   }
 
-  .review-execute-page .review-mobile-footer-note {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-footer-note{
     display: none;
   }
 
-  .review-execute-page .review-mobile-footer {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-footer{
     grid-template-columns: minmax(88px, auto) minmax(0, 1fr);
-  }
-}
+  }}
 
 @media (max-width: 360px) {
-  .review-execute-page .review-mobile-step-copy b {
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-step-copy b{
     font-size: 11px;
   }
 
-  .review-execute-page .review-mobile-step-current {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-step-current{
     padding-inline: 5px;
     font-size: 8px;
   }
 
-  .review-execute-page .review-mobile-footer > .button {
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-footer > .button{
     font-size: 11px;
   }
-}
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-basic .review-basic-row{
+    gap: 6px;
+  }
+
+  :root[data-layout="mobile"] .review-execute-page .review-mobile-basic .review-basic-row .text-input{
+    min-height: 40px;
+    padding: 6px 5px;
+    font-size: 12px;
+  }}
 
 @keyframes review-guidance-in {
   from { opacity: 0; transform: translateY(-3px); }
