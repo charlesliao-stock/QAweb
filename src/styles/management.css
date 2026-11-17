@@ -1060,6 +1060,15 @@
   margin-top: 4px;
 }
 
+/* v1.88.5：批次上傳按鈕不被預覽表格拉高。
+   BatchImporter 回傳 fragment，兩個按鈕與預覽 section 都是父層
+   .form-actions 的 flex 子項；.form-actions 預設 align-items: stretch，
+   預覽一出現整列被撐高，按鈕就被拉成與預覽等高的長條。改為靠上對齊、
+   維持正常高度；等高按鈕列不受影響。 */
+.form-actions > .button {
+  align-self: flex-start;
+}
+
 /* 指標管理重構（2026-11-03）：負責人 chips、autocomplete、子指標、閾值、題組 */
 .chip-row {
   display: flex;
