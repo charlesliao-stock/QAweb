@@ -20,6 +20,7 @@ import {
 import type { DashboardData } from "./useDashboardData";
 import type { ExecuteTarget } from "../ReviewExecutePage";
 import { pad2 } from "../../lib/ym";
+import { stripInternalIdPrefix } from "../../lib/indicators";
 
 export function ReviewerTab({
   data,
@@ -163,7 +164,7 @@ export function ReviewerTab({
                     return (
                       <tr key={t.id}>
                         <td>
-                          {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
+                          {data.indicatorMap.get(t.indicatorId) ?? stripInternalIdPrefix(t.indicatorId)}
                         </td>
                         <td>{displayUnitCode(t.unitId)}</td>
                         <td>{taskProgressLabel(t)}</td>
@@ -216,7 +217,7 @@ export function ReviewerTab({
                   <div key={t.id} className="task-card">
                     <div className="task-card-top">
                       <b>
-                        {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
+                        {data.indicatorMap.get(t.indicatorId) ?? stripInternalIdPrefix(t.indicatorId)}
                       </b>
                       {statusPill(t)}
                     </div>
@@ -271,7 +272,7 @@ export function ReviewerTab({
                     {lockedTasks.map((t) => (
                       <tr key={t.id}>
                         <td data-label="指標名稱">
-                          {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
+                          {data.indicatorMap.get(t.indicatorId) ?? stripInternalIdPrefix(t.indicatorId)}
                         </td>
                         <td data-label="審查單位">{displayUnitCode(t.unitId)}</td>
                         <td data-label="完成／應審件數">{taskProgressLabel(t)}</td>
@@ -296,7 +297,7 @@ export function ReviewerTab({
             <ul style={{ margin: "8px 0 0", paddingLeft: 20 }}>
               {dueSoon.map((t) => (
                 <li key={t.id}>
-                  {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}／
+                  {data.indicatorMap.get(t.indicatorId) ?? stripInternalIdPrefix(t.indicatorId)}／
                   {displayUnitCode(t.unitId)}：{t.deadline} 截止
                   <span className="status-pill warning" style={{ marginLeft: 8 }}>
                     剩餘 {daysBetween(today, t.deadline)} 天
@@ -332,7 +333,7 @@ export function ReviewerTab({
                 {upcomingTasks.map((t) => (
                   <tr key={t.id}>
                     <td data-label="指標名稱">
-                      {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
+                      {data.indicatorMap.get(t.indicatorId) ?? stripInternalIdPrefix(t.indicatorId)}
                     </td>
                     <td data-label="審查單位">{displayUnitCode(t.unitId)}</td>
                     <td data-label="應審件數">{t.caseCount ?? "未設定"}</td>

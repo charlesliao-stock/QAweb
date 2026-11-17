@@ -125,6 +125,7 @@ import {
 import {
   effectiveThreshold,
   indicatorCodeOf,
+  stripInternalIdPrefix,
   normalizeQuestions,
   type AuditQuestion,
 } from "../lib/indicators";
@@ -667,7 +668,7 @@ export function AuditPage({
             const storeKey = `qaweb:audit-schedules:${staffId}`;
             const current = classified.map((c) => ({
               id: scheduleDocId(c.sched.indicatorId, c.sched.category, c.sched.period),
-              label: `${indicators.get(c.sched.indicatorId)?.name ?? c.sched.indicatorId}・${c.sched.periodLabel}`,
+              label: `${indicators.get(c.sched.indicatorId)?.name ?? stripInternalIdPrefix(c.sched.indicatorId)}・${c.sched.periodLabel}`,
             }));
             const raw = window.localStorage.getItem(storeKey);
             if (raw) {
@@ -2118,7 +2119,7 @@ export function AuditPage({
                 return (
                   <div key={q.id} className="panel" style={{ marginBottom: 12 }}>
                     <p>
-                      <b>{nm?.indicatorName ?? q.indicatorId}</b>・
+                      <b>{nm?.indicatorName ?? stripInternalIdPrefix(q.indicatorId)}</b>・
                       {nm?.unitNameOf(q.unitId) ?? q.unitId}・{q.year}年{q.month}月
                     </p>
                     <p className="muted-text">

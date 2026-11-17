@@ -18,6 +18,16 @@ export function ymPadded(year: number, month: number): string {
   return `${year}-${pad2(month)}`;
 }
 
+/** 日期顯示統一為 YYYY/MM/DD（v1.88.7）：`2026-10-10` → `2026/10/10`；
+ * 已是斜線格式者不變；空值回 "—"；非日期字串原樣回傳（不丟資訊）。 */
+export function formatDateSlash(value: string): string {
+  const v = value.trim();
+  if (v === "") return "—";
+  const m = v.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (!m) return value;
+  return `${m[1]}/${pad2(Number(m[2]))}/${pad2(Number(m[3]))}`;
+}
+
 /** 年月加減 n 個月（跨年自動進位）：(2026, 12, +1) → { year: 2027, month: 1 } */
 export function shiftYm(
   year: number,

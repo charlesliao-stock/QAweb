@@ -60,6 +60,7 @@ import { usePermissions } from "../lib/usePermissions";
 import {
   effectiveThreshold,
   indicatorCodeOf,
+  stripInternalIdPrefix,
   normalizeQuestions,
   type AuditQuestion,
 } from "../lib/indicators";
@@ -2117,7 +2118,7 @@ export function ResultsPage({
       {unconfirmed.length > 0 && (
         <p className="settings-note" style={{ color: "#b3372f", fontWeight: 600 }}>
           尚待確認封存：以下審查區間已結束超過一個月，結果尚待召集人／執行幹事確認封存，數字可能再變動：
-          {[...new Set(unconfirmed.map((e) => `${indOf.get(e.indicatorId)?.name ?? e.indicatorId}（${e.label}）`))]
+          {[...new Set(unconfirmed.map((e) => `${indOf.get(e.indicatorId)?.name ?? stripInternalIdPrefix(e.indicatorId)}（${e.label}）`))]
             .slice(0, 8)
             .join("、")}
           {unconfirmed.length > 8 ? `…等 ${unconfirmed.length} 個區間` : ""}
@@ -3893,7 +3894,7 @@ function CauseDrillModal({
                   const ind = indOf.get(entry.record.indicatorId);
                   return (
                     <tr key={`${entry.record.personEmpNo}-${entry.record.year}-${entry.record.month}-${entry.questionId}-${i}`}>
-                      <td>{ind ? `${ind.code}・${ind.name}` : entry.record.indicatorId}</td>
+                      <td>{ind ? `${stripInternalIdPrefix(ind.code)}・${ind.name}` : stripInternalIdPrefix(entry.record.indicatorId)}</td>
                       <td>{entry.record.unitId === "" ? "NA" : `${entry.record.unitId}・${unitNameOf.get(entry.record.unitId) ?? ""}`}</td>
                       <td>{entry.record.year}/{pad2(entry.record.month)}</td>
                       <td>{staffLabel(entry.record.personEmpNo, entry.record.personName)}</td>

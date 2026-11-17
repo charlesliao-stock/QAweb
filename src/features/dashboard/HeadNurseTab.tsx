@@ -19,6 +19,7 @@ import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
 import { CapaPendingReviewCard } from "./CapaPendingReviewCard";
 import { pad2 } from "../../lib/ym";
+import { stripInternalIdPrefix } from "../../lib/indicators";
 
 export function HeadNurseTab({
   data,
@@ -119,7 +120,7 @@ export function HeadNurseTab({
             <div key={a.recordId} style={{ marginBottom: 12 }}>
               <p style={{ margin: "0 0 4px" }}>
                 <b style={{ color: "#b3372f" }}>
-                  {data.indicatorMap.get(a.indicatorId) ?? a.indicatorId}
+                  {data.indicatorMap.get(a.indicatorId) ?? stripInternalIdPrefix(a.indicatorId)}
                 </b>
                 <span className="muted-text">（{a.reviewDate || "日期未填"}）</span>
               </p>
@@ -161,7 +162,7 @@ export function HeadNurseTab({
                 {nextAudits.map((t) => (
                   <tr key={t.id}>
                     <td data-label="指標名稱">
-                      {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
+                      {data.indicatorMap.get(t.indicatorId) ?? stripInternalIdPrefix(t.indicatorId)}
                     </td>
                     <td data-label="應審件數">{t.caseCount ?? "未設定"}</td>
                     <td data-label="截止日期">{t.deadline}</td>
@@ -218,7 +219,7 @@ export function HeadNurseTab({
               const doneCount = taskProgressCount(t) ?? 0;
               return (
                 <li key={t.id}>
-                  {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}：
+                  {data.indicatorMap.get(t.indicatorId) ?? stripInternalIdPrefix(t.indicatorId)}：
                   已完成 {doneCount} 件（應審 {requiredCases(t.caseCount)} 件）
                 </li>
               );

@@ -36,7 +36,7 @@ import {
 } from "../lib/scheduling";
 import { categoryLabel, type CycleCategory } from "../lib/cycle";
 import { staffLabel } from "../lib/mask";
-import { pad2 } from "../lib/ym";
+import { formatDateSlash, pad2 } from "../lib/ym";
 import {
   EmptyState,
   FilterPanel,
@@ -402,12 +402,14 @@ export function ScheduleDetailPage({
     return { total: intervalRows.length, done, pending, locked };
   }, [intervalRows]);
   // 區間截止日：區間內任務的截止日（皆相同→該日；不一致→最早–最晚）；
-  // 區間尚無任務時，由區間末月＋系統截止日推算。
+  // 區間尚無任務時，由區間末月＋系統截止日推算。顯示統一為 YYYY/MM/DD（v1.88.7）。
   const intervalDeadline = useMemo(() => {
     if (!selInterval) return "—";
     const fromTasks = intervalDeadlineLabel(intervalRows.map((r) => r.deadline));
     if (fromTasks !== "—") return fromTasks;
-    return deadlineFor(selInterval.endYear, selInterval.endMonth, deadlineDay);
+    return formatDateSlash(
+      deadlineFor(selInterval.endYear, selInterval.endMonth, deadlineDay),
+    );
   }, [selInterval, intervalRows, deadlineDay]);
 
   if (!sched) {
@@ -449,8 +451,8 @@ export function ScheduleDetailPage({
       </div>
 
       {tab === "basic" && (
-        <div className="table-scroll">
-          <table className="data-table">
+        <section className="panel schedule-detail-card">
+          <table className="data-table detail-kv-table">
             <tbody>
               <tr>
                 <td style={{ whiteSpace: "nowrap" }}><b>期間</b></td>
@@ -531,7 +533,7 @@ export function ScheduleDetailPage({
               </tr>
             </tbody>
           </table>
-        </div>
+        </section>
       )}
 
       {tab === "tracking" && (
@@ -571,6 +573,7 @@ export function ScheduleDetailPage({
                   <option value="locked">逾期鎖定</option>
                 </FormSelect>
               </FilterPanel>
+              <section className="panel schedule-detail-card">
               {selInterval && (
                 <p>
                   <b>審查年月：{selInterval.label}</b>
@@ -613,11 +616,6 @@ export function ScheduleDetailPage({
                             {r.done == null
                               ? `—/${r.required}`
                               : `${r.done}/${r.required}${r.pct == null ? "" : `（${r.pct}%）`}`}
-                            {r.quotaInterval && (
-                              <div className="muted-text">
-                                共用配額 {r.quotaInterval.startYear}/{pad2(r.quotaInterval.startMonth)}–{r.quotaInterval.endYear}/{pad2(r.quotaInterval.endMonth)}
-                              </div>
-                            )}
                           </td>
                           <td data-label="狀態">
                             <span className={`status-pill ${r.status === "done" ? "success" : r.status === "locked" ? "danger" : "muted"}`}>
@@ -633,6 +631,7 @@ export function ScheduleDetailPage({
                   </table>
                 </div>
               )}
+              </section>
             </>
           )}
         </>

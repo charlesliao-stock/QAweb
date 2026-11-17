@@ -14,6 +14,7 @@ import {
 } from "../../lib/dashboardSections";
 import type { DashboardData } from "./useDashboardData";
 import { pad2 } from "../../lib/ym";
+import { stripInternalIdPrefix } from "../../lib/indicators";
 
 export function NurseTab({
   data,
@@ -48,7 +49,7 @@ export function NurseTab({
       }
     }
     return [...ids]
-      .map((id) => data.indicatorMap.get(id) ?? id)
+      .map((id) => data.indicatorMap.get(id) ?? stripInternalIdPrefix(id))
       .sort((a, b) => a.localeCompare(b, "zh-Hant"));
   }, [data, unitCode, curYear, curMonth]);
 
@@ -77,7 +78,7 @@ export function NurseTab({
                 {trend.map((r) => (
                   <tr key={r.id}>
                   <td data-label="審查日期">{r.reviewDate || "—"}</td>
-                  <td data-label="指標名稱">{data.indicatorMap.get(r.indicatorId) ?? r.indicatorId}</td>
+                  <td data-label="指標名稱">{data.indicatorMap.get(r.indicatorId) ?? stripInternalIdPrefix(r.indicatorId)}</td>
                   <td data-label="正確率">{r.rate != null ? `${r.rate}%` : "—"}</td>
                   <td data-label="正確率進度" style={{ minWidth: 120 }}>
                       <div

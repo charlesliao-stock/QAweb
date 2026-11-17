@@ -438,9 +438,20 @@ export function parseIndicatorDocId(
   return { groupId: id.slice(0, i), code: id.slice(i + 2) };
 }
 
+/**
+ * 去除內部識別前綴（v1.88.7：顯示層共用，全站不再顯示 `__` 之前的前綴）。
+ * `TW4MOYmeUb1oFctiO5ZN__3-0002` → `3-0002`；無 `__` 前綴、或 `__` 在開頭／
+ * 末尾（無有效後綴）時原樣回傳。只改顯示，不動資料庫存的值。
+ */
+export function stripInternalIdPrefix(value: string): string {
+  const i = value.indexOf("__");
+  if (i <= 0 || i >= value.length - 2) return value;
+  return value.slice(i + 2);
+}
+
 /** 由文件 ID 取顯示用編號：複合 ID 取 code；舊格式回傳原 ID */
 export function indicatorCodeOf(id: string): string {
-  return parseIndicatorDocId(id)?.code ?? id;
+  return stripInternalIdPrefix(id);
 }
 
 /**

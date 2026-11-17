@@ -16,6 +16,7 @@ import { useStaffNameMap } from "../../lib/useStaffNames";
 import { todayStr } from "../../lib/scheduling";
 import type { DashboardData } from "./useDashboardData";
 import { pad2 } from "../../lib/ym";
+import { stripInternalIdPrefix } from "../../lib/indicators";
 
 export function OfficerTab({
   data,
@@ -110,7 +111,7 @@ export function OfficerTab({
                       </span>
                     </td>
                     <td data-label="指標名稱">
-                      {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
+                      {data.indicatorMap.get(t.indicatorId) ?? stripInternalIdPrefix(t.indicatorId)}
                     </td>
                     <td data-label="審查單位">{displayUnitCode(t.unitId)}</td>
                     <td data-label="審查員">{staffLabel(t.reviewerId, staffNames.get(t.reviewerId) ?? "")}</td>
@@ -152,7 +153,7 @@ export function OfficerTab({
                       {t.year}/{pad2(t.month)}
                     </td>
                     <td data-label="指標名稱">
-                      {data.indicatorMap.get(t.indicatorId) ?? t.indicatorId}
+                      {data.indicatorMap.get(t.indicatorId) ?? stripInternalIdPrefix(t.indicatorId)}
                     </td>
                     <td data-label="審查單位">{displayUnitCode(t.unitId)}</td>
                     {/* v1.28 階段 2：補紀錄超過上限者進度未知，顯示「—」而非錯誤的 0 */}
@@ -197,7 +198,7 @@ export function OfficerTab({
                       {u.year}/{pad2(u.month)}
                     </td>
                     <td data-label="指標名稱">
-                      {data.indicatorMap.get(u.indicatorId) ?? u.indicatorId}
+                      {data.indicatorMap.get(u.indicatorId) ?? stripInternalIdPrefix(u.indicatorId)}
                     </td>
                     <td data-label="審查單位">{displayUnitCode(u.unitId)}</td>
                     <td data-label="申請人">

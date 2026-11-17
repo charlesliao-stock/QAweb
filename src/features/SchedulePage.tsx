@@ -40,7 +40,7 @@ import {
 import { getFirebaseDb } from "../lib/firebase";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
 import { getDocCacheFirst } from "../lib/cacheFirst";
-import { indicatorCodeOf, effectiveThreshold } from "../lib/indicators";
+import { indicatorCodeOf, stripInternalIdPrefix, effectiveThreshold } from "../lib/indicators";
 import { buildTaskIndex, buildTaskUnitIndex, type TaskUnitIndex } from "../lib/taskIndex";
 import { usePermissions } from "../lib/usePermissions";
 import { useAuth } from "../lib/auth";
@@ -1462,7 +1462,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
           </div>
           <SectionTitle
             title={indicator.name}
-            note={`指標編號 ${indicator.id}・組別 ${groupMap.get(indicator.groupId) ?? "—"}`}
+            note={`指標編號 ${stripInternalIdPrefix(indicator.id)}・組別 ${groupMap.get(indicator.groupId) ?? "—"}`}
           />
           {view.kind === "schedule" && (
             <ScheduleEditor

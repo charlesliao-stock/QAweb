@@ -14,7 +14,7 @@ import {
   type ReviewInterval,
   type ScheduleCategory,
 } from "./scheduling";
-import { pad2 } from "./ym";
+import { formatDateSlash, pad2 } from "./ym";
 
 /** 一個審查區間（起始月＋連續月數展開後的曆年月集合） */
 export interface ScheduleReviewInterval {
@@ -99,11 +99,11 @@ export function intervalContains(
 
 /**
  * 區間截止日標題：區間內任務截止日皆相同→該日；不一致→「最早–最晚」；
- * 無任務截止日→「—」。
+ * 無任務截止日→「—」。日期統一顯示為 YYYY/MM/DD（v1.88.7）。
  */
 export function intervalDeadlineLabel(deadlines: string[]): string {
   const uniq = [...new Set(deadlines.filter(Boolean))].sort();
   if (uniq.length === 0) return "—";
-  if (uniq.length === 1) return uniq[0];
-  return `${uniq[0]}–${uniq[uniq.length - 1]}`;
+  if (uniq.length === 1) return formatDateSlash(uniq[0]);
+  return `${formatDateSlash(uniq[0])}–${formatDateSlash(uniq[uniq.length - 1])}`;
 }
