@@ -226,7 +226,7 @@ export function getDemoData(): Record<string, Record<string, unknown>> {
       B67890: {
         name: "陳大華",
         unitCode: "9A",
-        title: "護理長",
+        title: "護理長/副護理長",
         roles: ["護理長"],
         mustChangePassword: false,
         status: "在職",

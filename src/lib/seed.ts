@@ -93,11 +93,11 @@ export const SEED_ROLES: SeedRoleDef[] = [
 
 export interface SeedTitleDef {
   name: string;
-  /** 群組層級（召集人／執行幹事／組長）或單位層級（主任／副主任／督導／護理長／副護理長／執行幹事） */
+  /** 展示用層級標籤（僅 demoData 用；運行時層級以 titleLevels／orgLevels 為準） */
   level: "群組" | "單位";
 }
 
-/** 預設職稱（需求規格書 v2.1 §6 系統管理：職稱分群組與單位兩層） */
+/** 預設職稱（需求規格書 v2.1 §6 系統管理：職稱分群組與單位兩層；v1.88.8：護理長／副護理長合併、新增護士） */
 export const SEED_TITLES: SeedTitleDef[] = [
   { name: "召集人", level: "群組" },
   { name: "執行幹事", level: "群組" },
@@ -109,10 +109,12 @@ export const SEED_TITLES: SeedTitleDef[] = [
   { name: "護理部主任", level: "單位" },
   { name: "護理部副主任", level: "單位" },
   { name: "護理部督導", level: "單位" },
-  { name: "護理長", level: "單位" },
-  { name: "副護理長", level: "單位" },
+  // v1.88.8：護理長／副護理長合併為一筆
+  { name: "護理長/副護理長", level: "單位" },
   { name: "執行幹事", level: "單位" },
   { name: "護理師", level: "單位" },
+  // v1.88.8：新增護士（單位層）
+  { name: "護士", level: "單位" },
 ];
 
 export interface SystemParams {

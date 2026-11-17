@@ -13,13 +13,129 @@ export interface OrgLevel {
   order: number;
 }
 
-/** 預設職稱層級：主任→副主任→督導→單位（v1.87.0：部級拆為主任／副主任／督導三層） */
+/** 預設職稱層級：部級→單位（v1.88.8：4 層併回 2 層；主任／副主任／督導同屬部級） */
 export const DEFAULT_TITLE_LEVELS: OrgLevel[] = [
-  { id: "tl-director", name: "主任", order: 0 },
-  { id: "tl-deputy", name: "副主任", order: 1 },
-  { id: "tl-supervisor", name: "督導", order: 2 },
-  { id: "tl-unit", name: "單位", order: 3 },
+  { id: "tl-dept", name: "部級", order: 0 },
+  { id: "tl-unit", name: "單位", order: 1 },
 ];
+
+/** 部級／單位層級 id（v1.88.8 起的現行 id） */
+export const DEPT_TITLE_LEVEL_ID = "tl-dept";
+export const UNIT_TITLE_LEVEL_ID = "tl-unit";
+
+/** v1.87.0 拆出的三層 id（v1.88.8 起為舊層級，遷移後清理） */
+export const LEGACY_TITLE_LEVEL_IDS = [
+  "tl-director",
+  "tl-deputy",
+  "tl-supervisor",
+] as const;
+
+/** 職稱遷移對照（按名；v1.88.8：部級＝主任／副主任／督導，單位＝護理長/副護理長／護理師／護士） */
+export const TITLE_LEVEL_ID_BY_NAME: Record<string, string> = {
+  主任: "tl-dept",
+  副主任: "tl-dept",
+  督導: "tl-dept",
+  護理部主任: "tl-dept",
+  護理部副主任: "tl-dept",
+  護理部督導: "tl-dept",
+  "護理長/副護理長": "tl-unit",
+  護理長: "tl-unit",
+  副護理長: "tl-unit",
+  護理師: "tl-unit",
+  護士: "tl-unit",
+};
+
+/** v1.87.0：舊部級層級 id；v1.88.8 起部級層級重新啟用此 id（遷移後不再是舊值，僅供 v1.87.0 遷移函式對照） */
+export const LEGACY_DEPT_TITLE_LEVEL_ID = "tl-dept";
+
+/**
+ * 職稱正規名稱（v1.88.8）：
+ * - 去「護理部」前綴（護理部主任→主任、護理部督導→督導）；
+ * - 護理長／副護理長皆視為合併後職稱「護理長/副護理長」。
+ */
+export function canonicalTitleName(name: string): string {
+  const stripped = name.trim().replace(/^護理部/, "");
+  if (stripped === "護理長" || stripped === "副護理長")
+    return "護理長/副護理長";
+  return stripped;
+}
+
+export function titleLevelIdForName(name: string): string {
+  if (TITLE_LEVEL_ID_BY_NAME[name]) return TITLE_LEVEL_ID_BY_NAME[name];
+  return TITLE_LEVEL_ID_BY_NAME[canonicalTitleName(name)] ?? "";
+}
+
+/** 合併後護理長職稱名稱（v1.88.8） */
+export const MERGED_HEAD_NURSE_TITLE = "護理長/副護理長";
+
+/**
+ * 職稱下屬對照（v1.88.8：按職稱順序，不按層級 order——併層後部級內無層級次序）。
+ * 主任→副主任、副主任→督導、督導→單位清單（無人員下層，由 titleUnitCodes 處理）、
+ * 護理長/副護理長→護理師＋護士、護理師／護士為末端。
+ */
+export const TITLE_SUBORDINATES: Record<string, string[]> = {
+  主任: ["副主任"],
+  副主任: ["督導"],
+  督導: [],
+  "護理長/副護理長": ["護理師", "護士"],
+  護理師: [],
+  護士: [],
+};
+
+/** 某職稱的下層職稱名（正規名；督導回空陣列——其下屬是單位清單） */
+export function subordinateTitleNames(name: string): string[] {
+  return [...(TITLE_SUBORDINATES[canonicalTitleName(name)] ?? [])];
+}
+
+/** 是否為督導職稱（正規名為「督導」；含「護理部督導」變體） */
+export function isSupervisorTitleName(name: string): boolean {
+  return canonicalTitleName(name) === "督導";
+}
+
+export interface HeadNurseMergePlan {
+  /** 保留的職稱文件 id（null＝三者皆無，需新建） */
+  targetId: string | null;
+  /** 保留的文件是否需更名為「護理長/副護理長」 */
+  targetNeedsRename: boolean;
+  /** 合併後應刪除的舊職稱文件 id */
+  mergeFromIds: string[];
+}
+
+/**
+ * 護理長／副護理長合併計畫（純函式，v1.88.8）：
+ * 已有合併名文件者以其為準；否則留護理長改名；再否留副護理長改名；皆無則新建。
+ */
+export function planHeadNurseMerge(
+  titles: Array<{ id: string; name: string }>,
+): HeadNurseMergePlan {
+  const merged = titles.find((t) => t.name === MERGED_HEAD_NURSE_TITLE);
+  const head = titles.find((t) => t.name === "護理長");
+  const deputy = titles.find((t) => t.name === "副護理長");
+  if (merged) {
+    return {
+      targetId: merged.id,
+      targetNeedsRename: false,
+      mergeFromIds: [head?.id, deputy?.id].filter(
+        (x): x is string => Boolean(x),
+      ),
+    };
+  }
+  if (head) {
+    return {
+      targetId: head.id,
+      targetNeedsRename: true,
+      mergeFromIds: deputy ? [deputy.id] : [],
+    };
+  }
+  if (deputy) {
+    return {
+      targetId: deputy.id,
+      targetNeedsRename: true,
+      mergeFromIds: [],
+    };
+  }
+  return { targetId: null, targetNeedsRename: false, mergeFromIds: [] };
+}
 
 /** 預設角色層級：委員會→品管組→單位 */
 export const DEFAULT_ROLE_LEVELS: OrgLevel[] = [
@@ -27,23 +143,6 @@ export const DEFAULT_ROLE_LEVELS: OrgLevel[] = [
   { id: "rl-qi", name: "品管組", order: 1 },
   { id: "rl-unit", name: "單位", order: 2 },
 ];
-
-/** 職稱遷移對照（按名；v1.87.0：部級拆為主任／副主任／督導三層） */
-export const TITLE_LEVEL_ID_BY_NAME: Record<string, string> = {
-  主任: "tl-director",
-  副主任: "tl-deputy",
-  督導: "tl-supervisor",
-  護理長: "tl-unit",
-  副護理長: "tl-unit",
-  護理師: "tl-unit",
-};
-
-/** v1.87.0：舊部級層級 id（遷移後不再新建，僅供既有資料對照） */
-export const LEGACY_DEPT_TITLE_LEVEL_ID = "tl-dept";
-
-export function titleLevelIdForName(name: string): string {
-  return TITLE_LEVEL_ID_BY_NAME[name] ?? "";
-}
 
 /** 角色遷移對照（按名稱前綴） */
 export function roleLevelIdForName(name: string): string {

@@ -29,9 +29,12 @@ import {
   DEFAULT_ROLE_LEVELS,
   DEFAULT_TITLE_LEVELS,
   LEGACY_DEPT_TITLE_LEVEL_ID,
+  LEGACY_TITLE_LEVEL_IDS,
+  MERGED_HEAD_NURSE_TITLE,
   NEW_ROLES,
   OLD_ROLE_NAME,
   OLD_ROLE_REPLACEMENT,
+  planHeadNurseMerge,
   roleLevelIdForName,
   titleLevelIdForName,
 } from "./orgLevels";
@@ -40,6 +43,9 @@ export const ORG_LEVELS_MIGRATION_MARKER = "configs/orgLevelsV155";
 
 /** v1.87.0：職稱層級拆分遷移旗標（部級→主任／副主任／督導／單位） */
 export const TITLE_LEVELS_MIGRATION_MARKER = "configs/titleLevelsV187";
+
+/** v1.88.8：職稱層級併回遷移旗標（主任／副主任／督導／單位→部級／單位） */
+export const TITLE_LEVELS_V188_MIGRATION_MARKER = "configs/titleLevelsV188";
 
 export interface TitleLevelsMigrationResult {
   levelsCreated: string[];
@@ -266,6 +272,222 @@ export async function migrateOrgLevels(
       createdAt: serverTimestamp(),
     });
   }
+
+  // 全部成功才寫旗標
+  await setDoc(markerRef, {
+    done: true,
+    migratedAt: serverTimestamp(),
+    migratedBy: staffId,
+  });
+  return result;
+}
+
+export interface TitleLevelsV188MigrationResult {
+  levelsCreated: string[];
+  titlesRemapped: number;
+  /** 護理長／副護理長是否已合併為「護理長/副護理長」 */
+  headNurseMerged: boolean;
+  /** 合併時轉任的人員數（titleId／title 字串重指） */
+  headNurseUsersRetargeted: number;
+  /** 「護士」職稱是否為本次新建 */
+  nurseTitleCreated: boolean;
+  /** 已刪除的舊層級文件 id（tl-director／tl-deputy／tl-supervisor） */
+  legacyLevelsRemoved: string[];
+}
+
+/**
+ * v1.88.8：職稱層級併回（主任／副主任／督導／單位→部級／單位）。
+ *
+ * 1. 建立部級（tl-dept，沿用舊 id）／單位層級文件（缺的才建；已存在的不動）。
+ * 2. 既有職稱按名稱重對照 levelId（主任／副主任／督導→部級；
+ *    護理長／副護理長／護理師／護士→單位；「護理部主任」等變體去前綴後對照；
+ *    對不上的自訂職稱不動）。
+ * 3. 護理長／副護理長合併為「護理長/副護理長」（planHeadNurseMerge）：
+ *    持有舊職稱者自動轉任（titleId 重指＋title 字串改名）；權限範本
+ *    目標不存在時由舊名範本複製（只取其一：護理長優先）。
+ * 4. 無「護士」職稱時新建（單位層）。
+ * 5. 重對照後已無職稱引用的舊層級文件（tl-director／tl-deputy／
+ *    tl-supervisor）刪除；仍有引用時保留（管理員可自行移轉後刪除）。
+ *
+ * 防重跑：configs/titleLevelsV188 { done: true }；各步驟本身具等冪性，
+ * 旗標只在全部成功後才寫入，失敗時下次開頁重試。
+ */
+export async function migrateTitleLevelsV188(
+  db: any,
+  staffId: string,
+): Promise<TitleLevelsV188MigrationResult> {
+  const markerRef = doc(db, TITLE_LEVELS_V188_MIGRATION_MARKER);
+  const markerSnap = await getDoc(markerRef);
+  if (markerSnap.exists() && markerSnap.data()?.done === true) {
+    return {
+      levelsCreated: [],
+      titlesRemapped: 0,
+      headNurseMerged: false,
+      headNurseUsersRetargeted: 0,
+      nurseTitleCreated: false,
+      legacyLevelsRemoved: [],
+    };
+  }
+
+  const result: TitleLevelsV188MigrationResult = {
+    levelsCreated: [],
+    titlesRemapped: 0,
+    headNurseMerged: false,
+    headNurseUsersRetargeted: 0,
+    nurseTitleCreated: false,
+    legacyLevelsRemoved: [],
+  };
+
+  // 1. 部級／單位層級文件（缺的才建）
+  for (const level of DEFAULT_TITLE_LEVELS) {
+    const ref = doc(db, "titleLevels", level.id);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      await setDoc(ref, {
+        name: level.name,
+        order: level.order,
+        ...auditFields(staffId, true),
+      });
+      result.levelsCreated.push(level.name);
+    }
+  }
+
+  // 2. 既有職稱按名稱重對照 levelId
+  const titleSnap = await getDocsFromServer(collection(db, "titles"));
+  for (const d of titleSnap.docs) {
+    const data = d.data() as Record<string, unknown>;
+    const name = typeof data.name === "string" ? data.name : "";
+    const levelId = titleLevelIdForName(name);
+    if (!levelId || data.levelId === levelId) continue;
+    await updateDoc(doc(db, "titles", d.id), {
+      levelId,
+      ...auditFields(staffId, false),
+    });
+    result.titlesRemapped += 1;
+  }
+
+  // 3. 護理長／副護理長合併
+  const freshSnap = await getDocsFromServer(collection(db, "titles"));
+  const titleRows = freshSnap.docs.map((d) => {
+    const data = d.data() as Record<string, unknown>;
+    return {
+      id: d.id,
+      name: typeof data.name === "string" ? data.name : "",
+    };
+  });
+  const plan = planHeadNurseMerge(titleRows);
+  let targetId = plan.targetId;
+  if (targetId === null) {
+    const ref = doc(collection(db, "titles"));
+    await setDoc(ref, {
+      name: MERGED_HEAD_NURSE_TITLE,
+      levelId: "tl-unit",
+      isUnitHead: true,
+      isDistrictHead: false,
+      isHospitalHead: false,
+      isOfficer: false,
+      isConvener: false,
+      ...auditFields(staffId, true),
+    });
+    targetId = ref.id;
+    result.headNurseMerged = true;
+  } else {
+    const updates: Record<string, unknown> = {
+      isUnitHead: true,
+      ...auditFields(staffId, false),
+    };
+    if (plan.targetNeedsRename) updates.name = MERGED_HEAD_NURSE_TITLE;
+    await updateDoc(doc(db, "titles", targetId), updates);
+    result.headNurseMerged = true;
+  }
+  // 持有舊職稱者轉任（titleId 重指；無 titleId 者只認 title 字串）
+  const oldIds = new Set(plan.mergeFromIds);
+  const usersSnap = await getDocsFromServer(collection(db, "users"));
+  for (const d of usersSnap.docs) {
+    const data = d.data() as Record<string, unknown>;
+    const uid = typeof data.titleId === "string" ? data.titleId : "";
+    const title = typeof data.title === "string" ? data.title : "";
+    const fromOldDoc = oldIds.has(uid);
+    const fromOldNameNoId =
+      !uid && (title === "護理長" || title === "副護理長");
+    const staleNameOnTarget =
+      uid === targetId && (title === "護理長" || title === "副護理長");
+    if (!fromOldDoc && !fromOldNameNoId && !staleNameOnTarget) continue;
+    await updateDoc(doc(db, "users", d.id), {
+      title: MERGED_HEAD_NURSE_TITLE,
+      titleId: targetId,
+      ...auditFields(staffId, false),
+    });
+    result.headNurseUsersRetargeted += 1;
+  }
+  // 舊職稱文件刪除（人員已轉任）
+  for (const id of plan.mergeFromIds) {
+    await deleteDoc(doc(db, "titles", id));
+  }
+  // 權限範本：目標不存在時由舊名範本複製（護理長優先），複製後刪舊範本
+  const newTplRef = doc(
+    db,
+    "permissionTemplates",
+    templateDocId("unit", MERGED_HEAD_NURSE_TITLE),
+  );
+  if (!(await getDoc(newTplRef)).exists()) {
+    for (const oldName of ["護理長", "副護理長"]) {
+      const oldRef = doc(db, "permissionTemplates", templateDocId("unit", oldName));
+      const oldSnap = await getDoc(oldRef);
+      if (!oldSnap.exists()) continue;
+      await setDoc(newTplRef, { ...oldSnap.data(), name: MERGED_HEAD_NURSE_TITLE });
+      await deleteDoc(oldRef);
+      break;
+    }
+  }
+
+  // 4. 無「護士」職稱時新建（單位層）
+  const afterMergeSnap = await getDocsFromServer(collection(db, "titles"));
+  const hasNurse = afterMergeSnap.docs.some((d) => {
+    const data = d.data() as Record<string, unknown>;
+    return data.name === "護士";
+  });
+  if (!hasNurse) {
+    await setDoc(doc(collection(db, "titles")), {
+      name: "護士",
+      levelId: "tl-unit",
+      isUnitHead: false,
+      isDistrictHead: false,
+      isHospitalHead: false,
+      isOfficer: false,
+      isConvener: false,
+      ...auditFields(staffId, true),
+    });
+    result.nurseTitleCreated = true;
+  }
+
+  // 5. 無人再引用的舊層級文件刪除
+  const finalSnap = await getDocsFromServer(collection(db, "titles"));
+  for (const legacyId of LEGACY_TITLE_LEVEL_IDS) {
+    const stillReferenced = finalSnap.docs.some((d) => {
+      const data = d.data() as Record<string, unknown>;
+      return data.levelId === legacyId;
+    });
+    if (stillReferenced) continue;
+    const ref = doc(db, "titleLevels", legacyId);
+    if ((await getDoc(ref)).exists()) {
+      await deleteDoc(ref);
+      result.legacyLevelsRemoved.push(legacyId);
+    }
+  }
+
+  // 稽核摘要（單筆，不逐人寫）
+  await setDoc(doc(collection(db, "auditLogs")), {
+    actor: staffId,
+    actorName: "",
+    action: "職稱層級併回",
+    targetType: "title",
+    targetId: targetId,
+    detail: `層級併回部級／單位（v1.88.8）：職稱重對照 ${result.titlesRemapped} 筆，護理長／副護理長合併轉任 ${result.headNurseUsersRetargeted} 人，護士職稱${result.nurseTitleCreated ? "已新建" : "已存在"}，舊層級刪除 ${result.legacyLevelsRemoved.join("、") || "無"}`,
+    before: null,
+    after: { levelsCreated: result.levelsCreated },
+    createdAt: serverTimestamp(),
+  });
 
   // 全部成功才寫旗標
   await setDoc(markerRef, {

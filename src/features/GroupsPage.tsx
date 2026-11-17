@@ -74,14 +74,20 @@ import {
 import { deriveRoleScope } from "../lib/roleDerivation";
 import {
   canDeleteLevel,
+  canonicalTitleName,
   groupByLevel,
+  isSupervisorTitleName,
   levelIdByName,
   nextLevelOrder,
   sortedLevels,
-  TITLE_LEVEL_ID_BY_NAME,
+  subordinateTitleNames,
   type OrgLevel,
 } from "../lib/orgLevels";
-import { migrateOrgLevels, migrateTitleLevelsV187 } from "../lib/levelMigration";
+import {
+  migrateOrgLevels,
+  migrateTitleLevelsV187,
+  migrateTitleLevelsV188,
+} from "../lib/levelMigration";
 import { wouldCreateUnitHistoryCycle } from "../lib/unitHistory";
 import {
   UNIT_TEMPLATE_HEADERS,
@@ -279,10 +285,11 @@ const UNIT_HEADER = UNIT_TEMPLATE_HEADERS;
 
 const TITLE_SAMPLE: string[][] = [
   ["職稱名稱", "層級"],
-  ["護理長", "單位"],
-  ["副護理長", "單位"],
-  ["督導", "督導"],
+  ["主任", "部級"],
+  ["督導", "部級"],
+  ["護理長/副護理長", "單位"],
   ["護理師", "單位"],
+  ["護士", "單位"],
 ];
 const TITLE_HEADER = ["職稱名稱", "層級"];
 
@@ -1336,6 +1343,34 @@ export function GroupsPage({
             } catch (error) {
               onAction(`職稱層級拆分失敗：${toErrorMessage(error)}`);
             }
+            // v1.88.8：職稱層級併回（主任／副主任／督導／單位→部級／單位；旗標防重跑）
+            try {
+              const res188 = await migrateTitleLevelsV188(
+                getFirebaseDb(),
+                user.staffId,
+              );
+              const parts188: string[] = [];
+              if (res188.levelsCreated.length > 0)
+                parts188.push(
+                  `建立職稱層級 ${res188.levelsCreated.join("、")}`,
+                );
+              if (res188.titlesRemapped > 0)
+                parts188.push(`職稱層級重對照 ${res188.titlesRemapped} 筆`);
+              if (res188.headNurseMerged)
+                parts188.push(
+                  `護理長／副護理長已合併，轉任 ${res188.headNurseUsersRetargeted} 人`,
+                );
+              if (res188.nurseTitleCreated)
+                parts188.push("已新增「護士」職稱");
+              if (res188.legacyLevelsRemoved.length > 0)
+                parts188.push(
+                  `舊層級已刪除 ${res188.legacyLevelsRemoved.join("、")}`,
+                );
+              if (parts188.length > 0)
+                onAction(`職稱層級併回完成：${parts188.join("、")}`);
+            } catch (error) {
+              onAction(`職稱層級併回失敗：${toErrorMessage(error)}`);
+            }
             await loadLevels();
             await loadTitles();
             await loadRoles();
@@ -2218,13 +2253,10 @@ export function GroupsPage({
       previousRoles,
     );
     // v1.58.0：負責單位只在督導職稱時設定，其餘情況清空，避免舊值殘留。
-    // v1.87.0：部級已拆分，督導以層級 id（tl-supervisor）或層級名稱（督導）認定，層級可由管理員更名。
-    const selectedTitleLevel = selectedTitle
-      ? titleLevels.find((l) => l.id === selectedTitle.levelId)
-      : undefined;
+    // v1.88.8：層級已併回部級／單位，督導以職稱名稱認定（「護理部督導」變體亦認）。
     const isSupervisorLevelTitle =
-      selectedTitle?.levelId === "tl-supervisor" ||
-      selectedTitleLevel?.name === "督導";
+      isSupervisorTitleName(selectedTitle?.name ?? "") ||
+      selectedTitle?.levelId === "tl-supervisor";
     const isDistrictHeadTitle =
       isSupervisorLevelTitle && selectedTitle?.isDistrictHead === true;
     const titleUnitCodes = isDistrictHeadTitle
@@ -3087,23 +3119,15 @@ export function GroupsPage({
 
   // ================= 職稱下層／督導負責單位（v1.87.0） =================
 
-  /** v1.87.0：職稱下層職稱（主任→副主任、副主任→督導；單位層級無下層）。
-   * 取下一層級（order 次小）的職稱，優先取該層級的標準職稱名，否則取第一個。 */
-  function childTitleFor(title: TitleRow): TitleRow | undefined {
-    const level = titleLevels.find((l) => l.id === title.levelId);
-    if (!level) return undefined;
-    const nextLevel = sortedLevels(titleLevels).find(
-      (l) => l.order > level.order,
-    );
-    if (!nextLevel) return undefined;
-    const inLevel = titles.filter((t) => t.levelId === nextLevel.id);
-    if (inLevel.length === 0) return undefined;
-    const canonicalName = Object.entries(TITLE_LEVEL_ID_BY_NAME).find(
-      ([, id]) => id === nextLevel.id,
-    )?.[0];
-    return (
-      inLevel.find((t) => t.name === canonicalName) ?? inLevel[0]
-    );
+  /** v1.88.8：職稱下層職稱（按職稱順序對照，不再按層級 order——併層後
+   * 部級內無層級次序）。主任→副主任、副主任→督導、督導→單位清單
+   * （無人員下層）、護理長/副護理長→護理師＋護士、護理師／護士無下層。 */
+  function childTitlesFor(title: TitleRow): TitleRow[] {
+    return subordinateTitleNames(title.name)
+      .map((name) =>
+        titles.find((t) => canonicalTitleName(t.name) === name),
+      )
+      .filter((t): t is TitleRow => Boolean(t));
   }
 
   /** v1.87.0：督導負責單位（titleUnitCodes 對應的單位清單） */
@@ -4433,20 +4457,19 @@ export function GroupsPage({
 
   function renderTitleMemberPanel() {
     if (!managingTitle) return null;
-    // v1.87.0：下層職稱（主任→副主任、副主任→督導；單位層級無下層）
-    const childTitle = childTitleFor(managingTitle);
-    // v1.87.0：督導層級（層級 id tl-supervisor 或層級名「督導」）的成員可設負責單位
-    const titleLevel = titleLevels.find((l) => l.id === managingTitle.levelId);
+    // v1.88.8：下層職稱（按職稱順序；護理長/副護理長同時管護理師與護士）
+    const childTitles = childTitlesFor(managingTitle);
+    // v1.88.8：督導以職稱名稱認定（層級已併回部級，不再認層級 id）
     const isSupervisorTitle =
-      managingTitle.levelId === "tl-supervisor" ||
-      titleLevel?.name === "督導";
+      isSupervisorTitleName(managingTitle.name) ||
+      managingTitle.levelId === "tl-supervisor";
     const parentTitleName =
       memberPage?.parent?.kind === "title"
         ? (titles.find((t) => t.id === memberPage.parent!.id)?.name ?? "")
         : "";
     return (
       <section className="panel data-panel">
-        <div className="panel-inset divided">
+        <div className="panel-inset">
           <MemberChecklist
             title={`職稱「${managingTitle.name}」的成員`}
             note="加入即轉任此職稱（一人一職稱）；移除即清除職稱"
@@ -4476,35 +4499,38 @@ export function GroupsPage({
             removeLabel="批次移出"
             busy={titleBusy}
           />
-          {/* v1.87.0：職稱下層（主任→副主任、副主任→督導） */}
-          {childTitle ? (
+          {/* v1.88.8：職稱下層（按職稱順序；護理長/副護理長可同時管護理師與護士） */}
+          {childTitles.length > 0 ? (
             <div className="form-field">
               <label className="field-label">下層成員管理</label>
               <p className="settings-note">
-                加入即把人轉任「{childTitle.name}」。
+                加入即把人轉任下層職稱。
               </p>
               <div className="form-actions">
-                <button
-                  className="button button-outline"
-                  onClick={() =>
-                    onOpenMemberPage?.({
-                      kind: "title",
-                      id: childTitle.id,
-                      parent: { kind: "title", id: managingTitle.id },
-                    })
-                  }
-                >
-                  「{childTitle.name}」成員管理
-                </button>
+                {childTitles.map((child) => (
+                  <button
+                    key={child.id}
+                    className="button button-outline"
+                    onClick={() =>
+                      onOpenMemberPage?.({
+                        kind: "title",
+                        id: child.id,
+                        parent: { kind: "title", id: managingTitle.id },
+                      })
+                    }
+                  >
+                    「{child.name}」成員管理
+                  </button>
+                ))}
               </div>
             </div>
           ) : null}
-          {/* v1.87.0：督導負責單位（每位督導各自設定，寫入其 titleUnitCodes） */}
+          {/* v1.88.8：督導的下屬管理就是負責單位（督導只管單位清單，不再直管護理長的人；單位自己設置護理長，下屬鏈就此串起） */}
           {isSupervisorTitle ? (
             <div className="form-field">
-              <label className="field-label">督導負責單位</label>
+              <label className="field-label">下屬管理 — 負責單位</label>
               <p className="settings-note">
-                為每位督導設定負責單位（人員編輯不再設）。
+                督導的下屬是單位清單（每位督導各自設定，寫入其 titleUnitCodes）。
               </p>
               {titleMembers.length === 0 ? (
                 <p className="settings-note">此職稱尚無成員。</p>

@@ -107,7 +107,8 @@ export function buildRoleMetaMap(
 
 /**
  * 職稱旗標推導（舊文件相容）：
- * - 單位主管：名稱含「護理長」且不含「副」（舊 D12 排除副護理長）；
+ * - 單位主管：名稱含「護理長」（v1.88.8：護理長與副護理長已合併為
+ *   「護理長/副護理長」，不再排除含「副」者；舊 D12 排除規則作廢）；
  * - 轄區主管：名稱含「督導」；院級主管：名稱含「主任」；
  * - 執行幹事／召集人職能：名稱含「執行幹事」／「召集人」
  *  （舊儀表板變體與 AuditPage 以職稱含這些字判斷）。
@@ -115,7 +116,7 @@ export function buildRoleMetaMap(
  */
 export function legacyTitleFlags(name: string): TitleFlags {
   return {
-    isUnitHead: name.includes("護理長") && !name.includes("副"),
+    isUnitHead: name.includes("護理長"),
     isDistrictHead: name.includes("督導"),
     isHospitalHead: name.includes("主任"),
     isOfficer: name.includes("執行幹事"),
