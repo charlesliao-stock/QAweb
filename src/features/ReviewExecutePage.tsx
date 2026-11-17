@@ -43,6 +43,16 @@ import {
   type ReviewAnswer,
 } from "../lib/reviewRecords";
 import {
+  clearReviewAutosave,
+  hasReviewAutosaveContent,
+  loadReviewAutosave,
+  pruneExpiredReviewAutosaves,
+  remainingMinutesText,
+  reviewAutosaveKey,
+  saveReviewAutosave,
+  type ReviewAutosaveData,
+} from "../lib/reviewAutosave";
+import {
   intervalsOverlap,
   intervalMonthKeys,
   isTaskComplete,
@@ -322,6 +332,15 @@ export function ReviewExecutePage({
   /** records 模式下正在編輯的單件（null＝列表） */
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
+  /** 未送出表單本機自動暫存（v1.88.10）：恢復提示的剩餘時間；null＝本次未恢復 */
+  const [autosaveNotice, setAutosaveNotice] = useState<{ remainingMs: number } | null>(null);
+  /** 最近一次表單內容的暫存 payload（ref：debounce 寫入與關頁前寫入共用） */
+  const autosavePayloadRef = useRef<ReviewAutosaveData | null>(null);
+  const autosaveContentKeyRef = useRef("");
+  /** 自上次寫入後有無新編輯；恢復後無新編輯時不重寫，避免把 10 分鐘時鐘延後 */
+  const autosaveDirtyRef = useRef(false);
+  /** 恢復那一次的 render 不計為新編輯 */
+  const autosaveRestoreSuppressRef = useRef(false);
   /** 解鎖申請（v1.15.0） */
   const [unlockRows, setUnlockRows] = useState<UnlockRow[]>([]);
   const [unlockReason, setUnlockReason] = useState("");
@@ -346,6 +365,118 @@ export function ReviewExecutePage({
       else root.setAttribute("data-review-form-active", previous);
     };
   }, [reviewFormActive]);
+
+  /* ---------- 未送出表單本機自動暫存（v1.88.10：10 分鐘，localStorage） ---------- */
+  /** 目前表單內容（不含 updatedAt）；無任務、無帳號或無內容時回傳 null。 */
+  function buildAutosavePayloadBase(): Omit<ReviewAutosaveData, "updatedAt"> | null {
+    if (!task || !staffId) return null;
+    if (!hasReviewAutosaveContent(answers, notes, commonErrorAnswers, personEmpNo, bedNo, selectedAuditItem)) return null;
+    return {
+      version: 1,
+      taskId: task.id,
+      staffId,
+      auditMonth,
+      reviewDate,
+      reviewerEmpNo,
+      reviewerName,
+      personEmpNo,
+      personName,
+      bedNo,
+      selectedAuditItem,
+      answers,
+      notes,
+      commonErrorAnswers,
+      editingDraftId,
+      editingId,
+    };
+  }
+  function autosaveContentKey(base: Omit<ReviewAutosaveData, "updatedAt">): string {
+    return JSON.stringify([
+      base.answers, base.notes, base.commonErrorAnswers, base.personEmpNo, base.personName,
+      base.bedNo, base.selectedAuditItem, base.auditMonth, base.reviewDate,
+      base.reviewerEmpNo, base.reviewerName, base.editingDraftId, base.editingId,
+    ]);
+  }
+  /** 表單一變就更新 ref 內的待寫 payload；內容不變時不刷新 updatedAt（10 分鐘以最後一次編輯起算）。 */
+  useEffect(() => {
+    if (autosaveRestoreSuppressRef.current) {
+      autosaveRestoreSuppressRef.current = false;
+      return;
+    }
+    const base = buildAutosavePayloadBase();
+    if (!base) {
+      autosavePayloadRef.current = null;
+      autosaveContentKeyRef.current = "";
+      return;
+    }
+    const key = autosaveContentKey(base);
+    const prev = autosavePayloadRef.current;
+    const changed = !prev || autosaveContentKeyRef.current !== key;
+    autosavePayloadRef.current = { ...base, updatedAt: changed ? Date.now() : prev.updatedAt };
+    autosaveContentKeyRef.current = key;
+    if (changed) autosaveDirtyRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task, staffId, answers, notes, commonErrorAnswers, reviewDate, reviewerEmpNo, reviewerName, personEmpNo, personName, bedNo, auditMonth, selectedAuditItem, editingDraftId, editingId]);
+  /** 作答後 800ms 寫入本機（防抖：連續作答只寫最後一次）。 */
+  useEffect(() => {
+    if (loading || !task || !staffId) return;
+    const timer = window.setTimeout(() => {
+      const payload = autosavePayloadRef.current;
+      if (payload && autosaveDirtyRef.current) {
+        if (saveReviewAutosave(window.localStorage, reviewAutosaveKey(staffId, task.id), payload)) {
+          autosaveDirtyRef.current = false;
+        }
+      }
+    }, 800);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answers, notes, commonErrorAnswers, reviewDate, reviewerEmpNo, reviewerName, personEmpNo, personName, bedNo, auditMonth, selectedAuditItem, editingDraftId, editingId, task, loading]);
+  /** 關閉／切換分頁前立即寫入，避免 800ms 防抖視窗內的最後一次編輯遺失。 */
+  useEffect(() => {
+    const flush = () => {
+      const payload = autosavePayloadRef.current;
+      if (payload && autosaveDirtyRef.current) {
+        if (saveReviewAutosave(window.localStorage, reviewAutosaveKey(payload.staffId, payload.taskId), payload)) {
+          autosaveDirtyRef.current = false;
+        }
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+  /** 清除本機暫存（送出成功、手動暫存成功、使用者主動清除時呼叫）。 */
+  function clearAutosaveDraft() {
+    if (!task || !staffId) return;
+    clearReviewAutosave(window.localStorage, reviewAutosaveKey(staffId, task.id));
+    autosavePayloadRef.current = null;
+    autosaveContentKeyRef.current = "";
+    autosaveDirtyRef.current = false;
+    setAutosaveNotice(null);
+  }
+  /** 清除暫存、重新開始（恢復提示上的按鈕）。 */
+  function handleClearAutosave() {
+    if (!task) return;
+    clearAutosaveDraft();
+    setAnswers({});
+    setNotes({});
+    setCommonErrorAnswers({});
+    setPersonEmpNo("");
+    setPersonName("");
+    setPersonQuery("");
+    setBedNo("");
+    setSelectedAuditItem("");
+    setEditingDraftId(null);
+    setEditingId(null);
+    setActiveQuestionId(questions[0]?.id ?? "");
+    onAction("已清除暫存，請重新填寫。");
+  }
   const liveScore = useMemo(() => {
     const selections = questions.flatMap((question) => {
       const selectedIndex = answers[question.id];
@@ -687,6 +818,70 @@ export function ReviewExecutePage({
     setBedNo(rec.bedNo);
   }
 
+  /* ---------- 本機自動暫存恢復（v1.88.10）：只還原屬於現有題目的內容 ---------- */
+  function restoreAutosave(
+    data: ReviewAutosaveData,
+    qs: AuditQuestion[],
+    recs: CaseRecordRow[],
+    draftRows: CaseRecordRow[],
+  ) {
+    const nextAnswers: Record<string, number> = {};
+    qs.forEach((q) => {
+      const idx = data.answers[q.id];
+      if (typeof idx === "number" && idx >= 0 && idx < optionLabelsOf(q.optionSet).length) {
+        nextAnswers[q.id] = idx;
+      }
+    });
+    setAnswers(nextAnswers);
+    setActiveQuestionId(qs.find((question) => nextAnswers[question.id] == null)?.id ?? qs[0]?.id ?? "");
+    const nextNotes: Record<string, string> = {};
+    Object.entries(data.notes).forEach(([qid, note]) => {
+      if (qs.some((q) => q.id === qid) && note) nextNotes[qid] = note;
+    });
+    setNotes(nextNotes);
+    const nextCommonErrors: Record<string, string[]> = {};
+    Object.entries(data.commonErrorAnswers).forEach(([qid, list]) => {
+      if (qs.some((q) => q.id === qid) && list.length > 0) nextCommonErrors[qid] = list;
+    });
+    setCommonErrorAnswers(nextCommonErrors);
+    setPhotoUrlsByQuestion({});
+    setPhotoCaptureCounts({});
+    setSelectedAuditItem(data.selectedAuditItem);
+    if (data.auditMonth) {
+      const [year, month] = data.auditMonth.split("-").map(Number);
+      setAuditMonth(data.auditMonth);
+      setAuditMonthOptions((previous) => previous.some((option) => option.value === data.auditMonth)
+        ? previous
+        : [...previous, {
+          value: data.auditMonth,
+          label: year && month ? `${ymLabel(year, month)}（暫存月份）` : `${data.auditMonth}（暫存月份）`,
+          active: false,
+        }]);
+    }
+    setReviewDate(data.reviewDate || todayStr());
+    setReviewerEmpNo(data.reviewerEmpNo);
+    setReviewerName(data.reviewerName);
+    setReviewerQuery("");
+    setPersonEmpNo(data.personEmpNo);
+    setPersonName(data.personName);
+    setPersonQuery("");
+    setBedNo(data.bedNo);
+    /* 恢復後繼續編輯同一筆暫存／紀錄；該筆已不在（被他人送出或刪除）時改為新件，避免覆蓋別筆 */
+    setEditingDraftId(
+      data.editingDraftId && draftRows.some((draft) => draft.id === data.editingDraftId)
+        ? data.editingDraftId
+        : null,
+    );
+    setEditingId(
+      data.editingId && recs.some((rec) => rec.id === data.editingId) ? data.editingId : null,
+    );
+    /* 本次 render 不計為新編輯：恢復不刷新 10 分鐘起算點，ref 沿用暫存原本的 updatedAt */
+    autosavePayloadRef.current = data;
+    autosaveContentKeyRef.current = autosaveContentKey(data);
+    autosaveDirtyRef.current = false;
+    autosaveRestoreSuppressRef.current = true;
+  }
+
   /* ---------- 初始載入 ---------- */
   useEffect(() => {
     let cancelled = false;
@@ -891,6 +1086,23 @@ export function ReviewExecutePage({
           if (draft) {
             prefillRecord(draft, nq.questions);
             setEditingDraftId(editDraftId);
+          }
+        }
+        // 未送出表單本機自動暫存（v1.88.10）：10 分鐘內重開可恢復；編輯指定紀錄／暫存時以該筆為準
+        if (!editId && !editDraftId && staffId && !cancelled) {
+          try {
+            pruneExpiredReviewAutosaves(window.localStorage, Date.now());
+            const found = loadReviewAutosave(
+              window.localStorage,
+              reviewAutosaveKey(staffId, t.id),
+              Date.now(),
+            );
+            if (found.status === "found") {
+              restoreAutosave(found.data, nq.questions, recs, draftRows);
+              setAutosaveNotice({ remainingMs: found.remainingMs });
+            }
+          } catch {
+            /* 暫存讀取失敗不阻擋表單 */
           }
         }
         const quotaComplete = isTaskComplete(quotaState.count, t.caseCount);
@@ -1303,6 +1515,7 @@ export function ReviewExecutePage({
       setPersonEmpNo("");
       setPersonName("");
       setBedNo("");
+      clearAutosaveDraft();
       onAction(`審查內容已暫存，尚未列入正式紀錄或分析${Object.values(photoCaptureCounts).some((count) => count > 0) ? "；本次拍照未保存" : ""}`);
     } catch (error) {
       onAction(`暫存失敗：${toErrorMessage(error)}`);
@@ -1794,6 +2007,7 @@ export function ReviewExecutePage({
         setPersonName("");
         setPersonQuery("");
         setBedNo("");
+        clearAutosaveDraft();
         onAction(
           `${commitResult === "confirmed" ? "已確認儲存，" : "已送出（伺服器已接受，但讀回確認暫時失敗），"}${postSyncFailed ? "進度畫面暫時無法更新，稍後重新整理；" : ""}已送出第 ${sharedQuotaTask ? completedCount : seq} 件（${sharedQuotaTask ? "本區間合計" : "共需"} ${sharedQuotaTask ? `${completedCount}/` : ""}${req} 件）${rate != null ? `，正確率 ${rate}%` : ""}${Object.values(photoCaptureCounts).some((count) => count > 0) ? "；本次拍照僅作畫面標記，未保存至結果" : ""}`,
         );
@@ -1865,6 +2079,18 @@ export function ReviewExecutePage({
         title={`${isRecordsView ? "審查結果查詢" : "審查表單"}：${indicatorName}`}
         note={`排程 ${ymLabel(task.year, task.month)}・稽核 ${selectedAuditMonthLabel}・${task.unitId || "NA（不限單位）"}・${sharedQuotaTask ? "正式紀錄／本區間" : "正式紀錄"} ${progressLabel(doneCount, task.caseCount)} 件${draftCount > 0 ? `・暫存未送出 ${draftCount} 件` : ""}`}
       />
+
+      {autosaveNotice && (
+        <section className="panel" style={{ borderColor: "#9fd4c8" }} role="status">
+          <p className="settings-note">
+            已恢復未完成的暫存（剩餘約 {remainingMinutesText(autosaveNotice.remainingMs)} 分鐘）。
+            關閉或重整網頁後 10 分鐘內會自動恢復，超過 10 分鐘會自動刪除；照片只作畫面標記，不會暫存。
+          </p>
+          <button type="button" className="button button-outline" onClick={handleClearAutosave}>
+            清除暫存、重新開始
+          </button>
+        </section>
+      )}
 
       {!editingDraftId && drafts.length > 0 && (
         <section className="panel">
