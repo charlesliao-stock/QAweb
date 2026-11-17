@@ -76,6 +76,21 @@ export function isUnitLevelRole(
  */
 export const COMMITTEE_GROUP_ID = "ALL";
 
+/**
+ * v1.88.6：單位級角色暫存群組值——所屬單位尚未歸屬品管組時，
+ * 單位級角色以此值登記一列 { groupId: "__ungrouped__", roles: [...] }，
+ * 角色綁定與單位歸屬品管組分開：角色先存下來，群組歸屬日後由單位現況
+ * 即時推導（can() 的 unitRoleTemplateAllows、groupsForRoles）或儲存時
+ * 補回（resolveUngroupedMemberships）。不是真實群組：deriveGroupIds
+ * 須排除，畫面顯示為「未歸屬品管組」。類比 COMMITTEE_GROUP_ID = "ALL"。
+ */
+export const UNGROUPED_GROUP_ID = "__ungrouped__";
+
+/** 是否為未歸屬品管組的暫存群組值 */
+export function isUngroupedGroupId(groupId: string): boolean {
+  return groupId === UNGROUPED_GROUP_ID;
+}
+
 /** 人員群組成員資格：一人可屬多群組，各群組角色可不同 */
 export interface Membership {
   groupId: string;
@@ -86,8 +101,14 @@ export interface Membership {
 export function deriveGroupIds(memberships: Membership[]): string[] {
   const out: string[] = [];
   for (const m of memberships) {
-    // v1.87.0：「ALL」是委員會特殊值，不是真實群組，不寫入 groupIds
-    if (m.groupId && m.groupId !== COMMITTEE_GROUP_ID && !out.includes(m.groupId))
+    // v1.87.0：「ALL」是委員會特殊值，不是真實群組，不寫入 groupIds；
+    // v1.88.6：「__ungrouped__」是單位級角色暫存值，同樣不寫入 groupIds
+    if (
+      m.groupId &&
+      m.groupId !== COMMITTEE_GROUP_ID &&
+      m.groupId !== UNGROUPED_GROUP_ID &&
+      !out.includes(m.groupId)
+    )
       out.push(m.groupId);
   }
   return out;
@@ -181,6 +202,55 @@ export function mergeMembership(
       ? { ...m, roles: [...new Set([...m.roles, ...clean])] }
       : m,
   );
+}
+
+/**
+ * v1.88.6：單位尚未歸屬品管組時，單位級角色暫以 UNGROUPED_GROUP_ID 登記；
+ * 單位日後歸屬品管組（unitGroupId 有值）時，把暫存列補回真實群組——
+ * 若該群組已有列，角色取聯集合併進去，不產生第二列；單位仍未歸組時
+ * 暫存列原樣保留。回傳新陣列，不動原陣列。儲存時呼叫（handleUserSave），
+ * 讀取時群組歸屬另由 can()／groupsForRoles 即時推導。
+ */
+export function resolveUngroupedMemberships(
+  memberships: Membership[],
+  unitGroupId: string,
+): Membership[] {
+  if (!unitGroupId) return [...memberships];
+  const out: Membership[] = [];
+  for (const m of memberships) {
+    if (m.groupId !== UNGROUPED_GROUP_ID) {
+      const dup = out.find((x) => x.groupId === m.groupId);
+      if (dup) {
+        for (const r of m.roles) if (!dup.roles.includes(r)) dup.roles.push(r);
+      } else {
+        out.push({ groupId: m.groupId, roles: [...m.roles] });
+      }
+      continue;
+    }
+    const target = out.find((x) => x.groupId === unitGroupId);
+    if (target) {
+      for (const r of m.roles)
+        if (!target.roles.includes(r)) target.roles.push(r);
+    } else {
+      out.push({ groupId: unitGroupId, roles: [...m.roles] });
+    }
+  }
+  return out;
+}
+
+/**
+ * v1.88.6：人員編輯「品管組與角色」列表中，單位級角色列的群組欄顯示格式
+ * 「品管組/單位(9B)」：前面是品管組名（未歸屬為「未歸屬品管組」），後面
+ * 是所屬單位（單位代碼）。單位為空時顯示「—」。角色欄本身另顯示角色名
+ * 稱（整列合起來即「品管組/單位(9B)、角色(單位召集人)」）。委員會與
+ * 品管組層級列不走此函式，顯示維持現狀。
+ */
+export function formatUnitMembershipLabel(
+  groupLabel: string,
+  unitCode: string,
+): string {
+  if (!unitCode.trim()) return "—";
+  return `${groupLabel}/單位(${unitCode.trim()})`;
 }
 
 /**
@@ -285,8 +355,11 @@ export function groupsForRoles(
     for (const r of m.roles) {
       if (!roleNames.includes(r)) continue;
       if (isUnitLevelRole(r, roleMeta)) {
-        // 單位級角色以其單位所屬群組計；單位未知時退回該筆 membership 的群組
-        push(unitGroupId ?? m.groupId);
+        // 單位級角色以其單位所屬群組計；單位未知時退回該筆 membership 的群組；
+        // v1.88.6：暫存值 "__ungrouped__" 不是真實群組，單位未知時不回傳
+        // （避免暫存值外洩進群組清單）
+        if (unitGroupId) push(unitGroupId);
+        else if (m.groupId !== UNGROUPED_GROUP_ID) push(m.groupId);
       } else if (m.groupId === COMMITTEE_GROUP_ID) {
         // v1.87.0：委員會角色持有 "ALL"，代表全部品管組
         for (const g of allGroupIds ?? [COMMITTEE_GROUP_ID]) push(g);

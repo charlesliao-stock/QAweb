@@ -53,12 +53,15 @@ import {
   deriveGroupIds,
   deriveRoles,
   deriveStoredRoles,
+  formatUnitMembershipLabel,
   groupedRolesLabel,
   groupedRolesSegments,
   isReviewerRole,
   mergeMembership,
   parseMemberships,
   removeMembership,
+  resolveUngroupedMemberships,
+  UNGROUPED_GROUP_ID,
   type Membership,
 } from "../lib/roleIdentity";
 import {
@@ -737,9 +740,36 @@ export function GroupsPage({
 
   const groupNameOf = (groupId: string): string =>
     // v1.87.0：委員會特殊值 "ALL" 顯示為「全院」
+    // v1.88.6：單位級角色暫存值 "__ungrouped__" 顯示為「未歸屬品管組」
     groupId === COMMITTEE_GROUP_ID
       ? "全院"
-      : (groups.find((g) => g.id === groupId)?.name ?? groupId);
+      : groupId === UNGROUPED_GROUP_ID
+        ? "未歸屬品管組"
+        : (groups.find((g) => g.id === groupId)?.name ?? groupId);
+
+  /** 該列是否全為單位級角色（角色主檔 levelId 為準，未載入時以名稱推導退路） */
+  const isUnitLevelMembershipRow = (m: Membership): boolean =>
+    m.roles.length > 0 &&
+    m.roles.every((r) => {
+      const opt = roleOptions.find((o) => o.name === r);
+      if (opt?.levelId) {
+        return (
+          opt.levelId === "rl-unit" ||
+          roleLevels.find((l) => l.id === opt.levelId)?.name === "單位"
+        );
+      }
+      return deriveRoleScope({ name: r }) === "unit";
+    });
+
+  /** v1.88.6：人員編輯列表中，單位級角色列的群組欄顯示為
+   * 「品管組/單位(9B)」——前面是品管組名（未歸屬為「未歸屬品管組」），
+   * 後面是所屬單位；單位為空顯示「—」。角色欄另顯示角色名稱，
+   * 整列合起來即「品管組/單位(9B)、角色(單位召集人)」。委員會與
+   * 品管組層級列維持現狀，只顯示品管組名。 */
+  const membershipRowGroupLabel = (m: Membership): string =>
+    isUnitLevelMembershipRow(m)
+      ? formatUnitMembershipLabel(groupNameOf(m.groupId), userForm.unitCode)
+      : groupNameOf(m.groupId);
   const unitLabelOf = (unitCode: string): string => {
     const unit = units.find((item) => item.code === unitCode);
     return unit ? `${unit.code}${unit.name ? ` ${unit.name}` : ""}` : unitCode;
@@ -1996,8 +2026,11 @@ export function GroupsPage({
       resolvedTitle ? resolvedTitle.levelId || "__ungrouped__" : "",
     );
     // v1.57.0 A6：人員已歸類群組時，群組自動帶入（先取已有角色的第一個群組，否則取所屬單位的群組）
+    // v1.88.6：暫存值 "__ungrouped__" 不是真實群組，自動帶入時跳過
     const autoGroupId =
-      row.memberships.find((m) => m.roles.length > 0)?.groupId ||
+      row.memberships.find(
+        (m) => m.roles.length > 0 && m.groupId !== UNGROUPED_GROUP_ID,
+      )?.groupId ||
       units.find((u) => u.code === row.unitCode)?.groupId ||
       "";
     if (autoGroupId) setMembershipAddGroupId(autoGroupId);
@@ -2100,18 +2133,21 @@ export function GroupsPage({
     // can() 的單位角色不跨單位判斷即認此群組（permissions.ts unitRoleTemplateAllows：
     // 以本人 unitCode 查所屬群組，要求該群組的 membership 持有此角色），故推導結果與權限一致，
     // 與 v1.87.0 角色成員管理頁的單位級加入（unitGroupOf）同一作法，不需新欄位。
+    // v1.88.6：單位尚未歸屬品管組時不再擋下加入（見下方 UNGROUPED_GROUP_ID），
+    // 角色綁定與單位歸組分開；單位日後歸組後儲存時補回、權限即時推導。
     let gid = membershipAddIsCommittee ? COMMITTEE_GROUP_ID : membershipAddGroupId;
     if (membershipAddIsUnit) {
       if (!userForm.unitCode.trim()) {
         setMembershipError("請先填寫基本資料的單位");
         return;
       }
+      // v1.88.6：選角色／加入角色與單位歸屬品管組分開綁定——單位尚未歸屬
+      // 品管組時不再擋下加入，改以 UNGROUPED_GROUP_ID 暫存登記；單位日後
+      // 歸組後，儲存時補回真實群組（handleUserSave），權限則即時推導
+      // （permissions.ts unitRoleTemplateAllows）。列表顯示為「未歸屬品管組」。
       gid =
-        units.find((u) => u.code === userForm.unitCode.trim())?.groupId ?? "";
-      if (!gid) {
-        setMembershipError("所屬單位尚未歸屬品管組，請先到品管組頁籤設定");
-        return;
-      }
+        units.find((u) => u.code === userForm.unitCode.trim())?.groupId ||
+        UNGROUPED_GROUP_ID;
     }
     if (!gid) {
       setMembershipError("請先選擇品管組");
@@ -2133,6 +2169,13 @@ export function GroupsPage({
               membershipAddRoles,
             ),
     }));
+    // v1.88.6：單位尚未歸屬品管組時仍可加入（暫存登記），明確回饋而非靜默；
+    // 列表該列顯示為「未歸屬品管組」。
+    if (membershipAddIsUnit && gid === UNGROUPED_GROUP_ID) {
+      onAction(
+        `已加入角色（所屬單位尚未歸屬品管組，暫以「未歸屬品管組」登記；單位歸組後儲存時自動對應）`,
+      );
+    }
     resetMembershipAddArea();
   }
 
@@ -2199,7 +2242,13 @@ export function GroupsPage({
     try {
       const db = getFirebaseDb();
       // v1.21：memberships 為主；同步更新 groupIds（衍生）與 roles（聯集一律由分工表衍生，v1.58.0）
-      const memberships = userForm.memberships.filter((m) => m.groupId);
+      // v1.88.6：儲存時把暫存列補回真實群組（所屬單位已歸組時，暫存列併入
+      // 該群組列；仍未歸組則維持暫存列，角色照樣存下來）
+      const healedMemberships = resolveUngroupedMemberships(
+        userForm.memberships,
+        units.find((u) => u.code === userForm.unitCode.trim())?.groupId ?? "",
+      );
+      const memberships = healedMemberships.filter((m) => m.groupId);
       const payload = {
         name: userForm.name.trim(),
         unitCode: userForm.unitCode,
@@ -2440,9 +2489,11 @@ export function GroupsPage({
         detail: `為職編 ${row.staffId} 新增角色「${roleName}」${
           groupId === COMMITTEE_GROUP_ID
             ? "（全院）"
-            : groupId
-              ? `（品管組 ${groupId}）`
-              : ""
+            : groupId === UNGROUPED_GROUP_ID
+              ? "（尚未歸屬品管組）"
+              : groupId
+                ? `（品管組 ${groupId}）`
+                : ""
         }`,
         before: { roles: row.roles, memberships: row.memberships },
         after: { roles, memberships },
@@ -2529,9 +2580,11 @@ export function GroupsPage({
     const committeeLevel =
       role.levelId === "rl-committee" || roleLevel?.name === "委員會";
     const unitGroupOf = (unitCode: string) =>
-      units.find((u) => u.code === unitCode)?.groupId ?? "";
+      // v1.88.6：單位尚未歸屬品管組時以 UNGROUPED_GROUP_ID 暫存登記，
+      // 不擋加入、不跳過人員（與人員編輯加入區同一作法）
+      units.find((u) => u.code === unitCode)?.groupId || UNGROUPED_GROUP_ID;
     const targets = users.filter((u) => roleAddChecked.includes(u.staffId));
-    const noUnit: string[] = [];
+    const ungrouped: string[] = [];
     const added: UserRow[] = [];
     const ops: Array<(b: WriteBatch) => void> = [];
     for (const u of targets) {
@@ -2541,19 +2594,8 @@ export function GroupsPage({
         gid = COMMITTEE_GROUP_ID;
       } else if (unitLevel) {
         // v1.87.0：單位級角色先選單位（已選時以該單位的群組計；未選時沿用各人所屬單位）
-        if (roleAddUnitCode) {
-          gid = unitGroupOf(roleAddUnitCode);
-          if (!gid) {
-            onAction("所選單位尚未歸屬品管組，請先到單位頁籤設定");
-            return;
-          }
-        } else {
-          gid = unitGroupOf(u.unitCode);
-          if (!gid) {
-            noUnit.push(u.staffId);
-            continue;
-          }
-        }
+        gid = roleAddUnitCode ? unitGroupOf(roleAddUnitCode) : unitGroupOf(u.unitCode);
+        if (gid === UNGROUPED_GROUP_ID) ungrouped.push(u.staffId);
       } else {
         // v1.40.3：非單位級角色一律指定群組加入（角色分類建立的角色皆可按群組指派）
         gid = roleAddGroupId;
@@ -2565,16 +2607,17 @@ export function GroupsPage({
       ops.push(addRoleToUser(u, role.name, gid));
       added.push(u);
     }
-    if (noUnit.length > 0) {
-      onAction(
-        `以下人員無所屬單位品管組，無法加入單位級角色：${noUnit.join("、")}`,
-      );
-      if (ops.length === 0) return;
-    }
+    if (ops.length === 0) return;
     setRoleBusy(true);
     try {
       await commitInBatches(ops);
       onAction(`已將 ${ops.length} 位人員加入角色「${role.name}」`);
+      // v1.88.6：未歸組者已暫存登記，明確告知而非靜默
+      if (ungrouped.length > 0) {
+        onAction(
+          `其中 ${ungrouped.length} 位所屬單位尚未歸屬品管組，已先以「未歸屬品管組」登記；單位歸組後儲存時自動對應`,
+        );
+      }
       setRoleAddChecked([]);
       setRoleAddSearch("");
       await loadUsers();
@@ -3467,13 +3510,9 @@ export function GroupsPage({
             units.find((u) => u.name === unitText);
           if (!unitRow)
             return { index, values: r, ok: false, error: `單位「${unitText}」不存在` };
-          if (!unitRow.groupId)
-            return {
-              index,
-              values: r,
-              ok: false,
-              error: `單位「${unitRow.name}」尚未歸屬品管組，請先到單位頁籤設定`,
-            };
+          // v1.88.6：單位尚未歸屬品管組時仍可匯入，改以 UNGROUPED_GROUP_ID
+          // 暫存登記（與人員編輯加入區同一作法），預覽不再擋下
+          const expectedGid = unitRow.groupId || UNGROUPED_GROUP_ID;
           const roleText = (r[3] ?? "").trim();
           if (roleText !== role.name)
             return {
@@ -3484,7 +3523,7 @@ export function GroupsPage({
             };
           if (
             person.memberships.some(
-              (m) => m.groupId === unitRow.groupId && m.roles.includes(role.name),
+              (m) => m.groupId === expectedGid && m.roles.includes(role.name),
             )
           )
             return { index, values: r, ok: false, error: "已是該角色成員" };
@@ -3537,8 +3576,9 @@ export function GroupsPage({
         const unitRow =
           units.find((u) => u.code === unitText) ??
           units.find((u) => u.name === unitText);
-        if (!unitRow?.groupId) continue;
-        gid = unitRow.groupId;
+        if (!unitRow) continue;
+        // v1.88.6：單位尚未歸屬品管組時以 UNGROUPED_GROUP_ID 暫存登記，不跳過
+        gid = unitRow.groupId || UNGROUPED_GROUP_ID;
       } else {
         const group = groups.find((g) => g.name === (r.values[2] ?? "").trim());
         if (!group) continue;
@@ -6205,7 +6245,7 @@ export function GroupsPage({
                   {userForm.memberships.map((m) => (
                     <tr key={m.groupId}>
                       <td>
-                        <b>{groupNameOf(m.groupId)}</b>
+                        <b>{membershipRowGroupLabel(m)}</b>
                       </td>
                       <td>
                         {m.roles.map((r) => (

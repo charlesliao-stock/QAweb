@@ -1,5 +1,5 @@
 import type { PageId } from "../types";
-import type { Membership } from "./roleIdentity";
+import { UNGROUPED_GROUP_ID, type Membership } from "./roleIdentity";
 
 /** 導覽頁面與功能權限使用同一矩陣；尚未實作的 reviewers 不列入。 */
 export const PAGE_PERMISSION_KEYS = {
@@ -269,7 +269,12 @@ function unitRoleTemplateAllows(
   if (template.cross) return true;
   const ownGroup = catalog.unitGroups[user.unitCode];
   if (!ownGroup) return false;
-  return groupsHoldingRole(user, roleName).includes(ownGroup);
+  // v1.88.6：單位級角色以 UNGROUPED_GROUP_ID 暫存（所屬單位尚未歸屬品管組
+  // 時先存角色、群組日後再綁），持有暫存列即視為持有於本人單位所屬群組——
+  // 單位一歸組，權限即時生效，不必重存人員。
+  return groupsHoldingRole(user, roleName).some(
+    (g) => g === ownGroup || g === UNGROUPED_GROUP_ID,
+  );
 }
 
 /**

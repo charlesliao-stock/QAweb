@@ -24,7 +24,7 @@
 import { roleLevelIdForName } from "./orgLevels";
 import { deriveRoleScope } from "./roleDerivation";
 import type { Membership } from "./roleIdentity";
-import { COMMITTEE_GROUP_ID } from "./roleIdentity";
+import { COMMITTEE_GROUP_ID, UNGROUPED_GROUP_ID } from "./roleIdentity";
 import type { AssignmentItem } from "./scheduling";
 import { unitHistoryCodes, type UnitHistoryLink } from "./unitHistory";
 
@@ -182,7 +182,12 @@ export function resolveDataScope(input: DataScopeInput): DataScopeResult {
   const visible = new Set<string>();
   // 縱向：品管組層級角色 → memberships 所屬群組內全部單位（A5）。
   for (const membership of input.memberships) {
-    if (!membership.groupId || membership.groupId === COMMITTEE_GROUP_ID) {
+    if (
+      !membership.groupId ||
+      membership.groupId === COMMITTEE_GROUP_ID ||
+      // v1.88.6：暫存值不是真實群組，不展開（單位級角色本就走下方的單位分支）
+      membership.groupId === UNGROUPED_GROUP_ID
+    ) {
       continue;
     }
     for (const roleName of membership.roles) {
