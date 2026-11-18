@@ -20,7 +20,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "../lib/db";
+import { collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "../lib/db";
 import {
   EmptyState,
   FilterPanel,
@@ -1598,10 +1598,18 @@ export function IndicatorsPage({
       const vsnap = await getDocs(
         collection(db, "indicators", docId, "versions"),
       );
-      for (const v of vsnap.docs) {
-        await deleteDoc(doc(db, "indicators", docId, "versions", v.id));
+      // 改用 writeBatch（每批 ≤ 450 筆）取代逐筆 await；主檔放最後一批，
+      // 中途失敗時主檔仍在，可重試刪除。
+      const refs = [
+        ...vsnap.docs.map((v) => doc(db, "indicators", docId, "versions", v.id)),
+        doc(db, "indicators", docId),
+      ];
+      const DELETE_BATCH_SIZE = 450;
+      for (let i = 0; i < refs.length; i += DELETE_BATCH_SIZE) {
+        const batch = writeBatch(db);
+        for (const ref of refs.slice(i, i + DELETE_BATCH_SIZE)) batch.delete(ref);
+        await batch.commit();
       }
-      await deleteDoc(doc(db, "indicators", docId));
       logAudit(db, {
         actor: user.staffId,
         actorName: user.name,
@@ -2610,12 +2618,30 @@ function BatchAddDialog({
       // 以複合文件 ID 精確讀取既有指標；組別名稱／編號不會跨組誤配。
       const db = getFirebaseDb();
       const existingByKey = new Map<string, ExistingAuditImport>();
-      for (const [key, pair] of pairByKey) {
-        const existingId =
-          existingIndicatorIds.get(key) ?? indicatorDocId(pair.groupId, pair.code);
-        const snap = await getDoc(
-          doc(db, "indicators", existingId),
+      // 讀取改為分批並行（每批 20 筆），讀取次數不變、只縮短等待；
+      // 之後仍依原順序逐筆檢查，錯誤訊息順序與先前一致。
+      const pairEntries = [...pairByKey.entries()];
+      const IMPORT_READ_CONCURRENCY = 20;
+      const existingSnaps: Awaited<ReturnType<typeof getDoc>>[] = [];
+      for (let i = 0; i < pairEntries.length; i += IMPORT_READ_CONCURRENCY) {
+        const chunk = pairEntries.slice(i, i + IMPORT_READ_CONCURRENCY);
+        existingSnaps.push(
+          ...(await Promise.all(
+            chunk.map(([key, pair]) =>
+              getDoc(
+                doc(
+                  db,
+                  "indicators",
+                  existingIndicatorIds.get(key) ??
+                    indicatorDocId(pair.groupId, pair.code),
+                ),
+              ),
+            ),
+          )),
         );
+      }
+      for (const [index, [key, pair]] of pairEntries.entries()) {
+        const snap = existingSnaps[index]!;
         if (!snap.exists()) {
           if (existingIndicatorIds.has(key))
             throw new Error(
