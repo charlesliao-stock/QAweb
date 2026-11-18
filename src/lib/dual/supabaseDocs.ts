@@ -9,7 +9,8 @@ import { runQuery, type Query, type Row, type WhereC } from "./query";
  * 「資料／規則」層級的拒絕（不是資料庫掛了）：業務規則拒絕（SQLSTATE QA403）、
  * 唯一鍵衝突、格式錯誤。呼叫端要把它當一般錯誤丟給使用者，
  * 不能因此轉移到備庫、也不能算進斷路器的失敗次數。
- * 401／403／5xx／逾時／斷線則視為主庫「不可用」（含登入或設定問題），會轉移到備庫。
+ * 401／403 是身分或權限拒絕，不得被當成服務故障切到較寬鬆的備庫；
+ * 只有網路、逾時與伺服器錯誤才交由斷路器處理。
  */
 export class DataError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) {
@@ -75,6 +76,7 @@ export function supabaseDocs(opt: SupabaseOptions): SupabaseAdapter {
     }
     const dataLevel =
       code.startsWith("QA") || code.startsWith("23") ||
+      res.status === 401 || res.status === 403 ||
       res.status === 400 || res.status === 409 || res.status === 422;
     if (dataLevel) throw new DataError(`supabase ${what} ${res.status} ${msg}`, res.status, code);
     throw new Error(`supabase ${what} ${res.status} ${msg}`);
@@ -103,7 +105,7 @@ export function supabaseDocs(opt: SupabaseOptions): SupabaseAdapter {
     name: "supabase",
 
     async get(col, id) {
-      const url = `${base}/docs?col=eq.${encodeURIComponent(col)}&id=eq.${encodeURIComponent(id)}&select=id,ts,data&limit=1`;
+      const url = `${base}/docs?col=eq.${encodeURIComponent(col)}&id=eq.${encodeURIComponent(id)}&deleted=eq.false&select=id,ts,data&limit=1`;
       const res = await f(url, { headers: await headers() });
       await check(res, "get");
       const rows = (await res.json()) as Row[];
@@ -116,6 +118,7 @@ export function supabaseDocs(opt: SupabaseOptions): SupabaseAdapter {
       for (let offset = 0; ; offset += pageSize) {
         const qs = [
           `col=eq.${encodeURIComponent(col)}`,
+          "deleted=eq.false",
           "select=id,ts,data",
           "order=id.asc",
           `limit=${pageSize}`,

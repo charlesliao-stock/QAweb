@@ -57,6 +57,48 @@ language sql stable as $$
      and jsonb_exists(coalesce(app.my_data()->'titleUnitCodes', '[]'::jsonb), coalesce(d->>'unitCode', ''))
 $$;
 
+-- 審查個資範圍：全院主管／品管幹事、本人審查員、本人被審者，或轄區主管。
+-- reviewRecords.unitId 是 units 文件代碼，對應 users.unitCode/titleUnitCodes。
+create or replace function app.can_read_all_reviews() returns boolean
+language sql stable as $$
+  select app.is_admin() or app.is_ganshi()
+      or app.has_role('主任') or app.has_role('副主任')
+      or app.has_role('護理部主管') or app.has_role('督導長')
+$$;
+
+create or replace function app.in_review_unit(d jsonb) returns boolean
+language sql stable as $$
+  select coalesce(d->>'unitId', d->>'unitCode', '') <> ''
+      and ((app.has_role('護理長')
+            and coalesce(d->>'unitId', d->>'unitCode', '') = coalesce(app.my_data()->>'unitCode', ''))
+        or (app.has_role('督導')
+            and jsonb_exists(coalesce(app.my_data()->'titleUnitCodes', '[]'::jsonb),
+              coalesce(d->>'unitId', d->>'unitCode', ''))))
+$$;
+
+create or replace function app.can_read_review_record(d jsonb) returns boolean
+language sql stable as $$
+  select app.can_read_all_reviews()
+      or coalesce(d->>'reviewerId', '') = app.staff_id()
+      or coalesce(d->>'reviewedPersonEmpNo', '') = app.staff_id()
+      or app.in_review_unit(d)
+$$;
+
+create or replace function app.can_read_review_task(d jsonb) returns boolean
+language sql stable as $$
+  select app.can_read_all_reviews() or app.can_manage_schedule()
+      or coalesce(d->>'reviewerId', '') = app.staff_id()
+      or app.in_review_unit(d)
+$$;
+
+create or replace function app.can_read_capa(d jsonb) returns boolean
+language sql stable as $$
+  select app.can_read_all_reviews() or app.can_manage_schedule() or app.has_role('督導')
+      or coalesce(d->>'ownerId', '') = app.staff_id()
+      or coalesce(d->>'writerId', d->>'ownerId', '') = app.staff_id()
+      or app.in_review_unit(d)
+$$;
+
 -- ---------- 集合分類 ----------
 create or replace function app.col_kind(c text) returns text
 language sql immutable as $$
@@ -79,6 +121,13 @@ language sql stable security definer set search_path = public as $$
   select coalesce((select data->>'reviewerId' from public.docs where col = 'reviewTasks' and id = task_id), '')
 $$;
 
+-- apply_ops 內部讀取版本時必須看見 RLS 對一般 SELECT 隱藏的 tombstone。
+create or replace function app.doc_version(p_col text, p_id text)
+returns table(ts bigint, deleted boolean)
+language sql stable security definer set search_path = public as $$
+  select d.ts, d.deleted from public.docs d where d.col = p_col and d.id = p_id
+$$;
+
 -- ---------- 讀取 ----------
 create or replace function app.can_read(c text, i text, d jsonb) returns boolean
 language sql stable as $$
@@ -89,8 +138,18 @@ language sql stable as $$
                         or app.is_unit_head_of(d) or app.is_supervisor_of(d)
       when 'notifications' then coalesce(d->>'userId', '') = app.staff_id()
       when 'auditLogs' then app.is_admin()
+      when 'reviewRecords' then app.can_read_review_record(d)
+      when 'reviewTasks' then app.can_read_review_task(d)
+      when 'reviewArchives' then app.can_read_all_reviews() or app.can_manage_schedule()
+      when 'reviewEditRequests' then coalesce(d->>'requestedBy', '') = app.staff_id()
+          or app.can_read_all_reviews() or app.can_manage_schedule()
+      when 'reviewDrafts' then coalesce(d->>'createdBy', '') = app.staff_id()
+          or app.is_admin() or app.task_reviewer(coalesce(d->>'taskId', '')) = app.staff_id()
+      when 'reviewReservations' then coalesce(d->>'ownerId', '') = app.staff_id()
+          or app.can_read_all_reviews() or app.can_manage_schedule()
       else true
     end
+    when 'open' then case c when 'capa' then app.can_read_capa(d) else true end
     else true
   end
 $$;
@@ -128,15 +187,22 @@ language sql stable as $$
   select app.staff_id() <> '' and case app.col_kind(c)
     when 'admin' then app.is_admin()
     when 'ganshi' then app.is_ganshi()
-    when 'open' then true
+    when 'open' then case c
+      when 'capa' then app.is_admin() or app.can_manage_schedule() or app.has_role('督導')
+          or coalesce(d->>'ownerId', '') = app.staff_id()
+          or coalesce(d->>'writerId', '') = app.staff_id()
+      else app.can_manage_schedule()
+    end
     when 'special' then case c
       when 'users' then app.is_admin()
       when 'reviewSummaries' then false
       when 'notifications' then false
       when 'auditLogs' then true
-      when 'reviewTasks' then true
+      when 'reviewTasks' then app.can_manage_schedule() or coalesce(d->>'reviewerId', '') = app.staff_id()
       when 'reviewQuotaGroups' then app.can_manage_schedule()
-      when 'reviewRecords' then (not jsonb_exists(d, 'quotaGroupId') or app.valid_quota_slot(i, d))
+      when 'reviewRecords' then coalesce(d->>'reviewerId', '') = app.staff_id()
+          and coalesce(d->>'submittedBy', '') = app.staff_id()
+          and (not jsonb_exists(d, 'quotaGroupId') or app.valid_quota_slot(i, d))
       when 'reviewArchives' then app.can_manage_schedule()
       when 'reviewEditRequests' then coalesce(d->>'requestedBy', '') = app.staff_id()
                                      and coalesce(d->>'status', '') = 'pending'
@@ -156,7 +222,12 @@ language sql stable as $$
   select app.staff_id() <> '' and case app.col_kind(c)
     when 'admin' then app.is_admin()
     when 'ganshi' then app.is_ganshi()
-    when 'open' then true
+    when 'open' then case c
+      when 'capa' then app.is_admin() or app.can_manage_schedule() or app.has_role('督導')
+          or coalesce(o->>'ownerId', '') = app.staff_id()
+          or coalesce(o->>'writerId', o->>'ownerId', '') = app.staff_id()
+      else app.can_manage_schedule()
+    end
     when 'special' then case c
       when 'users' then app.is_admin() or (
           i = app.staff_id()
@@ -165,9 +236,14 @@ language sql stable as $$
       when 'notifications' then coalesce(o->>'userId', '') = app.staff_id()
           and (n - 'read' - 'readAt') = (o - 'read' - 'readAt')
           and jsonb_typeof(n->'read') = 'boolean'
-      when 'reviewTasks' then app.same_snapshot(o, n)
+      when 'reviewTasks' then (coalesce(o->>'reviewerId', '') = app.staff_id() or app.can_manage_schedule())
+          and app.same_snapshot(o, n)
+          and (coalesce(n->>'reviewerId', '') = coalesce(o->>'reviewerId', '') or app.can_manage_schedule())
+          and (n - array['status','completedAt','reviewerId','assignmentStatus','reassignedAt','reassignedBy'])
+              = (o - array['status','completedAt','reviewerId','assignmentStatus','reassignedAt','reassignedBy'])
       when 'reviewQuotaGroups' then app.can_manage_schedule()
-      when 'reviewRecords' then app.same_snapshot(o, n) and (
+      when 'reviewRecords' then (coalesce(o->>'reviewerId', '') = app.staff_id() or app.can_manage_schedule())
+          and app.same_snapshot(o, n) and (
           (not jsonb_exists(o, 'quotaGroupId') and not jsonb_exists(n, 'quotaGroupId'))
           or (jsonb_exists(o, 'quotaGroupId')
               and coalesce(n->>'quotaGroupId', '') = coalesce(o->>'quotaGroupId', '')
@@ -180,8 +256,12 @@ language sql stable as $$
           coalesce(o->>'createdBy', '') = app.staff_id() or app.is_admin()
           or app.task_reviewer(coalesce(o->>'taskId', '')) = app.staff_id())
           and coalesce(n->>'createdBy', '') = coalesce(o->>'createdBy', '')
-      when 'reviewReservations' then coalesce(n->>'uniqueKey', '') = i
+      when 'reviewReservations' then (coalesce(o->>'ownerId', '') = app.staff_id()
+          or app.can_read_all_reviews() or app.can_manage_schedule())
+          and coalesce(n->>'uniqueKey', '') = i
           and coalesce(n->>'ownerId', '') = coalesce(o->>'ownerId', '')
+          and coalesce(n->>'targetCollection', '') = coalesce(o->>'targetCollection', '')
+          and coalesce(n->>'targetId', '') = coalesce(o->>'targetId', '')
       when 'unlockRequests' then app.is_ganshi()
       else false     -- auditLogs（只能新增）、reviewSummaries（僅後端可寫）
     end
@@ -194,10 +274,10 @@ language sql stable as $$
   select app.staff_id() <> '' and case app.col_kind(c)
     when 'admin' then app.is_admin()
     when 'ganshi' then app.is_ganshi()
-    when 'open' then true
+    when 'open' then app.is_admin()
     when 'special' then case c
       when 'users' then app.is_admin()
-      when 'reviewTasks' then true
+      when 'reviewTasks' then app.is_admin() or app.can_manage_schedule()
       when 'reviewRecords' then app.is_admin()
       when 'reviewQuotaGroups' then app.is_admin()
       when 'reviewArchives' then app.is_admin()
@@ -205,7 +285,8 @@ language sql stable as $$
       when 'unlockRequests' then app.is_admin()
       when 'reviewDrafts' then coalesce(o->>'createdBy', '') = app.staff_id() or app.is_admin()
                                or app.task_reviewer(coalesce(o->>'taskId', '')) = app.staff_id()
-      when 'reviewReservations' then true
+      when 'reviewReservations' then coalesce(o->>'ownerId', '') = app.staff_id()
+          or app.can_read_all_reviews() or app.can_manage_schedule()
       else false
     end
     else false
@@ -222,10 +303,17 @@ begin
     return coalesce(new, old);
   end if;
   if tg_op = 'INSERT' then
-    ok := app.can_create(new.col, new.id, new.data);
+    ok := not new.deleted and app.can_create(new.col, new.id, new.data);
   elsif tg_op = 'UPDATE' then
-    ok := new.col = old.col and new.id = old.id
-          and app.can_update(old.col, old.id, old.data, new.data);
+    ok := new.col = old.col and new.id = old.id and (
+          (new.deleted and new.ts > old.ts
+            and new.data = jsonb_build_object('_dualTombstone', true, '_dualTs', new.ts)
+            and (old.deleted or app.can_delete(old.col, old.id, old.data))
+            and new.data->>'_dualTombstone' = 'true'
+            and (new.data->>'_dualTs')::bigint = new.ts)
+          or (not new.deleted and (
+            (old.deleted and new.ts > old.ts and app.can_create(old.col, old.id, new.data))
+            or app.can_update(old.col, old.id, old.data, new.data))));
   else
     ok := app.can_delete(old.col, old.id, old.data);
   end if;
@@ -247,7 +335,7 @@ create or replace function app.guard_after() returns trigger
 language plpgsql as $$
 declare ok boolean := true; uk text; tc text; ti text;
 begin
-  if current_user <> 'authenticated' then return null; end if;
+  if current_user <> 'authenticated' or new.deleted then return null; end if;
   if new.col in ('reviewRecords', 'reviewDrafts') then
     uk := coalesce(new.data->>'uniqueKey', '');
     if uk <> '' then
@@ -275,6 +363,11 @@ drop trigger if exists docs_guard_after on public.docs;
 create constraint trigger docs_guard_after after insert or update on public.docs
   deferrable initially deferred for each row execute function app.guard_after();
 
+-- 既有 tombstone 不得保留被刪文件內容，避免以新 SELECT policy 暴露歷史個資。
+update public.docs
+   set data = jsonb_build_object('_dualTombstone', true, '_dualTs', ts)
+ where deleted;
+
 -- ---------- RLS ----------
 alter table public.docs enable row level security;
 
@@ -284,18 +377,23 @@ drop policy if exists docs_update on public.docs;
 drop policy if exists docs_delete on public.docs;
 
 create policy docs_select on public.docs for select to authenticated
-  using (app.can_read(col, id, data));
+  using ((not deleted and app.can_read(col, id, data)) or (deleted and app.staff_id() <> ''));
 -- 寫入：RLS 只確認已登入；細部權限在 app.guard() 觸發器
 create policy docs_insert on public.docs for insert to authenticated with check (app.staff_id() <> '');
-create policy docs_update on public.docs for update to authenticated using (app.can_read(col, id, data)) with check (app.staff_id() <> '');
-create policy docs_delete on public.docs for delete to authenticated using (app.can_read(col, id, data));
+-- UPDATE USING 不可套讀取範圍：若隱藏列被 RLS 過濾，apply_ops 只會回傳 0 rows，前端會誤以為同步成功。
+-- 觸發器會用 OLD/NEW 執行 app.can_update/app.can_delete，拒絕時回傳 QA403；SELECT 仍由 docs_select 隔離。
+create policy docs_update on public.docs for update to authenticated using (true) with check (true);
+-- 瀏覽器刪除一律經 apply_ops 寫 tombstone，禁止實體 DELETE 讓舊寫入復活。
 
 -- anon（未登入）不給任何權限；authenticated 要有表權限才能走到 RLS
 revoke all on public.docs from anon;
-grant select, insert, update, delete on public.docs to authenticated;
+grant select, insert, update on public.docs to authenticated;
+revoke delete on public.docs from authenticated;
 grant usage on schema app to authenticated;
 grant execute on all functions in schema app to authenticated;
 grant execute on function public.apply_ops(jsonb) to authenticated;
+-- 舊版單筆 upsert 不保證 tombstone 單調性；唯一正式瀏覽器寫入入口是 apply_ops。
+revoke all on function public.upsert_doc(text, text, jsonb) from public, anon, authenticated;
 
 -- 錯誤碼約定：業務規則拒絕一律是 SQLSTATE 'QA403'（PostgREST 回 HTTP 400，body.code='QA403'）；
 -- 前端據此判斷「這是被規則拒絕」而非「資料庫掛了」，不會觸發故障轉移／斷路器。

@@ -4,17 +4,54 @@ service firebase.storage {
   match /b/{bucket}/o {
     function isAuth() { return request.auth != null; }
 
-    // 審查照片／語音：須登入；讀取範圍由 Firestore 文件權限把關，寫入限審查員上傳
+    function staffId() {
+      return isAuth()
+        ? (request.auth.token.get('staffId', '') is string && request.auth.token.get('staffId', '') != ''
+            ? request.auth.token.get('staffId', '')
+            : (request.auth.token.email is string ? request.auth.token.email.split('@')[0] : ''))
+        : '';
+    }
+    function me() {
+      return firestore.get(/databases/(default)/documents/users/$(staffId())).data;
+    }
+    function hasRole(role) {
+      return isAuth() && role in me().get('roles', []);
+    }
+    function canReadAllReviews() {
+      return hasRole('系統管理員') || hasRole('品管執行幹事')
+        || hasRole('主任') || hasRole('副主任')
+        || hasRole('護理部主管') || hasRole('督導長');
+    }
+    function canAccessReview(reviewId) {
+      let reviewPath = /databases/(default)/documents/reviewRecords/$(reviewId);
+      let review = firestore.get(reviewPath).data;
+      let unit = review.get('unitId', review.get('unitCode', ''));
+      return isAuth() && firestore.exists(reviewPath)
+        && (canReadAllReviews()
+          || review.get('reviewerId', '') == staffId()
+          || review.get('reviewedPersonEmpNo', '') == staffId()
+          || (hasRole('護理長') && unit == me().get('unitCode', ''))
+          || (hasRole('督導') && unit in me().get('titleUnitCodes', [])));
+    }
+    function canWriteReview(reviewId) {
+      let reviewPath = /databases/(default)/documents/reviewRecords/$(reviewId);
+      let review = firestore.get(reviewPath).data;
+      return isAuth() && firestore.exists(reviewPath)
+        && (canReadAllReviews() || review.get('reviewerId', '') == staffId());
+    }
+
+    // 路徑為 reviews/{reviewRecordId}/{kind}/{file}；按對應紀錄授權，不能只驗登入。
     match /reviews/{reviewId}/{kind}/{file} {
-      allow read: if isAuth();
-      allow write: if isAuth()
+      allow read: if canAccessReview(reviewId);
+      allow create, update: if canWriteReview(reviewId)
                    && request.resource.size < 10 * 1024 * 1024
                    && request.resource.contentType.matches('image/.*|audio/.*');
+      allow delete: if canWriteReview(reviewId);
     }
-    // 指引文件：登入者可讀；上傳限幹事/管理員（以自訂 claims 判斷）
+    // 指引文件：登入者可讀；上傳限品管幹事／管理員。
     match /guidelines/{file} {
       allow read: if isAuth();
-      allow write: if isAuth() && 'ganshi' in request.auth.token.roles;
+      allow write: if isAuth() && hasRole('品管執行幹事');
     }
   }
 }

@@ -135,6 +135,42 @@ service cloud.firestore {
         || isAdmin();
     }
 
+    // 只有全院主管／品管幹事可跨所有單位讀取審查資料；一般排程管理者
+    // 仍依任務所屬單位或本人任務範圍存取，不能藉管理排程取得全院個資。
+    function canReadAllReviews() {
+      return isAdmin() || isGanShi()
+        || hasRole('主任') || hasRole('副主任')
+        || hasRole('護理部主管') || hasRole('督導長');
+    }
+
+    function inReviewUnit(data) {
+      let unit = data.get('unitId', data.get('unitCode', ''));
+      return unit is string && unit != ''
+        && ((hasRole('護理長') && unit == myUnitCode())
+          || (hasRole('督導') && unit in myTitleUnitCodes()));
+    }
+
+    function canReadReviewRecord(data) {
+      return canReadAllReviews()
+        || data.get('reviewerId', '') == staffId()
+        || data.get('reviewedPersonEmpNo', '') == staffId()
+        || inReviewUnit(data);
+    }
+
+    function canReadReviewTask(data) {
+      return canReadAllReviews()
+        || canManageSchedule()
+        || data.get('reviewerId', '') == staffId()
+        || inReviewUnit(data);
+    }
+
+    function canReadCapa(data) {
+      return canReadAllReviews() || canManageSchedule() || hasRole('督導')
+        || data.get('ownerId', '') == staffId()
+        || data.get('writerId', data.get('ownerId', '')) == staffId()
+        || inReviewUnit(data);
+    }
+
     // ---------- P0（v1.85.5）：寫入濫用收緊 ----------
     // 規則語言沒有速率限制原語；此處能做的是「誰能寫」＋「寫什麼欄位」＋
     // 「欄位多大」。單筆文件上限仍是平台 1 MiB；巢狀內容（answers／
@@ -454,7 +490,7 @@ service cloud.firestore {
     // 任務無 createdBy 欄位，無法以建立者判斷）。週期配額整組狀態
     // 同步另見 quotaTaskStatusSync()。
     match /reviewTasks/{id} {
-      allow read: if isAuthed();
+      allow read: if isAuthed() && canReadReviewTask(resource.data);
       allow create: if isAuthed()
         && (canManageSchedule() || request.resource.data.get('reviewerId', '') == staffId())
         && 'indicatorId' in request.resource.data
@@ -488,7 +524,7 @@ service cloud.firestore {
     // 沒有 quotaGroupId，全面強制會擋掉正常送出。update 限本人或排程管理者
     // （封存修改核准由執行幹事代為套用）＋快照不變＋異動鍵白名單。
     match /reviewRecords/{id} {
-      allow read: if isAuthed();
+      allow read: if isAuthed() && canReadReviewRecord(resource.data);
       allow create: if isAuthed()
         && request.resource.data.get('reviewerId', '') == staffId()
         && request.resource.data.get('submittedBy', '') == staffId()
@@ -521,7 +557,8 @@ service cloud.firestore {
     // 已結束區間的封存摘要（v1.64.0；與舊的後端預計算 reviewSummaries 分開）：登入者可讀；召集人／執行幹事／管理員可建立與重算
     //（群組範圍由前端限制，Rules 僅驗證角色）；刪除限管理員。
     match /reviewArchives/{id} {
-      allow read: if isAuthed();
+      // 封存摘要可能包含小樣本明細；沒有可驗證單位範圍時採管理角色限定。
+      allow read: if canReadAllReviews() || canManageSchedule();
       allow create, update: if canManageSchedule();
       allow delete: if isAdmin();
     }
@@ -529,7 +566,9 @@ service cloud.firestore {
     // 封存後修改紀錄的待審申請（v1.64.0）：登入者可建立（申請人須為本人）；
     // 召集人／執行幹事／管理員審核；刪除限管理員。
     match /reviewEditRequests/{id} {
-      allow read: if isAuthed();
+      allow read: if isAuthed()
+        && (resource.data.get('requestedBy', '') == staffId()
+          || canReadAllReviews() || canManageSchedule());
       allow create: if isAuthed()
         && request.resource.data.get('requestedBy', '') == staffId()
         && request.resource.data.get('status', '') == 'pending';
@@ -539,7 +578,9 @@ service cloud.firestore {
 
     // 尚未送出的逐件暫存：不進正式紀錄／分析；本人或管理員可編輯及刪除。
     match /reviewDrafts/{id} {
-      allow read: if isAuthed();
+      allow read: if isAuthed() && (resource.data.get('createdBy', '') == staffId()
+        || isAdmin()
+        || get(/databases/$(database)/documents/reviewTasks/$(resource.data.get('taskId', ''))).data.get('reviewerId', '') == staffId());
       allow create: if isAuthed() && request.resource.data.get('createdBy', '') == staffId()
         && draftHasReservation(id, request.resource.data);
       allow update: if isAuthed()
@@ -555,14 +596,19 @@ service cloud.firestore {
 
     // 同指標／區間／受審人員的唯一名額；create-only 可拒絕同一唯一鍵的競態建立。
     match /reviewReservations/{id} {
-      allow get, list: if isAuthed();
+      allow get, list: if isAuthed() && (resource.data.get('ownerId', '') == staffId()
+        || canReadAllReviews() || canManageSchedule());
       allow create: if isAuthed()
         && request.resource.data.get('uniqueKey', '') == id
         && request.resource.data.get('ownerId', '') == staffId()
         && reservationTargetMatches(id, request.resource.data);
       allow update: if isAuthed()
+        && (resource.data.get('ownerId', '') == staffId()
+          || canReadAllReviews() || canManageSchedule())
         && request.resource.data.get('uniqueKey', '') == id
         && request.resource.data.get('ownerId', '') == resource.data.get('ownerId', '')
+        && request.resource.data.get('targetCollection', '') == resource.data.get('targetCollection', '')
+        && request.resource.data.get('targetId', '') == resource.data.get('targetId', '')
         && reservationTargetMatches(id, request.resource.data);
       // v1.85.5：刪除補擁有者檢查（舊鎖須由本人或排程管理者清；
       // 封存修改核准會由執行幹事刪舊鎖）。未補之前任一登入者可刪他人
@@ -598,7 +644,7 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
     match /capa/{id} {
-      allow read: if isAuthed();
+      allow read: if isAuthed() && canReadCapa(resource.data);
       allow create: if isAdmin() || canManageSchedule() || hasRole('督導')
         || request.resource.data.get('ownerId', '') == staffId()
         || request.resource.data.get('writerId', '') == staffId();

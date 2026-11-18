@@ -3,6 +3,9 @@
     "indexes": "firestore.indexes.json",
     "rules": "firestore.rules"
   },
+  "storage": {
+    "rules": "storage.rules"
+  },
   "hosting": {
     "ignore": [
       "firebase.json",
