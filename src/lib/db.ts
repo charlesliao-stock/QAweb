@@ -12,7 +12,7 @@ import { isDemoMode } from "./demoMode";
 import { invalidateRefForDocPath } from "./refCache";
 import { assertFirestoreAllowed } from "./maintenance";
 import { recordDocRead, recordQueryRead } from "./readMeter";
-import * as demo from "./demoStore";
+import { demoStoreSync, type DemoStoreModule } from "./demoLoader";
 import * as dual from "./dual/dualDb";
 import { isDualMode } from "./dual/bootstrap";
 import {
@@ -40,6 +40,10 @@ import {
 
 export type { Firestore, WriteBatch } from "firebase/firestore";
 
+/** 展示模式實作改為延遲載入（見 demoLoader.ts）；呼叫端寫法不變，取用時才解析模組。 */
+const demo: DemoStoreModule = new Proxy({} as DemoStoreModule, {
+  get: (_target, key) => demoStoreSync()[key as keyof DemoStoreModule],
+});
 const demoOn = (): boolean => isDemoMode();
 /** 雙寫模式（Supabase 主／Firebase 備）；展示模式優先，且需 VITE_DB_MODE=dual 並已初始化。 */
 const dualOn = (): boolean => !isDemoMode() && isDualMode();

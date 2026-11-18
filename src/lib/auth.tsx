@@ -21,6 +21,7 @@ import { doc, getDoc, updateDoc } from "./db";
 import { addDoc, collection as rawCollection, serverTimestamp } from "firebase/firestore";
 import { getFirebaseAuth, getFirebaseDb } from "./firebase";
 import { isDemoMode, setDemoMode } from "./demoMode";
+import { loadDemoStore } from "./demoLoader";
 import { clearRefCache } from "./refCache";
 import { activeRolesForReviewerExpiry, isReviewerAccessActive } from "./reviewerValidity";
 import { parseMemberships, type Membership } from "./roleIdentity";
@@ -333,6 +334,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     // 展示帳號：不經 Firebase，所有操作只寫入記憶體
     if (trimmed === "demo" && password === "demo") {
+      await loadDemoStore(); // 展示資料層延遲載入：先載入再切換模式
       setDemoMode(true);
       setFirebaseUser(null);
       setUser(DEMO_USER);
