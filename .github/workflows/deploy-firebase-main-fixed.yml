@@ -5,6 +5,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      deploy_storage:
+        description: Deploy Storage rules (requires Firebase Storage bucket setup)
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,6 +22,7 @@ concurrency:
 jobs:
   deploy:
     name: Build and deploy to Firebase
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
@@ -61,4 +68,8 @@ jobs:
         run: npm install -g firebase-tools
 
       - name: Deploy to Firebase Hosting
-        run: firebase deploy --only hosting,firestore:rules,firestore:indexes,storage --non-interactive --token "${{ secrets.FIREBASE_TOKEN }}"
+        run: firebase deploy --only hosting,firestore:rules,firestore:indexes --non-interactive --token "${{ secrets.FIREBASE_TOKEN }}"
+
+      - name: Deploy Firebase Storage rules
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_storage }}
+        run: firebase deploy --only storage --non-interactive --token "${{ secrets.FIREBASE_TOKEN }}"
