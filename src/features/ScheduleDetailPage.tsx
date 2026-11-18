@@ -5,10 +5,11 @@
  * - 基本資料：期間、審查月份、審查頻次、審查區間、受審單位、審查件數、
  *   最後編輯（排程設定與分工表一起顯示）；不留分工表（由追蹤頁籤代替）、
  *   不留備註欄。審查件數顯示設定值 N（不是總數）。
- * - 追蹤頁籤：篩選器為審查區間（依排程的審查年月＋區間，1 個月如
- *   2026/10、3 個月如 2026/10-2026/12）與狀態（全部／待完成／已完成／
- *   逾期鎖定，預設全部）；標題顯示審查年月與截止日；清單欄位為單位、
- *   審查員、已審／應審件數（併進度，如 7/10（70%））、狀態、完成時間。
+ * - 追蹤頁籤：篩選器為審查區間(起)／審查區間(迄)兩個月份（YYYY-MM，與結果分析
+ *   月份篩選器同型；預設起＝迄＝當月，臨時排程為該單月；改了立即生效）與狀態
+ *   （全部／待完成／已完成／逾期鎖定，預設全部）；標題改顯示任務統計
+ *   （共 N 筆任務・已完成・待完成・逾期鎖定）；清單欄位為單位、審查員、
+ *   已審／應審件數（併進度，如 7/10（70%））、狀態、完成時間。
  * - 查閱頁不放刪除排程按鈕（清單的刪除維持現狀）。
  * - 追蹤進度沿用 v1.88.4 任務追蹤邏輯（配額感知計數、狀態校正、範圍過濾），
  *   由 ScheduleDetailModal 原樣搬移，僅把「全部月份一張表」改成「按區間分表」。
@@ -23,12 +24,9 @@ import { loadPeriodicQuotaCounts } from "./dashboard/periodicQuotaCounts";
 import { buildTrackedRows, taskStatusLabel } from "../lib/taskTracking";
 import {
   buildReviewIntervals,
-  intervalContains,
-  intervalDeadlineLabel,
   type ScheduleReviewInterval,
 } from "../lib/scheduleIntervals";
 import {
-  deadlineFor,
   frequencyLabel,
   intervalLabel,
   type IndicatorAssignment,
@@ -36,7 +34,7 @@ import {
 } from "../lib/scheduling";
 import { categoryLabel, type CycleCategory } from "../lib/cycle";
 import { staffLabel } from "../lib/mask";
-import { formatDateSlash, pad2 } from "../lib/ym";
+import { pad2, parseYmOrder, ymInRange } from "../lib/ym";
 import {
   EmptyState,
   FilterPanel,
@@ -123,7 +121,6 @@ export function ScheduleDetailPage({
   unitNameOf,
   visibleUnitCodes,
   viewerStaffId,
-  deadlineDay,
   onAction,
 }: {
   row: ScheduleDetailRow;
@@ -133,8 +130,6 @@ export function ScheduleDetailPage({
   /** v1.88.4：任務追蹤的可見單位（null＝全看）；審查員本人的任務另行放行 */
   visibleUnitCodes: ReadonlySet<string> | null;
   viewerStaffId: string;
-  /** 系統參數：補審截止日（次月幾日；區間無任務時推算截止日用） */
-  deadlineDay: number;
   onAction: (m: string) => void;
 }) {
   const sched = row.schedule;
@@ -156,19 +151,29 @@ export function ScheduleDetailPage({
     () => (sched ? buildReviewIntervals(sched) : []),
     [sched],
   );
-  const [selIntervalId, setSelIntervalId] = useState("");
-  // 預設選第一個區間；排程切換後（區間 id 不在清單內）重設為第一個。
-  useEffect(() => {
-    if (intervals.length === 0) {
-      if (selIntervalId !== "") setSelIntervalId("");
-      return;
+  // v1.88.14：追蹤篩選改為起迄月份（YYYY-MM，與結果分析月份篩選器同型），
+  // 預設起＝迄＝當月；臨時排程（加審／自審）區間固定 1 個月，預設起＝迄＝該月。
+  // 改了立即生效。起＞迄時過濾以兩者交換後的區間為準。
+  const currentYm = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+  };
+  const defaultYm = useMemo(() => {
+    if (isTemp && intervals.length > 0) {
+      const iv = intervals[0];
+      return `${iv.startYear}-${pad2(iv.startMonth)}`;
     }
-    if (!intervals.some((iv) => iv.id === selIntervalId)) {
-      setSelIntervalId(intervals[0].id);
-    }
-    // intervals 依 sched 推導；sched 換指標時此 effect 重設選取。
+    return currentYm();
+    // intervals 依 sched 推導；sched 換指標時預設起迄跟著重設。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [intervals]);
+  }, [isTemp, intervals]);
+  const [fromMonth, setFromMonth] = useState(defaultYm);
+  const [toMonth, setToMonth] = useState(defaultYm);
+  // 排程切換後（預設起迄改變）重設為預設值。
+  useEffect(() => {
+    setFromMonth(defaultYm);
+    setToMonth(defaultYm);
+  }, [defaultYm]);
 
   const ymSet = useMemo(() => {
     const set = new Set<string>();
@@ -375,17 +380,12 @@ export function ScheduleDetailPage({
     return sched.unitIds.filter((c) => visibleUnitCodes.has(c));
   }, [sched, visibleUnitCodes]);
 
-  const selInterval = useMemo(
-    () => intervals.find((iv) => iv.id === selIntervalId) ?? null,
-    [intervals, selIntervalId],
-  );
-  // 所選區間的追蹤列（再依狀態篩選）
+  // 所選起迄區間內的追蹤列（再依狀態篩選）；起＞迄時以交換後的區間為準。
   const intervalRows = useMemo(() => {
-    if (!selInterval) return [];
-    return scopedTrackedRows.filter((r) =>
-      intervalContains(selInterval, r.year, r.month),
-    );
-  }, [scopedTrackedRows, selInterval]);
+    const from = parseYmOrder(fromMonth);
+    const to = parseYmOrder(toMonth);
+    return scopedTrackedRows.filter((r) => ymInRange(r.year, r.month, from, to));
+  }, [scopedTrackedRows, fromMonth, toMonth]);
   const filteredIntervalRows = useMemo(
     () => intervalRows.filter((r) => !trackStatus || r.status === trackStatus),
     [intervalRows, trackStatus],
@@ -401,16 +401,6 @@ export function ScheduleDetailPage({
     }
     return { total: intervalRows.length, done, pending, locked };
   }, [intervalRows]);
-  // 區間截止日：區間內任務的截止日（皆相同→該日；不一致→最早–最晚）；
-  // 區間尚無任務時，由區間末月＋系統截止日推算。顯示統一為 YYYY/MM/DD（v1.88.7）。
-  const intervalDeadline = useMemo(() => {
-    if (!selInterval) return "—";
-    const fromTasks = intervalDeadlineLabel(intervalRows.map((r) => r.deadline));
-    if (fromTasks !== "—") return fromTasks;
-    return formatDateSlash(
-      deadlineFor(selInterval.endYear, selInterval.endMonth, deadlineDay),
-    );
-  }, [selInterval, intervalRows, deadlineDay]);
 
   if (!sched) {
     return (
@@ -551,17 +541,26 @@ export function ScheduleDetailPage({
           ) : (
             <>
               <FilterPanel title="追蹤篩選">
-                <FormSelect
-                  label="審查區間"
-                  value={selIntervalId}
-                  onChange={(e) => setSelIntervalId(e.target.value)}
-                >
-                  {intervals.map((iv) => (
-                    <option key={iv.id} value={iv.id}>
-                      {iv.label}
-                    </option>
-                  ))}
-                </FormSelect>
+                <div className="form-field">
+                  <label className="field-label" htmlFor="track-from-month">審查區間(起)</label>
+                  <input
+                    id="track-from-month"
+                    type="month"
+                    className="text-input"
+                    value={fromMonth}
+                    onChange={(e) => setFromMonth(e.target.value)}
+                  />
+                </div>
+                <div className="form-field">
+                  <label className="field-label" htmlFor="track-to-month">審查區間(迄)</label>
+                  <input
+                    id="track-to-month"
+                    type="month"
+                    className="text-input"
+                    value={toMonth}
+                    onChange={(e) => setToMonth(e.target.value)}
+                  />
+                </div>
                 <FormSelect
                   label="狀態"
                   value={trackStatus}
@@ -574,15 +573,8 @@ export function ScheduleDetailPage({
                 </FormSelect>
               </FilterPanel>
               <section className="panel schedule-detail-card">
-              {selInterval && (
-                <p>
-                  <b>審查年月：{selInterval.label}</b>
-                  {"　"}
-                  <b>審查截止日：{intervalDeadline}</b>
-                </p>
-              )}
-              <p className="settings-note">
-                共 {intervalSummary.total} 筆任務・已完成 {intervalSummary.done}・待完成 {intervalSummary.pending}・逾期鎖定 {intervalSummary.locked}
+              <p>
+                <b>共 {intervalSummary.total} 筆任務・已完成 {intervalSummary.done}・待完成 {intervalSummary.pending}・逾期鎖定 {intervalSummary.locked}</b>
                 {progressUnknown ? "・部分進度因紀錄讀取失敗未知（顯示 —）" : ""}
               </p>
               {intervalRows.length === 0 ? (

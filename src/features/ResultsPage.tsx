@@ -103,6 +103,7 @@ import {
 import { buildReviewIntervals } from "../lib/scheduleIntervals";
 import {
   formatPassRate,
+  belowClass,
   causeRecordEntries,
   collectConsolidatedRecordNotes,
   optionDetailRows,
@@ -360,7 +361,7 @@ function ResultMonthPicker({
 
 /** 低於閾值時回傳 " below"（紅字樣式），否則空字串；閾值未設定（<=0）不標示 */
 function isBelow(rate: number | null | undefined, threshold: number | undefined): string {
-  return rate != null && threshold != null && threshold > 0 && rate < threshold ? " below" : "";
+  return belowClass(rate, threshold);
 }
 
 /** CAPA 案件的來源月份（periodKeys 最後一筆，YYYY-MM）是否落在該欄的月份內 */
@@ -555,6 +556,20 @@ export function ResultsPage({
   }, []);
   // Modal
   const [chartModal, setChartModal] = useState<ChartModalData | null>(null);
+  // v1.88.14：曲線圖彈窗的 CAPA 案件（依彈窗指標一次查詢），供「C」標記使用。
+  const [chartModalCapaCases, setChartModalCapaCases] = useState<CapaCase[]>([]);
+  useEffect(() => {
+    const indicatorId = chartModal?.indicatorId;
+    if (!indicatorId) {
+      setChartModalCapaCases([]);
+      return;
+    }
+    let alive = true;
+    loadCapaCasesByIndicator(indicatorId)
+      .then((rows) => { if (alive) setChartModalCapaCases(rows); })
+      .catch(() => { if (alive) setChartModalCapaCases([]); });
+    return () => { alive = false; };
+  }, [chartModal?.indicatorId]);
   const [docModal, setDocModal] = useState<DocModalData | null>(null);
   // v1.50.0：原因詞庫件數下探（勾選該原因的審查紀錄，跨指標）
   const [causeDrill, setCauseDrill] = useState<string | null>(null);
@@ -1478,6 +1493,20 @@ export function ResultsPage({
     return () => { alive = false; };
   }, [tab, applied, selUnitCode]);
   const errorUnitCode = errorUnit === NA_UNIT ? "" : errorUnit;
+  // v1.88.14：指標頁籤曲線圖的 CAPA 案件（依指標一次查詢），供「C」標記使用；
+  // 沿用單位圖的接線寫法（每欄只取第一件未撤案且落在該欄月份內的案件）。
+  const [indCapaCases, setIndCapaCases] = useState<CapaCase[]>([]);
+  useEffect(() => {
+    if (tab !== "indicator" || !applied || !selIndicator) {
+      setIndCapaCases([]);
+      return;
+    }
+    let alive = true;
+    loadCapaCasesByIndicator(selIndicator)
+      .then((rows) => { if (alive) setIndCapaCases(rows); })
+      .catch(() => { if (alive) setIndCapaCases([]); });
+    return () => { alive = false; };
+  }, [tab, applied, selIndicator]);
   const hasNaUnit = useMemo(
     () =>
       scopedRecords.some((r) => r.unitId === "") ||
@@ -2642,6 +2671,7 @@ export function ResultsPage({
                               )
                             : optionDetailRows(recs, ind.questions)
                         }
+                        threshold={ind.threshold}
                         onQuestionClick={(questionId) =>
                           openDrill(ind.id, allPeriodColumn, unitUnit, selUnitCode, {
                             questionId,
@@ -2858,6 +2888,14 @@ export function ResultsPage({
                     threshold={indSel.threshold > 0 ? indSel.threshold : null}
                     thresholds={indSummary.chartThresholds}
                     legend="正確率"
+                    capaMarks={indSummary.chartCols.map((col) => {
+                      const hit = indCapaCases.find((c) => c.stage !== "已撤案" && capaInColumn(c, col.months));
+                      return hit ? { id: hit.id, label: hit.caseNumber, actions: hit.actions.map((a) => a.title) } : null;
+                    })}
+                    onCapaClick={(i) => {
+                      const hit = indCapaCases.find((c) => c.stage !== "已撤案" && capaInColumn(c, indSummary.chartCols[i].months));
+                      if (hit) window.dispatchEvent(new CustomEvent("capa:open", { detail: { caseId: hit.id } }));
+                    }}
                     onPointClick={(i) =>
                       openDrill(selIndicator, indSummary.chartCols[i], indUnit)
                     }
@@ -2887,6 +2925,7 @@ export function ResultsPage({
                 ) : (
                 <OptionDetailTable
                   rows={indSummary.optionRows}
+                  threshold={indSel.threshold}
                   onQuestionClick={(questionId) =>
                     openDrill(selIndicator, allPeriodColumn, indUnit, undefined, {
                       questionId,
@@ -3001,6 +3040,14 @@ export function ResultsPage({
                 threshold={chartModal.threshold}
                 thresholds={chartModal.thresholds}
                 legend="達閾值率"
+                capaMarks={chartModal.cols.map((col) => {
+                  const hit = chartModalCapaCases.find((c) => c.stage !== "已撤案" && (!chartModal.unitId || c.unitCode === chartModal.unitId) && capaInColumn(c, col.months));
+                  return hit ? { id: hit.id, label: hit.caseNumber, actions: hit.actions.map((a) => a.title) } : null;
+                })}
+                onCapaClick={(i) => {
+                  const hit = chartModalCapaCases.find((c) => c.stage !== "已撤案" && (!chartModal.unitId || c.unitCode === chartModal.unitId) && capaInColumn(c, chartModal.cols[i].months));
+                  if (hit) window.dispatchEvent(new CustomEvent("capa:open", { detail: { caseId: hit.id } }));
+                }}
                 onPointClick={(i) => {
                   const cm = chartModal;
                   setChartModal(null);
@@ -3041,6 +3088,7 @@ export function ResultsPage({
             </div>
             <OptionDetailTable
               rows={docModal.rows}
+              threshold={indOf.get(docModal.indicatorId)?.threshold}
               onQuestionClick={(questionId) => {
                 const dm = docModal;
                 setDocModal(null);
@@ -4548,10 +4596,17 @@ function DrillModal({
 function OptionDetailTable({
   rows,
   onQuestionClick,
+  threshold,
 }: {
   rows: OptionDetailRow[];
   /** v1.50.0：題目列可點下探到該題的個人審查結果 */
   onQuestionClick?: (questionId: string) => void;
+  /**
+   * v1.88.14：得分率未達閾值時該格顯示紅色，判紅用指標閾值。
+   * 口徑提醒：得分率是題目層級聚合（是／（是＋否）），指標閾值原本是
+   * 單筆紀錄 rate 的達標線，此處是借用同一數字；閾值 ≤0／缺值不標。
+   */
+  threshold?: number;
 }) {
   if (rows.length === 0) {
     return <EmptyState title="無題目" description="該指標尚無審核表題目。" />;
@@ -4596,7 +4651,7 @@ function OptionDetailTable({
                   <td>{cell(r.yes, r.yesRate)}</td>
                   <td>{cell(r.no, r.noRate)}</td>
                   <td>{cell(r.na, r.naRate)}</td>
-                  <td>{fmtRate(r.scoreRate)}</td>
+                  <td className={`rate-cell${isBelow(r.scoreRate, threshold)}`}>{fmtRate(r.scoreRate)}</td>
                 </tr>
               );
             })}

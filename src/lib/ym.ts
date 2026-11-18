@@ -13,6 +13,35 @@ export function ymKeyOf(year: number, month: number): string {
   return `${year}-${month}`;
 }
 
+/**
+ * "YYYY-MM" → 可比較的年月序號（年*12＋月-1）；格式非法／月份超出 1–12 回 null。
+ * v1.88.14：審查進度追蹤起迄月份篩選用。
+ */
+export function parseYmOrder(value: string): number | null {
+  const m = /^(\d{4})-(\d{1,2})$/.exec(value ?? "");
+  if (!m) return null;
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return null;
+  return Number(m[1]) * 12 + (month - 1);
+}
+
+/**
+ * 年月是否落在 [起，迄] 區間內（起、迄為 parseYmOrder 的序號；起＞迄時自動交換）。
+ * v1.88.14：審查進度追蹤起迄月份篩選用。
+ */
+export function ymInRange(
+  year: number,
+  month: number,
+  from: number | null,
+  to: number | null,
+): boolean {
+  if (from == null || to == null) return false;
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+  const k = year * 12 + (month - 1);
+  return k >= lo && k <= hi;
+}
+
 /** 年月字串（月份補零，符合 <input type="month">）：2026, 3 → "2026-03" */
 export function ymPadded(year: number, month: number): string {
   return `${year}-${pad2(month)}`;

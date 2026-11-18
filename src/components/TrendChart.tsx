@@ -12,6 +12,9 @@
  * 點選觸發 onCapaClick（連結對應 CAPA 案件）。
  * 另一個獨立選項「顯示未達閾值月份的改善措施」：勾選時，在圖上方以小方框列出該 CAPA 的
  * 改善措施，方框與資料點以實線連接，點方框同樣連結 CAPA。
+ * v1.88.14：軸名——X 軸「月份」置中放標籤下方、Y 軸「審查結果(%)」
+ * 旋轉 -90 度放左側（viewBox 底部往下延 16px；Y 軸名在刻度數字左側，
+ * 不重疊）。
  */
 import { useRef, useState } from "react";
 import { isPassing } from "../lib/analysisRates";
@@ -177,7 +180,7 @@ export function TrendChart({
       <div className="chart-svg-wrap" ref={wrapRef}>
         <svg
           className="trend-chart"
-          viewBox={`0 ${-bandH} 600 ${218 + bandH}`}
+          viewBox={`0 ${-bandH} 600 ${234 + bandH}`}
           preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="趨勢圖"
@@ -350,6 +353,20 @@ export function TrendChart({
               {notes[index] === "（加審）" ? "(加審)" : notes[index]}
             </text>
           ) : null)}
+          {/* v1.88.14：軸名——X 軸「月份」置中放標籤下方；Y 軸「審查結果(%)」
+              旋轉 -90 度放左側（刻度數字在 x=30 靠右對齊，軸名約佔 x=4–16，不重疊） */}
+          <text x="300" y={224} textAnchor="middle" className="chart-label">
+            月份
+          </text>
+          <text
+            transform="rotate(-90 10 85)"
+            x="10"
+            y="85"
+            textAnchor="middle"
+            className="chart-label"
+          >
+            審查結果(%)
+          </text>
         </svg>
         {hover != null && tipPos != null && (
           <div

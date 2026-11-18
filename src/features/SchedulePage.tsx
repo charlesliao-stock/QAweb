@@ -1528,7 +1528,6 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                 unitNameOf={unitNameOf}
                 visibleUnitCodes={scheduleScopeUnits}
                 viewerStaffId={user?.staffId ?? ""}
-                deadlineDay={deadlineDay}
                 onAction={onAction}
               />
             ) : (

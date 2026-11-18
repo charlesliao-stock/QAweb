@@ -87,6 +87,18 @@ export function isPassing(rate: number | null, threshold: number): boolean {
   return typeof rate === "number" && threshold > 0 && rate >= threshold;
 }
 
+/**
+ * 低於閾值時回傳 " below"（紅字樣式），否則空字串；閾值未設定（<=0）／缺值不標。
+ * v1.88.14：OptionDetailTable 得分率格判紅用（得分率是題目層級聚合
+ * 是／（是＋否），指標閾值原本是單筆紀錄 rate 的達標線，此處是借用同一數字）。
+ */
+export function belowClass(
+  rate: number | null | undefined,
+  threshold: number | undefined,
+): string {
+  return rate != null && threshold != null && threshold > 0 && rate < threshold ? " below" : "";
+}
+
 /** 合併人次率：達閾值總人次／總審查人次 */
 export function passRateOf(
   records: AnalysisRecord[],
