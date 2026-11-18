@@ -403,6 +403,8 @@ function AuditFormEditor({
   }
 
   function removeQuestion(id: string) {
+    // v1.88.19：先確認，確認後只改草稿，按「儲存修改」才真正刪除
+    if (!window.confirm("確定刪除這道題目？按「儲存修改」後才真正刪除。")) return;
     onChange({ questions: value.questions.filter((q) => q.id !== id) });
   }
 

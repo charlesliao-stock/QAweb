@@ -16,7 +16,7 @@
  * 本檔零依賴、不碰 DOM、不碰 Firestore，可在 node 直接單元測試。
  */
 
-import { fmtYm, pad2, shiftYm, ymKeyOf } from "./ym";
+import { fmtYm, normalizeReviewMonths, pad2, shiftYm, ymKeyOf } from "./ym";
 
 export interface CalendarYM {
   year: number;
@@ -61,6 +61,8 @@ export interface ScheduleLike {
   frequency: number | null;
   intervalMonths: number | null;
   refYear: number | null;
+  /** v1.88.19：臨時排程明確曆年月（有值時 temp 區間以此為準） */
+  calendarMonths?: string[];
 }
 
 function calendarYearOf(
@@ -102,14 +104,32 @@ export function scheduleIntervals(
   const months = [...new Set(sched.months)]
     .filter((m) => Number.isInteger(m) && m >= 1 && m <= 12)
     .sort((a, b) => a - b);
-  if (months.length === 0) return [];
+  // v1.88.19：臨時排程有明確曆年月時，即使 months 為空也不回空。
+  const hasExplicitTempMonths =
+    sched.category === "temp" &&
+    normalizeReviewMonths(sched.calendarMonths).length > 0;
+  if (months.length === 0 && !hasExplicitTempMonths) return [];
   const calOf = (m: number): CalendarYM => ({
     year: calendarYearOf(sched.category, sched.period, m, sched.refYear, now),
     month: m,
   });
 
   if (sched.category === "temp") {
-    const cals = months.map(calOf).sort(cmpYM);
+    // v1.88.19：有明確曆年月時直接採用（13 個月可能跨曆年）；
+    // 舊排程無此欄時退回 months＋refYear 的舊行為。
+    const explicit = normalizeReviewMonths(sched.calendarMonths);
+    const cals =
+      explicit.length > 0
+        ? explicit
+            .map((ym) => {
+              const m = ym.match(/^(\d{4})\/(\d{2})$/);
+              return m
+                ? { year: Number(m[1]), month: Number(m[2]) }
+                : null;
+            })
+            .filter((x): x is CalendarYM => x != null)
+            .sort(cmpYM)
+        : months.map(calOf).sort(cmpYM);
     const start = cals[0];
     const end = cals[cals.length - 1];
     return [

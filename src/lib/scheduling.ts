@@ -641,6 +641,13 @@ export interface IndicatorSchedule {
   periodLabel: string;
   /** 審查起始月份（1–12，可複選） */
   months: number[];
+  /**
+   * 明確曆年月清單（v1.88.19，僅臨時排程）："yyyy/mm" 排序後清單。
+   * 臨時排程的月份選項為 13 個月（該年度／學年度 12 個月＋結束後下一個
+   * 月），可能跨曆年，單一 refYear 無法表達，故以此欄為準；舊排程
+   * 無此欄時退回 months＋refYear 的舊行為。
+   */
+  calendarMonths?: string[];
   /** 審查頻次：一年幾次（v1.18；null＝未設定／舊資料） */
   frequency: ReviewFrequency | null;
   /** 審查區間：每次審查連續涵蓋幾個月（v1.18；null＝未設定／舊資料） */
@@ -714,6 +721,10 @@ export function parseIndicatorSchedule(raw: unknown): IndicatorSchedule | null {
         ? d.periodLabel
         : periodLabel(category, period),
     months: parseScheduleMonths(d.months),
+    // v1.88.19：臨時排程明確曆年月（有值才帶，舊排程無此欄）
+    ...(normalizeReviewMonths(d.calendarMonths).length > 0
+      ? { calendarMonths: normalizeReviewMonths(d.calendarMonths) }
+      : {}),
     frequency: parseFrequency(d.frequency),
     intervalMonths: parseIntervalMonths(d.intervalMonths),
     refYear:
@@ -861,6 +872,11 @@ export async function saveSchedule(
       period: sched.period,
       periodLabel: periodLabel(sched.category, sched.period),
       months: parseScheduleMonths(sched.months),
+      // v1.88.19：臨時排程明確曆年月（有值才存）
+      ...(sched.category === "temp" &&
+      normalizeReviewMonths(sched.calendarMonths).length > 0
+        ? { calendarMonths: normalizeReviewMonths(sched.calendarMonths) }
+        : {}),
       frequency: parseFrequency(sched.frequency),
       intervalMonths: parseIntervalMonths(sched.intervalMonths),
       refYear:
@@ -963,7 +979,22 @@ export function scheduleReviewCalendarMonths(sched: {
   months: number[];
   frequency: ReviewFrequency | null;
   intervalMonths: ReviewInterval | null;
+  calendarMonths?: string[];
 }): { year: number; month: number }[] {
+  // v1.88.19：臨時排程有明確曆年月時直接採用（13 個月可能跨曆年，
+  // months＋單一 refYear 無法表達；舊排程無此欄時走舊路徑）。
+  if (sched.category === "temp") {
+    const explicit = normalizeReviewMonths(sched.calendarMonths);
+    if (explicit.length > 0) {
+      const out = new Map<string, { year: number; month: number }>();
+      for (const ym of explicit) {
+        const m = ym.match(/^(\d{4})\/(\d{2})$/);
+        if (!m) continue;
+        out.set(ym, { year: Number(m[1]), month: Number(m[2]) });
+      }
+      return [...out.values()].sort((a, b) => a.year - b.year || a.month - b.month);
+    }
+  }
   const starts = parseScheduleMonths(sched.months);
   const len =
     sched.category === "temp"
@@ -1025,6 +1056,12 @@ export interface TempScheduleInput {
   unitIds: string[];
   /** 審查月份（1–12） */
   months: number[];
+  /**
+   * 明確曆年月（v1.88.19，臨時排程 13 個月用）："yyyy/mm" 清單。
+   * 提供時以此為準產生任務（可跨曆年）；months 欄仍同步寫入月份
+   * 數字（供舊版顯示／重複偵測退回用）。
+   */
+  calendarMonths?: string[];
   caseCount: number | null;
   /** 負責審查員職編清單（每位審查員負責全部 unitIds；items 提供時忽略） */
   reviewerIds: string[];
@@ -1110,7 +1147,20 @@ export async function createTempSchedule(
     category: "temp",
     period: String(periodMs),
     periodLabel: "臨時",
-    months: parseScheduleMonths(input.months),
+    // v1.88.19：有明確曆年月時 months 寫月份數字（去重排序）供舊版顯示，
+    // 曆年以 calendarMonths 為準。
+    months: (() => {
+      const cal = normalizeReviewMonths(input.calendarMonths);
+      if (cal.length > 0) {
+        return [
+          ...new Set(cal.map((ym) => Number(ym.slice(5, 7)))),
+        ].sort((a, b) => a - b);
+      }
+      return parseScheduleMonths(input.months);
+    })(),
+    ...(normalizeReviewMonths(input.calendarMonths).length > 0
+      ? { calendarMonths: normalizeReviewMonths(input.calendarMonths) }
+      : {}),
     frequency: null,
     intervalMonths: null,
     refYear:
@@ -1240,6 +1290,8 @@ export interface TempScheduleLike {
   category: ScheduleCategory;
   period: string;
   months: number[];
+  /** v1.88.19：明確曆年月（有值時重複比對以此為準） */
+  calendarMonths?: string[];
   unitIds: string[];
   unlimitedUnits: boolean;
   selfReview: boolean;
@@ -1257,6 +1309,8 @@ export function findDuplicateTempSchedule(
   temps: TempScheduleLike[],
   input: {
     months: number[];
+    /** v1.88.19：明確曆年月（有值時以此比對，可跨曆年） */
+    calendarMonths?: string[];
     unitIds: string[];
     unlimitedUnits: boolean;
     selfReview: boolean;
@@ -1264,7 +1318,10 @@ export function findDuplicateTempSchedule(
   nowMs: number,
   windowMs = 10 * 60 * 1000,
 ): TempScheduleLike | null {
+  // v1.88.19：任一方有明確曆年月就比曆年月，否則退回月份數字比對。
+  const inputCal = normalizeReviewMonths(input.calendarMonths);
   const monthsKey = [...input.months].sort((a, b) => a - b).join(",");
+  const calKey = inputCal.join(",");
   const unitsKey = input.unlimitedUnits
     ? "NA"
     : [...input.unitIds].sort().join(",");
@@ -1273,7 +1330,14 @@ export function findDuplicateTempSchedule(
     const tMs = Number(t.period);
     if (!Number.isFinite(tMs) || tMs <= 0) continue;
     if (nowMs - tMs > windowMs || tMs > nowMs + 60 * 1000) continue;
-    if ([...t.months].sort((a, b) => a - b).join(",") !== monthsKey) continue;
+    const tCal = normalizeReviewMonths(t.calendarMonths);
+    if (inputCal.length > 0 || tCal.length > 0) {
+      if (tCal.join(",") !== calKey) continue;
+    } else if (
+      [...t.months].sort((a, b) => a - b).join(",") !== monthsKey
+    ) {
+      continue;
+    }
     const tUnits = t.unlimitedUnits
       ? "NA"
       : [...t.unitIds].sort().join(",");

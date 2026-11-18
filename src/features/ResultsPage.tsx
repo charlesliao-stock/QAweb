@@ -129,7 +129,6 @@ import {
   sectionPassRateOf,
   sectionUnitPassRateOf,
   transposePersonOptionRows,
-  unitMonthsForDrill,
   unitPassRate,
   unitPeriodPassRate,
   unitScoringBreakdownRows,
@@ -545,6 +544,15 @@ export function ResultsPage({
   // 指標分析：使用者要求載入全部原始紀錄（選項明細、補充說明、下探）
   const [rawFull, setRawFull] = useState(false);
   const [rawHint, setRawHint] = useState("");
+  /** v1.88.19：第一次點曲線圖時原始紀錄尚未載入，先記下待開的圖，載完自動彈出 */
+  const [pendingChart, setPendingChart] = useState<{
+    indicatorId: string;
+    unitId: string | undefined;
+    mode: UnitMode;
+    scopeLabel: string;
+    section?: SectionRef;
+    spans?: RowSpan[];
+  } | null>(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -895,13 +903,14 @@ export function ResultsPage({
   function requireRaw(indicatorId?: string): boolean {
     if (!perIndMode) return false;
     if (indicatorId && !summaryPlans.has(indicatorId)) return false;
-    setRawHint("此操作需原始紀錄，已開始載入，載入完成後請再點一次。");
+    setRawHint("此操作需原始紀錄，已開始載入，載入完成後自動開啟。");
     setRawFull(true);
     return true;
   }
   useEffect(() => {
     setRawFull(false);
     setRawHint("");
+    setPendingChart(null);
   }, [selIndicator, selGroup, selGroupU, selIndU, applied, tab]);
 
   // 審查紀錄（查詢閘門＋按年份快取）：
@@ -2121,7 +2130,11 @@ export function ResultsPage({
     section?: SectionRef,
     spans?: RowSpan[],
   ) {
-    if (requireRaw(indicatorId)) return;
+    if (requireRaw(indicatorId)) {
+      // v1.88.19：第一次點只觸發載入，記下待開的圖，原始紀錄載完自動彈出
+      setPendingChart({ indicatorId, unitId, mode, scopeLabel, section, spans });
+      return;
+    }
     const ind = indOf.get(indicatorId);
     if (!ind) return;
     const chartSpans =
@@ -2150,6 +2163,24 @@ export function ResultsPage({
       sectionLabel: section?.label,
     });
   }
+
+  // v1.88.19：待開曲線圖——第一次點已觸發原始紀錄載入（rawFull），載完
+  // （loading 結束）自動彈出，不用再點第二次。載入失敗（rawFull 被重設）
+  // 時放棄待開圖；使用者切頁籤／改查詢時 pendingChart 已隨之清空。
+  useEffect(() => {
+    if (!pendingChart || !rawFull || loading) return;
+    const target = pendingChart;
+    setPendingChart(null);
+    openChart(
+      target.indicatorId,
+      target.unitId,
+      target.mode,
+      target.scopeLabel,
+      target.section,
+      target.spans,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingChart, rawFull, loading]);
 
   /**
    * 下探 L1：開啟單位矩陣（只有點選的那一個期間欄）。
@@ -3369,6 +3400,13 @@ export function ResultsPage({
               drill.mode,
             )
           }
+          extraOf={(m) =>
+            hasTempReview(
+              drill.indicatorId,
+              { key: `${m.year}-${m.month}`, label: fmtYm(m.year, m.month), months: [m] },
+              drill.scopeUnitId,
+            )
+          }
           onPick={(m) =>
             setDrill((d) =>
               d
@@ -3415,6 +3453,13 @@ export function ResultsPage({
           indOf={indOf}
           unitNameOf={unitNameOf}
           capaSpans={drillCapaSpans}
+          tempReviewOf={(months, unitId) =>
+            hasTempReview(
+              drill.indicatorId,
+              { key: "", label: "", months },
+              unitId,
+            )
+          }
         />
       )}
 
@@ -4227,6 +4272,7 @@ function SpanMonthPicker({
   subtitle,
   months,
   cellOf,
+  extraOf,
   onPick,
   onClose,
 }: {
@@ -4234,6 +4280,8 @@ function SpanMonthPicker({
   subtitle: string;
   months: { year: number; month: number }[];
   cellOf: (month: { year: number; month: number }) => CellValue;
+  /** v1.88.19：該月有加審紀錄時在成績旁標「加審」 */
+  extraOf?: (month: { year: number; month: number }) => boolean;
   onPick: (month: { year: number; month: number }) => void;
   onClose: () => void;
 }) {
@@ -4291,7 +4339,7 @@ function SpanMonthPicker({
                           : undefined
                       }
                     >
-                      <RateCellBody cell={cell} />
+                      <RateCellBody cell={cell} extra={extraOf?.(m) ?? false} />
                     </td>
                   </tr>
                 );
@@ -4395,6 +4443,7 @@ function DrillModal({
   indOf,
   unitNameOf,
   capaSpans,
+  tempReviewOf,
 }: {
   drill: DrillState;
   onClose: () => void;
@@ -4408,6 +4457,8 @@ function DrillModal({
   recordIndex: RecordIndex;
   indOf: Map<string, IndicatorOpt>;
   unitNameOf: Map<string, string>;
+  /** v1.88.19：該（月份、單位）有加審紀錄時回 true，成績旁標「加審」 */
+  tempReviewOf?: (months: { year: number; month: number }[], unitId?: string) => boolean;
   /** CAPA 偵測用 spans（v1.88.18：一個排程區間算一次審查，加審月份已歸併原區間不切出；由舊到新）：連續未達標偵測只用已載入的 spans，不另外讀取 */
   capaSpans: RowSpan[];
 }) {
@@ -4571,39 +4622,8 @@ function DrillModal({
     }
     return map;
   }, [recordIndex, drill.indicatorId, drill.mode, l1Units, l1Summary, col, th, filterIds, filterKind]);
-  // v1.88.13：L1「審查月份」欄——每單位在該期間欄內有紀錄的排程月份。
-  // 封存摘要路徑由 SummaryCell 的 year／month 推出（只顯示排程月份，
-  // 真實審查日只在 L2 顯示）；原始紀錄路徑由 unitMonthsForDrill 推出。
-  const l1UnitMonths = useMemo(() => {
-    const map = new Map<string, { year: number; month: number }[]>();
-    for (const unitId of l1Units) {
-      if (l1Summary) {
-        const keys = new Set<string>();
-        for (const c of l1Summary) {
-          if (c.unitId !== unitId || c.total <= 0) continue;
-          keys.add(`${c.year}-${c.month}`);
-        }
-        map.set(
-          unitId,
-          [...keys]
-            .map((k) => {
-              const [year, month] = k.split("-").map(Number);
-              return { year, month };
-            })
-            .sort((a, b) => a.year - b.year || a.month - b.month),
-        );
-      } else {
-        const recs = recordsForIndex(
-          recordIndex,
-          drill.indicatorId,
-          col.months,
-          unitId,
-        );
-        map.set(unitId, unitMonthsForDrill(recs, col.months, unitId));
-      }
-    }
-    return map;
-  }, [l1Summary, l1Units, recordIndex, drill.indicatorId, col]);
+  // v1.88.19：L1「審查月份」欄已移除（B：單月多月都不要；多月單月下探改走
+  // 矩陣成績格 → 選月彈窗，v1.88.17 Q5=C 路徑）。
   // 連續未達標偵測（v1.88.18）：一個排程區間（span）算一次審查，不按月算；
   // 不論區間或單月，連續 need 次未達標就觸發；沒有審查資料的期不列入；
   // 期數取 CAPA 設定（指標覆寫優先，否則全院預設，預設 2）。選定期本身須有資料且為最新一期。
@@ -4759,7 +4779,6 @@ function DrillModal({
               <thead>
                 <tr>
                   <th className="ind-col">單位</th>
-                  <th>審查月份</th>
                   {showRecentResults && historyMonths.map((month) => <th key={month.key} className="rate-col">{month.label}</th>)}
                   <th className="rate-col" style={showRecentResults ? { background: "#eef4ff" } : undefined}>{col.label}</th>
                   <th className="rate-col">操作</th>
@@ -4768,33 +4787,16 @@ function DrillModal({
               <tbody>
                 {l1Units.length === 0 ? (
                   <tr>
-                    <td colSpan={4 + (showRecentResults ? historyMonths.length : 0)}>{historyBusy ? "讀取中…" : historyNote || "無資料"}</td>
+                    <td colSpan={3 + (showRecentResults ? historyMonths.length : 0)}>{historyBusy ? "讀取中…" : historyNote || "無資料"}</td>
                   </tr>
                 ) : (
                   l1Units.map((unitId) => {
                     const cell = l1Cells.get(unitId);
                     const clickable = cell != null && cell.rate != null;
-                    const unitMonths = l1UnitMonths.get(unitId) ?? [];
                     return (
                       <tr key={unitId}>
                         <td className="ind-col">
                           {unitId === "" ? "NA" : `${unitId}・${unitNameOf.get(unitId) ?? ""}`}
-                        </td>
-                        <td>
-                          {unitMonths.length === 0
-                            ? "—"
-                            : unitMonths.map((m) => (
-                              <button
-                                key={`${m.year}-${m.month}`}
-                                type="button"
-                                className="text-button"
-                                style={{ marginRight: 6 }}
-                                title="點選只看該月被審人員"
-                                onClick={() => onSelectUnit(unitId, { year: m.year, month: m.month })}
-                              >
-                                {fmtYm(m.year, m.month)}
-                              </button>
-                            ))}
                         </td>
                         {showRecentResults && historyMonths.map((month) => {
                           const recs = recordsForIndex(recordIndex, drill.indicatorId, [{ year: month.year, month: month.month }], unitId);
@@ -4817,7 +4819,7 @@ function DrillModal({
                               tabIndex={hClickable ? 0 : undefined}
                               onKeyDown={hClickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } } : undefined}
                             >
-                              {hp.total === 0 ? "—" : <RateCellBody cell={hCell} />}
+                              {hp.total === 0 ? "—" : <RateCellBody cell={hCell} extra={tempReviewOf?.([{ year: month.year, month: month.month }], unitId) ?? false} />}
                             </td>
                           );
                         })}
@@ -4847,6 +4849,7 @@ function DrillModal({
                           {cell ? (
                             <RateCellBody
                               cell={cell}
+                              extra={tempReviewOf?.(col.months, unitId) ?? false}
                               capa={(capaCases ?? []).find((c) => c.unitCode === unitId && c.stage !== "已撤案" && capaInColumn(c, col.months))}
                             />
                           ) : "—"}

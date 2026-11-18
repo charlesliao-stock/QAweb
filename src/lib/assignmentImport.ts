@@ -5,7 +5,8 @@
  * - 指標代號：只核對目前頁面的指標，不符者整列報錯不匯入（一次只匯一支指標）；
  * - 審查員職編：與人員資料比對；姓名欄已移除（v1.88.13），解析後預覽
  *   以職編查出人員並顯示遮罩姓名供匯入者確認；
- * - 負責單位：單位代碼或單位名稱，多個單位以「、」分隔（例如 U01、U02）；
+ * - 負責單位：單位代碼或單位名稱，多個單位以半形逗號分隔（例如 U01,U02）；
+ *   只認半形逗號（v1.88.19：含「、」／全形逗號／分號／空白者整列報錯）；
  *   填「不限單位」時匯入為不限單位項目（units 為空、unlimitedUnits 為 true），
  *   與現行分工表「不限單位」語意一致；「不限單位」不可與其他單位併填。
  * - 審查月份：必填，yyyy/m，多筆以半形逗號分隔（例如 2026/8,2026/9）；
@@ -41,15 +42,15 @@ export const ASSIGNMENT_IMPORT_HEADER = [
 /** 範例檔內容（含標題列；下載時走 downloadTemplate，xlsx 失敗退回 CSV） */
 export const ASSIGNMENT_IMPORT_SAMPLE_ROWS: string[][] = [
   [...ASSIGNMENT_IMPORT_HEADER],
-  ["QA-001", "0000001", "U01、U02", "2026/8,2026/9"],
+  ["QA-001", "0000001", "U01,U02", "2026/8,2026/9"],
   ["QA-001", "0000002", "不限單位", "2026/10"],
 ];
 
 /** 負責單位欄填此值＝不限單位項目 */
 export const ASSIGNMENT_UNLIMITED_TEXT = "不限單位";
 
-/** 多單位分隔符（頓號／逗號／分號／空白皆可） */
-const UNIT_SEPARATORS = /[、,，;；\s]+/;
+/** 多單位分隔符（v1.88.19：只認半形逗號） */
+const UNIT_SEPARATORS = /,/;
 
 export interface AssignmentImportLookup {
   /** 職編 → 姓名（人員資料） */
@@ -96,12 +97,12 @@ export interface ValidatedAssignmentRow {
   parsed?: ParsedAssignmentRow;
 }
 
-/** 多月份分隔符（半形逗號為主；全形逗號／頓號亦接受並視為同一分隔） */
-const MONTH_SEPARATORS = /[,，、]+/;
+/** 多月份分隔符（v1.88.19：只認半形逗號） */
+const MONTH_SEPARATORS = /,/;
 
 /**
- * 解析審查月份欄（v1.88.13，純函式）：
- * 以半形逗號分隔多筆（全形逗號／頓號亦接受），每段 trim；
+ * 解析審查月份欄（v1.88.13，純函式；v1.88.19 只認半形逗號）：
+ * 以半形逗號分隔多筆，每段 trim；
  * 格式須為 yyyy/mm，一位數月份正規化為兩位數（2026/9 → 2026/09）；
  * 去重、依曆年月排序。空白回錯誤；任一段格式不符即整欄報錯。
  */
@@ -110,13 +111,15 @@ export function parseReviewMonths(
 ): { months: string[]; error: string } {
   const raw = (text ?? "").trim();
   if (!raw) return { months: [], error: "審查月份不可空白" };
+  if (/[、，；\s]/.test(raw))
+    return { months: [], error: "審查月份多筆請以半形逗號分隔" };
   const months: string[] = [];
   for (const token of raw.split(MONTH_SEPARATORS)) {
     const t = token.trim();
     if (!t) continue;
     const n = normalizeReviewMonth(t);
     if (!n) {
-      return { months: [], error: `審查月份格式錯誤「${t}」（應為 yyyy/mm）` };
+      return { months: [], error: `審查月份格式錯誤「${t}」（應為 yyyy/mm，多筆以半形逗號分隔）` };
     }
     if (!months.includes(n)) months.push(n);
   }
@@ -136,6 +139,12 @@ export function parseAssignedUnits(
   if (raw === ASSIGNMENT_UNLIMITED_TEXT) {
     return { unlimited: true, unitIds: [], error: "" };
   }
+  if (/[、，；\s]/.test(raw))
+    return {
+      unlimited: false,
+      unitIds: [],
+      error: "負責單位多筆請以半形逗號分隔",
+    };
   const tokens = raw.split(UNIT_SEPARATORS).map((t) => t.trim()).filter(Boolean);
   if (tokens.includes(ASSIGNMENT_UNLIMITED_TEXT)) {
     return {

@@ -14,7 +14,7 @@ import {
   type ReviewInterval,
   type ScheduleCategory,
 } from "./scheduling";
-import { fmtYm, formatDateSlash, pad2 } from "./ym";
+import { fmtYm, formatDateSlash, normalizeReviewMonths, pad2 } from "./ym";
 
 /** 一個審查區間（起始月＋連續月數展開後的曆年月集合） */
 export interface ScheduleReviewInterval {
@@ -62,7 +62,34 @@ export function buildReviewIntervals(sched: {
   months: number[];
   frequency: ReviewFrequency | null;
   intervalMonths: ReviewInterval | null;
+  /** v1.88.19：臨時排程明確曆年月（有值時 temp 每個曆月各為一區） */
+  calendarMonths?: string[];
 }): ScheduleReviewInterval[] {
+  // v1.88.19：臨時排程有明確曆年月時，每個曆月各為一個 1 個月區間
+  //（13 個月可能跨曆年，months＋period 年無法表達）。
+  if (sched.category === "temp") {
+    const explicit = normalizeReviewMonths(sched.calendarMonths);
+    if (explicit.length > 0) {
+      const out: ScheduleReviewInterval[] = [];
+      for (const ym of explicit) {
+        const m = ym.match(/^(\d{4})\/(\d{2})$/);
+        if (!m) continue;
+        const y = Number(m[1]);
+        const mo = Number(m[2]);
+        out.push({
+          id: `${y}-${pad2(mo)}`,
+          startYear: y,
+          startMonth: mo,
+          endYear: y,
+          endMonth: mo,
+          label: reviewIntervalLabel(y, mo, y, mo),
+          months: [{ year: y, month: mo }],
+        });
+      }
+      out.sort((a, b) => a.startYear - b.startYear || a.startMonth - b.startMonth);
+      return out;
+    }
+  }
   const starts = parseScheduleMonths(sched.months);
   const len =
     sched.category === "temp"

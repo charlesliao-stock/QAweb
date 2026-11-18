@@ -123,6 +123,7 @@ import {
   type IntervalProgress,
   type ReviewInterval,
 } from "../lib/reviewActive";
+import { isTaskComplete } from "../lib/reviewProgress";
 import {
   effectiveThreshold,
   indicatorCodeOf,
@@ -190,6 +191,8 @@ interface ActiveRow {
   reviewMonthCount: number;
   /** 本人被指派的單位（分工表）；空＝未被指派 */
   assignedUnitIds: string[];
+  /** v1.88.19：本人被指派的審查月份（分工表 reviewMonths，"yyyy/mm"；空＝全部月份） */
+  assignedReviewMonths: string[];
   /** v1.59.1：檢視彈窗可見單位（null＝該列全部可見；否則只列這些單位） */
   modalUnitIds: ModalUnitScope;
   monthOptions: MonthOption[];
@@ -250,6 +253,8 @@ function schedLike(s: IndicatorSchedule) {
     frequency: s.frequency,
     intervalMonths: s.intervalMonths,
     refYear: s.refYear,
+    // v1.88.19：臨時排程明確曆年月（區間推導以此為準）
+    calendarMonths: s.calendarMonths,
   };
 }
 
@@ -352,6 +357,8 @@ export function AuditPage({
   const [execMonth, setExecMonth] = useState("");
   /** v1.63.1：開窗時載入該排程區間內實際存在的任務（單位＋年月），選項只列有任務者 */
   const [execTaskKeys, setExecTaskKeys] = useState<Set<string> | null>(null);
+  /** v1.88.19：已滿單位（已提交＋暫存 ≧ 應審件數；null＝尚未算出／讀取失敗，不反灰） */
+  const [execFullUnits, setExecFullUnits] = useState<Set<string> | null>(null);
   const [execBusy, setExecBusy] = useState(false);
   /** v1.64.0：已封存的區間摘要（文件 ID → 摘要） */
   const [summaries, setSummaries] = useState<Map<string, StoredSummary>>(new Map());
@@ -450,8 +457,11 @@ export function AuditPage({
           const s = parseIndicatorSchedule(d.data());
           if (s) schedules.push(s);
         });
-        // 分工表：指標 → 審查員 → 單位
-        const reviewerOf = new Map<string, Map<string, string[]>>();
+        // 分工表：指標 → 審查員 → 單位與被分派月份（v1.88.19：已滿判斷用 reviewMonths）
+        const reviewerOf = new Map<
+          string,
+          Map<string, { units: string[]; reviewMonths: string[] }>
+        >();
         aSnap.docs.forEach((d) => {
           const v = d.data() as Record<string, unknown>;
           const indicatorId =
@@ -461,9 +471,13 @@ export function AuditPage({
                 .map((it) => normalizeAssignmentItem(it))
                 .filter((it) => it !== null)
             : [];
-          const m = new Map<string, string[]>();
+          const m = new Map<string, { units: string[]; reviewMonths: string[] }>();
           items.forEach((it) => {
-            if (it) m.set(it.reviewerId, it.units.map((u) => u.unitId));
+            if (it)
+              m.set(it.reviewerId, {
+                units: it.units.map((u) => u.unitId),
+                reviewMonths: it.reviewMonths ?? [],
+              });
           });
           reviewerOf.set(indicatorId, m);
         });
@@ -604,6 +618,8 @@ export function AuditPage({
         interface Cand {
           sched: IndicatorSchedule;
           assigned: string[];
+          /** v1.88.19：分工表上本人被分派的審查月份（空＝全部月份） */
+          assignedReviewMonths: string[];
           state: AuditProgressState;
           interval: ReviewInterval;
         }
@@ -614,12 +630,14 @@ export function AuditPage({
           if (!ind) continue;
           let visible = false;
           const assigned: string[] = [];
+          let assignedReviewMonths: string[] = [];
           if (isAdmin || isSenior) visible = true;
           if (isReviewer) {
-            const units = reviewerOf.get(s.indicatorId)?.get(staffId);
-            if (units) {
+            const mine = reviewerOf.get(s.indicatorId)?.get(staffId);
+            if (mine) {
               visible = true;
-              assigned.push(...units);
+              assigned.push(...mine.units);
+              assignedReviewMonths = mine.reviewMonths;
             }
             // v1.59.1：任務指派聯集——臨時排程（加審／自審）無分工表，
             // 審查員改以 reviewTasks（reviewerId＝本人）所屬排程列出，
@@ -651,6 +669,7 @@ export function AuditPage({
           cands.push({
             sched: s,
             assigned: unionUnits(assigned),
+            assignedReviewMonths,
             state: c.state,
             interval: c.interval,
           });
@@ -773,7 +792,7 @@ export function AuditPage({
         if (!cancelled) setRecordsTruncated(recordsTruncated);
 
         const out: ActiveRow[] = [];
-        for (const { sched: s, assigned, state, interval: iv } of classified) {
+        for (const { sched: s, assigned, assignedReviewMonths, state, interval: iv } of classified) {
           const ind = indicators.get(s.indicatorId);
           if (!ind) continue;
           const keys = new Set(iv.allMonths.map(ymKey));
@@ -875,6 +894,7 @@ export function AuditPage({
             progress,
             reviewMonthCount,
             assignedUnitIds: assigned,
+            assignedReviewMonths,
             modalUnitIds,
             monthOptions,
             summarized,
@@ -1298,6 +1318,7 @@ export function AuditPage({
   function openExec(row: ActiveRow) {
     setExecRow(row);
     setExecTaskKeys(null);
+    setExecFullUnits(null);
     setExecBusy(false);
     const baseUnits =
       row.assignedUnitIds.length > 0 ? row.assignedUnitIds : row.sched.unitIds;
@@ -1312,6 +1333,8 @@ export function AuditPage({
     setExecMonth(defMonth ? `${defMonth.year}-${defMonth.month}` : "");
     // v1.63.1：排程清單的受審單位／月份不一定都有已展開的任務（分工表缺單位、
     // 尚未產生排程等），先查實際任務，避免點「審查」才跳「找不到審查任務」。
+    // v1.88.19：同場加算已滿單位——依分工表被分派月份，計已提交＋暫存，
+    // 對照應審件數；達標者下拉反灰（仍顯示），預設選項跳過已滿者。
     void (async () => {
       try {
         const db = getFirebaseDb();
@@ -1328,28 +1351,158 @@ export function AuditPage({
           ),
         );
         const keys = new Set<string>();
+        // 任務歸屬（單位＋年月 → 任務 id／配額組），供已提交／暫存比對
+        const taskIdsByKey = new Map<string, Set<string>>();
+        const quotaByKey = new Map<string, string>();
         snap.docs.forEach((d) => {
           const v = d.data() as Record<string, unknown>;
           const ym = `${Number(v.year ?? 0)}-${Number(v.month ?? 0)}`;
           if (!monthKeys.has(ym)) return;
-          keys.add(`${String(v.unitId ?? "")}|${ym}`);
+          const unit = String(v.unitId ?? "");
+          const k = `${unit}|${ym}`;
+          keys.add(k);
+          const ids = taskIdsByKey.get(k) ?? new Set<string>();
+          ids.add(d.id);
+          taskIdsByKey.set(k, ids);
+          if (typeof v.quotaGroupId === "string" && v.quotaGroupId)
+            quotaByKey.set(k, v.quotaGroupId);
         });
         setExecTaskKeys(keys);
+        // ---- 已滿計算（讀不到件數就不反灰，維持原行為） ----
+        let fullUnits: Set<string> | null = null;
+        let monthFull = (_unit: string, _ym: string) => false;
+        try {
+          // 被分派月份（空＝全部區間月份；"yyyy/mm" → "y-m" 鍵）
+          const assignedKeys = new Set<string>(
+            (row.assignedReviewMonths.length > 0
+              ? row.assignedReviewMonths.map((s) => {
+                  const [y, m] = s.split("/");
+                  return `${Number(y)}-${Number(m)}`;
+                })
+              : [...monthKeys]
+            ).filter((k) => monthKeys.has(k)),
+          );
+          const periodic =
+            row.sched.category === "year" ||
+            row.sched.category === "academic";
+          const counts = new Map<string, number>(); // "單位|y-m" → 已提交＋暫存
+          const countDoc = (data: Record<string, unknown>) => {
+            const unit = String(data.unitId ?? "");
+            const ym = `${Number(data.year ?? 0)}-${Number(data.month ?? 0)}`;
+            if (!assignedKeys.has(ym)) return;
+            const k = `${unit}|${ym}`;
+            const taskIds = taskIdsByKey.get(k);
+            const quota = quotaByKey.get(k);
+            const taskId =
+              typeof data.taskId === "string" ? data.taskId : "";
+            const groupId =
+              typeof data.quotaGroupId === "string" ? data.quotaGroupId : "";
+            const source =
+              typeof data.source === "string" ? data.source : "";
+            // 歸屬：該任務的紀錄／暫存、匯入紀錄、或同一週期配額組者才計入
+            if (
+              taskIds?.has(taskId) ||
+              source === "import" ||
+              (periodic &&
+                quota !== undefined &&
+                groupId !== "" &&
+                groupId === quota)
+            ) {
+              counts.set(k, (counts.get(k) ?? 0) + 1);
+            }
+          };
+          const yearChunks: number[][] = [];
+          for (let i = 0; i < years.length; i += 10)
+            yearChunks.push(years.slice(i, i + 10));
+          const [recSnaps, draftSnaps] = await Promise.all([
+            Promise.all(
+              yearChunks.map((ys) =>
+                getDocs(
+                  query(
+                    collection(db, "reviewRecords"),
+                    where("indicatorId", "==", row.indicatorId),
+                    where("year", "in", ys),
+                    limit(2000),
+                  ),
+                ),
+              ),
+            ),
+            Promise.all(
+              yearChunks.map((ys) =>
+                getDocs(
+                  query(
+                    collection(db, "reviewDrafts"),
+                    where("indicatorId", "==", row.indicatorId),
+                    where("year", "in", ys),
+                    limit(2000),
+                  ),
+                ),
+              ),
+            ),
+          ]);
+          recSnaps
+            .flat()
+            .forEach((s) =>
+              s.docs.forEach((d) =>
+                countDoc(d.data() as Record<string, unknown>),
+              ),
+            );
+          draftSnaps
+            .flat()
+            .forEach((s) =>
+              s.docs.forEach((d) =>
+                countDoc(d.data() as Record<string, unknown>),
+              ),
+            );
+          // 週期排程配額全區間共用：被分派月份合計達標即滿；
+          // 臨時排程每個月各算一件配額：被分派月份全部達標才滿。
+          monthFull = (unit, ym) =>
+            isTaskComplete(counts.get(`${unit}|${ym}`) ?? 0, row.sched.caseCount);
+          fullUnits = new Set<string>();
+          for (const u of baseUnits) {
+            const months = [...assignedKeys];
+            if (months.length === 0) continue;
+            const full = periodic
+              ? isTaskComplete(
+                  months.reduce(
+                    (sum, ym) => sum + (counts.get(`${u}|${ym}`) ?? 0),
+                    0,
+                  ),
+                  row.sched.caseCount,
+                )
+              : months.every((ym) => monthFull(u, ym));
+            if (full) fullUnits.add(u);
+          }
+        } catch {
+          fullUnits = null;
+        }
+        setExecFullUnits(fullUnits);
         const units = baseUnits;
         const pick = row.sched.unlimitedUnits
           ? [""]
-          : units.filter((u) =>
-              row.monthOptions.some((o) => keys.has(`${u}|${o.year}-${o.month}`)),
+          : units.filter(
+              (u) =>
+                row.monthOptions.some((o) =>
+                  keys.has(`${u}|${o.year}-${o.month}`),
+                ) && !fullUnits?.has(u),
             );
-        const unit = row.sched.unlimitedUnits ? "" : (pick[0] ?? units[0] ?? "");
+        const unit = row.sched.unlimitedUnits
+          ? ""
+          : (pick[0] ??
+            units.filter((u) => !fullUnits?.has(u))[0] ??
+            units[0] ??
+            "");
         setExecUnit(unit);
-        const m = row.monthOptions.find((o) =>
-          keys.has(`${unit}|${o.year}-${o.month}`),
+        const m = row.monthOptions.find(
+          (o) =>
+            keys.has(`${unit}|${o.year}-${o.month}`) &&
+            !monthFull(unit, `${o.year}-${o.month}`),
         );
         if (m) setExecMonth(`${m.year}-${m.month}`);
       } catch {
         // 讀不到就維持原行為（開始審查時再檢查）
         setExecTaskKeys(null);
+        setExecFullUnits(null);
       }
     })();
   }
@@ -1358,6 +1511,11 @@ export function AuditPage({
     // v1.51.0：不限單位排程 execUnit 為 ""（不用選單位），只檢查月份
     if (!execRow || !execMonth) return;
     if (!execRow.sched.unlimitedUnits && !execUnit) return;
+    // v1.88.19：已滿單位反灰不可選；萬一仍選到（例如件數在開窗後才滿），擋下不開啟
+    if (!execRow.sched.unlimitedUnits && execFullUnits?.has(execUnit)) {
+      onAction("該單位本區間審查件數已滿，請改選其他單位");
+      return;
+    }
     const [y, m] = execMonth.split("-").map(Number);
     if (!y || !m) return;
     setExecBusy(true);
@@ -1941,7 +2099,6 @@ export function AuditPage({
                       <th>審查日期</th>
                       <th>審查人員</th>
                       <th>受審人員</th>
-                      <th>審核項目</th>
                       <th>正確率</th>
                       <th>個人結果</th>
                     </tr>
@@ -1953,7 +2110,6 @@ export function AuditPage({
                         <td data-label="審查日期">{fmtYmd(record.reviewDate)}</td>
                         <td data-label="審查人員">{staffLabel(record.reviewerEmpNo, record.reviewerName)}</td>
                         <td data-label="受審人員">{staffLabel(record.reviewedPersonEmpNo, record.reviewedPersonName)}</td>
-                        <td data-label="審核項目">{record.auditItem || "—"}</td>
                         <td data-label="正確率">{record.rate == null ? "—" : `${record.rate}%`}</td>
                         <td data-label="個人結果">
                           <div className="review-record-actions">
@@ -2222,12 +2378,26 @@ export function AuditPage({
                           ),
                       )
                       .map((c) => (
-                        <option key={c} value={c}>
+                        <option
+                          key={c}
+                          value={c}
+                          disabled={execFullUnits?.has(c) ?? false}
+                        >
                           {execRow.unitNameOf(c)}（{c}）
+                          {execFullUnits?.has(c) ? "（已滿）" : ""}
                         </option>
                       ))}
                   </select>
                 </div>
+              )}
+              {execFullUnits && execFullUnits.size > 0 && !execRow.sched.unlimitedUnits && (
+                <p className="settings-note" style={{ color: "#b3372f" }}>
+                  以下單位在本區間被分派月份的審查件數已滿（已提交＋暫存），無法再選：
+                  {[...execFullUnits]
+                    .map((c) => execRow.unitNameOf(c))
+                    .join("、")}
+                  。
+                </p>
               )}
               {execTaskKeys && !execRow.sched.unlimitedUnits && (() => {
                 const base =
@@ -2286,6 +2456,8 @@ export function AuditPage({
                 disabled={
                   execBusy ||
                   (!execRow.sched.unlimitedUnits && !execUnit) ||
+                  (!execRow.sched.unlimitedUnits &&
+                    (execFullUnits?.has(execUnit) ?? false)) ||
                   !execMonth
                 }
                 onClick={confirmExec}

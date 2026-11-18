@@ -67,7 +67,9 @@ import {
   categoryLabel,
   cycleMonths,
   periodLabel,
+  tempCycleMonths,
   type CycleCategory,
+  type TempCycleMonth,
 } from "../lib/cycle";
 import {
   ASSIGNMENT_UNIT_FILTER_UNLIMITED,
@@ -304,7 +306,7 @@ export function assignmentPillState(
 
 /** 加審／自審預覽任務數＝月份數 × 單位數 × 審核員數 */
 export function previewTempTaskCount(
-  months: number[],
+  months: readonly unknown[],
   unitIds: string[],
   reviewerIds: string[],
 ): number {
@@ -1916,6 +1918,60 @@ function MonthPicker({
   );
 }
 
+/**
+ * 臨時排程月份選擇器（v1.88.19）：選項為明確曆年月（13 個），
+ * 同月份數字可能出現兩次（如 2026/1 與 2027/1），故以 "yyyy/mm" 為鍵，
+ * 顯示年／月；順序依傳入 options（年度 1–12＋次年 1 月；學年度 8 月起）。
+ */
+function CalendarMonthPicker({
+  options,
+  selected,
+  onChange,
+  disabled,
+}: {
+  options: TempCycleMonth[];
+  selected: TempCycleMonth[];
+  onChange: (months: TempCycleMonth[]) => void;
+  disabled: boolean;
+}) {
+  const sel = useMemo(
+    () => new Set(selected.map((m) => `${m.year}/${pad2(m.month)}`)),
+    [selected],
+  );
+  function toggle(opt: TempCycleMonth) {
+    const key = `${opt.year}/${pad2(opt.month)}`;
+    const next = new Set(sel);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    onChange(
+      options
+        .filter((o) => next.has(`${o.year}/${pad2(o.month)}`)),
+    );
+  }
+  return (
+    <div className="month-grid">
+      {options.map((o) => {
+        const key = `${o.year}/${pad2(o.month)}`;
+        const checked = sel.has(key);
+        return (
+          <label
+            key={key}
+            className={`check-row month-cell${checked ? " checked" : ""}`}
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              disabled={disabled}
+              onChange={() => toggle(o)}
+            />
+            <span>{fmtYm(o.year, o.month)}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
 /** 件數輸入（僅接受 ≥1 整數或清空＝未設定） */
 function useCaseCountInput(initial = "") {
   const [value, setValue] = useState(initial);
@@ -2278,6 +2334,8 @@ function ScheduleEditor({
   const [prev, setPrev] = useState<IndicatorSchedule | null>(null);
   const [loadingPeriod, setLoadingPeriod] = useState(true);
   const [saving, setSaving] = useState(false);
+  /** v1.88.19：已確認刪除、待按「儲存設定」才真正刪除（未儲存就離開＝不刪除） */
+  const [pendingDelete, setPendingDelete] = useState(false);
 
   const monthOrder = useMemo(
     () => cycleMonths(category, period),
@@ -2290,6 +2348,7 @@ function ScheduleEditor({
 
   useEffect(() => {
     let cancelled = false;
+    setPendingDelete(false); // v1.88.19：切換期間時清除待刪除標記
     (async () => {
       setLoadingPeriod(true);
       try {
@@ -2369,6 +2428,11 @@ function ScheduleEditor({
   }
 
   async function handleSave() {
+    // v1.88.19：已標記刪除時，「儲存設定」就是執行刪除（不寫回設定）
+    if (pendingDelete) {
+      await performDelete();
+      return;
+    }
     if (months.length === 0) {
       onAction("請至少選擇一個審查月份");
       return;
@@ -2429,10 +2493,20 @@ function ScheduleEditor({
       onAction("此排程包含其他單位，僅能由管理員刪除");
       return;
     }
+    // v1.88.19：先確認，確認後只標記待刪除，按「儲存設定」才真正刪除；
+    // 未儲存就離開此頁，設定保持不變。
     const ok = window.confirm(
-      `確定刪除 ${periodLabel(category, period)} 的排程設定？將一併刪除該排程的未完成任務；已完成任務與已提交的審查紀錄不受影響。`,
+      `確定刪除 ${periodLabel(category, period)} 的排程設定？將一併刪除該排程的未完成任務；已完成任務與已提交的審查紀錄不受影響。按「儲存設定」後才真正刪除。`,
     );
     if (!ok) return;
+    setPendingDelete(true);
+    onAction(
+      `已標記刪除 ${periodLabel(category, period)} 的排程設定，按「儲存設定」後才真正刪除；未儲存就離開則不刪除。`,
+    );
+  }
+
+  async function performDelete() {
+    setSaving(true);
     try {
       const db = getFirebaseDb();
       const { deletedTasks, keptDoneTasks } = await deleteScheduleWithTasks(
@@ -2448,6 +2522,8 @@ function ScheduleEditor({
       onSaved();
     } catch (error) {
       onAction(`刪除失敗：${toErrorMessage(error)}`);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -2659,10 +2735,30 @@ function ScheduleEditor({
                   disabled={saving}
                   onClick={handleSave}
                 >
-                  {saving ? "儲存中…" : "儲存設定"}
+                  {saving
+                    ? pendingDelete
+                      ? "刪除中…"
+                      : "儲存中…"
+                    : pendingDelete
+                      ? "儲存設定（將刪除此期間設定）"
+                      : "儲存設定"}
                 </button>
               )}
-              {canEdit && exists && !(restricted && (otherUnitIds.length > 0 || unlimited)) && (
+              {canEdit && exists && pendingDelete && (
+                <>
+                  <span className="settings-note" style={{ color: "#b3372f" }}>
+                    已標記刪除此期間設定，按「儲存設定」後才真正刪除；未儲存就離開則不刪除。
+                  </span>
+                  <button
+                    className="button button-outline"
+                    disabled={saving}
+                    onClick={() => setPendingDelete(false)}
+                  >
+                    取消刪除
+                  </button>
+                </>
+              )}
+              {canEdit && exists && !pendingDelete && !(restricted && (otherUnitIds.length > 0 || unlimited)) && (
                 <button className="button button-ghost" onClick={handleDelete}>
                   <Trash2 size={15} /> 刪除此期間設定
                 </button>
@@ -2726,8 +2822,14 @@ function AddAuditDialog({
   const restrictedUnitCode = restricted
     ? [...restrictedUnitCodes!][0] ?? ""
     : "";
-  const monthOrder = useMemo(() => cycleMonths(cycle, ""), [cycle]);
-  const [months, setMonths] = useState<number[]>([]);
+  // v1.88.19：臨時排程月份選項＝該年度／學年度 12 個月＋結束後下一個月，
+  // 合計 13 個明確曆年月（年度：filterYear/1–12＋(filterYear+1)/1；
+  // 學年度：filterYear/8 起連續 12 個月＋次年 8 月）。
+  const monthOptions = useMemo(
+    () => tempCycleMonths(cycle, filterYear),
+    [cycle, filterYear],
+  );
+  const [months, setMonths] = useState<TempCycleMonth[]>([]);
   const caseCount = useCaseCountInput();
   const [selUnits, setSelUnits] = useState<string[]>(() => {
     const ids = row.schedule?.unitIds ?? [];
@@ -3057,7 +3159,7 @@ function AddAuditDialog({
   /** v1.60.0：點某個失敗年月 → 預填下一個月（完整年月）＋該月未達單位；件數與審查員由使用者補填 */
   function applyBelowThresholdRow(r: BelowThresholdRow) {
     const target = nextCalendarMonth(r.year, r.month);
-    setMonths([target.month]);
+    setMonths([{ year: target.year, month: target.month }]);
     setPickedYear(target.year);
     // v1.88.5：單位排程者只帶入自己單位。
     const ownUnits = restricted
@@ -3149,10 +3251,17 @@ function AddAuditDialog({
     }
     // v1.60.0：短時間內相同內容（同月份、同單位集合）的加審擋下，
     // 避免重複建立；不同月份／單位／隔天以上的正常第二次加審不受影響
+    // v1.88.19：月份為明確曆年月（13 個月可跨曆年），重複比對以曆年月為準。
+    const dialogCalendarMonths = months.map(
+      (m) => `${m.year}/${pad2(m.month)}`,
+    );
     const dup = findDuplicateTempSchedule(
       existingTemps,
       {
-        months: [...months].sort((a, b) => a - b),
+        months: [...new Set(months.map((m) => m.month))].sort(
+          (a, b) => a - b,
+        ),
+        calendarMonths: dialogCalendarMonths,
         unitIds: items.flatMap((it) => it.units.map((u) => u.unitId)),
         unlimitedUnits: items.some((it) => it.unlimitedUnits === true),
         selfReview: false,
@@ -3164,7 +3273,19 @@ function AddAuditDialog({
       const dupTime = Number.isNaN(d.getTime())
         ? ""
         : `（建立於 ${fmtDateTime(d)}）`;
-      const msg = `已有相同內容的加審${dupTime}建立（${[...dup.months].sort((a, b) => a - b).map((m) => MONTH_LABELS[m - 1]).join("、")}・${dup.unlimitedUnits ? "不限單位" : `${dup.unitIds.length} 單位`}），請先查閱既有加審，確認是否重複。`;
+      const dupMonthsLabel =
+        dup.calendarMonths && dup.calendarMonths.length > 0
+          ? dup.calendarMonths
+              .map((ym) => {
+                const p = reviewMonthToYm(ym);
+                return p ? fmtYm(p.year, p.month) : ym;
+              })
+              .join("、")
+          : [...dup.months]
+              .sort((a, b) => a - b)
+              .map((m) => MONTH_LABELS[m - 1])
+              .join("、");
+      const msg = `已有相同內容的加審${dupTime}建立（${dupMonthsLabel}・${dup.unlimitedUnits ? "不限單位" : `${dup.unitIds.length} 單位`}），請先查閱既有加審，確認是否重複。`;
       setSubmitError(msg);
       onAction(msg);
       return;
@@ -3172,8 +3293,8 @@ function AddAuditDialog({
     // v1.88.16：三元組重疊檢測——同一位審查員、同單位、同一月份重複指派時
     // 跳提醒、拒絕建立（整張表都不存）。對話框的列無 reviewMonths，
     // 有效月份＝全域審查月份＋目標年份；不限單位（unitId ""）與具體單位不算重疊。
-    const dialogYear = pickedYear ?? filterYear;
-    const dialogMonths = months.map((m) => `${dialogYear}/${pad2(m)}`);
+    // v1.88.19：三元組比對用明確曆年月（dialogCalendarMonths 已在上方算出）。
+    const dialogMonths = dialogCalendarMonths;
     const tripleDups = findDuplicateAssignmentTriples(items, () => dialogMonths);
     if (tripleDups.length > 0) {
       const lines = tripleDups.slice(0, 10).map((d) => {
@@ -3198,7 +3319,11 @@ function AddAuditDialog({
       const { taskCount } = await createTempSchedule(db, {
         indicatorId: row.indicatorId,
         unitIds: [],
-        months: [...months].sort((a, b) => a - b),
+        months: [...new Set(months.map((m) => m.month))].sort(
+          (a, b) => a - b,
+        ),
+        // v1.88.19：明確曆年月（13 個月可跨曆年），任務曆年以此為準。
+        calendarMonths: dialogCalendarMonths,
         caseCount: parseCaseCount(Number(caseCount.value)),
         reviewerIds: [],
         items,
@@ -3225,7 +3350,7 @@ function AddAuditDialog({
     <>
       <Modal
         title={`加審：${row.name}`}
-        note={`建立臨時排程並直接產生任務（${pickedYear ?? filterYear}年・${cycle === "academic" ? "學年度" : "年度"}月份）`}
+        note={`建立臨時排程並直接產生任務（${cycle === "academic" ? "學年度" : "年度"}月份：${fmtYm(monthOptions[0].year, monthOptions[0].month)}～${fmtYm(monthOptions[monthOptions.length - 1].year, monthOptions[monthOptions.length - 1].month)}，共 13 個月可選）`}
         onClose={onClose}
         medium
       >
@@ -3234,12 +3359,16 @@ function AddAuditDialog({
           審查月份（可複選）
           {months.length > 0 && `：已選 ${months.length} 個月`}
         </label>
-        <MonthPicker
-          order={monthOrder}
+        <CalendarMonthPicker
+          options={monthOptions}
           selected={months}
           onChange={setMonths}
           disabled={false}
         />
+        <p className="settings-note">
+          提供該{cycle === "academic" ? "學年度" : "年度"}全部 12
+          個月＋結束後下一個月，共 13 個月可選。
+        </p>
         <div className="form-actions" style={{ marginTop: 8 }}>
           <button
             type="button"
@@ -3641,7 +3770,12 @@ function SelfAuditDialog({
   );
   // v1.17：自審指標選擇器只列「啟用」的指標
   const activeIndicators = indicators.filter((i) => i.status === "啟用");
-  const [months, setMonths] = useState<number[]>([]);
+  // v1.88.19：自審同為臨時排程，月份選項＝今年 12 個月＋明年 1 月，共 13 個月。
+  const selfMonthOptions = useMemo(
+    () => tempCycleMonths("year", new Date().getFullYear()),
+    [],
+  );
+  const [months, setMonths] = useState<TempCycleMonth[]>([]);
   const caseCount = useCaseCountInput();
   const [reviewerIds, setReviewerIds] = useState<string[]>(() =>
     defaultSelfAuditReviewers(unitUsers, userUnitCode),
@@ -3682,7 +3816,11 @@ function SelfAuditDialog({
       const { taskCount } = await createTempSchedule(db, {
         indicatorId,
         unitIds: [userUnitCode],
-        months: [...months].sort((a, b) => a - b),
+        months: [...new Set(months.map((m) => m.month))].sort(
+          (a, b) => a - b,
+        ),
+        // v1.88.19：明確曆年月（13 個月可跨曆年），任務曆年以此為準。
+        calendarMonths: months.map((m) => `${m.year}/${pad2(m.month)}`),
         caseCount: parseCaseCount(cc),
         reviewerIds: [...reviewerIds],
         selfReview: true,
@@ -3731,12 +3869,15 @@ function SelfAuditDialog({
           審查月份（可複選）
           {months.length > 0 && `：已選 ${months.length} 個月`}
         </label>
-        <MonthPicker
-          order={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]}
+        <CalendarMonthPicker
+          options={selfMonthOptions}
           selected={months}
           onChange={setMonths}
           disabled={false}
         />
+        <p className="settings-note">
+          提供今年全部 12 個月＋明年 1 月，共 13 個月可選。
+        </p>
       </div>
 
       <div className="form-field">

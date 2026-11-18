@@ -535,6 +535,8 @@ function MemberChecklist({
   idLabel = "職編／代號",
   nameLabel = "姓名／名稱",
   columns = [],
+  /** v1.88.19：置於職編／姓名之前的欄位（角色成員表照「品管組、角色、單位、職編、姓名」順序用） */
+  leadingColumns = [],
   // v1.88.16：可選的操作欄（職稱成員管理合併表用；未傳 onRowAction 時該格顯示「—」）
   actionLabel,
   rowActionLabel,
@@ -553,6 +555,7 @@ function MemberChecklist({
   idLabel?: string;
   nameLabel?: string;
   columns?: { key: string; label: string }[];
+  leadingColumns?: { key: string; label: string }[];
   actionLabel?: string;
   rowActionLabel?: string;
   onRowAction?: (id: string) => void;
@@ -585,6 +588,7 @@ function MemberChecklist({
                       aria-label="全選"
                     />
                   </th>
+                  {leadingColumns.map((column) => <th key={column.key}>{column.label}</th>)}
                   <th>{idLabel}</th>
                   <th>{nameLabel}</th>
                   {columns.map((column) => <th key={column.key}>{column.label}</th>)}
@@ -602,6 +606,9 @@ function MemberChecklist({
                         aria-label={`選擇 ${it.id}`}
                       />
                     </td>
+                    {leadingColumns.map((column) => (
+                      <td key={column.key}>{it.fields?.[column.key] || "—"}</td>
+                    ))}
                     <td>
                       <b>{it.id}</b>
                     </td>
@@ -856,6 +863,10 @@ export function GroupsPage({
   const [titleMemberChecked, setTitleMemberChecked] = useState<string[]>([]);
   // v1.88.16：成員表上方搜尋方框（搜現有成員，職編／姓名關鍵字；與下方「加入人員」搜非成員的搜尋框分開）
   const [titleMemberSearch, setTitleMemberSearch] = useState("");
+  /** v1.88.19：職稱成員單位篩選器——第一次按「搜尋」才生效，之後改選即時生效（比照「人員」頁籤 appliedUserUnitFilter） */
+  const [titleUnitFilter, setTitleUnitFilter] = useState("");
+  const [appliedTitleUnitFilter, setAppliedTitleUnitFilter] = useState("");
+  const [titleUnitSearched, setTitleUnitSearched] = useState(false);
   const [titleAddSearch, setTitleAddSearch] = useState("");
   const [titleAddChecked, setTitleAddChecked] = useState<string[]>([]);
   const [titleBusy, setTitleBusy] = useState(false);
@@ -1018,15 +1029,18 @@ export function GroupsPage({
     [users, titles, managingTitleId],
   );
   // v1.88.16：成員表搜尋過濾（職編／姓名關鍵字；只影響顯示，不清除勾選）
+  // v1.88.19：再加單位篩選（所屬單位；第一次按「搜尋」才生效，之後即時）
   const filteredTitleMembers = useMemo(() => {
     const kw = titleMemberSearch.trim().toLowerCase();
-    if (kw === "") return titleMembers;
     return titleMembers.filter(
       (u) =>
-        u.staffId.toLowerCase().includes(kw) ||
-        u.name.toLowerCase().includes(kw),
+        (appliedTitleUnitFilter === "" ||
+          u.unitCode === appliedTitleUnitFilter) &&
+        (kw === "" ||
+          u.staffId.toLowerCase().includes(kw) ||
+          u.name.toLowerCase().includes(kw)),
     );
-  }, [titleMembers, titleMemberSearch]);
+  }, [titleMembers, titleMemberSearch, appliedTitleUnitFilter]);
   const titleCandidates = useMemo(() => {
     const title = titles.find((item) => item.id === managingTitleId);
     if (!title) return [];
@@ -2335,8 +2349,14 @@ export function GroupsPage({
     resetMembershipAddArea();
   }
 
-  /** 點[刪除]：直接刪列，無確認；只改表單 state，儲存才生效 */
+  /** 點[刪除]：先確認；只改表單 state，按「儲存修改」才生效（v1.88.19 補確認） */
   function removeMembershipByGroup(groupId: string) {
+    if (
+      !window.confirm(
+        `確定刪除「${groupNameOf(groupId)}」的品管組與角色？按「儲存修改」後才真正刪除。`,
+      )
+    )
+      return;
     setUserForm((prev) => ({
       ...prev,
       memberships: removeMembership(prev.memberships, groupId),
@@ -4577,23 +4597,24 @@ export function GroupsPage({
           note="勾選＋全選可批次移除（同時從 memberships 移除該角色）"
           idLabel="職編"
           nameLabel="姓名"
-          columns={[
-            { key: "unitGroup", label: "單位／品管組" },
+          // v1.88.19：B——「單位／品管組」合併欄拆成兩欄，欄位順序照
+          // 「品管組、角色、單位、職編、姓名」（勾選框仍在最左、批次移出保留）
+          leadingColumns={[
+            { key: "group", label: "品管組" },
             { key: "role", label: "角色" },
+            { key: "unit", label: "單位" },
           ]}
           items={roleMembers.map((u) => ({
             id: u.staffId,
             label: maskName(u.name),
             fields: {
-              unitGroup: [
-                unitLabelOf(u.unitCode),
-                [...new Set(
-                  u.memberships
-                    .filter((membership) => membership.roles.includes(managingRole.name))
-                    .map((membership) => groupNameOf(membership.groupId)),
-                )].join("、"),
-              ].filter(Boolean).join("／"),
+              group: [...new Set(
+                u.memberships
+                  .filter((membership) => membership.roles.includes(managingRole.name))
+                  .map((membership) => groupNameOf(membership.groupId)),
+              )].join("、"),
               role: managingRole.name,
+              unit: unitLabelOf(u.unitCode),
             },
           }))}
           checked={roleMemberChecked}
@@ -4692,6 +4713,37 @@ export function GroupsPage({
                 onChange={(e) => setTitleMemberSearch(e.target.value)}
               />
             </div>
+            {/* v1.88.19：單位篩選器（同「人員」頁籤列全部單位；預設不篩選；
+                第一次按「搜尋」才生效，之後改選單位即時生效） */}
+            <div style={{ maxWidth: 240, flex: "1 1 180px" }}>
+              <FormSelect
+                label="單位"
+                value={titleUnitFilter}
+                aria-label="依單位篩選職稱成員"
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setTitleUnitFilter(v);
+                  if (titleUnitSearched) setAppliedTitleUnitFilter(v);
+                }}
+              >
+                <option value="">全部單位</option>
+                {units.map((unit) => (
+                  <option key={unit.code} value={unit.code}>
+                    {unit.name}（{unit.code}）
+                  </option>
+                ))}
+              </FormSelect>
+            </div>
+            <button
+              type="button"
+              className="button button-outline"
+              onClick={() => {
+                setAppliedTitleUnitFilter(titleUnitFilter);
+                setTitleUnitSearched(true);
+              }}
+            >
+              搜尋
+            </button>
             <BatchImporter
               sampleBaseName={`職稱「${managingTitle.name}」成員範例`}
               sampleRows={[TITLE_MEMBER_HEADER, ["0000001", "王小明"]]}
@@ -4716,6 +4768,8 @@ export function GroupsPage({
             idLabel="職編"
             nameLabel="姓名"
             columns={[
+              // v1.88.19：「單位」＝所屬單位，只顯示代號；「負責單位」維持督導負責單位
+              { key: "homeUnit", label: "單位" },
               { key: "unit", label: "負責單位" },
             ]}
             actionLabel="操作"
@@ -4737,6 +4791,7 @@ export function GroupsPage({
               id: u.staffId,
               label: maskName(u.name),
               fields: {
+                homeUnit: u.unitCode || "—",
                 unit: isSupervisorTitle
                   ? supervisorUnitsLabel(u.titleUnitCodes)
                   : "—",

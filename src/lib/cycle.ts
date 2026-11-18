@@ -66,6 +66,38 @@ export function cycleMonths(category: CycleCategory, _period: string): number[] 
   return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 }
 
+/** 臨時排程月份選項的一個曆月（v1.88.19） */
+export interface TempCycleMonth {
+  year: number;
+  month: number;
+}
+
+/**
+ * 臨時排程（加審／自審）月份選項（v1.88.19，純函式）：
+ * 該年度／學年度的全部 12 個月，再加結束後的下一個月，合計 13 個月。
+ * - 年度（filterYear 為曆年）：filterYear/1–12 ＋ (filterYear+1)/1；
+ * - 學年度（filterYear 為曆年，學年度自該年 8 月起）：filterYear/8 起連續
+ *   12 個月（至次年 7 月）＋次年 8 月。
+ * 回傳依曆年月排序（學年度即 8 月制順序）。
+ */
+export function tempCycleMonths(
+  cycle: "year" | "academic",
+  filterYear: number,
+): TempCycleMonth[] {
+  const out: TempCycleMonth[] = [];
+  let year = filterYear;
+  let month = cycle === "academic" ? 8 : 1;
+  for (let i = 0; i < 13; i++) {
+    out.push({ year, month });
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+  return out;
+}
+
 /**
  * 週期月份 → 曆年。
  * 學年度 period "115"：8–12 月 → 2026，1–7 月 → 2027；
