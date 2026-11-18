@@ -28,7 +28,7 @@ a("產物：xlsx 獨立 chunk 存在", !!xlsxChunk);
 const mainSize = mainJs ? statSync(resolve(ROOT, "dist/assets", mainJs)).size : Infinity;
 const xlsxSize = xlsxChunk ? statSync(resolve(ROOT, "dist/assets", xlsxChunk)).size : 0;
 a(`產物：首屏 JS ${mainSize} < 1,200,000（改前 1,493,698）`, mainSize < 1200000);
-a(`產物：xlsx chunk 約 430KB（${xlsxSize}）`, xlsxSize > 400000 && xlsxSize < 460000);
+a(`產物：xlsx chunk 約 500KB（${xlsxSize}）`, xlsxSize > 400000 && xlsxSize < 520000);
 const mainText = mainJs ? readFileSync(resolve(ROOT, "dist/assets", mainJs), "utf8") : "";
 a("產物：首屏 JS 不含 SheetJS 標記", !mainText.includes("SheetJS"));
 const xlsxText = xlsxChunk ? readFileSync(resolve(ROOT, "dist/assets", xlsxChunk), "utf8") : "";
