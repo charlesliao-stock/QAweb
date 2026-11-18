@@ -37,3 +37,41 @@ export function shiftYm(
   const total = year * 12 + (month - 1) + n;
   return { year: Math.floor(total / 12), month: (total % 12) + 1 };
 }
+
+/**
+ * 審查月份「yyyy/mm」正規化（v1.88.13）：
+ * 接受一位數月份並補零（"2026/9" → "2026/09"）；格式不符回 null。
+ * 前後空白會先 trim；年份須為 4 位數、月份 1–12。
+ */
+export function normalizeReviewMonth(value: string): string | null {
+  const m = /^\s*(\d{4})\/(\d{1,2})\s*$/.exec(value ?? "");
+  if (!m) return null;
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return null;
+  return `${m[1]}/${pad2(month)}`;
+}
+
+/**
+ * 審查月份清單正規化（v1.88.13）：只留合法的 "yyyy/mm"，去重、依曆年月排序。
+ * 非字串／非法值直接丟棄（不報錯，呼叫端驗證另行處理）。
+ */
+export function normalizeReviewMonths(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  const out = new Set<string>();
+  for (const v of values) {
+    if (typeof v !== "string") continue;
+    const n = normalizeReviewMonth(v);
+    if (n) out.add(n);
+  }
+  return [...out].sort();
+}
+
+/** 審查月份「yyyy/mm」→ { year, month }（非法回 null） */
+export function reviewMonthToYm(
+  value: string,
+): { year: number; month: number } | null {
+  const n = normalizeReviewMonth(value);
+  if (!n) return null;
+  const [y, m] = n.split("/");
+  return { year: Number(y), month: Number(m) };
+}

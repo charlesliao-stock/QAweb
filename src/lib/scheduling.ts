@@ -19,7 +19,7 @@ import {
   periodLabel,
   type CycleCategory,
 } from "./cycle";
-import { pad2, shiftYm } from "./ym";
+import { normalizeReviewMonths, pad2, shiftYm } from "./ym";
 
 /** 審查頻次：一年幾次（v1.18 排程設定下拉） */
 export type ReviewFrequency = 2 | 3 | 4;
@@ -239,6 +239,12 @@ export interface AssignmentItem {
    * 任務產生時每月份生一筆 unitId: "" 的任務。未設＝有單位。
    */
   unlimitedUnits?: boolean;
+  /**
+   * 審查月份（v1.88.13）："yyyy/mm" 字串陣列，排序去重；
+   * 一位審查員名下所有單位共用同一組月份。
+   * 缺值／空陣列＝全部月份（舊資料相容，不需回填）。
+   */
+  reviewMonths?: string[];
 }
 
 /**
@@ -270,9 +276,13 @@ export function normalizeAssignmentItem(raw: unknown): AssignmentItem | null {
       .map((unitId) => ({ unitId, caseCount: null as number | null }));
   }
   // v1.51.0：不限單位旗標（只在 true 時寫入，避免舊文件被改寫形狀）
-  return r.unlimitedUnits === true
-    ? { reviewerId, units, unlimitedUnits: true as const }
-    : { reviewerId, units };
+  // v1.88.13：審查月份（缺值／空陣列＝全部月份，舊資料相容）
+  const reviewMonths = normalizeReviewMonths(r.reviewMonths);
+  const base: AssignmentItem =
+    r.unlimitedUnits === true
+      ? { reviewerId, units, unlimitedUnits: true as const }
+      : { reviewerId, units };
+  return reviewMonths.length > 0 ? { ...base, reviewMonths } : base;
 }
 
 /** 單位／審查員設定（每支指標一份，不分年度） */
@@ -280,6 +290,20 @@ export interface IndicatorAssignment {
   indicatorId: string;
   items: AssignmentItem[];
   updatedAt: unknown;
+}
+
+/**
+ * 審查月份合併（v1.88.13）：同一審查員多列／多次加入時月份取聯集；
+ * 既有為空（＝全部月份，舊資料）時，新填的月份直接取代（不再是全部月份）。
+ * 回傳排序去重的 "yyyy/mm" 陣列。
+ */
+export function mergeReviewMonths(
+  prev: string[] | undefined,
+  next: string[],
+): string[] {
+  const p = normalizeReviewMonths(prev);
+  if (p.length === 0) return normalizeReviewMonths(next);
+  return normalizeReviewMonths([...p, ...next]);
 }
 
 export type ReviewTaskStatus = "pending" | "done" | "locked";
@@ -435,6 +459,15 @@ export function buildReviewTasks(
   const tasks: Omit<ReviewTask, "createdAt" | "completedAt">[] = [];
   for (const month of input.months) {
     for (const it of input.items) {
+      // v1.88.13：審查月份過濾——該審查員有指定月份時，只對清單內的曆月
+      // 產生任務；缺值／空陣列＝全部月份（舊資料相容）。
+      const months = normalizeReviewMonths(it.reviewMonths);
+      if (
+        months.length > 0 &&
+        !months.includes(`${input.year}/${pad2(month)}`)
+      ) {
+        continue;
+      }
       // v1.51.0：不限單位項目每月份生一筆 unitId: "" 的任務（不固定單位）
       if (it.unlimitedUnits === true) {
         tasks.push({
@@ -914,6 +947,10 @@ export async function createTempSchedule(
           // v1.51.0：不限單位旗標透傳（units 為空）；NA 加審必須走 items 分支
           ...(it.unlimitedUnits === true
             ? { unlimitedUnits: true as const }
+            : {}),
+          // v1.88.13：審查月份透傳（加審任務產生時同樣按月份過濾）
+          ...(normalizeReviewMonths(it.reviewMonths).length > 0
+            ? { reviewMonths: normalizeReviewMonths(it.reviewMonths) }
             : {}),
           units: it.units
             .filter((u) => typeof u.unitId === "string" && u.unitId)

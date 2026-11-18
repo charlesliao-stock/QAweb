@@ -96,9 +96,11 @@ import { TrendChart } from "../components/TrendChart";
 import {
   calendarYearsOf,
   expandMonthRangeColumns,
+  expandScheduleIntervalColumns,
   type AnalysisGranularity,
   type AnalysisPeriodColumn,
 } from "../lib/analysisPeriod";
+import { buildReviewIntervals } from "../lib/scheduleIntervals";
 import {
   formatPassRate,
   causeRecordEntries,
@@ -115,6 +117,7 @@ import {
   sectionPassRateOf,
   sectionUnitPassRateOf,
   transposePersonOptionRows,
+  unitMonthsForDrill,
   unitPassRate,
   unitPeriodPassRate,
   unitScoringBreakdownRows,
@@ -723,10 +726,54 @@ export function ResultsPage({
   }, []);
 
   const rangeValid = Boolean(startMonth && endMonth && startMonth <= endMonth);
-  // 期間欄只取所選年月範圍內的月份，再依月／季／半年／年分組。
+  /**
+   * v1.88.13：月模式的欄位來源——指標頁籤用該指標排程的區間，
+   * 分組別／單位頁籤用可見排程區間的聯集（起點不同即聯集、去重排序）；
+   * 整個系統切點一致（三個頁籤同一組欄位定義）。
+   * 指標清單取法與 planTargets 一致（僅不依賴 applied／archiveCtx）。
+   */
+  const columnIndicatorIds = useMemo<string[]>(() => {
+    if (tab === "indicator") return selIndicator ? [selIndicator] : [];
+    if (tab === "group")
+      return indicators.filter((i) => i.groupId === selGroup).map((i) => i.id);
+    if (tab === "unit")
+      return indicators
+        .filter(
+          (i) =>
+            (selGroupU === "all" || i.groupId === selGroupU) &&
+            (selIndU === "all" || i.id === selIndU),
+        )
+        .map((i) => i.id);
+    return [];
+  }, [tab, selIndicator, selGroup, selGroupU, selIndU, indicators]);
+  /**
+   * 期間欄產生：月模式走排程區間（起始月＋區間月數合併一格），
+   * 年／學年模式走 expandMonthRangeColumns（一格一曆年／一學年度）。
+   * 排程尚未載入時月模式退回單月欄（涵蓋月份不變，查詢年份不受影響）。
+   */
+  const buildColumns = useCallback(
+    (
+      s: string,
+      e: string,
+      g: AnalysisGranularity,
+    ): AnalysisPeriodColumn[] => {
+      if (g === "month" && archiveCtx) {
+        const scheds = archiveCtx.schedules.filter(
+          (sc) =>
+            sc.category !== "temp" &&
+            columnIndicatorIds.includes(sc.indicatorId),
+        );
+        const intervals = scheds.flatMap((sc) => buildReviewIntervals(sc));
+        return expandScheduleIntervalColumns(s, e, intervals);
+      }
+      return expandMonthRangeColumns(s, e, g);
+    },
+    [archiveCtx, columnIndicatorIds],
+  );
+  // 期間欄只取所選年月範圍內的月份，再依月／年／學年分組。
   const columns = useMemo(
-    () => expandMonthRangeColumns(startMonth, endMonth, interval),
-    [startMonth, endMonth, interval],
+    () => buildColumns(startMonth, endMonth, interval),
+    [buildColumns, startMonth, endMonth, interval],
   );
   const queryYears = useMemo(() => calendarYearsOf(columns), [columns]);
   const queryLoadYears = useMemo(
@@ -739,13 +786,13 @@ export function ResultsPage({
   const appliedColumns = useMemo(
     () =>
       applied
-        ? expandMonthRangeColumns(
+        ? buildColumns(
             applied.startMonth,
             applied.endMonth,
             applied.interval,
           )
         : columns,
-    [applied, columns],
+    [applied, columns, buildColumns],
   );
   const appliedYearsKey = applied ? applied.years.join(",") : "";
   const allMonths = useMemo(
@@ -1610,11 +1657,9 @@ export function ResultsPage({
     const label =
       granularity === "month"
         ? "月"
-        : granularity === "quarter"
-          ? "季"
-          : granularity === "halfYear"
-            ? "半年"
-            : "年";
+        : granularity === "academic"
+          ? "學年"
+          : "年";
     return `${display(from)} ~ ${display(to)}・單位：${label}`;
   }, [applied, startMonth, endMonth, interval]);
 
@@ -2282,9 +2327,8 @@ export function ResultsPage({
             onChange={(value) => setInterval(value as AnalysisGranularity)}
             options={[
               { value: "month", label: "月" },
-              { value: "quarter", label: "季" },
-              { value: "halfYear", label: "半年" },
               { value: "year", label: "年" },
+              { value: "academic", label: "學年" },
             ]}
           />
           <label className="check-row">
@@ -4102,6 +4146,39 @@ function DrillModal({
     }
     return map;
   }, [recordIndex, drill.indicatorId, drill.mode, l1Units, l1Summary, col, th, filterIds, filterKind]);
+  // v1.88.13：L1「審查月份」欄——每單位在該期間欄內有紀錄的排程月份。
+  // 封存摘要路徑由 SummaryCell 的 year／month 推出（只顯示排程月份，
+  // 真實審查日只在 L2 顯示）；原始紀錄路徑由 unitMonthsForDrill 推出。
+  const l1UnitMonths = useMemo(() => {
+    const map = new Map<string, { year: number; month: number }[]>();
+    for (const unitId of l1Units) {
+      if (l1Summary) {
+        const keys = new Set<string>();
+        for (const c of l1Summary) {
+          if (c.unitId !== unitId || c.total <= 0) continue;
+          keys.add(`${c.year}-${c.month}`);
+        }
+        map.set(
+          unitId,
+          [...keys]
+            .map((k) => {
+              const [year, month] = k.split("-").map(Number);
+              return { year, month };
+            })
+            .sort((a, b) => a.year - b.year || a.month - b.month),
+        );
+      } else {
+        const recs = recordsForIndex(
+          recordIndex,
+          drill.indicatorId,
+          col.months,
+          unitId,
+        );
+        map.set(unitId, unitMonthsForDrill(recs, col.months, unitId));
+      }
+    }
+    return map;
+  }, [l1Summary, l1Units, recordIndex, drill.indicatorId, col]);
   // 連續未達標偵測：只用目前查詢畫面已載入的期間欄；沒有審查資料的欄不列入；
   // 期數取 CAPA 設定（指標覆寫優先，否則全院預設）。選定期間本身須有資料且為最新一期。
   const capaTriggers = useMemo(() => {
@@ -4176,7 +4253,7 @@ function DrillModal({
     () =>
       ind
         ? transposePersonOptionRows(l2Rows, l2Questions)
-        : { headers: [] as string[], bedNos: [] as string[], rows: [], rates: [] },
+        : { headers: [] as string[], bedNos: [] as string[], months: [] as string[], reviewDates: [] as string[], rows: [], rates: [] },
     [l2Rows, ind, l2Questions],
   );
 
@@ -4197,6 +4274,7 @@ function DrillModal({
           key: `${row.personEmpNo}-${row.year}-${row.month}-${i}`,
           label: l2Matrix.headers[i] ?? row.personEmpNo,
           monthLabel: `${row.year}/${pad2(row.month)}`,
+          reviewDate: row.reviewDate || "—",
           bedNo: row.bedNo,
           text,
         };
@@ -4262,6 +4340,7 @@ function DrillModal({
               <thead>
                 <tr>
                   <th className="ind-col">單位</th>
+                  <th>審查月份</th>
                   {showRecentResults && historyMonths.map((month) => <th key={month.key} className="rate-col">{month.label}</th>)}
                   <th className="rate-col" style={showRecentResults ? { background: "#eef4ff" } : undefined}>{col.label}</th>
                   <th className="rate-col">操作</th>
@@ -4270,16 +4349,33 @@ function DrillModal({
               <tbody>
                 {l1Units.length === 0 ? (
                   <tr>
-                    <td colSpan={3 + (showRecentResults ? historyMonths.length : 0)}>{historyBusy ? "讀取中…" : historyNote || "無資料"}</td>
+                    <td colSpan={4 + (showRecentResults ? historyMonths.length : 0)}>{historyBusy ? "讀取中…" : historyNote || "無資料"}</td>
                   </tr>
                 ) : (
                   l1Units.map((unitId) => {
                     const cell = l1Cells.get(unitId);
                     const clickable = cell != null && cell.rate != null;
+                    const unitMonths = l1UnitMonths.get(unitId) ?? [];
                     return (
                       <tr key={unitId}>
                         <td className="ind-col">
                           {unitId === "" ? "NA" : `${unitId}・${unitNameOf.get(unitId) ?? ""}`}
+                        </td>
+                        <td>
+                          {unitMonths.length === 0
+                            ? "—"
+                            : unitMonths.map((m) => (
+                              <button
+                                key={`${m.year}-${m.month}`}
+                                type="button"
+                                className="text-button"
+                                style={{ marginRight: 6 }}
+                                title="點選只看該月被審人員"
+                                onClick={() => onSelectUnit(unitId, { year: m.year, month: m.month })}
+                              >
+                                {m.year}/{pad2(m.month)}
+                              </button>
+                            ))}
                         </td>
                         {showRecentResults && historyMonths.map((month) => {
                           const recs = recordsForIndex(recordIndex, drill.indicatorId, [{ year: month.year, month: month.month }], unitId);
@@ -4383,6 +4479,8 @@ function DrillModal({
                         >
                           <div>{h}</div>
                           <div>{l2Matrix.bedNos[i] ?? ""}</div>
+                          <div>{l2Matrix.months[i] ?? ""}</div>
+                          <div>審查日 {l2Matrix.reviewDates[i] ?? "—"}</div>
                         </th>
                       ))}
                     </tr>
@@ -4428,7 +4526,7 @@ function DrillModal({
                   {l2NoteGroups.map((g) => (
                     <div key={g.key} className="supp-notes-group">
                       <p className="supp-notes-person">
-                        {g.label}・{g.monthLabel}
+                        {g.label}・{g.monthLabel}・審查日 {g.reviewDate}
                         {g.bedNo ? `・床號 ${g.bedNo}` : ""}
                       </p>
                       <p className="supp-note-text">{g.text}</p>

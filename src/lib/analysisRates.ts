@@ -20,6 +20,7 @@
 import type { AuditQuestion } from "./indicators";
 import { mergeNoteParts } from "./import";
 import { maskName } from "./mask";
+import { pad2 } from "./ym";
 
 export interface AnalysisAnswer {
   questionId: string;
@@ -40,6 +41,13 @@ export interface AnalysisRecord {
   unitId: string;
   year: number;
   month: number;
+  /**
+   * 實際審查日（v1.88.13，YYYY-MM-DD）；缺值＝舊紀錄未存。
+   * 分組鍵仍是排程月份（year／month），不因 reviewDate 改變。
+   */
+  reviewDate?: string;
+  /** 手動匯入的紀錄（source="import"；其 reviewDate 為匯入當天，不可靠） */
+  imported?: boolean;
   /** 正確率％（一位小數）；滿分 0 時為 null */
   rate: number | null;
   /** 排程建立時固定的閾值；舊／外部匯入紀錄可能缺值。 */
@@ -430,6 +438,28 @@ export function unitsForDrill(
   return [...ids].sort((a, b) => a.localeCompare(b, "zh-Hant"));
 }
 
+/**
+ * 下探 L1 的「審查月份」欄（v1.88.13）：該單位在該期間欄內有紀錄的
+ * 排程月份（yyyy/mm 排序去重），由紀錄的 year／month 推出。
+ */
+export function unitMonthsForDrill(
+  records: AnalysisRecord[],
+  months: { year: number; month: number }[],
+  unitId: string,
+): { year: number; month: number }[] {
+  const set = new Set<string>();
+  for (const r of recordsInMonths(records, months)) {
+    if (r.unitId !== unitId) continue;
+    set.add(`${r.year}-${r.month}`);
+  }
+  return [...set]
+    .map((k) => {
+      const [year, month] = k.split("-").map(Number);
+      return { year, month };
+    })
+    .sort((a, b) => a.year - b.year || a.month - b.month);
+}
+
 export interface PersonOptionRow {
   personEmpNo: string;
   personName: string;
@@ -437,6 +467,11 @@ export interface PersonOptionRow {
   bedNo: string;
   year: number;
   month: number;
+  /**
+   * 實際審查日（v1.88.13，YYYY-MM-DD）：匯入紀錄一律 ""（其 reviewDate
+   * 為匯入當天，不可靠）；缺值亦 ""，顯示時為 "—"。
+   */
+  reviewDate: string;
   /** 正確率％；滿分 0 時為 null */
   rate: number | null;
   passing: boolean;
@@ -467,6 +502,9 @@ export function personOptionRows(
       bedNo: r.bedNo ?? "",
       year: r.year,
       month: r.month,
+      // v1.88.13：實際審查日；匯入紀錄（source="import"）的 reviewDate
+      // 為匯入當天、不可靠，一律留空，顯示為 "—"。
+      reviewDate: r.imported === true ? "" : (r.reviewDate ?? ""),
       rate: r.rate,
       passing: isPassing(r.rate, threshold),
       answers: new Map(r.answers.map((a) => [a.questionId, a.optionLabel])),
@@ -481,6 +519,13 @@ export interface TransposedPersonMatrix {
   headers: string[];
   /** 每欄對應紀錄的床號（與 headers 一一對應；無床號為 ""，表頭下行留空） */
   bedNos: string[];
+  /** 每欄對應紀錄的排程月份（v1.88.13，yyyy/mm，與 headers 一一對應） */
+  months: string[];
+  /**
+   * 每欄對應紀錄的實際審查日（v1.88.13，YYYY-MM-DD；匯入／缺值為 "—"，
+   * 與 headers 一一對應）。
+   */
+  reviewDates: string[];
   /** 每列一題：題目文字＋每欄的作答（是／否／不適用；無作答為 "—"） */
   rows: { questionId: string; itemText: string; values: string[]; notes: string[] }[];
   /** 最下方「正確率」列：每欄的得分（null 表無分數）與達閾值標示 */
@@ -504,6 +549,9 @@ export function transposePersonOptionRows(
       return r.personEmpNo || maskedName || "—";
     }),
     bedNos: rows.map((r) => r.bedNo ?? ""),
+    // v1.88.13：表頭第二行起顯示排程月份與實際審查日。
+    months: rows.map((r) => `${r.year}/${pad2(r.month)}`),
+    reviewDates: rows.map((r) => r.reviewDate || "—"),
     rows: questions.map((q) => ({
       questionId: q.id,
       itemText: q.itemText,

@@ -85,6 +85,7 @@ import {
   INTERVAL_OPTIONS,
   intervalRangeLabels,
   listSchedules,
+  mergeReviewMonths,
   normalizeAssignmentItem,
   parseCaseCount,
   periodForFilter,
@@ -204,7 +205,7 @@ type View =
       category: "year" | "academic";
       year: number;
     }
-  | { kind: "assignment"; indicatorId: string }
+  | { kind: "assignment"; indicatorId: string; category: "year" | "academic"; period: string }
   /** v1.88.6：查閱改整頁式（ScheduleDetailPage），不再用彈窗 */
   | {
       kind: "detail";
@@ -239,13 +240,11 @@ export function mergeItemsWithUnits(
   prev: AssignmentItem[],
   reviewerIds: string[],
   unitIds: string[],
+  reviewMonths: string[] = [],
 ): AssignmentItem[] {
   const next: AssignmentItem[] = prev.map((it) => ({
-    reviewerId: it.reviewerId,
+    ...it,
     units: it.units.map((u) => ({ ...u })),
-    ...(it.unlimitedUnits === true
-      ? { unlimitedUnits: true as const }
-      : {}),
   }));
   for (const rid of reviewerIds) {
     const existing = next.find((it) => it.reviewerId === rid);
@@ -259,12 +258,16 @@ export function mergeItemsWithUnits(
       }))
       .sort((a, b) => a.unitId.localeCompare(b.unitId, "zh-Hant"));
     const idx = next.findIndex((it) => it.reviewerId === rid);
+    // v1.88.13：審查月份取聯集；既有為空（＝全部月份）時新填月份直接取代。
+    const months = mergeReviewMonths(existing?.reviewMonths, reviewMonths);
+    const monthsPart =
+      months.length > 0 ? { reviewMonths: months } : {};
     // 併入單位後即為指定單位項目，旗標取消；單位為空才保留原旗標
     const item: AssignmentItem =
       merged.length > 0
-        ? { reviewerId: rid, units: merged }
+        ? { reviewerId: rid, units: merged, ...monthsPart }
         : existing?.unlimitedUnits === true
-          ? { reviewerId: rid, units: [], unlimitedUnits: true as const }
+          ? { reviewerId: rid, units: [], unlimitedUnits: true as const, ...monthsPart }
           : { reviewerId: rid, units: [] };
     if (idx >= 0) next[idx] = item;
     else next.push(item);
@@ -280,20 +283,22 @@ export function mergeItemsWithUnits(
 export function mergeItemsUnlimited(
   prev: AssignmentItem[],
   reviewerIds: string[],
+  reviewMonths: string[] = [],
 ): AssignmentItem[] {
   const next: AssignmentItem[] = prev.map((it) => ({
-    reviewerId: it.reviewerId,
+    ...it,
     units: it.units.map((u) => ({ ...u })),
-    ...(it.unlimitedUnits === true
-      ? { unlimitedUnits: true as const }
-      : {}),
   }));
   for (const rid of reviewerIds) {
     const idx = next.findIndex((it) => it.reviewerId === rid);
+    const existing = idx >= 0 ? next[idx] : undefined;
+    // v1.88.13：審查月份取聯集；既有為空（＝全部月份）時新填月份直接取代。
+    const months = mergeReviewMonths(existing?.reviewMonths, reviewMonths);
     const item: AssignmentItem = {
       reviewerId: rid,
       units: [],
       unlimitedUnits: true as const,
+      ...(months.length > 0 ? { reviewMonths: months } : {}),
     };
     if (idx >= 0) next[idx] = item;
     else next.push(item);
@@ -1215,6 +1220,10 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                               setView({
                                 kind: "assignment",
                                 indicatorId: r.indicatorId,
+                                // v1.88.13：帶入當前篩選期別（年別＋週期鍵），
+                                // 分工表的單位與月份以該期「排程／單位設定」為準。
+                                category: cycle,
+                                period,
                               })
                             }
                             title="進入單位／審查員設定"
@@ -1448,6 +1457,17 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
             r.period === view.period,
         ) ?? null)
       : null;
+  // v1.88.13：分工表期別上下文——該期「排程／單位設定」（單位與月份來源）；
+  // 無該期排程時為 null（單位與月份選項為空，提示先完成排程／單位設定）。
+  const assignmentSchedule =
+    view.kind === "assignment"
+      ? (schedules.find(
+          (s) =>
+            s.indicatorId === subView.indicatorId &&
+            s.category === view.category &&
+            s.period === view.period,
+        ) ?? null)
+      : null;
   return (
     <>
       <PageHeading page="schedule" />
@@ -1483,6 +1503,8 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
           {view.kind === "assignment" && (
             <AssignmentEditor
               indicatorId={indicator.id}
+              indicatorCode={indicator.code}
+              schedule={assignmentSchedule}
               reviewersByGroup={reviewersByGroup}
               units={units}
               groupMap={groupMap}
@@ -3279,12 +3301,16 @@ function SelfAuditDialog({
 
 /* ================= 審查員／單位設定（v1.18：組別篩選＋搜尋多選） ================= */
 
-/* ================= 分工表批次匯入（v1.88.4；比照 GroupsPage BatchImporter 模式） =================
- * 範本欄位：審查員職編／審查員姓名／負責單位（多單位以「、」分隔；填「不限單位」
- * 為不限單位項目）。驗證走 lib/assignmentImport 純函式；匯入只寫進分工表 state，
+/* ================= 分工表批次匯入（v1.88.4；v1.88.13 改為 4 欄） =================
+ * 範本欄位：指標代號／審查員職編／負責單位／審查月份（多筆半形逗號分隔）。
+ * 指標代號只核對目前頁面指標；姓名欄已移除，預覽依職編帶出遮罩姓名供確認。
+ * 驗證走 lib/assignmentImport 純函式；匯入只寫進分工表 state，
  * 須按「儲存分工表」才寫入 Firestore。
  */
 function AssignmentBatchImporter({
+  indicatorCode,
+  allowedReviewMonths,
+  scheduleUnitCodes,
   reviewersByGroup,
   usersMap,
   reviewerRoleIds,
@@ -3294,6 +3320,17 @@ function AssignmentBatchImporter({
   onImport,
   onAction,
 }: {
+  /** v1.88.13：目前頁面指標的代號（匯入只核對，不符整列報錯） */
+  indicatorCode: string;
+  /**
+   * v1.88.13：該期排程的審查曆月（"yyyy/mm" 集合；未設＝尚無排程，
+   * 月份無法核對，整列報錯）。
+   */
+  allowedReviewMonths?: ReadonlySet<string>;
+  /**
+   * v1.88.13：該期排程的受審單位代碼（未設＝尚無排程或排程不限單位）。
+   */
+  scheduleUnitCodes?: ReadonlySet<string>;
   reviewersByGroup: Map<string, ReviewerLite[]>;
   usersMap: Map<string, string>;
   reviewerRoleIds: Set<string>;
@@ -3324,8 +3361,12 @@ function AssignmentBatchImporter({
       units: units.map((u) => ({ code: u.code, name: u.name })),
       // v1.88.5：受限時只允許自己單位的列；「不限單位」列亦不通過。
       allowedUnitCodes: restrictedUnitCodes ?? undefined,
+      // v1.88.13：指標代號核對＋該期審查月範圍核對＋受審單位核對。
+      expectedIndicatorCode: indicatorCode,
+      allowedReviewMonths,
+      scheduleUnitCodes,
     }),
-    [reviewersByGroup, usersMap, reviewerRoleIds, units, restrictedUnitCodes],
+    [reviewersByGroup, usersMap, reviewerRoleIds, units, restrictedUnitCodes, indicatorCode, allowedReviewMonths, scheduleUnitCodes],
   );
 
   function handlePick() {
@@ -3425,6 +3466,8 @@ function AssignmentBatchImporter({
       </div>
       <p className="settings-note batch-sample-note">
         匯入只寫進分工表畫面，須按「儲存分工表」才寫入；審查件數仍在「排程／單位設定」中設定。
+        指標代號須與本指標一致（只核對、不跨指標匯入）；審查月份必填、須在該期審查月範圍內，超出範圍整列不匯入。
+        姓名欄已移除，預覽會依職編帶出遮罩姓名供確認。
         {restrictedUnitCodes != null &&
           `僅能匯入自己單位（${restrictedUnitName || "尚未設定所屬單位"}），「不限單位」不開放。`}
       </p>
@@ -3458,6 +3501,7 @@ function AssignmentBatchImporter({
                   {[...ASSIGNMENT_IMPORT_HEADER].map((h) => (
                     <th key={h}>{h}</th>
                   ))}
+                  <th>姓名（依職編帶出）</th>
                   <th>狀態</th>
                   <th>原因</th>
                 </tr>
@@ -3466,13 +3510,12 @@ function AssignmentBatchImporter({
                 {preview.map((p) => (
                   <tr key={p.index}>
                     <td>{p.index}</td>
-                    {[...ASSIGNMENT_IMPORT_HEADER].map((h, i) => (
-                      <td key={i}>
-                        {h === "審查員姓名"
-                          ? maskName(String(p.values[i] ?? ""))
-                          : (p.values[i] ?? "")}
-                      </td>
+                    {[...ASSIGNMENT_IMPORT_HEADER].map((_, i) => (
+                      <td key={i}>{p.values[i] ?? ""}</td>
                     ))}
+                    <td>
+                      {maskName(usersMap.get(String(p.values[1] ?? "").trim()) ?? "") || "—"}
+                    </td>
                     <td>
                       <span
                         className={`status-pill ${p.ok ? "success" : "danger"}`}
@@ -3511,6 +3554,8 @@ function AssignmentBatchImporter({
 
 function AssignmentEditor({
   indicatorId,
+  indicatorCode,
+  schedule,
   reviewersByGroup,
   units,
   groupMap,
@@ -3525,6 +3570,13 @@ function AssignmentEditor({
   onSaved,
 }: {
   indicatorId: string;
+  /** v1.88.13：目前頁面指標的代號（匯入核對用） */
+  indicatorCode: string;
+  /**
+   * v1.88.13：該期「排程／單位設定」（單位與月份來源）；
+   * null＝本期尚無排程，單位與月份選項為空。
+   */
+  schedule: IndicatorSchedule | null;
   reviewersByGroup: Map<string, ReviewerLite[]>;
   units: UnitLite[];
   groupMap: Map<string, string>;
@@ -3569,13 +3621,34 @@ function AssignmentEditor({
       ...(it.unlimitedUnits === true
         ? { unlimitedUnits: true as const }
         : {}),
+      // v1.88.13：審查月份一併帶入 state（缺值＝全部月份）。
+      ...(it.reviewMonths && it.reviewMonths.length > 0
+        ? { reviewMonths: [...it.reviewMonths] }
+        : {}),
     })),
   );
   const [selReviewers, setSelReviewers] = useState<string[]>([]);
   const [selUnits, setSelUnits] = useState<string[]>([]);
   // v1.51.0：不限單位模式（此審查員不固定單位）
   const [unlimited, setUnlimited] = useState(false);
+  // v1.88.13：第 3 步：審查月份（多選，必填；候選＝該期排程的審查曆月）
+  const [selMonths, setSelMonths] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+
+  /** 該期排程的審查曆月（"yyyy/mm"，依曆年月排序；無排程為空） */
+  const scheduleMonths: string[] = useMemo(
+    () =>
+      schedule
+        ? scheduleReviewCalendarMonths(schedule).map(
+            ({ year, month }) => `${year}/${pad2(month)}`,
+          )
+        : [],
+    [schedule],
+  );
+  const scheduleMonthSet = useMemo(
+    () => new Set(scheduleMonths),
+    [scheduleMonths],
+  );
 
   // 審查員候選：全部組別的審查員主檔（組別下拉篩選）
   const reviewerOptions: PickerOption[] = useMemo(() => {
@@ -3596,6 +3669,15 @@ function AssignmentEditor({
   const unitOptions: PickerOption[] = useMemo(
     () =>
       units
+        // v1.88.13：要審查的單位來自該期「排程／單位設定」的 unitIds；
+        // 排程不限單位時不設限；無該期排程時選項為空。
+        .filter((u) =>
+          schedule == null
+            ? false
+            : schedule.unlimitedUnits
+              ? true
+              : schedule.unitIds.includes(u.code),
+        )
         // v1.88.5：單位排程者只看得到自己單位可選。
         .filter((u) => !restricted || restrictedUnitCodes!.has(u.code))
         .map((u) => ({
@@ -3604,7 +3686,7 @@ function AssignmentEditor({
           sub: groupDisplayName(groupMap, u.groupId),
           groupId: u.groupId,
         })),
-    [units, groupMap, restricted, restrictedUnitCodes],
+    [units, groupMap, restricted, restrictedUnitCodes, schedule],
   );
 
   const reviewerName = useCallback(
@@ -3644,29 +3726,43 @@ function AssignmentEditor({
       onAction("請先選擇審查員");
       return;
     }
+    // v1.88.13：分工表須有該期排程才能加入（單位與月份皆來自排程／單位設定）。
+    if (schedule == null) {
+      onAction("請先完成排程／單位設定（本期尚無排程，無法選擇單位與月份）");
+      return;
+    }
     // v1.88.5：防護——單位排程者不得以不限單位加入分工表。
     if (restricted && unlimited) {
       onAction("僅能為自己單位排程，不提供不限單位");
       return;
     }
+    // v1.88.13：第 3 步審查月份為必填（不限單位亦同）。
+    if (selMonths.length === 0) {
+      onAction("請選擇審查月份");
+      return;
+    }
     if (unlimited) {
-      setItems((prev) => mergeItemsUnlimited(prev, selReviewers));
+      setItems((prev) => mergeItemsUnlimited(prev, selReviewers, selMonths));
       onAction(
-        `已加入分工表：${selReviewers.length} 位審查員（不限單位）`,
+        `已加入分工表：${selReviewers.length} 位審查員（不限單位）・${selMonths.join("、")}`,
       );
       setSelReviewers([]);
+      setSelMonths([]);
       return;
     }
     if (selUnits.length === 0) {
       onAction("請至少勾選一個單位");
       return;
     }
-    setItems((prev) => mergeItemsWithUnits(prev, selReviewers, selUnits));
+    setItems((prev) =>
+      mergeItemsWithUnits(prev, selReviewers, selUnits, selMonths),
+    );
     onAction(
-      `已加入分工表：${selReviewers.length} 位審查員 × ${selUnits.length} 個單位`,
+      `已加入分工表：${selReviewers.length} 位審查員 × ${selUnits.length} 個單位・${selMonths.join("、")}`,
     );
     setSelReviewers([]);
     setSelUnits([]);
+    setSelMonths([]);
   }
 
   function removeItem(reviewerId: string) {
@@ -3736,8 +3832,13 @@ function AssignmentEditor({
       <section className="panel">
         <SectionTitle
           title="審查員／單位設定"
-          note="先選審查員（可多選），再選其負責單位（可多選），按「加入分工表」；同一單位可指派給多位審查員（會警示但不阻擋）。審查件數在「排程／單位設定」中按年度設定。"
+          note="三步加入分工表：1. 選審查員（可多選），2. 選負責單位（可多選，來自該期「排程／單位設定」的受審單位），3. 選審查月份（必填，可多選）；同一單位可指派給多位審查員（會警示但不阻擋）。審查件數在「排程／單位設定」中按年度設定。"
         />
+        {schedule == null && (
+          <p className="settings-note">
+            本期尚無「排程／單位設定」，請先完成排程／單位設定（單位、月份、件數皆需設定），才能選擇負責單位與審查月份。
+          </p>
+        )}
         <InactiveReviewerNotice
           reviewerIds={items.map((it) => it.reviewerId)}
           inactiveIds={inactiveIds}
@@ -3796,12 +3897,43 @@ function AssignmentEditor({
           disabled={!canEdit || unlimited}
           searchPlaceholder="搜尋單位名稱或代碼"
         />
+        <div style={{ marginTop: 12 }}>
+          <b>3. 選擇審查月份（必填，可多選）</b>
+          {schedule == null ? (
+            <p className="settings-note">
+              請先完成排程／單位設定（本期尚無排程，無法選擇審查月份）。
+            </p>
+          ) : scheduleMonths.length === 0 ? (
+            <p className="settings-note">
+              本期排程尚未設定審查月份，請先到「排程／單位設定」設定月份。
+            </p>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 16px", marginTop: 6 }}>
+              {scheduleMonths.map((m) => (
+                <label key={m} className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={selMonths.includes(m)}
+                    disabled={!canEdit}
+                    onChange={() =>
+                      setSelMonths((prev) => toggleId(prev, m))
+                    }
+                  />
+                  {m}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
         {canEdit && (
           <div className="form-actions">
             <button
               className="button button-outline"
               disabled={
-                selReviewers.length === 0 || (!unlimited && selUnits.length === 0)
+                selReviewers.length === 0 ||
+                (!unlimited && selUnits.length === 0) ||
+                selMonths.length === 0 ||
+                schedule == null
               }
               onClick={applyToTable}
             >
@@ -3811,6 +3943,13 @@ function AssignmentEditor({
         )}
         {canEdit && (
           <AssignmentBatchImporter
+            indicatorCode={indicatorCode}
+            allowedReviewMonths={schedule ? scheduleMonthSet : undefined}
+            scheduleUnitCodes={
+              schedule && !schedule.unlimitedUnits
+                ? new Set(schedule.unitIds)
+                : undefined
+            }
             reviewersByGroup={reviewersByGroup}
             usersMap={usersMap}
             reviewerRoleIds={reviewerRoleIds}
@@ -3841,6 +3980,7 @@ function AssignmentEditor({
                 <tr>
                   <th>審查員</th>
                   <th>負責單位</th>
+                  <th>審查月份</th>
                   {canEdit && <th>操作</th>}
                 </tr>
               </thead>
@@ -3879,6 +4019,11 @@ function AssignmentEditor({
                           </div>
                         ))
                       )}
+                    </td>
+                    <td>
+                      {it.reviewMonths && it.reviewMonths.length > 0
+                        ? it.reviewMonths.join("、")
+                        : "全部月份"}
                     </td>
                     {canEdit && (
                       <td>

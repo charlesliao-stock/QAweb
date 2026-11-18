@@ -1,39 +1,48 @@
 /**
- * 分工表批次匯入（v1.88.4）：純函式，不碰 Firestore，可 node 測試。
+ * 分工表批次匯入（v1.88.4；v1.88.13 改為 4 欄）：純函式，不碰 Firestore，可 node 測試。
  *
  * 範本欄位（依分工表一列的資料設計）：
- * - 審查員職編／審查員姓名：與人員資料比對（姓名須與人員檔一致，比照角色成員匯入）；
+ * - 指標代號：只核對目前頁面的指標，不符者整列報錯不匯入（一次只匯一支指標）；
+ * - 審查員職編：與人員資料比對；姓名欄已移除（v1.88.13），解析後預覽
+ *   以職編查出人員並顯示遮罩姓名供匯入者確認；
  * - 負責單位：單位代碼或單位名稱，多個單位以「、」分隔（例如 U01、U02）；
  *   填「不限單位」時匯入為不限單位項目（units 為空、unlimitedUnits 為 true），
  *   與現行分工表「不限單位」語意一致；「不限單位」不可與其他單位併填。
- * 同一審查員可分多列填寫，匯入時合併單位（聯集）。
+ * - 審查月份：必填，yyyy/mm，多筆以半形逗號分隔（例如 2026/08,2026/09）；
+ *   一位數月份接受並正規化為兩位數（2026/9 → 2026/09）；超出該期
+ *   審查月範圍者整列報錯不匯入。
+ * 同一審查員可分多列填寫，匯入時合併單位（聯集）與月份（聯集）。
  *
  * 驗證（驗不過的列報錯不匯入，其餘照常）：
+ * - 指標代號須與目前頁面指標一致；
  * - 職編不可空白；須在人員資料中；
- * - 姓名不可空白，須與人員資料一致；
  * - 審查員須具審查員身分：在 reviewReviewers 名單內，或具品管組審查員角色
  *   （呼叫端以 reviewerIds／reviewerRoleIds 兩集合傳入；效期已由呼叫端過濾）；
- * - 負責單位不可空白；每個單位須存在（代碼或名稱比對）。
+ * - 負責單位不可空白；每個單位須存在（代碼或名稱比對），且須在該期
+ *   受審單位內（allowedUnitCodes＝排程單位 ∩ 權限單位）；
+ * - 審查月份不可空白；格式須為 yyyy/mm；須落在該期審查月範圍內。
  *
  * 匯入只寫進分工表 state（呼叫端 setItems），儲存／產生排程時才寫入
  * Firestore，沿用現行分工表儲存時機，不另立寫入路徑。
  */
 
-import { maskName } from "./mask";
+import { mergeReviewMonths } from "./scheduling";
 import type { AssignmentItem } from "./scheduling";
+import { normalizeReviewMonth, normalizeReviewMonths } from "./ym";
 
 /** 分工表匯入範本標題列（標題須完全一致，否則 BatchImporter 模式會擋下檔案） */
 export const ASSIGNMENT_IMPORT_HEADER = [
+  "指標代號",
   "審查員職編",
-  "審查員姓名",
   "負責單位",
+  "審查月份",
 ] as const;
 
 /** 範例檔內容（含標題列；下載時走 downloadTemplate，xlsx 失敗退回 CSV） */
 export const ASSIGNMENT_IMPORT_SAMPLE_ROWS: string[][] = [
   [...ASSIGNMENT_IMPORT_HEADER],
-  ["0000001", "王小明", "U01、U02"],
-  ["0000002", "王小美", "不限單位"],
+  ["QA-001", "0000001", "U01、U02", "2026/08,2026/09"],
+  ["QA-001", "0000002", "不限單位", "2026/10"],
 ];
 
 /** 負責單位欄填此值＝不限單位項目 */
@@ -56,6 +65,18 @@ export interface AssignmentImportLookup {
    * 「不限單位」列對受限者一律不通過（不限單位等於幫所有單位排）。
    */
   allowedUnitCodes?: ReadonlySet<string>;
+  /** v1.88.13：目前頁面指標的代號（只核對，不符整列報錯） */
+  expectedIndicatorCode?: string;
+  /**
+   * v1.88.13：該期排程的受審單位代碼（未設＝尚無排程或排程不限單位，
+   * 不做此項核對；月份核對仍會因無排程而報錯）。
+   */
+  scheduleUnitCodes?: ReadonlySet<string>;
+  /**
+   * v1.88.13：該期排程的審查曆月（"yyyy/mm" 集合；未設＝尚無排程，
+   * 月份無法核對，整列報錯）。
+   */
+  allowedReviewMonths?: ReadonlySet<string>;
 }
 
 export interface ParsedAssignmentRow {
@@ -63,6 +84,8 @@ export interface ParsedAssignmentRow {
   reviewerName: string;
   unlimited: boolean;
   unitIds: string[];
+  /** 審查月份（v1.88.13）："yyyy/mm"，排序去重 */
+  reviewMonths: string[];
 }
 
 export interface ValidatedAssignmentRow {
@@ -71,6 +94,36 @@ export interface ValidatedAssignmentRow {
   ok: boolean;
   error: string;
   parsed?: ParsedAssignmentRow;
+}
+
+/** 多月份分隔符（半形逗號為主；全形逗號／頓號亦接受並視為同一分隔） */
+const MONTH_SEPARATORS = /[,，、]+/;
+
+/**
+ * 解析審查月份欄（v1.88.13，純函式）：
+ * 以半形逗號分隔多筆（全形逗號／頓號亦接受），每段 trim；
+ * 格式須為 yyyy/mm，一位數月份正規化為兩位數（2026/9 → 2026/09）；
+ * 去重、依曆年月排序。空白回錯誤；任一段格式不符即整欄報錯。
+ */
+export function parseReviewMonths(
+  text: string,
+): { months: string[]; error: string } {
+  const raw = (text ?? "").trim();
+  if (!raw) return { months: [], error: "審查月份不可空白" };
+  const months: string[] = [];
+  for (const token of raw.split(MONTH_SEPARATORS)) {
+    const t = token.trim();
+    if (!t) continue;
+    const n = normalizeReviewMonth(t);
+    if (!n) {
+      return { months: [], error: `審查月份格式錯誤「${t}」（應為 yyyy/mm）` };
+    }
+    if (!months.includes(n)) months.push(n);
+  }
+  if (months.length === 0) {
+    return { months: [], error: "審查月份不可空白" };
+  }
+  return { months: months.sort(), error: "" };
 }
 
 /** 解析負責單位欄：回傳單位代碼清單，或不限單位旗標，或錯誤訊息。 */
@@ -108,7 +161,8 @@ export function parseAssignedUnits(
 
 /**
  * 逐列驗證（與 GroupsPage 角色成員匯入同一模式：錯誤列不匯入，其餘照常）。
- * 同一審查員分多列填寫視為合法，合併時再聯集單位。
+ * 同一審查員分多列填寫視為合法，合併時再聯集單位與月份。
+ * 欄位順序（v1.88.13）：指標代號／審查員職編／負責單位／審查月份。
  */
 export function validateAssignmentImportRows(
   rows: string[][],
@@ -123,16 +177,22 @@ export function validateAssignmentImportRows(
       ok: false,
       error,
     });
-    const staffId = (row[0] ?? "").trim();
+    // v1.88.13：指標代號只核對目前頁面指標，不符整列報錯（一次只匯一支指標）。
+    const code = (row[0] ?? "").trim();
+    if (!code) return fail("指標代號不可空白");
+    if (!lookup.expectedIndicatorCode) {
+      return fail("無法核對指標代號（尚無指標代號）");
+    }
+    if (code !== lookup.expectedIndicatorCode) {
+      return fail(
+        `指標代號不符（應為 ${lookup.expectedIndicatorCode}，本列為 ${code}）`,
+      );
+    }
+    const staffId = (row[1] ?? "").trim();
     if (!staffId) return fail("職編不可空白");
     const realName = lookup.userNames.get(staffId);
     if (realName === undefined) {
       return fail(`職編 ${staffId} 不在人員資料中`);
-    }
-    const name = (row[1] ?? "").trim();
-    if (!name) return fail("姓名不可空白");
-    if (name !== realName) {
-      return fail(`姓名與人員資料不符（應為 ${maskName(realName)}）`);
     }
     if (
       !lookup.reviewerIds.has(staffId) &&
@@ -142,6 +202,15 @@ export function validateAssignmentImportRows(
     }
     const parsedUnits = parseAssignedUnits(row[2] ?? "", lookup.units);
     if (parsedUnits.error) return fail(parsedUnits.error);
+    // v1.88.13：負責單位須在該期受審單位內（不限單位列不受此限）。
+    if (lookup.scheduleUnitCodes && !parsedUnits.unlimited) {
+      const outside = parsedUnits.unitIds.filter(
+        (c) => !lookup.scheduleUnitCodes!.has(c),
+      );
+      if (outside.length > 0) {
+        return fail(`負責單位不在本期受審單位內（${outside.join("、")}）`);
+      }
+    }
     // v1.88.5：單位排程者僅能匯入自己單位；「不限單位」列亦不通過。
     if (lookup.allowedUnitCodes) {
       if (parsedUnits.unlimited) {
@@ -154,6 +223,18 @@ export function validateAssignmentImportRows(
         return fail(`僅能為自己單位匯入（不可匯入 ${outside.join("、")}）`);
       }
     }
+    // v1.88.13：審查月份必填；超出該期審查月範圍整列報錯不匯入。
+    const parsedMonths = parseReviewMonths(row[3] ?? "");
+    if (parsedMonths.error) return fail(parsedMonths.error);
+    if (!lookup.allowedReviewMonths) {
+      return fail("尚無排程／單位設定，無法核對審查月份");
+    }
+    const outsideMonths = parsedMonths.months.filter(
+      (m) => !lookup.allowedReviewMonths!.has(m),
+    );
+    if (outsideMonths.length > 0) {
+      return fail(`審查月份超出該期審查月範圍（${outsideMonths.join("、")}）`);
+    }
     return {
       index,
       values,
@@ -164,6 +245,7 @@ export function validateAssignmentImportRows(
         reviewerName: realName,
         unlimited: parsedUnits.unlimited,
         unitIds: parsedUnits.unitIds,
+        reviewMonths: parsedMonths.months,
       },
     };
   });
@@ -174,8 +256,10 @@ export function validateAssignmentImportRows(
  * SchedulePage 的 mergeItemsWithUnits／mergeItemsUnlimited 一致）：
  * - 有單位列：該審查員的單位取聯集，既有單位的每輪件數保留，新單位件數為 null；
  *   併入單位後即為指定單位項目，既有限制單位旗標取消；
- * - 不限單位列：該審查員改為不限單位項目（units 清空）。
- * 項目依審查員職編排序，單位依代碼排序。
+ * - 不限單位列：該審查員改為不限單位項目（units 清空）；
+ * - 審查月份（v1.88.13）：同一審查員多列取聯集；既有為空（＝全部月份）
+ *   時，新填月份直接取代。
+ * 項目依審查員職編排序，單位依代碼排序，月份排序去重。
  */
 export function mergeImportedAssignments(
   prev: AssignmentItem[],
@@ -187,6 +271,9 @@ export function mergeImportedAssignments(
     ...(it.unlimitedUnits === true
       ? { unlimitedUnits: true as const }
       : {}),
+    ...(normalizeReviewMonths(it.reviewMonths).length > 0
+      ? { reviewMonths: normalizeReviewMonths(it.reviewMonths) }
+      : {}),
   }));
   for (const row of parsed) {
     const idx = next.findIndex((it) => it.reviewerId === row.reviewerId);
@@ -195,6 +282,7 @@ export function mergeImportedAssignments(
         reviewerId: row.reviewerId,
         units: [],
         unlimitedUnits: true as const,
+        reviewMonths: [...row.reviewMonths],
       };
       if (idx >= 0) next[idx] = item;
       else next.push(item);
@@ -210,7 +298,11 @@ export function mergeImportedAssignments(
         caseCount: existingMap.get(unitId) ?? null,
       }))
       .sort((a, b) => a.unitId.localeCompare(b.unitId, "zh-Hant"));
-    const item: AssignmentItem = { reviewerId: row.reviewerId, units: merged };
+    const item: AssignmentItem = {
+      reviewerId: row.reviewerId,
+      units: merged,
+      reviewMonths: mergeReviewMonths(existing?.reviewMonths, row.reviewMonths),
+    };
     if (idx >= 0) next[idx] = item;
     else next.push(item);
   }

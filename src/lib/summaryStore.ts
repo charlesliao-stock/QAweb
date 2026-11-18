@@ -70,6 +70,13 @@ export function recordDocToAnalysis(
     personEmpNo: String(v.reviewedPersonEmpNo ?? ""),
     personName: String(v.reviewedPersonName ?? ""),
     bedNo: typeof v.bedNo === "string" ? v.bedNo : "",
+    // v1.88.13：實際審查日（YYYY-MM-DD）；匯入紀錄 source="import"
+    // 的 reviewDate 為匯入當天、不可靠，分析頁顯示時一律為 "—"。
+    reviewDate:
+      typeof v.reviewDate === "string" && v.reviewDate
+        ? v.reviewDate
+        : undefined,
+    imported: v.source === "import",
   };
 }
 

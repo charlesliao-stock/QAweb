@@ -27,6 +27,7 @@ import type { Membership } from "./roleIdentity";
 import { COMMITTEE_GROUP_ID, UNGROUPED_GROUP_ID } from "./roleIdentity";
 import type { AssignmentItem } from "./scheduling";
 import { unitHistoryCodes, type UnitHistoryLink } from "./unitHistory";
+import { normalizeReviewMonths } from "./ym";
 
 /** 單位對照（code＝units 文件 id；groupId＝所屬品管組，空＝未歸屬） */
 export interface DataScopeUnit extends UnitHistoryLink {
@@ -383,12 +384,28 @@ export function splitAssignmentItemsByUnit(
 /**
  * 拆分後的分工表按審查員合併還原：同一審查員的單位取聯集；任一邊為
  * 不限單位者，合併後仍為不限單位（units 清空）。
+ * v1.88.13：審查月份亦取聯集；任一邊為空（＝全部月份）時取另一邊。
  */
 export function mergeAssignmentItemsByReviewer(
   own: readonly AssignmentItem[],
   other: readonly AssignmentItem[],
 ): AssignmentItem[] {
   const byReviewer = new Map<string, AssignmentItem>();
+  const unionMonths = (
+    a: string[] | undefined,
+    b: string[] | undefined,
+  ): string[] | undefined => {
+    const na = normalizeReviewMonths(a);
+    const nb = normalizeReviewMonths(b);
+    if (na.length === 0) return nb.length > 0 ? nb : undefined;
+    if (nb.length === 0) return na;
+    return normalizeReviewMonths([...na, ...nb]);
+  };
+  const withMonths = (
+    item: AssignmentItem,
+    months: string[] | undefined,
+  ): AssignmentItem =>
+    months && months.length > 0 ? { ...item, reviewMonths: months } : item;
   const mergeOne = (it: AssignmentItem) => {
     const prev = byReviewer.get(it.reviewerId);
     if (!prev) {
@@ -398,24 +415,37 @@ export function mergeAssignmentItemsByReviewer(
       });
       return;
     }
+    const months = unionMonths(prev.reviewMonths, it.reviewMonths);
     if (prev.unlimitedUnits === true || it.unlimitedUnits === true) {
-      byReviewer.set(it.reviewerId, {
-        ...prev,
-        units: [],
-        unlimitedUnits: true as const,
-      });
+      byReviewer.set(
+        it.reviewerId,
+        withMonths(
+          {
+            ...prev,
+            units: [],
+            unlimitedUnits: true as const,
+          },
+          months,
+        ),
+      );
       return;
     }
     const seen = new Map(prev.units.map((u) => [u.unitId, u]));
     for (const u of it.units) {
       if (!seen.has(u.unitId)) seen.set(u.unitId, { ...u });
     }
-    byReviewer.set(it.reviewerId, {
-      ...prev,
-      units: [...seen.values()].sort((a, b) =>
-        a.unitId.localeCompare(b.unitId, "zh-Hant"),
+    byReviewer.set(
+      it.reviewerId,
+      withMonths(
+        {
+          ...prev,
+          units: [...seen.values()].sort((a, b) =>
+            a.unitId.localeCompare(b.unitId, "zh-Hant"),
+          ),
+        },
+        months,
       ),
-    });
+    );
   };
   for (const it of other) mergeOne(it);
   for (const it of own) mergeOne(it);
