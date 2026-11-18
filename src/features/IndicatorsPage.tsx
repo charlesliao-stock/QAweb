@@ -20,7 +20,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "../lib/db";
+import { collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "../lib/db";
 import {
   EmptyState,
   FilterPanel,
@@ -1598,10 +1598,18 @@ export function IndicatorsPage({
       const vsnap = await getDocs(
         collection(db, "indicators", docId, "versions"),
       );
-      for (const v of vsnap.docs) {
-        await deleteDoc(doc(db, "indicators", docId, "versions", v.id));
+      // 改用 writeBatch（每批 ≤ 450 筆）取代逐筆 await；主檔放最後一批，
+      // 中途失敗時主檔仍在，可重試刪除。
+      const refs = [
+        ...vsnap.docs.map((v) => doc(db, "indicators", docId, "versions", v.id)),
+        doc(db, "indicators", docId),
+      ];
+      const DELETE_BATCH_SIZE = 450;
+      for (let i = 0; i < refs.length; i += DELETE_BATCH_SIZE) {
+        const batch = writeBatch(db);
+        for (const ref of refs.slice(i, i + DELETE_BATCH_SIZE)) batch.delete(ref);
+        await batch.commit();
       }
-      await deleteDoc(doc(db, "indicators", docId));
       logAudit(db, {
         actor: user.staffId,
         actorName: user.name,
