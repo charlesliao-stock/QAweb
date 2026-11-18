@@ -431,6 +431,128 @@ export function findDuplicateUnits(
 }
 
 /**
+ * v1.88.16：分工表篩選（純函式）。
+ * reviewerKw：審查員關鍵字（姓名／職編，大小寫不敏感；空白＝不過濾）。
+ * unitFilter：負責單位單選（""＝全部、"__unlimited__"＝不限單位、其餘為單位代號）。
+ * monthFilter：審查月份單選（""＝全部月份，否則為 "yyyy/mm" 儲存制式）；
+ * 缺值／空（＝全部月份）的列篩選任一月份都算符合（與任務產生語意一致）。
+ * 不限單位項目只有在 unitFilter 為 "__unlimited__" 或 "" 時才出現；
+ * 篩選只影響顯示，不清除已選狀態（由呼叫端維護勾選）。
+ */
+export const ASSIGNMENT_UNIT_FILTER_UNLIMITED = "__unlimited__";
+
+export function filterAssignmentItems(
+  items: AssignmentItem[],
+  reviewerKw: string,
+  unitFilter: string,
+  nameOf: (reviewerId: string) => string,
+  monthFilter = "",
+): AssignmentItem[] {
+  const kw = reviewerKw.trim().toLowerCase();
+  return items.filter((it) => {
+    if (kw !== "") {
+      const haystack = `${it.reviewerId} ${nameOf(it.reviewerId)}`.toLowerCase();
+      if (!haystack.includes(kw)) return false;
+    }
+    if (unitFilter !== "") {
+      if (unitFilter === ASSIGNMENT_UNIT_FILTER_UNLIMITED)
+        return it.unlimitedUnits === true;
+      if (it.unlimitedUnits === true) return false;
+      if (!it.units.some((u) => u.unitId === unitFilter)) return false;
+    }
+    if (monthFilter !== "") {
+      // 缺值／空＝全部月份，篩選任一月份都算符合。
+      const months = normalizeReviewMonths(it.reviewMonths);
+      if (months.length > 0 && !months.includes(monthFilter)) return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * v1.88.16：分工表三元組（審查員、單位、月份）。
+ * 不限單位列的單位取 ""（與任務產生的 unitId: "" 一致）。
+ */
+export interface AssignmentTriple {
+  reviewerId: string;
+  unitId: string;
+  /** "yyyy/mm"（儲存制式，補零） */
+  month: string;
+}
+
+export interface DuplicateAssignmentTriple extends AssignmentTriple {
+  count: number;
+}
+
+/**
+ * v1.88.16：展開分工表為三元組清單（存檔重複檢測用）。
+ * 指定單位列＝去重後單位 × 有效月份；不限單位列單位取 ""。
+ * effectiveMonthsOf：月份缺值／空（＝全部月份）時傳入該期排程曆月；
+ * 回傳 []（排程曆月未知）時缺值列不參與比對，只比對明確月份。
+ */
+export function expandAssignmentTriples(
+  items: AssignmentItem[],
+  effectiveMonthsOf: (it: AssignmentItem) => string[],
+): AssignmentTriple[] {
+  const out: AssignmentTriple[] = [];
+  for (const it of items) {
+    const explicit = normalizeReviewMonths(it.reviewMonths);
+    const months =
+      explicit.length > 0
+        ? explicit
+        : normalizeReviewMonths(effectiveMonthsOf(it));
+    if (months.length === 0) continue;
+    const unitIds =
+      it.unlimitedUnits === true
+        ? [""]
+        : [...new Set(it.units.map((u) => u.unitId))];
+    for (const unitId of unitIds) {
+      for (const month of months) {
+        out.push({ reviewerId: it.reviewerId, unitId, month });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * v1.88.16：找出重疊的三元組（同一 (審查員、單位、月份) 出現 2 次以上）。
+ * 不限單位（unitId ""）與任何具體單位都不相等，不算重疊。
+ * 回傳每組重疊三元組及其出現次數（依審查員／單位／月份排序）。
+ */
+export function findDuplicateAssignmentTriples(
+  items: AssignmentItem[],
+  effectiveMonthsOf: (it: AssignmentItem) => string[],
+): DuplicateAssignmentTriple[] {
+  const map = new Map<string, DuplicateAssignmentTriple>();
+  for (const t of expandAssignmentTriples(items, effectiveMonthsOf)) {
+    const key = JSON.stringify([t.reviewerId, t.unitId, t.month]);
+    const prev = map.get(key);
+    if (prev) prev.count += 1;
+    else map.set(key, { ...t, count: 1 });
+  }
+  return [...map.values()]
+    .filter((d) => d.count > 1)
+    .sort(
+      (a, b) =>
+        a.reviewerId.localeCompare(b.reviewerId, "zh-Hant") ||
+        a.unitId.localeCompare(b.unitId, "zh-Hant") ||
+        a.month.localeCompare(b.month),
+    );
+}
+
+/**
+ * v1.88.16：受限時鎖定的分工列（不限單位項目涵蓋所有單位，
+ * 單位排程者不得勾選／刪除；全選時自動排除）。
+ */
+export function isLockedAssignmentItem(
+  it: AssignmentItem,
+  restricted: boolean,
+): boolean {
+  return restricted && it.unlimitedUnits === true;
+}
+
+/**
  * @deprecated 改用 buildReviewTasksPerCalendar（經 monthToCalendarYear 換算）或 buildTasksFromSchedule
  */
 export interface GenerateInput {

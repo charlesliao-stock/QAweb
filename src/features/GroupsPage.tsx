@@ -535,6 +535,10 @@ function MemberChecklist({
   idLabel = "職編／代號",
   nameLabel = "姓名／名稱",
   columns = [],
+  // v1.88.16：可選的操作欄（職稱成員管理合併表用；未傳 onRowAction 時該格顯示「—」）
+  actionLabel,
+  rowActionLabel,
+  onRowAction,
   items,
   checked,
   onToggle,
@@ -549,6 +553,9 @@ function MemberChecklist({
   idLabel?: string;
   nameLabel?: string;
   columns?: { key: string; label: string }[];
+  actionLabel?: string;
+  rowActionLabel?: string;
+  onRowAction?: (id: string) => void;
   items: { id: string; label: string; sub?: string; fields?: Record<string, string> }[];
   checked: string[];
   onToggle: (id: string, next: boolean) => void;
@@ -581,6 +588,7 @@ function MemberChecklist({
                   <th>{idLabel}</th>
                   <th>{nameLabel}</th>
                   {columns.map((column) => <th key={column.key}>{column.label}</th>)}
+                  {actionLabel != null && <th>{actionLabel}</th>}
                 </tr>
               </thead>
               <tbody>
@@ -601,6 +609,20 @@ function MemberChecklist({
                     {columns.map((column) => (
                       <td key={column.key}>{it.fields?.[column.key] || "—"}</td>
                     ))}
+                    {actionLabel != null && (
+                      <td>
+                        {onRowAction ? (
+                          <button
+                            className="text-button"
+                            onClick={() => onRowAction(it.id)}
+                          >
+                            {rowActionLabel ?? "管理"}
+                          </button>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -832,6 +854,8 @@ export function GroupsPage({
     memberPage?.kind === "title" ? memberPage.id : "",
   );
   const [titleMemberChecked, setTitleMemberChecked] = useState<string[]>([]);
+  // v1.88.16：成員表上方搜尋方框（搜現有成員，職編／姓名關鍵字；與下方「加入人員」搜非成員的搜尋框分開）
+  const [titleMemberSearch, setTitleMemberSearch] = useState("");
   const [titleAddSearch, setTitleAddSearch] = useState("");
   const [titleAddChecked, setTitleAddChecked] = useState<string[]>([]);
   const [titleBusy, setTitleBusy] = useState(false);
@@ -993,6 +1017,16 @@ export function GroupsPage({
     },
     [users, titles, managingTitleId],
   );
+  // v1.88.16：成員表搜尋過濾（職編／姓名關鍵字；只影響顯示，不清除勾選）
+  const filteredTitleMembers = useMemo(() => {
+    const kw = titleMemberSearch.trim().toLowerCase();
+    if (kw === "") return titleMembers;
+    return titleMembers.filter(
+      (u) =>
+        u.staffId.toLowerCase().includes(kw) ||
+        u.name.toLowerCase().includes(kw),
+    );
+  }, [titleMembers, titleMemberSearch]);
   const titleCandidates = useMemo(() => {
     const title = titles.find((item) => item.id === managingTitleId);
     if (!title) return [];
@@ -4630,22 +4664,83 @@ export function GroupsPage({
       memberPage?.parent?.kind === "title"
         ? (titles.find((t) => t.id === memberPage.parent!.id)?.name ?? "")
         : "";
+    // v1.88.16：督導負責單位顯示（titleUnitCodes →「代號 名稱」以「、」連接；無則 —）
+    const supervisorUnitsLabel = (codes: string[] | undefined) =>
+      (codes ?? []).length > 0
+        ? (codes ?? [])
+            .map((code) => {
+              const unitRow = units.find((x) => x.code === code);
+              return unitRow ? `${code} ${unitRow.name}` : code;
+            })
+            .join("、")
+        : "—";
     return (
       <section className="panel data-panel">
         <div className="panel-inset">
+          {/* v1.88.16：工具列上移——搜尋方框（搜現有成員）＋下載範例檔＋批次上傳 */}
+          <div
+            className="form-actions"
+            style={{ marginTop: 0, flexWrap: "wrap", alignItems: "flex-end" }}
+          >
+            <div style={{ maxWidth: 320, flex: "1 1 220px" }}>
+              <label className="field-label">搜尋成員</label>
+              <input
+                className="text-input"
+                style={{ marginBottom: 0 }}
+                placeholder="輸入職編或姓名搜尋"
+                value={titleMemberSearch}
+                onChange={(e) => setTitleMemberSearch(e.target.value)}
+              />
+            </div>
+            <BatchImporter
+              sampleBaseName={`職稱「${managingTitle.name}」成員範例`}
+              sampleRows={[TITLE_MEMBER_HEADER, ["0000001", "王小明"]]}
+              header={TITLE_MEMBER_HEADER}
+              validateRows={validateTitleMemberRows}
+              importRows={importTitleMemberRows}
+              sampleNote="範本欄位：職編、姓名（職稱固定為該頁職稱）；人員須已存在於人員資料。"
+              onDone={() => loadUsers()}
+              onAction={onAction}
+            />
+          </div>
+          {/* v1.88.16：成員表與「下屬管理 — 負責單位」表併成一張人員管理表
+              （勾選／職編／姓名／負責單位／操作；非督導職稱負責單位與操作欄皆顯示 —） */}
           <MemberChecklist
             title={`職稱「${managingTitle.name}」的成員`}
             note="加入即轉任此職稱（一人一職稱）；移除即清除職稱"
+            emptyText={
+              titleMemberSearch.trim() !== ""
+                ? "無符合搜尋條件的成員。"
+                : "尚無成員。"
+            }
             idLabel="職編"
             nameLabel="姓名"
             columns={[
-              { key: "unit", label: "單位" },
-              { key: "title", label: "職稱" },
+              { key: "unit", label: "負責單位" },
             ]}
-            items={titleMembers.map((u) => ({
+            actionLabel="操作"
+            rowActionLabel="負責單位管理"
+            onRowAction={
+              isSupervisorTitle
+                ? (staffId: string) =>
+                    onOpenMemberPage?.({
+                      kind: "title-units",
+                      id: staffId,
+                      parent: {
+                        kind: "title",
+                        id: managingTitle.id,
+                      },
+                    })
+                : undefined
+            }
+            items={filteredTitleMembers.map((u) => ({
               id: u.staffId,
               label: maskName(u.name),
-              fields: { unit: unitLabelOf(u.unitCode), title: u.title || managingTitle.name },
+              fields: {
+                unit: isSupervisorTitle
+                  ? supervisorUnitsLabel(u.titleUnitCodes)
+                  : "—",
+              },
             }))}
             checked={titleMemberChecked}
             onToggle={(id, next) =>
@@ -4655,7 +4750,7 @@ export function GroupsPage({
             }
             onToggleAll={(next) =>
               setTitleMemberChecked(
-                next ? titleMembers.map((u) => u.staffId) : [],
+                next ? filteredTitleMembers.map((u) => u.staffId) : [],
               )
             }
             onRemoveSelected={handleTitleMembersRemove}
@@ -4686,70 +4781,6 @@ export function GroupsPage({
                   </button>
                 ))}
               </div>
-            </div>
-          ) : null}
-          {/* v1.88.8：督導的下屬管理就是負責單位（督導只管單位清單，不再直管護理長的人；單位自己設置護理長，下屬鏈就此串起） */}
-          {isSupervisorTitle ? (
-            <div className="form-field">
-              <label className="field-label">下屬管理 — 負責單位</label>
-              <p className="settings-note">
-                督導的下屬是單位清單（每位督導各自設定，寫入其 titleUnitCodes）。
-              </p>
-              {titleMembers.length === 0 ? (
-                <p className="settings-note">此職稱尚無成員。</p>
-              ) : (
-                <div className="table-scroll">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>職編</th>
-                        <th>姓名</th>
-                        <th>負責單位</th>
-                        <th>操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {titleMembers.map((u) => (
-                        <tr key={u.staffId}>
-                          <td>{u.staffId}</td>
-                          <td>{maskName(u.name)}</td>
-                          <td>
-                            {(u.titleUnitCodes ?? []).length > 0
-                              ? (u.titleUnitCodes ?? [])
-                                  .map((code) => {
-                                    const unitRow = units.find(
-                                      (x) => x.code === code,
-                                    );
-                                    return unitRow
-                                      ? `${code} ${unitRow.name}`
-                                      : code;
-                                  })
-                                  .join("、")
-                              : "—"}
-                          </td>
-                          <td>
-                            <button
-                              className="text-button"
-                              onClick={() =>
-                                onOpenMemberPage?.({
-                                  kind: "title-units",
-                                  id: u.staffId,
-                                  parent: {
-                                    kind: "title",
-                                    id: managingTitle.id,
-                                  },
-                                })
-                              }
-                            >
-                              負責單位管理
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
             </div>
           ) : null}
           <div className="form-field" style={{ maxWidth: 320 }}>
@@ -4830,18 +4861,6 @@ export function GroupsPage({
                 </div>
               </>
             ))}
-          <div className="form-actions">
-            <BatchImporter
-              sampleBaseName={`職稱「${managingTitle.name}」成員範例`}
-              sampleRows={[TITLE_MEMBER_HEADER, ["0000001", "王小明"]]}
-              header={TITLE_MEMBER_HEADER}
-              validateRows={validateTitleMemberRows}
-              importRows={importTitleMemberRows}
-              sampleNote="範本欄位：職編、姓名（職稱固定為該頁職稱）；人員須已存在於人員資料。"
-              onDone={() => loadUsers()}
-              onAction={onAction}
-            />
-          </div>
           <div className="form-actions">
             <button
               className="button button-outline"

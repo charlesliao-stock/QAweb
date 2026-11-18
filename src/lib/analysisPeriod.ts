@@ -10,9 +10,9 @@ export type AnalysisCycle = "year" | "academic";
 export type AnalysisInterval = "month" | "quarter" | "year";
 /**
  * 結果分析區間粒度（v1.88.13）：只留 月／年／學年；季、半年已取消。
- * - 月：欄位改為排程區間（見 expandScheduleIntervalColumns），
- *   每格＝起始月＋區間月數 N 個月合併；
- * - 年：一格一曆年；學年：一格一學年度（8 月至隔年 7 月）。
+ * v1.88.17：三種模式表頭都一月一格（見 expandMonthRangeColumns），
+ * 資料格一律按每支指標自己的排程區間合併（見 analysisSpans）；
+ * 區間單位下拉只影響預設起訖範圍，不再決定欄位切法。
  */
 export type AnalysisGranularity = "month" | "year" | "academic";
 export type QuarterSub = 1 | 2 | 3 | 4;
@@ -222,10 +222,10 @@ export function calendarYearsOf(columns: AnalysisPeriodColumn[]): number[] {
 }
 
 /**
- * 依使用者選取的西元年月範圍，產生月／年／學年資料欄。
- * 首尾欄只包含落在所選範圍內的月份，避免查詢區間外的資料混入。
- * （v1.88.13：季、半年已取消；月粒度在結果分析頁改走排程區間，
- * 見 expandScheduleIntervalColumns，此處月粒度仍為單月欄，供其他呼叫端用。）
+ * 依使用者選取的西元年月範圍，產生資料欄。
+ * v1.88.17：三種模式一律走月粒度＝一月一欄（年／學年不再一格一曆年／
+ * 一學年度）；資料格的合併改由每列自己的排程區間決定（見 analysisSpans），
+ * 不再由欄位定義。首尾欄只包含落在所選範圍內的月份，避免查詢區間外的資料混入。
  */
 export function expandMonthRangeColumns(
   startMonth: string,
@@ -263,81 +263,6 @@ export function expandMonthRangeColumns(
     label: rangeLabel(months),
     months,
   }));
-}
-
-/** 排程區間輸入（buildReviewIntervals 的回傳形狀子集） */
-export interface ScheduleIntervalInput {
-  startYear: number;
-  startMonth: number;
-  endYear: number;
-  endMonth: number;
-  months: CalendarMonth[];
-}
-
-/**
- * 排程區間欄（v1.88.13，純函式）：把所選年月範圍內的月份，
- * 按各排程的審查區間合併成欄（每格＝起始月＋區間月數 N 個月，
- * 標籤為起訖格式，如 2026/8–2026/10）。
- * - 區間先裁切到所選範圍（只含範圍內的月份）；
- * - 多支指標區間起點不同時取聯集（去重、依起始月排序）；
- * - 未被任何區間覆蓋的月份，退回單月欄（資料不遺失）。
- * 彙總數字與計算不動，分組鍵仍是排程月份。
- */
-export function expandScheduleIntervalColumns(
-  startMonth: string,
-  endMonth: string,
-  intervals: ScheduleIntervalInput[],
-): AnalysisPeriodColumn[] {
-  const parse = (value: string): CalendarMonth | null => {
-    const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(value);
-    return match ? { year: Number(match[1]), month: Number(match[2]) } : null;
-  };
-  const start = parse(startMonth);
-  const end = parse(endMonth);
-  if (!start || !end) return [];
-  const startIndex = start.year * 12 + start.month - 1;
-  const endIndex = end.year * 12 + end.month - 1;
-  if (startIndex > endIndex) return [];
-  const inRange = (m: CalendarMonth): boolean => {
-    const idx = m.year * 12 + m.month - 1;
-    return idx >= startIndex && idx <= endIndex;
-  };
-  const keyOf = (m: CalendarMonth): string => `${m.year}-${m.month}`;
-  const covered = new Set<string>();
-  const byStart = new Map<string, CalendarMonth[]>();
-  for (const iv of intervals) {
-    const months = iv.months.filter(inRange).sort((a, b) => a.year - b.year || a.month - b.month);
-    if (months.length === 0) continue;
-    const key = `${months[0].year}-${months[0].month}`;
-    if (byStart.has(key)) continue;
-    byStart.set(key, months);
-    for (const m of months) covered.add(keyOf(m));
-  }
-  const columns: AnalysisPeriodColumn[] = [];
-  for (const months of byStart.values()) {
-    columns.push({
-      key: `${months[0].year}-${months[0].month}`,
-      label: intervalRangeLabel(months),
-      months,
-    });
-  }
-  // 未被區間覆蓋的月份退回單月欄。
-  for (let index = startIndex; index <= endIndex; index++) {
-    const year = Math.floor(index / 12);
-    const month = (index % 12) + 1;
-    if (covered.has(`${year}-${month}`)) continue;
-    columns.push({
-      key: `${year}-${month}`,
-      label: fmtYm(year, month),
-      months: [{ year, month }],
-    });
-  }
-  columns.sort((a, b) => {
-    const fa = a.months[0];
-    const fb = b.months[0];
-    return fa.year - fb.year || fa.month - fb.month;
-  });
-  return columns;
 }
 
 /** 區間起訖標籤：單月如「2026/8」，多月如「2026/8–2026/10」（v1.88.15：不補零） */

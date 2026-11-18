@@ -38,7 +38,7 @@ import {
 } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
 import { unarchivedOverdue } from "../lib/archiveReminder";
-import { listSchedules } from "../lib/scheduling";
+import { listSchedules, scheduleDocId } from "../lib/scheduling";
 import { loadAllSummaries, recordDocToAnalysis, type StoredSummary } from "../lib/summaryStore";
 import {
   buildReviewSummary,
@@ -96,11 +96,18 @@ import { TrendChart } from "../components/TrendChart";
 import {
   calendarYearsOf,
   expandMonthRangeColumns,
-  expandScheduleIntervalColumns,
   type AnalysisGranularity,
   type AnalysisPeriodColumn,
+  type CalendarMonth,
 } from "../lib/analysisPeriod";
-import { buildReviewIntervals } from "../lib/scheduleIntervals";
+import {
+  buildRowSpans,
+  groupSchedulesForRows,
+  scheduleIntervalsInRange,
+  singleMonthSpan,
+  type RowSpan,
+  type ScheduleSpanGroup,
+} from "../lib/analysisSpans";
 import {
   formatPassRate,
   belowClass,
@@ -253,12 +260,19 @@ interface DrillState {
   questionId?: string;
   /** v1.50.0：只顯示答此選項的人員（與 questionId 併用） */
   optionLabel?: string;
+  /**
+   * v1.88.17 Q5=C：點多月合併格時先展開區間內各月明細（SpanMonthPicker），
+   * 再由使用者選單月進入 L1／L2；true 時不渲染 DrillModal，改渲染選月彈窗。
+   */
+  pickMonths?: boolean;
 }
 
 /** 矩陣下方展開面板（僅單位分析）：曲線圖／選項明細 */
 interface UnitPanel {
   kind: "chart" | "doc";
   indicatorId: string;
+  /** v1.88.17：開啟面板的那一列 id（同一指標分列時，用來取該列的 spans 畫曲線） */
+  rowId?: string;
   /** v1.53.0：分組版（只看該組）；無值＝整支指標 */
   sectionKey?: string;
   sectionLabel?: string;
@@ -376,10 +390,11 @@ function capaInColumn(item: CapaCase, months: { year: number; month: number }[])
 
 /**
  * 矩陣格內容（v1.76.5）：百分比在上、(分子/分母) 在下以縮減欄寬；
- * 加審字樣置於右側垂直置中。無資料顯示 —。
+ * 加審字樣置於右側垂直置中。無紀錄顯示「未審核」（v1.88.17 Q4=A：
+ * 不看排程／任務，無紀錄即未審核）。
  */
 function RateCellBody({ cell, extra, capa }: { cell: PassRate; extra?: boolean; capa?: CapaCase }) {
-  if (cell.rate == null) return <>—</>;
+  if (cell.rate == null) return <>未審核</>;
   const pct = Number.isInteger(cell.rate) ? String(cell.rate) : cell.rate.toFixed(1);
   return (
     <span className="rate-stack">
@@ -742,48 +757,18 @@ export function ResultsPage({
 
   const rangeValid = Boolean(startMonth && endMonth && startMonth <= endMonth);
   /**
-   * v1.88.13：月模式的欄位來源——指標頁籤用該指標排程的區間，
-   * 分組別／單位頁籤用可見排程區間的聯集（起點不同即聯集、去重排序）；
-   * 整個系統切點一致（三個頁籤同一組欄位定義）。
-   * 指標清單取法與 planTargets 一致（僅不依賴 applied／archiveCtx）。
-   */
-  const columnIndicatorIds = useMemo<string[]>(() => {
-    if (tab === "indicator") return selIndicator ? [selIndicator] : [];
-    if (tab === "group")
-      return indicators.filter((i) => i.groupId === selGroup).map((i) => i.id);
-    if (tab === "unit")
-      return indicators
-        .filter(
-          (i) =>
-            (selGroupU === "all" || i.groupId === selGroupU) &&
-            (selIndU === "all" || i.id === selIndU),
-        )
-        .map((i) => i.id);
-    return [];
-  }, [tab, selIndicator, selGroup, selGroupU, selIndU, indicators]);
-  /**
-   * 期間欄產生：月模式走排程區間（起始月＋區間月數合併一格），
-   * 年／學年模式走 expandMonthRangeColumns（一格一曆年／一學年度）。
-   * 排程尚未載入時月模式退回單月欄（涵蓋月份不變，查詢年份不受影響）。
+   * v1.88.17：期間欄一律一月一欄（月／年／學年三種模式皆然），
+   * 資料格的合併改由每列自己的排程區間決定（見 buildRowSpans），
+   * 欄位不再由排程區間聯集產生。區間單位只影響預設起訖範圍
+   * （見 handleIntervalChange），不決定欄位切法。
    */
   const buildColumns = useCallback(
     (
       s: string,
       e: string,
-      g: AnalysisGranularity,
-    ): AnalysisPeriodColumn[] => {
-      if (g === "month" && archiveCtx) {
-        const scheds = archiveCtx.schedules.filter(
-          (sc) =>
-            sc.category !== "temp" &&
-            columnIndicatorIds.includes(sc.indicatorId),
-        );
-        const intervals = scheds.flatMap((sc) => buildReviewIntervals(sc));
-        return expandScheduleIntervalColumns(s, e, intervals);
-      }
-      return expandMonthRangeColumns(s, e, g);
-    },
-    [archiveCtx, columnIndicatorIds],
+      _g: AnalysisGranularity,
+    ): AnalysisPeriodColumn[] => expandMonthRangeColumns(s, e, "month"),
+    [],
   );
   // 期間欄只取所選年月範圍內的月份，再依月／年／學年分組。
   const columns = useMemo(
@@ -1186,6 +1171,27 @@ export function ResultsPage({
   }, [appliedYearsKey, reloadNonce, archiveReady, plansKey, rawFull, scope.kind, scope.kind === "reviewer" ? scope.staffId : "", scope.kind === "staff" ? scope.unitCode : "", tab, singleIndicatorId, isNurseLeader, visibleUnitCodes]);
 
   /** 每次查詢皆失效所選年份，避免再次查詢命中過期快取。 */
+  /**
+   * v1.88.17：區間單位下拉只影響預設起訖範圍（切換時重設起訖月份；
+   * 欄位切法已與下拉脫鉤，三種模式都一月一格）。
+   * 月＝今年 1 月～本月；年＝今年 1～12 月；學年＝當學年 8 月～隔年 7 月。
+   */
+  function handleIntervalChange(g: AnalysisGranularity) {
+    setInterval(g);
+    const y = now.getFullYear();
+    const m = now.getMonth() + 1;
+    if (g === "year") {
+      setStartMonth(`${y}-01`);
+      setEndMonth(`${y}-12`);
+    } else if (g === "academic") {
+      const startYear = m >= 8 ? y : y - 1;
+      setStartMonth(`${startYear}-08`);
+      setEndMonth(`${startYear + 1}-07`);
+    } else {
+      setStartMonth(`${y}-01`);
+      setEndMonth(`${y}-${pad2(m)}`);
+    }
+  }
   function handleQuery() {
     if (!rangeValid || tab === "manage") return;
     invalidateCachedYears("reviewRecords", queryLoadYears, cacheScope);
@@ -1247,6 +1253,111 @@ export function ResultsPage({
     return periodRecords.some((record) => Boolean(record.taskId && tempTaskIds.has(record.taskId))) ||
       columnTempNote(periodRecords, tempTaskKeys, col.months.length) != null;
   };
+
+  /**
+   * v1.88.17：每列合併格（RowSpan）建構。
+   * 表頭固定一月一格；每列的資料格按該指標自己的排程區間 colspan 合併。
+   * 加審月份不併入合併格：有加審紀錄的月份從區間中切出、獨立成一格
+   * （temp: true，格面顯示該月全部紀錄並標「加審」），區間其餘月份仍合併。
+   */
+  interface MatrixRow {
+    id: string;
+    indicatorId: string;
+    label: string;
+    spans: RowSpan[];
+    details: { key: string; label: string; cells: Record<string, PassRate> }[];
+  }
+
+  /** 該指標在指定月份內有加審紀錄的月份鍵集合（原始紀錄 taskId 或封存摘要反查任務鍵）。 */
+  function tempMonthKeysOf(
+    indicatorId: string,
+    months: CalendarMonth[],
+    unitId: string | undefined,
+  ): Set<string> {
+    const keys = new Set<string>();
+    for (const m of months) {
+      const col: AnalysisPeriodColumn = {
+        key: `${m.year}-${m.month}`,
+        label: fmtYm(m.year, m.month),
+        months: [m],
+      };
+      if (hasTempReview(indicatorId, col, unitId)) keys.add(`${m.year}-${m.month}`);
+    }
+    return keys;
+  }
+
+  /**
+   * 該指標的非臨時排程分組（區間已裁切到 applied 範圍；重疊排程分組，
+   * 見 groupSchedulesForRows）。無排程／範圍內無區間時回一組空區間（全單月格）。
+   */
+  function scheduleGroupsOf(indicatorId: string): ScheduleSpanGroup[] {
+    const rangeMonths = appliedColumns.flatMap((c) => c.months);
+    const inputs = (archiveCtx?.schedules ?? [])
+      .filter((sc) => sc.category !== "temp" && sc.indicatorId === indicatorId)
+      .map((sc) => ({
+        key: scheduleDocId(sc.indicatorId, sc.category, sc.period),
+        periodLabel: sc.periodLabel,
+        intervals: scheduleIntervalsInRange(sc, rangeMonths),
+      }))
+      .filter((g) => g.intervals.length > 0);
+    const groups = groupSchedulesForRows(inputs);
+    return groups.length > 0
+      ? groups
+      : [{ key: "__none__", periodLabels: [], intervals: [] }];
+  }
+
+  /**
+   * 該指標在指定月份範圍、指定單位範圍內的 spans（全部排程聯集；
+   * 重疊區間以起始月較早者優先，僅為防禦性 fallback——矩陣列應走
+   * buildMatrixRows 的分組 spans）。指標分析曲線圖／openChart 備援用。
+   */
+  function spansForIndicator(
+    indicatorId: string,
+    months: CalendarMonth[],
+    unitId: string | undefined,
+  ): RowSpan[] {
+    const groups = scheduleGroupsOf(indicatorId);
+    const intervals = groups.flatMap((g) => g.intervals);
+    return buildRowSpans(
+      months,
+      intervals,
+      tempMonthKeysOf(indicatorId, months, unitId),
+    );
+  }
+
+  /** 建矩陣列：每支指標依排程分組分列（重疊才分列，否則一列）；每列 spans＋分組明細列。 */
+  function buildMatrixRows(
+    inds: IndicatorOpt[],
+    months: CalendarMonth[],
+    unitId: string | undefined,
+    mode: UnitMode,
+    withDetails: boolean,
+  ): MatrixRow[] {
+    const rows: MatrixRow[] = [];
+    for (const ind of inds) {
+      const groups = scheduleGroupsOf(ind.id);
+      for (const group of groups) {
+        const spans = buildRowSpans(
+          months,
+          group.intervals,
+          tempMonthKeysOf(ind.id, months, unitId),
+        );
+        const split = groups.length > 1;
+        rows.push({
+          id: split ? `${ind.id}__${group.key}` : ind.id,
+          indicatorId: ind.id,
+          label: split
+            ? `${ind.code}・${ind.name}（${group.periodLabels.join("、")}）`
+            : `${ind.code}・${ind.name}`,
+          spans,
+          details: withDetails
+            ? matrixScoringDetails(ind, spans, unitId, mode)
+            : [],
+        });
+      }
+    }
+    return rows;
+  }
 
   const causeCountRows = useMemo(() => {    const counts = new Map<string, number>();
     for (const record of recordsInMonths(scopedRecords, allMonths)) {
@@ -1625,57 +1736,124 @@ export function ResultsPage({
   }, [unitIndOptions, selIndU]);
 
   /**
-   * v1.40.2「未審月份不顯示」：勾選時只保留該期間欄內有審查紀錄的欄位。
+   * v1.40.2「未審月份不顯示」：勾選時隱藏無資料的期間。
+   * v1.88.17：改為「隱藏整段無資料區間」——隱藏單位是每列的合併格（span），
+   * 不是單月欄：某月只有在「所有列包含它的 span 都無紀錄」時才隱藏，
+   * 有紀錄的 span 內的無資料月份仍顯示（不切斷合併格、不破壞 colspan 對齊）。
    * 判斷以目前查詢範圍內的審查紀錄為準（組別分析＝該組指標、單位分析＝該單位
-   * 該組／指標、指標分析＝該支指標；皆限已查詢的年份區間）：該欄總審查數為 0
-   * 就隱藏，≥1 就顯示。區間單位為季／半年／年時同理（該區間全部月份合計）。
-   * 只影響矩陣的期間欄位顯示，不改計算公式、不改下探邏輯、不動 allMonths。
+   * 該組／指標；皆限已查詢的年份區間），含封存摘要。只影響矩陣的期間欄位顯示，
+   * 不改計算公式、不改下探邏輯、不動 allMonths。
+   * 指標分析無矩陣，沿用舊的按月判定（只影響下探 CAPA 偵測用的欄位）。
    */
+  const inArchivedMonths = useCallback(
+    (
+      ids: string[],
+      months: { year: number; month: number }[],
+      unitId?: string,
+    ): boolean =>
+      ids.some((id) =>
+        (summaryPlans.get(id)?.archivedCells ?? []).some(
+          (c) =>
+            (unitId === undefined || c.unitId === unitId) &&
+            months.some((m) => m.year === c.year && m.month === c.month),
+        ),
+      ),
+    [summaryPlans],
+  );
+  /** 全範圍（未隱藏）的矩陣列：僅供 hideEmptyMonths 時判斷哪些月份屬於有資料的 span。 */
+  const allMonthRows = useMemo<MatrixRow[]>(() => {
+    if (!hideEmptyMonths || (tab !== "group" && tab !== "unit")) return [];
+    const months = appliedColumns.flatMap((c) => c.months);
+    if (tab === "unit") {
+      return buildMatrixRows(unitIndicators, months, selUnitCode, unitUnit, false);
+    }
+    return buildMatrixRows(groupIndicators, months, undefined, groupUnit, false);
+    // buildMatrixRows 為當次 render 的閉包（讀最新值）；deps 列其全部反應式輸入。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    hideEmptyMonths,
+    tab,
+    appliedColumns,
+    groupIndicators,
+    unitIndicators,
+    selUnitCode,
+    groupUnit,
+    unitUnit,
+    archiveCtx,
+    recordIndex,
+    tempTaskIds,
+    tempTaskKeys,
+    hybridByInd,
+  ]);
   const visibleColumns = useMemo(() => {
     if (!hideEmptyMonths) return appliedColumns;
-    const hasRecords = (col: AnalysisPeriodColumn): boolean => {
-      const inArchived = (ids: string[], unitId?: string) =>
-        ids.some((id) =>
-          (summaryPlans.get(id)?.archivedCells ?? []).some(
-            (c) =>
-              (unitId === undefined || c.unitId === unitId) &&
-              col.months.some((m) => m.year === c.year && m.month === c.month),
-          ),
-        );
-      if (tab === "unit") {
-        const ids = unitIndicators.map((ind) => ind.id);
-        return (
-          columnRecordCount(recordIndex, ids, col.months, selUnitCode) > 0 ||
-          inArchived(ids, selUnitCode)
-        );
+    if (tab === "indicator") {
+      const hasRecords = (col: AnalysisPeriodColumn): boolean =>
+        selIndicator !== "" &&
+        (columnRecordCount(recordIndex, [selIndicator], col.months) > 0 ||
+          inArchivedMonths([selIndicator], col.months));
+      return appliedColumns.filter(hasRecords);
+    }
+    if (tab !== "group" && tab !== "unit") return appliedColumns;
+    const unitId = tab === "unit" ? selUnitCode : undefined;
+    const visibleKeys = new Set<string>();
+    for (const row of allMonthRows) {
+      for (const span of row.spans) {
+        const hasData =
+          columnRecordCount(recordIndex, [row.indicatorId], span.months, unitId) > 0 ||
+          inArchivedMonths([row.indicatorId], span.months, unitId);
+        if (!hasData) continue;
+        for (const m of span.months) visibleKeys.add(`${m.year}-${m.month}`);
       }
-      if (tab === "indicator") {
-        return (
-          selIndicator !== "" &&
-          (columnRecordCount(recordIndex, [selIndicator], col.months) > 0 ||
-            inArchived([selIndicator]))
-        );
-      }
-      return (
-        columnRecordCount(
-          recordIndex,
-          groupIndicators.map((ind) => ind.id),
-          col.months,
-        ) > 0 || inArchived(groupIndicators.map((ind) => ind.id))
-      );
-    };
-    return appliedColumns.filter(hasRecords);
+    }
+    return appliedColumns.filter((c) => visibleKeys.has(c.key));
   }, [
     hideEmptyMonths,
     appliedColumns,
     recordIndex,
     tab,
-    groupIndicators,
-    unitIndicators,
     selIndicator,
     selUnitCode,
     summaryPlans,
+    allMonthRows,
+    inArchivedMonths,
   ]);
+
+  /** 目前頁籤的矩陣列（組別／單位分析；指標分析無矩陣回 []）。 */
+  const matrixRows = useMemo<MatrixRow[]>(() => {
+    const months = visibleColumns.flatMap((c) => c.months);
+    if (tab === "group") {
+      return buildMatrixRows(groupIndicators, months, undefined, groupUnit, true);
+    }
+    if (tab === "unit") {
+      return buildMatrixRows(unitIndicators, months, selUnitCode, unitUnit, true);
+    }
+    return [];
+    // 同 allMonthRows：deps 列 buildMatrixRows 的全部反應式輸入。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    tab,
+    visibleColumns,
+    groupIndicators,
+    unitIndicators,
+    selUnitCode,
+    groupUnit,
+    unitUnit,
+    archiveCtx,
+    recordIndex,
+    tempTaskIds,
+    tempTaskKeys,
+    hybridByInd,
+  ]);
+  /** 列 id → 列（含指標 id 與 spans；分列時 id 帶排程 key，勿直接當指標 id 用）。 */
+  const rowMetaById = useMemo(
+    () => new Map(matrixRows.map((r) => [r.id, r])),
+    [matrixRows],
+  );
+  const rowIndOf = (rowId: string): string =>
+    rowMetaById.get(rowId)?.indicatorId ?? rowId;
+  const rowSpansOf = (rowId: string): RowSpan[] =>
+    rowMetaById.get(rowId)?.spans ?? [];
 
   // 期間說明文字（modal 副標共用；顯示已生效的查詢條件）
   const periodDesc = useMemo(() => {
@@ -1724,10 +1902,10 @@ export function ResultsPage({
     if (hcs) {
       if (mode === "unit") {
         const ur = unitPassRateFromCells(hcs, th);
-        return { ...ur, title: ur.rate == null ? "無資料" : `達閾值 ${ur.pass}／${ur.total} 單位` };
+        return { ...ur, title: ur.rate == null ? "未審核" : `達閾值 ${ur.pass}／${ur.total} 單位` };
       }
       const pr = passRateFromCells(hcs);
-      return { ...pr, title: pr.total === 0 ? "無資料" : `達閾值 ${pr.pass}／${pr.total} 人次` };
+      return { ...pr, title: pr.total === 0 ? "未審核" : `達閾值 ${pr.pass}／${pr.total} 人次` };
     }
     // A3：查表取該指標該期間欄（可再限單位）的紀錄，不再全量 filter。
     const recs = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
@@ -1737,14 +1915,14 @@ export function ResultsPage({
         ...ur,
         title:
           ur.rate == null
-            ? "無資料"
+            ? "未審核"
             : `達閾值 ${ur.pass}／${ur.total} 單位`,
       };
     }
     const pr = passRateOf(recs, th);
     return {
       ...pr,
-      title: pr.total === 0 ? "無資料" : `達閾值 ${pr.pass}／${pr.total} 人次`,
+      title: pr.total === 0 ? "未審核" : `達閾值 ${pr.pass}／${pr.total} 人次`,
     };
   }
 
@@ -1785,11 +1963,16 @@ export function ResultsPage({
     return [...details].map(([key, value]) => ({ key, ...value }));
   }
 
-  /** 曲線圖數列（只取有資料的欄；附 hover 提示文字；v1.59.0 附加審標註） */
+  /**
+   * 曲線圖數列（v1.88.17 Q6=A：一點一合併格，x 軸標籤為區間，如 9–11月；
+   * 只取有資料的格；附 hover 提示文字；v1.59.0 附加審標註）。
+   * spans 為該列的合併格（矩陣列的 spans；未傳時以單月格計）。
+   */
   function chartSeries(
     indicatorId: string,
     unitId: string | undefined,
     mode: UnitMode,
+    spans?: RowSpan[],
   ): { values: number[]; labels: string[]; tips: string[]; cols: AnalysisPeriodColumn[]; notes: (string | null)[]; thresholds: (number | null)[] } {
     const values: number[] = [];
     const labels: string[] = [];
@@ -1798,7 +1981,7 @@ export function ResultsPage({
     const notes: (string | null)[] = [];
     const thresholds: (number | null)[] = [];
     const curTh = indOf.get(indicatorId)?.threshold ?? 0;
-    for (const col of appliedColumns) {
+    for (const col of spans ?? appliedColumns) {
       const c = cellValue(indicatorId, col, unitId, mode);
       if (c.rate != null) {
         const hcs = cellsOfInd(indicatorId, col.months, unitId);
@@ -1851,12 +2034,13 @@ export function ResultsPage({
     return sectionPassRateOf(periodRecords, section.ids, section.kind, indicator.threshold);
   }
 
-  /** v1.53.0：分組曲線圖數列（每組一張單線圖；只取有資料的欄；v1.59.0 附加審標註） */
+  /** v1.53.0：分組曲線圖數列（每組一張單線圖；一點一合併格，見 chartSeries；只取有資料的格；v1.59.0 附加審標註） */
   function sectionChartSeries(
     indicatorId: string,
     unitId: string | undefined,
     mode: UnitMode,
     sectionKey: string,
+    spans?: RowSpan[],
   ): { values: number[]; labels: string[]; tips: string[]; cols: AnalysisPeriodColumn[]; notes: (string | null)[]; thresholds: (number | null)[] } {
     const ind = indOf.get(indicatorId);
     const values: number[] = [];
@@ -1866,7 +2050,7 @@ export function ResultsPage({
     const notes: (string | null)[] = [];
     const thresholds: (number | null)[] = [];
     if (!ind) return { values, labels, tips, cols, notes, thresholds };
-    for (const col of appliedColumns) {
+    for (const col of spans ?? appliedColumns) {
       const hcs = cellsOfInd(indicatorId, col.months, unitId);
       const recs = hcs ? [] : recordsForIndex(recordIndex, indicatorId, col.months, unitId);
       let pr: PassRate;
@@ -1916,13 +2100,16 @@ export function ResultsPage({
     mode: UnitMode,
     scopeLabel: string,
     section?: SectionRef,
+    spans?: RowSpan[],
   ) {
     if (requireRaw(indicatorId)) return;
     const ind = indOf.get(indicatorId);
     if (!ind) return;
+    const chartSpans =
+      spans ?? spansForIndicator(indicatorId, visibleColumns.flatMap((c) => c.months), unitId);
     const { values, labels, tips, cols, notes, thresholds } = section
-      ? sectionChartSeries(indicatorId, unitId, mode, section.key)
-      : chartSeries(indicatorId, unitId, mode);
+      ? sectionChartSeries(indicatorId, unitId, mode, section.key, chartSpans)
+      : chartSeries(indicatorId, unitId, mode, chartSpans);
     setChartModal({
       title: section
         ? `${ind.code}・${ind.name}・${section.label} 達閾值率曲線`
@@ -1977,6 +2164,10 @@ export function ResultsPage({
       sectionKey: extra?.sectionKey,
       questionId: extra?.questionId,
       optionLabel: extra?.optionLabel,
+      // v1.88.17 Q5=C：多月合併格先展開區間內各月明細（選月彈窗），再選單月進入 L1／L2。
+      // 全期間欄（key "__all__"）與直接開 L2（l2All）不經選月。
+      pickMonths:
+        !extra?.l2All && col.key !== "__all__" && col.months.length > 1,
     });
   }
 
@@ -2035,14 +2226,37 @@ export function ResultsPage({
   }, [recordIndex, selIndicator, allMonths]);
   const indSel = indOf.get(selIndicator);
   const hybridCells = (selIndicator ? hybridByInd.get(selIndicator) : undefined) ?? null;
+  /** 指標分析頁籤該指標的合併格（曲線圖一點一格、unit-period 計分用；與矩陣列同 spans）。 */
+  const indSpans = useMemo<RowSpan[]>(
+    () =>
+      selIndicator
+        ? spansForIndicator(
+            selIndicator,
+            visibleColumns.flatMap((c) => c.months),
+            undefined,
+          )
+        : [],
+    // spansForIndicator 為當次 render 的閉包；deps 列其全部反應式輸入。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      selIndicator,
+      visibleColumns,
+      archiveCtx,
+      appliedColumns,
+      recordIndex,
+      tempTaskIds,
+      tempTaskKeys,
+      hybridByInd,
+    ],
+  );
   const indSummary = useMemo(() => {
     if (!indSel) return null;
     const th = indSel.threshold;
     if (hybridCells) {
       const cells = hybridCells;
-      const unitPr = unitPeriodPassRateFromCells(cells, appliedColumns, th);
+      const unitPr = unitPeriodPassRateFromCells(cells, indSpans, th);
       const merged = passRateFromCells(cells);
-      const perColumn = appliedColumns.map((column) => {
+      const perColumn = indSpans.map((column) => {
         const cs = cellsInMonths(cells, column.months);
         return {
           column,
@@ -2077,19 +2291,19 @@ export function ResultsPage({
         scoringRows: !indSel.groupScoring
           ? []
           : indUnit === "unit"
-            ? unitScoringRowsFromCells(cells, indSel.questions, appliedColumns, th)
+            ? unitScoringRowsFromCells(cells, indSel.questions, indSpans, th)
             : personScoringRowsFromCells(cells, indSel.questions),
       };
     }
     const unitIds = new Set(indRecs.map((record) => record.unitId));
-    const unitPr = unitPeriodPassRate(indRecs, appliedColumns, th);
+    const unitPr = unitPeriodPassRate(indRecs, indSpans, th);
     const merged = passRateOf(indRecs, th);
     const perColumn =
       indUnit === "unit"
-        ? appliedColumns.map((column) => ({ column, pr: unitPassRate(recordsInMonths(indRecs, column.months), th) }))
-        : appliedColumns.map((column) => ({ column, pr: passRateOf(recordsInMonths(indRecs, column.months), th) }));
+        ? indSpans.map((column) => ({ column, pr: unitPassRate(recordsInMonths(indRecs, column.months), th) }))
+        : indSpans.map((column) => ({ column, pr: passRateOf(recordsInMonths(indRecs, column.months), th) }));
     const pts = perColumn.filter(
-      (point): point is { column: AnalysisPeriodColumn; pr: PassRate } & { pr: { rate: number } } => point.pr.rate != null,
+      (point): point is { column: RowSpan; pr: PassRate } & { pr: { rate: number } } => point.pr.rate != null,
     );
     const optionRows = optionDetailRows(indRecs, indSel.questions);
     // v1.59.0：曲線圖加審標註（與 chartSeries 同一判別：該欄紀錄對上加審任務月鍵）
@@ -2119,10 +2333,10 @@ export function ResultsPage({
       scoringRows: !indSel.groupScoring
         ? []
         : indUnit === "unit"
-          ? unitScoringBreakdownRows(indRecs, indSel.questions, appliedColumns, th)
+          ? unitScoringBreakdownRows(indRecs, indSel.questions, indSpans, th)
           : personScoringBreakdownRows(indRecs, indSel.questions, th),
     };
-  }, [indRecs, indSel, indUnit, appliedColumns, tempTaskKeys, hybridCells]);
+  }, [indRecs, indSel, indUnit, indSpans, tempTaskKeys, hybridCells]);
 
   const errorAnalysisRows = hybridCells
     ? questionErrorRowsFromSummaries(
@@ -2353,7 +2567,7 @@ export function ResultsPage({
           <SelectField
             label="區間單位"
             value={interval}
-            onChange={(value) => setInterval(value as AnalysisGranularity)}
+            onChange={(value) => handleIntervalChange(value as AnalysisGranularity)}
             options={[
               { value: "month", label: "月" },
               { value: "year", label: "年" },
@@ -2465,32 +2679,28 @@ export function ResultsPage({
                 note={`${periodDesc}・單元：${groupUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}`}
               />
               <RateMatrix
-                rows={groupIndicators.map((i) => ({
-                  id: i.id,
-                  label: `${i.code}・${i.name}`,
-                  details: matrixScoringDetails(i, visibleColumns, undefined, groupUnit),
-                }))}
+                rows={matrixRows}
                 columns={visibleColumns}
-                cellOf={(id, col) =>
-                  cellValue(id, col, undefined, groupUnit)
+                cellOf={(rowId, col) =>
+                  cellValue(rowIndOf(rowId), col, undefined, groupUnit)
                 }
-                hasExtraReview={(id, col) => hasTempReview(id, col)}
-                onCell={(id, col) => openDrill(id, col, groupUnit)}
-                onDetailCell={(id, detailKey, col) =>
-                  openDrill(id, col, groupUnit, undefined, { sectionKey: detailKey })
+                hasExtraReview={(rowId, col) => hasTempReview(rowIndOf(rowId), col)}
+                onCell={(rowId, col) => openDrill(rowIndOf(rowId), col, groupUnit)}
+                onDetailCell={(rowId, detailKey, col) =>
+                  openDrill(rowIndOf(rowId), col, groupUnit, undefined, { sectionKey: detailKey })
                 }
-                onChart={(id) =>
-                  openChart(id, undefined, groupUnit, "全部單位")
+                onChart={(rowId) =>
+                  openChart(rowIndOf(rowId), undefined, groupUnit, "全部單位", undefined, rowSpansOf(rowId))
                 }
-                onDoc={(id) => openDoc(id, undefined, "全部單位", groupUnit)}
-                onDetailChart={(id, detailKey, detailLabel) =>
-                  openChart(id, undefined, groupUnit, "全部單位", {
+                onDoc={(rowId) => openDoc(rowIndOf(rowId), undefined, "全部單位", groupUnit)}
+                onDetailChart={(rowId, detailKey, detailLabel) =>
+                  openChart(rowIndOf(rowId), undefined, groupUnit, "全部單位", {
                     key: detailKey,
                     label: detailLabel,
-                  })
+                  }, rowSpansOf(rowId))
                 }
-                onDetailDoc={(id, detailKey, detailLabel) =>
-                  openDoc(id, undefined, "全部單位", groupUnit, {
+                onDetailDoc={(rowId, detailKey, detailLabel) =>
+                  openDoc(rowIndOf(rowId), undefined, "全部單位", groupUnit, {
                     key: detailKey,
                     label: detailLabel,
                   })
@@ -2522,65 +2732,63 @@ export function ResultsPage({
                 note={`${periodDesc}・單元：${unitUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}`}
               />
               <RateMatrix
-                rows={unitIndicators.map((i) => ({
-                  id: i.id,
-                  label: `${i.code}・${i.name}`,
-                  details: matrixScoringDetails(i, visibleColumns, selUnitCode, unitUnit),
-                }))}
+                rows={matrixRows}
                 columns={visibleColumns}
-                cellOf={(id, col) =>
-                  cellValue(id, col, selUnitCode, unitUnit)
+                cellOf={(rowId, col) =>
+                  cellValue(rowIndOf(rowId), col, selUnitCode, unitUnit)
                 }
-                hasExtraReview={(id, col) => hasTempReview(id, col, selUnitCode)}
-                thresholdOf={(id) => indOf.get(id)?.threshold ?? 0}
-                capaMarkOf={(id, col) =>
-                  unitCapaCases.find((c) => c.indicatorId === id && c.stage !== "已撤案" && capaInColumn(c, col.months))
+                hasExtraReview={(rowId, col) => hasTempReview(rowIndOf(rowId), col, selUnitCode)}
+                thresholdOf={(rowId) => indOf.get(rowIndOf(rowId))?.threshold ?? 0}
+                capaMarkOf={(rowId, col) =>
+                  unitCapaCases.find((c) => c.indicatorId === rowIndOf(rowId) && c.stage !== "已撤案" && capaInColumn(c, col.months))
                 }
-                onCell={(id, col) =>
-                  openDrill(id, col, unitUnit, selUnitCode)
+                onCell={(rowId, col) =>
+                  openDrill(rowIndOf(rowId), col, unitUnit, selUnitCode)
                 }
-                onDetailCell={(id, detailKey, col) =>
-                  openDrill(id, col, unitUnit, selUnitCode, { sectionKey: detailKey })
+                onDetailCell={(rowId, detailKey, col) =>
+                  openDrill(rowIndOf(rowId), col, unitUnit, selUnitCode, { sectionKey: detailKey })
                 }
-                onChart={(id) =>
+                onChart={(rowId) =>
                   setUnitPanel((p) =>
-                    p?.kind === "chart" && p.indicatorId === id
+                    p?.kind === "chart" && p.rowId === rowId
                       ? null
-                      : { kind: "chart", indicatorId: id },
+                      : { kind: "chart", indicatorId: rowIndOf(rowId), rowId },
                   )
                 }
-                onDoc={(id) =>
-                  requireRaw(id) ||
+                onDoc={(rowId) =>
+                  requireRaw(rowIndOf(rowId)) ||
                   setUnitPanel((p) =>
-                    p?.kind === "doc" && p.indicatorId === id
+                    p?.kind === "doc" && p.rowId === rowId
                       ? null
-                      : { kind: "doc", indicatorId: id },
+                      : { kind: "doc", indicatorId: rowIndOf(rowId), rowId },
                   )
                 }
-                onDetailChart={(id, detailKey, detailLabel) =>
+                onDetailChart={(rowId, detailKey, detailLabel) =>
                   setUnitPanel((p) =>
                     p?.kind === "chart" &&
-                    p.indicatorId === id &&
+                    p.rowId === rowId &&
                     p.sectionKey === detailKey
                       ? null
                       : {
                           kind: "chart",
-                          indicatorId: id,
+                          indicatorId: rowIndOf(rowId),
+                          rowId,
                           sectionKey: detailKey,
                           sectionLabel: detailLabel,
                         },
                   )
                 }
-                onDetailDoc={(id, detailKey, detailLabel) =>
-                  requireRaw(id) ||
+                onDetailDoc={(rowId, detailKey, detailLabel) =>
+                  requireRaw(rowIndOf(rowId)) ||
                   setUnitPanel((p) =>
                     p?.kind === "doc" &&
-                    p.indicatorId === id &&
+                    p.rowId === rowId &&
                     p.sectionKey === detailKey
                       ? null
                       : {
                           kind: "doc",
-                          indicatorId: id,
+                          indicatorId: rowIndOf(rowId),
+                          rowId,
                           sectionKey: detailKey,
                           sectionLabel: detailLabel,
                         },
@@ -2592,14 +2800,21 @@ export function ResultsPage({
                   const ind = indOf.get(unitPanel.indicatorId);
                   if (!ind) return null;
                   if (unitPanel.kind === "chart") {
+                    // v1.88.17：曲線圖一點一合併格，取開啟面板那一列的 spans；找不到列時退回該指標聯集 spans。
+                    const panelSpans = unitPanel.rowId ? rowSpansOf(unitPanel.rowId) : [];
+                    const chartSpans =
+                      panelSpans.length > 0
+                        ? panelSpans
+                        : spansForIndicator(ind.id, visibleColumns.flatMap((c) => c.months), selUnitCode);
                     const s = unitPanel.sectionKey
                       ? sectionChartSeries(
                           ind.id,
                           selUnitCode,
                           unitUnit,
                           unitPanel.sectionKey,
+                          chartSpans,
                         )
-                      : chartSeries(ind.id, selUnitCode, unitUnit);
+                      : chartSeries(ind.id, selUnitCode, unitUnit, chartSpans);
                     return (
                       <UnitBelowPanel
                         title={
@@ -3100,7 +3315,39 @@ export function ResultsPage({
         </div>
       )}
 
-      {drill && (
+      {drill?.pickMonths && (
+        <SpanMonthPicker
+          title={`${indOf.get(drill.indicatorId)?.code ?? ""}・${indOf.get(drill.indicatorId)?.name ?? drill.indicatorId}`}
+          subtitle={`${drill.column.label}・各月明細（點選月份看該月各單位審查結果）`}
+          months={drill.column.months}
+          cellOf={(m) =>
+            cellValue(
+              drill.indicatorId,
+              { key: `${m.year}-${m.month}`, label: fmtYm(m.year, m.month), months: [m] },
+              drill.scopeUnitId,
+              drill.mode,
+            )
+          }
+          onPick={(m) =>
+            setDrill((d) =>
+              d
+                ? {
+                    ...d,
+                    column: {
+                      key: `${m.year}-${m.month}`,
+                      label: fmtYm(m.year, m.month),
+                      months: [m],
+                    },
+                    pickMonths: false,
+                  }
+                : d,
+            )
+          }
+          onClose={() => setDrill(null)}
+        />
+      )}
+
+      {drill && !drill.pickMonths && (
         <DrillModal
           drill={drill}
           onClose={() => setDrill(null)}
@@ -3727,6 +3974,11 @@ function RateMatrix({
   rows: {
     id: string;
     label: string;
+    /**
+     * v1.88.17：該列的合併格（表頭仍為單月欄；每列資料格按自己的排程區間
+     * colspan 合併）。未傳時退回一月一格。
+     */
+    spans?: RowSpan[];
     details?: { key: string; label: string; cells: Record<string, PassRate> }[];
   }[];
   columns: AnalysisPeriodColumn[];
@@ -3786,34 +4038,39 @@ function RateMatrix({
                   </span>
                 </div>
               </td>
-              {columns.map((c) => {
-                const cell = cellOf(row.id, c);
-                const clickable = cell.rate != null && onCell != null;
-                return (
-                  <td
-                    key={c.key}
-                    className={`rate-cell${clickable ? " clickable" : ""}${isBelow(cell.rate, thresholdOf?.(row.id))}`}
-                    title={clickable ? `${cell.title}（點選下探）` : cell.title}
-                    onClick={
-                      clickable ? () => onCell(row.id, c) : undefined
-                    }
-                    role={clickable ? "button" : undefined}
-                    tabIndex={clickable ? 0 : undefined}
-                    onKeyDown={
-                      clickable
-                        ? (e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              onCell(row.id, c);
+              {(() => {
+                // v1.88.17：每列用自己的 spans 渲染（合併格 colSpan）；未傳 spans 時一月一格。
+                const spans = row.spans ?? columns.map((c) => singleMonthSpan(c.months[0]));
+                return spans.map((span) => {
+                  const cell = cellOf(row.id, span);
+                  const clickable = cell.rate != null && onCell != null;
+                  return (
+                    <td
+                      key={span.key}
+                      colSpan={span.months.length}
+                      className={`rate-cell${clickable ? " clickable" : ""}${isBelow(cell.rate, thresholdOf?.(row.id))}`}
+                      title={clickable ? `${cell.title}（點選下探）` : cell.title}
+                      onClick={
+                        clickable ? () => onCell(row.id, span) : undefined
+                      }
+                      role={clickable ? "button" : undefined}
+                      tabIndex={clickable ? 0 : undefined}
+                      onKeyDown={
+                        clickable
+                          ? (e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                onCell(row.id, span);
+                              }
                             }
-                          }
-                        : undefined
-                    }
-                  >
-                    <RateCellBody cell={cell} extra={!!hasExtraReview?.(row.id, c)} capa={capaMarkOf?.(row.id, c)} />
-                  </td>
-                );
-              })}
+                          : undefined
+                      }
+                    >
+                      <RateCellBody cell={cell} extra={!!hasExtraReview?.(row.id, span)} capa={capaMarkOf?.(row.id, span)} />
+                    </td>
+                  );
+                });
+              })()}
             </tr>,
             ...(row.details ?? []).map((detail) => (
               <tr key={`${row.id}-detail-${detail.key}`} className="analysis-matrix-detail-row">
@@ -3845,34 +4102,39 @@ function RateMatrix({
                     </span>
                   </div>
                 </td>
-                {columns.map((column) => {
-                  const detailCell = detail.cells[column.key] ?? { pass: 0, total: 0, rate: null };
-                  const detailClickable = detailCell.rate != null && onDetailCell != null;
-                  return (
-                    <td
-                      key={column.key}
-                      className={`rate-cell${detailClickable ? " clickable" : ""}${isBelow(detailCell.rate, thresholdOf?.(row.id))}`}
-                      title={detailClickable ? `${formatPassRate(detailCell)}（點選下探到個人審查結果）` : formatPassRate(detailCell)}
-                      onClick={
-                        detailClickable ? () => onDetailCell(row.id, detail.key, column) : undefined
-                      }
-                      role={detailClickable ? "button" : undefined}
-                      tabIndex={detailClickable ? 0 : undefined}
-                      onKeyDown={
-                        detailClickable
-                          ? (e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                e.preventDefault();
-                                onDetailCell(row.id, detail.key, column);
+                {(() => {
+                  // v1.88.17：明細列與主列用同一組 spans 合併（否則欄位錯位）。
+                  const spans = row.spans ?? columns.map((c) => singleMonthSpan(c.months[0]));
+                  return spans.map((span) => {
+                    const detailCell = detail.cells[span.key] ?? { pass: 0, total: 0, rate: null };
+                    const detailClickable = detailCell.rate != null && onDetailCell != null;
+                    return (
+                      <td
+                        key={span.key}
+                        colSpan={span.months.length}
+                        className={`rate-cell${detailClickable ? " clickable" : ""}${isBelow(detailCell.rate, thresholdOf?.(row.id))}`}
+                        title={detailClickable ? `${formatPassRate(detailCell)}（點選下探到個人審查結果）` : formatPassRate(detailCell)}
+                        onClick={
+                          detailClickable ? () => onDetailCell(row.id, detail.key, span) : undefined
+                        }
+                        role={detailClickable ? "button" : undefined}
+                        tabIndex={detailClickable ? 0 : undefined}
+                        onKeyDown={
+                          detailClickable
+                            ? (e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  onDetailCell(row.id, detail.key, span);
+                                }
                               }
-                            }
-                          : undefined
-                      }
-                    >
-                      <RateCellBody cell={detailCell} extra={!!hasExtraReview?.(row.id, column)} />
-                    </td>
-                  );
-                })}
+                            : undefined
+                        }
+                      >
+                        <RateCellBody cell={detailCell} extra={!!hasExtraReview?.(row.id, span)} />
+                      </td>
+                    );
+                  });
+                })()}
               </tr>
             )),
           ])}
@@ -3912,6 +4174,91 @@ function UnitBelowPanel({
         </button>
       </div>
       {children}
+    </div>
+  );
+}
+
+/* ================= 下探：合併格先展開區間內各月（v1.88.17 Q5=C） ================= */
+
+/** 點多月合併格時的中間層：列出區間內各月達閾值率，點有資料的月份進入 L1。 */
+function SpanMonthPicker({
+  title,
+  subtitle,
+  months,
+  cellOf,
+  onPick,
+  onClose,
+}: {
+  title: string;
+  subtitle: string;
+  months: { year: number; month: number }[];
+  cellOf: (month: { year: number; month: number }) => CellValue;
+  onPick: (month: { year: number; month: number }) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="reviewer-modal-backdrop" onClick={onClose}>
+      <div
+        className="reviewer-modal panel"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <div className="reviewer-modal-head">
+          <div>
+            <h2>{title}</h2>
+            <p>{subtitle}</p>
+          </div>
+          <button
+            className="button button-ghost"
+            onClick={onClose}
+            aria-label="關閉"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="analysis-table-wrap">
+          <table className="data-table analysis-matrix">
+            <thead>
+              <tr>
+                <th className="ind-col">審查月份</th>
+                <th className="rate-col">達閾值率</th>
+              </tr>
+            </thead>
+            <tbody>
+              {months.map((m) => {
+                const cell = cellOf(m);
+                const clickable = cell.rate != null;
+                return (
+                  <tr key={`${m.year}-${m.month}`}>
+                    <td className="ind-col">{fmtYm(m.year, m.month)}</td>
+                    <td
+                      className={`rate-cell${clickable ? " clickable" : ""}`}
+                      title={clickable ? `${cell.title}（點選看該月各單位）` : cell.title}
+                      onClick={clickable ? () => onPick(m) : undefined}
+                      role={clickable ? "button" : undefined}
+                      tabIndex={clickable ? 0 : undefined}
+                      onKeyDown={
+                        clickable
+                          ? (e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                onPick(m);
+                              }
+                            }
+                          : undefined
+                      }
+                    >
+                      <RateCellBody cell={cell} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
@@ -4178,7 +4525,7 @@ function DrillModal({
           })();
       map.set(unitId, {
         ...pr,
-        title: pr.total === 0 ? "無資料" : `達閾值 ${pr.pass}／${pr.total} 人次`,
+        title: pr.total === 0 ? "未審核" : `達閾值 ${pr.pass}／${pr.total} 人次`,
       });
     }
     return map;
@@ -4222,7 +4569,10 @@ function DrillModal({
     const map = new Map<string, { need: number; series: { label: string; rate: number; ym: string }[] }>();
     if (!capaSettings?.triggerEnabled || th <= 0 || filterIds) return map;
     const need = Math.max(1, capaSettings.indicatorOverrides[drill.indicatorId] ?? capaSettings.defaultTriggerPeriods);
-    const idx = columns.findIndex((c) => c.key === col.key);
+    // v1.88.17：columns 已是一月一欄；取選定格最後一個月的索引作截止（含整個合併格）。
+    const lastMonth = col.months[col.months.length - 1];
+    const lastKey = lastMonth ? `${lastMonth.year}-${lastMonth.month}` : col.key;
+    const idx = columns.findIndex((c) => c.key === lastKey);
     const cols = idx >= 0 ? columns.slice(0, idx + 1) : [col];
     const rateOf = (months: { year: number; month: number }[], unitId: string): PassRate => {
       const cells = summaryCellsFor(drill.indicatorId, months, unitId);
@@ -4240,7 +4590,10 @@ function DrillModal({
         series.push({ label: c.label, rate: pr.rate, ym: `${withData.year}-${pad2(withData.month)}` });
       }
       const last = series.slice(-need);
-      const selectedHasData = series.length > 0 && series[series.length - 1].label === col.label;
+      const lastYm = series.length > 0 ? series[series.length - 1].ym : "";
+      const selectedHasData =
+        series.length > 0 &&
+        col.months.some((m) => `${m.year}-${pad2(m.month)}` === lastYm);
       if (selectedHasData && last.length >= need && last.every((x) => x.rate < th)) {
         map.set(unitId, { need, series: last });
       }
@@ -4444,7 +4797,7 @@ function DrillModal({
                           title={
                             clickable
                               ? `${cell.title}（點選看被審人員）`
-                              : (cell?.title ?? "無資料")
+                              : (cell?.title ?? "未審核")
                           }
                           onClick={
                             clickable ? () => onSelectUnit(unitId) : undefined
