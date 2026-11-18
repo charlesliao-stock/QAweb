@@ -109,6 +109,10 @@ import {
   type ScheduleSpanGroup,
 } from "../lib/analysisSpans";
 import {
+  detectCapaTrigger,
+  type CapaTrigger,
+} from "../lib/capaTrigger";
+import {
   formatPassRate,
   belowClass,
   causeRecordEntries,
@@ -390,11 +394,11 @@ function capaInColumn(item: CapaCase, months: { year: number; month: number }[])
 
 /**
  * 矩陣格內容（v1.76.5）：百分比在上、(分子/分母) 在下以縮減欄寬；
- * 加審字樣置於右側垂直置中。無紀錄顯示「未審核」（v1.88.17 Q4=A：
- * 不看排程／任務，無紀錄即未審核）。
+ * 加審字樣置於右側垂直置中。無紀錄顯示「—」（v1.88.18：未排程、無資料；
+ * v1.88.17 曾改為另一文案，v1.88.18 改回 —）。
  */
 function RateCellBody({ cell, extra, capa }: { cell: PassRate; extra?: boolean; capa?: CapaCase }) {
-  if (cell.rate == null) return <>未審核</>;
+  if (cell.rate == null) return <>—</>;
   const pct = Number.isInteger(cell.rate) ? String(cell.rate) : cell.rate.toFixed(1);
   return (
     <span className="rate-stack">
@@ -1325,6 +1329,21 @@ export function ResultsPage({
     );
   }
 
+  /**
+   * CAPA 偵測用 spans（v1.88.18）：一個排程區間算一次審查；
+   * 加審月份不切出、歸併原區間（不另算一期）。與 spansForIndicator 的差別
+   * 只在 tempMonthKeys 傳空集合；分列排程仍走聯集（防禦性 fallback，
+   * 指標層級偵測用，矩陣列仍走 buildMatrixRows 的分組 spans）。
+   */
+  function capaSpansForIndicator(
+    indicatorId: string,
+    months: CalendarMonth[],
+  ): RowSpan[] {
+    const groups = scheduleGroupsOf(indicatorId);
+    const intervals = groups.flatMap((g) => g.intervals);
+    return buildRowSpans(months, intervals, new Set());
+  }
+
   /** 建矩陣列：每支指標依排程分組分列（重疊才分列，否則一列）；每列 spans＋分組明細列。 */
   function buildMatrixRows(
     inds: IndicatorOpt[],
@@ -1902,10 +1921,10 @@ export function ResultsPage({
     if (hcs) {
       if (mode === "unit") {
         const ur = unitPassRateFromCells(hcs, th);
-        return { ...ur, title: ur.rate == null ? "未審核" : `達閾值 ${ur.pass}／${ur.total} 單位` };
+        return { ...ur, title: ur.rate == null ? "無資料" : `達閾值 ${ur.pass}／${ur.total} 單位` };
       }
       const pr = passRateFromCells(hcs);
-      return { ...pr, title: pr.total === 0 ? "未審核" : `達閾值 ${pr.pass}／${pr.total} 人次` };
+      return { ...pr, title: pr.total === 0 ? "無資料" : `達閾值 ${pr.pass}／${pr.total} 人次` };
     }
     // A3：查表取該指標該期間欄（可再限單位）的紀錄，不再全量 filter。
     const recs = recordsForIndex(recordIndex, indicatorId, col.months, unitId);
@@ -1915,14 +1934,14 @@ export function ResultsPage({
         ...ur,
         title:
           ur.rate == null
-            ? "未審核"
+            ? "無資料"
             : `達閾值 ${ur.pass}／${ur.total} 單位`,
       };
     }
     const pr = passRateOf(recs, th);
     return {
       ...pr,
-      title: pr.total === 0 ? "未審核" : `達閾值 ${pr.pass}／${pr.total} 人次`,
+      title: pr.total === 0 ? "無資料" : `達閾值 ${pr.pass}／${pr.total} 人次`,
     };
   }
 
@@ -2240,6 +2259,28 @@ export function ResultsPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       selIndicator,
+      visibleColumns,
+      archiveCtx,
+      appliedColumns,
+      recordIndex,
+      tempTaskIds,
+      tempTaskKeys,
+      hybridByInd,
+    ],
+  );
+  /** 下探 CAPA 偵測用 spans（v1.88.18）：一個區間算一次審查，加審歸併原區間。 */
+  const drillCapaSpans = useMemo<RowSpan[]>(
+    () =>
+      drill
+        ? capaSpansForIndicator(
+            drill.indicatorId,
+            visibleColumns.flatMap((c) => c.months),
+          )
+        : [],
+    // capaSpansForIndicator 為當次 render 的閉包；deps 列其全部反應式輸入。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      drill,
       visibleColumns,
       archiveCtx,
       appliedColumns,
@@ -3373,7 +3414,7 @@ export function ResultsPage({
           recordIndex={recordIndex}
           indOf={indOf}
           unitNameOf={unitNameOf}
-          columns={visibleColumns}
+          capaSpans={drillCapaSpans}
         />
       )}
 
@@ -4353,7 +4394,7 @@ function DrillModal({
   recordIndex,
   indOf,
   unitNameOf,
-  columns,
+  capaSpans,
 }: {
   drill: DrillState;
   onClose: () => void;
@@ -4367,8 +4408,8 @@ function DrillModal({
   recordIndex: RecordIndex;
   indOf: Map<string, IndicatorOpt>;
   unitNameOf: Map<string, string>;
-  /** 目前查詢畫面的期間欄（由舊到新）：連續未達標偵測只用已載入的欄，不另外讀取 */
-  columns: AnalysisPeriodColumn[];
+  /** CAPA 偵測用 spans（v1.88.18：一個排程區間算一次審查，加審月份已歸併原區間不切出；由舊到新）：連續未達標偵測只用已載入的 spans，不另外讀取 */
+  capaSpans: RowSpan[];
 }) {
   const ind = indOf.get(drill.indicatorId);
   const th = ind?.threshold ?? 0;
@@ -4525,7 +4566,7 @@ function DrillModal({
           })();
       map.set(unitId, {
         ...pr,
-        title: pr.total === 0 ? "未審核" : `達閾值 ${pr.pass}／${pr.total} 人次`,
+        title: pr.total === 0 ? "無資料" : `達閾值 ${pr.pass}／${pr.total} 人次`,
       });
     }
     return map;
@@ -4563,43 +4604,31 @@ function DrillModal({
     }
     return map;
   }, [l1Summary, l1Units, recordIndex, drill.indicatorId, col]);
-  // 連續未達標偵測：只用目前查詢畫面已載入的期間欄；沒有審查資料的欄不列入；
-  // 期數取 CAPA 設定（指標覆寫優先，否則全院預設）。選定期間本身須有資料且為最新一期。
+  // 連續未達標偵測（v1.88.18）：一個排程區間（span）算一次審查，不按月算；
+  // 不論區間或單月，連續 need 次未達標就觸發；沒有審查資料的期不列入；
+  // 期數取 CAPA 設定（指標覆寫優先，否則全院預設，預設 2）。選定期本身須有資料且為最新一期。
   const capaTriggers = useMemo(() => {
-    const map = new Map<string, { need: number; series: { label: string; rate: number; ym: string }[] }>();
+    const map = new Map<string, CapaTrigger>();
     if (!capaSettings?.triggerEnabled || th <= 0 || filterIds) return map;
     const need = Math.max(1, capaSettings.indicatorOverrides[drill.indicatorId] ?? capaSettings.defaultTriggerPeriods);
-    // v1.88.17：columns 已是一月一欄；取選定格最後一個月的索引作截止（含整個合併格）。
-    const lastMonth = col.months[col.months.length - 1];
-    const lastKey = lastMonth ? `${lastMonth.year}-${lastMonth.month}` : col.key;
-    const idx = columns.findIndex((c) => c.key === lastKey);
-    const cols = idx >= 0 ? columns.slice(0, idx + 1) : [col];
     const rateOf = (months: { year: number; month: number }[], unitId: string): PassRate => {
       const cells = summaryCellsFor(drill.indicatorId, months, unitId);
       if (cells) return passRateFromCells(cells.filter((c) => c.unitId === unitId));
       return passRateOf(recordsForIndex(recordIndex, drill.indicatorId, months, unitId), th);
     };
     for (const unitId of l1Units) {
-      const series: { label: string; rate: number; ym: string }[] = [];
-      for (const c of cols) {
-        const pr = rateOf(c.months, unitId);
-        if (pr.rate == null || pr.total === 0) continue;
-        const withData = [...c.months]
-          .sort((a, b) => b.year * 100 + b.month - (a.year * 100 + a.month))
-          .find((m) => rateOf([m], unitId).total > 0) ?? c.months[c.months.length - 1];
-        series.push({ label: c.label, rate: pr.rate, ym: `${withData.year}-${pad2(withData.month)}` });
-      }
-      const last = series.slice(-need);
-      const lastYm = series.length > 0 ? series[series.length - 1].ym : "";
-      const selectedHasData =
-        series.length > 0 &&
-        col.months.some((m) => `${m.year}-${pad2(m.month)}` === lastYm);
-      if (selectedHasData && last.length >= need && last.every((x) => x.rate < th)) {
-        map.set(unitId, { need, series: last });
-      }
+      const trig = detectCapaTrigger(
+        capaSpans,
+        (months) => rateOf(months, unitId),
+        (m) => rateOf([m], unitId).total > 0,
+        col.months,
+        need,
+        th,
+      );
+      if (trig) map.set(unitId, trig);
     }
     return map;
-  }, [capaSettings, th, filterIds, drill.indicatorId, columns, col, l1Units, summaryCellsFor, recordIndex]);
+  }, [capaSettings, th, filterIds, drill.indicatorId, capaSpans, col, l1Units, summaryCellsFor, recordIndex]);
   const startCapa = (unitId: string) => {
     const trig = capaTriggers.get(unitId);
     if (!trig) return;
@@ -4797,7 +4826,7 @@ function DrillModal({
                           title={
                             clickable
                               ? `${cell.title}（點選看被審人員）`
-                              : (cell?.title ?? "未審核")
+                              : (cell?.title ?? "無資料")
                           }
                           onClick={
                             clickable ? () => onSelectUnit(unitId) : undefined
