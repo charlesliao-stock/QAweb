@@ -18,7 +18,7 @@ import {
 import { requiredCases } from "../../lib/reviewProgress";
 import type { DashboardData } from "./useDashboardData";
 import { CapaPendingReviewCard } from "./CapaPendingReviewCard";
-import { pad2 } from "../../lib/ym";
+import { fmtYm } from "../../lib/ym";
 import { stripInternalIdPrefix } from "../../lib/indicators";
 
 export function HeadNurseTab({
@@ -144,7 +144,7 @@ export function HeadNurseTab({
       {sections.nextMonthPreview && (
         <section className="panel">
           <SectionTitle
-            title={`次月受審預告（${nextYear}/${pad2(nextMonth)}）`}
+            title={`次月受審預告（${fmtYm(nextYear, nextMonth)}）`}
           />
         {nextAudits.length === 0 ? (
           <p className="settings-note">次月本單位尚無排定審查。</p>
@@ -179,7 +179,7 @@ export function HeadNurseTab({
       {sections.unitAvg ? (
         <section className="panel">
           <SectionTitle
-            title={`本單位 vs 全院基準（${curYear}/${pad2(curMonth)}）`}
+            title={`本單位 vs 全院基準（${fmtYm(curYear, curMonth)}）`}
             note="僅顯示全院平均，不顯示其他單位數值"
           />
         <div className="table-scroll dashboard-responsive-table">

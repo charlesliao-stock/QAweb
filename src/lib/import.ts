@@ -517,7 +517,7 @@ export interface ResultImportRowResult {
 /**
  * 審查月份解析（v1.40.4，配合 Google 表單匯出）：
  * - 2026-11 / 2026/11 / 2026.11（既有）
- * - 2026/11/05 / 2026-11-05（年月日，日忽略；單數日亦可）
+ * - 2026/9/5 / 2026-9-5（年月日，日忽略；月、日不用補 0）
  * - Excel 日期序列（5 位數字，如 46331＝2026-11-05；xssx 未開 cellDates 時
  *   日期格即以序列傳入）；範圍 1981-01-01～2100-12-31，其餘回傳 null
  * - Date 物件先經 normalizeSheetRows 轉為 YYYY-MM-DD 再進此函式
@@ -1042,7 +1042,7 @@ export function validateResultSheet(
     const ym = parseReviewMonth(r.monthRaw);
     if (!ym)
       errors.push(
-        `審查月份「${r.monthRaw || "（空白）"}」格式須為 YYYY-MM 或 YYYY/MM/DD（如 2026/11/05）`,
+        `審查月份「${r.monthRaw || "（空白）"}」格式須為 YYYY-MM 或 YYYY/MM/DD（如 2026/9/5，月、日不用補 0）`,
       );
     // v1.47.0：審查員職編有填且不在人員檔＝硬錯誤；人員檔未載入時改軟
     // 錯誤（不直接放行、也不擋死），由匯入者決定。

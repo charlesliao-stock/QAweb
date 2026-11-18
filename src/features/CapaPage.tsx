@@ -14,11 +14,12 @@ import { maskName } from "../lib/mask";
 import { useOrgMeta } from "../lib/useOrgMeta";
 import { hasRoleCategory, titleFlagsOf } from "../lib/orgMeta";
 import { isConvenerRole, isOfficerRole, isReviewerRole } from "../lib/roleIdentity";
+import { fmtIsoDateTime } from "../lib/ym";
 
 type LaunchContext = { indicatorId?: string; indicatorCode?: string; indicatorName?: string; threshold?: number; period?: string; periodKeys?: string[]; unitCode?: string; unitName?: string; rate?: number; summary?: string; snapshots?: Array<{ period: string; rate: number }>; caseId?: string };
 type ViewTab = "cases" | "settings" | "templates";
 type SortKey = "number" | "unit" | "owner" | "indicator" | "reason" | "due" | "progress";
-const formatDateTime = (value: string) => value ? new Date(value).toLocaleString("zh-TW", { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+const formatDateTime = (value: string) => fmtIsoDateTime(value);
 const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 /** 改善期限預設為發動（建立）後 30 天；舊案件未設定時以建立日＋30 天顯示 */
 const addDaysKey = (iso: string, days: number) => { const base = iso ? new Date(iso) : new Date(); base.setDate(base.getDate() + days); return dateKey(base); };

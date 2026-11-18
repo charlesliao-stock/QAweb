@@ -84,7 +84,7 @@ import { AdminCleanupSection } from "./AdminCleanupSection";
 import { DbStatusSection } from "./DbStatusSection";
 import { MailLogSection } from "./MailLogSection";
 import { getReadMeter, resetReadMeter, subscribeReadMeter } from "../lib/readMeter";
-import { pad2 } from "../lib/ym";
+import { fmtDateTime, fmtIsoDateTime, pad2 } from "../lib/ym";
 
 function formatParamValue(key: keyof SystemParams, value: unknown): string {
   const opts = SYSTEM_PARAM_SELECT_OPTIONS[key];
@@ -1175,7 +1175,7 @@ function AuditLogSection({ canManageRoles }: { canManageRoles: boolean }) {
               : "00";
             return {
               id: d.id,
-              timeText: createdAt ? createdAt.toLocaleString("zh-Hant") : "—",
+              timeText: createdAt ? fmtDateTime(createdAt) : "—",
               dateKey: `${y}-${m}-${day}`,
               actorLabel: staffLabel(actor, actorName),
               action: typeof data.action === "string" ? data.action : "",
@@ -1631,7 +1631,7 @@ function QuotaUsageBars({
     { label: "刪除", used: status.usageDeletes ?? 0, quota: QUOTAS.deletes },
   ];
   const updated = status.usageUpdatedAt
-    ? new Date(status.usageUpdatedAt).toLocaleString("zh-TW", { hour12: false })
+    ? fmtIsoDateTime(status.usageUpdatedAt)
     : "—";
   return (
     <div style={{ marginBottom: 12 }}>

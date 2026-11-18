@@ -1,0 +1,6 @@
+import{c as i,ey as u,ez as d,eA as h,eB as w}from"./index-BMqII1yc.js";/**
+ * @license lucide-react v0.468.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const y=i("Upload",[["path",{d:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4",key:"ih7n3h"}],["polyline",{points:"17 8 12 3 7 8",key:"t8dd8p"}],["line",{x1:"12",x2:"12",y1:"3",y2:"15",key:"widbto"}]]);let r=null;function c(){return r||(r=u(()=>import("./xlsx-CbTSpprj.js"),[]).catch(t=>{throw r=null,t})),r}async function _(t){if(/\.xlsx?$/i.test(t.name)){let o;try{o=await c()}catch{throw new Error("Excel 解析元件載入失敗，請檢查網路連線後再試一次（CSV 檔不受影響）")}const e=await t.arrayBuffer(),a=o.read(e,{type:"array"}),s=a.Sheets[a.SheetNames[0]];if(!s)return[];const l=o.utils.sheet_to_json(s,{header:1,defval:""});return h(l)}const n=await t.text();return w(n)}function x(t,n){const o=new Blob(["\uFEFF"+d(t)],{type:"text/csv;charset=utf-8"}),e=URL.createObjectURL(o),a=document.createElement("a");a.href=e,a.download=n,a.click(),URL.revokeObjectURL(e)}async function f(t,n,o){try{const e=await c(),a=e.utils.aoa_to_sheet(t),s=e.utils.book_new();return e.utils.book_append_sheet(s,a,n),e.writeFile(s,`${o}.xlsx`),"xlsx"}catch{return x(t,`${o}.csv`),"csv"}}export{y as U,f as d,_ as r};

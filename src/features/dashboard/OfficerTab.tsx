@@ -15,7 +15,7 @@ import { displayUnitCode, staffLabel } from "../../lib/mask";
 import { useStaffNameMap } from "../../lib/useStaffNames";
 import { todayStr } from "../../lib/scheduling";
 import type { DashboardData } from "./useDashboardData";
-import { pad2 } from "../../lib/ym";
+import { fmtYm } from "../../lib/ym";
 import { stripInternalIdPrefix } from "../../lib/indicators";
 
 export function OfficerTab({
@@ -150,7 +150,7 @@ export function OfficerTab({
                 {locked.map((t) => (
                   <tr key={t.id}>
                     <td data-label="年月">
-                      {t.year}/{pad2(t.month)}
+                      {fmtYm(t.year, t.month)}
                     </td>
                     <td data-label="指標名稱">
                       {data.indicatorMap.get(t.indicatorId) ?? stripInternalIdPrefix(t.indicatorId)}
@@ -195,7 +195,7 @@ export function OfficerTab({
                 {data.unlockPending.map((u) => (
                   <tr key={u.id}>
                     <td data-label="年月">
-                      {u.year}/{pad2(u.month)}
+                      {fmtYm(u.year, u.month)}
                     </td>
                     <td data-label="指標名稱">
                       {data.indicatorMap.get(u.indicatorId) ?? stripInternalIdPrefix(u.indicatorId)}

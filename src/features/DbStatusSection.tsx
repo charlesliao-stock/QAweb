@@ -8,6 +8,7 @@ import { dualClearEvents, dualDrainNow, dualEvents, dualHealth, dualRequested, f
 import {
   SUPABASE_LIMITS, dbLabel, describeHealth, formatBytes, level, pct, type SupabaseUsage,
 } from "../lib/dual/status";
+import { fmtIsoDateTime } from "../lib/ym";
 
 const TONE_COLOR = { ok: "#16a34a", warn: "#d97706", bad: "#dc2626" } as const;
 const LEVEL_COLOR = { ok: "#16a34a", warn: "#d97706", stop: "#dc2626" } as const;
@@ -142,7 +143,7 @@ export function DbStatusSection() {
         <ul style={{ listStyle: "none", margin: 0, padding: 0, maxHeight: 220, overflowY: "auto", fontSize: 13 }}>
           {events.map((ev, i) => (
             <li key={`${ev.ts}-${i}`} style={{ padding: "3px 0", borderBottom: "1px solid #eee", color: TONE_COLOR[ev.level === "info" ? "ok" : ev.level] }}>
-              <span style={{ color: "#6b7280", marginRight: 8 }}>{new Date(ev.ts).toLocaleString("zh-TW", { hour12: false })}</span>
+              <span style={{ color: "#6b7280", marginRight: 8 }}>{fmtIsoDateTime(ev.ts)}</span>
               {ev.text}
             </li>
           ))}

@@ -20,7 +20,7 @@
 import type { AuditQuestion } from "./indicators";
 import { mergeNoteParts } from "./import";
 import { maskName } from "./mask";
-import { pad2 } from "./ym";
+import { fmtYm, fmtYmd } from "./ym";
 
 export interface AnalysisAnswer {
   questionId: string;
@@ -561,9 +561,9 @@ export function transposePersonOptionRows(
       return r.personEmpNo || maskedName || "—";
     }),
     bedNos: rows.map((r) => r.bedNo ?? ""),
-    // v1.88.13：表頭第二行起顯示排程月份與實際審查日。
-    months: rows.map((r) => `${r.year}/${pad2(r.month)}`),
-    reviewDates: rows.map((r) => r.reviewDate || "—"),
+    // v1.88.13：表頭第二行起顯示排程月份與實際審查日（v1.88.15：顯示不補零）。
+    months: rows.map((r) => fmtYm(r.year, r.month)),
+    reviewDates: rows.map((r) => fmtYmd(r.reviewDate ?? "")),
     rows: questions.map((q) => ({
       questionId: q.id,
       itemText: q.itemText,

@@ -77,6 +77,7 @@ import {
 } from "../lib/editRequests";
 import { usePermissions } from "../lib/usePermissions";
 import { maskName, staffLabel } from "../lib/mask";
+import { fmtIsoDateTime, fmtYmd } from "../lib/ym";
 import {
   normalizeAssignmentItem,
   parseIndicatorSchedule,
@@ -1949,7 +1950,7 @@ export function AuditPage({
                     {viewRecords.map((record) => (
                       <tr key={record.id}>
                         <td data-label="年月">{record.year}年{record.month}月</td>
-                        <td data-label="審查日期">{record.reviewDate || "—"}</td>
+                        <td data-label="審查日期">{fmtYmd(record.reviewDate)}</td>
                         <td data-label="審查人員">{staffLabel(record.reviewerEmpNo, record.reviewerName)}</td>
                         <td data-label="受審人員">{staffLabel(record.reviewedPersonEmpNo, record.reviewedPersonName)}</td>
                         <td data-label="審核項目">{record.auditItem || "—"}</td>
@@ -2041,7 +2042,7 @@ export function AuditPage({
                         reviewedPersonEmpNo: "受審人員職編", reviewedPersonName: "受審人員", bedNo: "床號", auditItem: "審核項目",
                       };
                       const stamp = typeof entry.editedAt === "string"
-                        ? new Date(entry.editedAt).toLocaleString("zh-TW", { hour12: false })
+                        ? fmtIsoDateTime(entry.editedAt)
                         : "時間未記錄";
                       return (
                         <article className="review-edit-history-item" key={`${String(entry.editedAt)}-${index}`}>

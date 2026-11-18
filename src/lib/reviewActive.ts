@@ -16,7 +16,7 @@
  * 本檔零依賴、不碰 DOM、不碰 Firestore，可在 node 直接單元測試。
  */
 
-import { pad2, shiftYm, ymKeyOf } from "./ym";
+import { fmtYm, pad2, shiftYm, ymKeyOf } from "./ym";
 
 export interface CalendarYM {
   year: number;
@@ -288,7 +288,7 @@ export function scheduleLastEnd(
 }
 
 /**
- * 審核區間顯示文字（v1.59.0）。
+ * 審核區間顯示文字（v1.59.0；v1.88.15：年月一律走 fmtYm，不補零）。
  * - 單月（起訖同年同月，任何類別）：「2026/11」
  * - 年度／學年度：「2026/1-3」；跨年「2026/11-2027/1」
  * - 臨時：勾選月份按連續分組；連續的顯示區間（「2026/3-5」，跨年
@@ -303,22 +303,22 @@ export function intervalDisplay(
   const e = iv.end;
   // v1.59.0：單月特例（起訖同年同月，如頻次 12 次／年的單月區間）
   if (s.year === e.year && s.month === e.month)
-    return `${s.year}/${s.month}`;
+    return fmtYm(s.year, s.month);
   if (category === "temp") {
     const groups = groupConsecutiveMonths(iv.reviewMonths);
     return groups
       .map((g) => {
-        if (g.length === 1) return `${g[0].year}/${g[0].month}`;
+        if (g.length === 1) return fmtYm(g[0].year, g[0].month);
         const a = g[0];
         const b = g[g.length - 1];
         return a.year === b.year
-          ? `${a.year}/${a.month}-${b.month}`
-          : `${a.year}/${a.month}-${b.year}/${b.month}`;
+          ? `${fmtYm(a.year, a.month)}-${b.month}`
+          : `${fmtYm(a.year, a.month)}-${fmtYm(b.year, b.month)}`;
       })
       .join("、");
   }
-  if (s.year === e.year) return `${s.year}/${s.month}-${e.month}`;
-  return `${s.year}/${s.month}-${e.year}/${e.month}`;
+  if (s.year === e.year) return `${fmtYm(s.year, s.month)}-${e.month}`;
+  return `${fmtYm(s.year, s.month)}-${fmtYm(e.year, e.month)}`;
 }
 
 /** 曆年月按連續分組（相鄰月份差一個月為同一組；輸入不需預先排序） */

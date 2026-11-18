@@ -4,6 +4,8 @@
  * 年份為起算年，年數為自年份起算的年數（往後數）。
  */
 
+import { fmtYm } from "./ym";
+
 export type AnalysisCycle = "year" | "academic";
 export type AnalysisInterval = "month" | "quarter" | "year";
 /**
@@ -275,7 +277,7 @@ export interface ScheduleIntervalInput {
 /**
  * 排程區間欄（v1.88.13，純函式）：把所選年月範圍內的月份，
  * 按各排程的審查區間合併成欄（每格＝起始月＋區間月數 N 個月，
- * 標籤為起訖格式，如 2026/08–2026/10）。
+ * 標籤為起訖格式，如 2026/8–2026/10）。
  * - 區間先裁切到所選範圍（只含範圍內的月份）；
  * - 多支指標區間起點不同時取聯集（去重、依起始月排序）；
  * - 未被任何區間覆蓋的月份，退回單月欄（資料不遺失）。
@@ -326,7 +328,7 @@ export function expandScheduleIntervalColumns(
     if (covered.has(`${year}-${month}`)) continue;
     columns.push({
       key: `${year}-${month}`,
-      label: `${year}/${String(month).padStart(2, "0")}`,
+      label: fmtYm(year, month),
       months: [{ year, month }],
     });
   }
@@ -338,13 +340,11 @@ export function expandScheduleIntervalColumns(
   return columns;
 }
 
-/** 區間起訖標籤：單月如「2026/08」，多月如「2026/08–2026/10」 */
+/** 區間起訖標籤：單月如「2026/8」，多月如「2026/8–2026/10」（v1.88.15：不補零） */
 export function intervalRangeLabel(months: CalendarMonth[]): string {
   if (months.length === 0) return "—";
   const first = months[0];
   const last = months[months.length - 1];
-  const fmt = (m: CalendarMonth): string =>
-    `${m.year}/${String(m.month).padStart(2, "0")}`;
-  if (months.length === 1) return fmt(first);
-  return `${fmt(first)}–${fmt(last)}`;
+  if (months.length === 1) return fmtYm(first.year, first.month);
+  return `${fmtYm(first.year, first.month)}–${fmtYm(last.year, last.month)}`;
 }

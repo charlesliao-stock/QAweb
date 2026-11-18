@@ -77,7 +77,7 @@ import {
   todayStr,
   type ReviewTask,
 } from "../lib/scheduling";
-import { pad2 } from "../lib/ym";
+import { fmtTsDate, fmtYmd, pad2 } from "../lib/ym";
 
 /**
  * 進入審查表單的方式（v1.11.0）：
@@ -151,16 +151,9 @@ function auditMonthValue(year: number, month: number): string {
 }
 
 function fmtTs(ts: unknown): string {
-  if (ts && typeof (ts as { toDate?: unknown }).toDate === "function") {
-    try {
-      return (ts as { toDate: () => Date })
-        .toDate()
-        .toLocaleString("zh-TW", { hour12: false });
-    } catch {
-      return "";
-    }
-  }
-  return "";
+  // v1.88.15：走 ym.ts 共用函式（不補零）；解析失敗回 ""（呼叫端補 "—"）。
+  const out = fmtTsDate(ts);
+  return out === "—" ? "" : out;
 }
 
 function isSharedPeriodicQuotaTask(
@@ -2205,7 +2198,7 @@ export function ReviewExecutePage({
       {!editingDraftId && drafts.length > 0 && (
         <section className="panel">
           <SectionTitle title={`暫存紀錄（${drafts.length}）`} note="暫存不列入正式結果與分析；可繼續編輯、送出或刪除。" />
-          <div className="table-scroll"><table className="data-table"><thead><tr><th>件次</th><th>審查日期</th><th>受審人員</th><th>已作答</th><th>狀態</th><th>操作</th></tr></thead><tbody>{drafts.map((draft) => <tr key={draft.id}><td>第 {draft.caseSeq ?? "—"} 件</td><td>{draft.reviewDate || "—"}</td><td>{draft.reviewedPersonEmpNo ? staffLabel(draft.reviewedPersonEmpNo, draft.reviewedPersonName) : "尚未選人"}</td><td>{draft.answers.length}/{questions.length}</td><td><span className="status-pill warning">暫存未送出</span></td><td><button type="button" className="text-button" onClick={() => { prefillRecord(draft, questions); setEditingId(null); setEditingDraftId(draft.id); }}>繼續編輯</button>{" "}<button type="button" className="text-button" onClick={() => void handleDeleteDraft(draft)}>刪除</button></td></tr>)}</tbody></table></div>
+          <div className="table-scroll"><table className="data-table"><thead><tr><th>件次</th><th>審查日期</th><th>受審人員</th><th>已作答</th><th>狀態</th><th>操作</th></tr></thead><tbody>{drafts.map((draft) => <tr key={draft.id}><td>第 {draft.caseSeq ?? "—"} 件</td><td>{fmtYmd(draft.reviewDate)}</td><td>{draft.reviewedPersonEmpNo ? staffLabel(draft.reviewedPersonEmpNo, draft.reviewedPersonName) : "尚未選人"}</td><td>{draft.answers.length}/{questions.length}</td><td><span className="status-pill warning">暫存未送出</span></td><td><button type="button" className="text-button" onClick={() => { prefillRecord(draft, questions); setEditingId(null); setEditingDraftId(draft.id); }}>繼續編輯</button>{" "}<button type="button" className="text-button" onClick={() => void handleDeleteDraft(draft)}>刪除</button></td></tr>)}</tbody></table></div>
         </section>
       )}
 

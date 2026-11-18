@@ -81,6 +81,7 @@ import {
   validateBasicRows,
 } from "../lib/import";
 import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
+import { fmtDateTime } from "../lib/ym";
 import {
   mergeImportedAuditForm,
   resolveAuditImportGroup,
@@ -1118,7 +1119,7 @@ export function IndicatorsPage({
                 typeof vd.effectiveDate === "string" ? vd.effectiveDate : "",
               createdBy: typeof vd.createdBy === "string" ? vd.createdBy : "",
               createdAtText: createdAt
-                ? createdAt.toLocaleString("zh-Hant")
+                ? fmtDateTime(createdAt)
                 : "",
             };
           }),

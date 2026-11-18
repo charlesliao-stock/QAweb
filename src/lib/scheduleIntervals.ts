@@ -14,7 +14,7 @@ import {
   type ReviewInterval,
   type ScheduleCategory,
 } from "./scheduling";
-import { formatDateSlash, pad2 } from "./ym";
+import { fmtYm, formatDateSlash, pad2 } from "./ym";
 
 /** 一個審查區間（起始月＋連續月數展開後的曆年月集合） */
 export interface ScheduleReviewInterval {
@@ -30,16 +30,16 @@ export interface ScheduleReviewInterval {
   months: { year: number; month: number }[];
 }
 
-/** 區間標籤：起訖同月只顯示該月，否則「起–訖」 */
+/** 區間標籤：起訖同月只顯示該月，否則「起–訖」（v1.88.15：月不補零） */
 export function reviewIntervalLabel(
   startYear: number,
   startMonth: number,
   endYear: number,
   endMonth: number,
 ): string {
-  const s = `${startYear}/${pad2(startMonth)}`;
+  const s = fmtYm(startYear, startMonth);
   if (startYear === endYear && startMonth === endMonth) return s;
-  return `${s}-${endYear}/${pad2(endMonth)}`;
+  return `${s}-${fmtYm(endYear, endMonth)}`;
 }
 
 function addCalMonths(
@@ -99,7 +99,7 @@ export function intervalContains(
 
 /**
  * 區間截止日標題：區間內任務截止日皆相同→該日；不一致→「最早–最晚」；
- * 無任務截止日→「—」。日期統一顯示為 YYYY/MM/DD（v1.88.7）。
+ * 無任務截止日→「—」。日期統一顯示為 YYYY/M/D（v1.88.7；v1.88.15 起不補零）。
  */
 export function intervalDeadlineLabel(deadlines: string[]): string {
   const uniq = [...new Set(deadlines.filter(Boolean))].sort();

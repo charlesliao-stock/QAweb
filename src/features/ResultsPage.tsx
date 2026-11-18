@@ -155,7 +155,7 @@ import {
   buildTempTaskKeys,
   columnTempNote,
 } from "../lib/tempChartNote";
-import { pad2, shiftYm, ymKeyOf } from "../lib/ym";
+import { fmtDateTime, fmtTsDate, fmtYm, fmtYmd, pad2, shiftYm, ymKeyOf } from "../lib/ym";
 import { toErrorMessage } from "../lib/errors";
 
 interface IndicatorOpt {
@@ -315,7 +315,7 @@ function ResultMonthPicker({
             setOpen((current) => !current);
           }}
         >
-          {year}年{pad2(month)}月
+          {year}年{month}月
           <ChevronDown size={15} />
         </button>
         {open && (
@@ -2402,9 +2402,7 @@ export function ResultsPage({
       {tab !== "import" && tab !== "manage" && applied && fetchedAt != null && !loading && (
         <p className="results-data-time">
           資料時間：
-          {new Date(fetchedAt).toLocaleString("zh-Hant-TW", {
-            hour12: false,
-          })}
+          {fmtDateTime(new Date(fetchedAt))}
         </p>
       )}
       {tab !== "import" && tab !== "manage" &&
@@ -3535,7 +3533,7 @@ function ReviewResultManager({
                         <td>
                           <input
                             type="checkbox"
-                            aria-label={`選取 ${row.year}/${pad2(row.month)} ${indicatorName(row.indicatorId)} ${row.reviewedPersonName || "審查結果"}`}
+                            aria-label={`選取 ${fmtYm(row.year, row.month)} ${indicatorName(row.indicatorId)} ${row.reviewedPersonName || "審查結果"}`}
                             checked={selected.includes(row.id)}
                             disabled={busy}
                             onChange={(event) =>
@@ -3548,7 +3546,7 @@ function ReviewResultManager({
                           />
                         </td>
                         <td>
-                          {row.year}/{pad2(row.month)}
+                          {fmtYm(row.year, row.month)}
                         </td>
                         <td>{unitName(row.unitId)}</td>
                         <td>{indicatorName(row.indicatorId)}</td>
@@ -3632,7 +3630,7 @@ function ReviewResultManager({
                     <label className="review-result-card-select">
                       <input
                         type="checkbox"
-                        aria-label={`選取 ${row.year}/${pad2(row.month)} ${indicatorName(row.indicatorId)} ${row.reviewedPersonName || "審查結果"}`}
+                        aria-label={`選取 ${fmtYm(row.year, row.month)} ${indicatorName(row.indicatorId)} ${row.reviewedPersonName || "審查結果"}`}
                         checked={selected.includes(row.id)}
                         disabled={busy}
                         onChange={(event) =>
@@ -3643,7 +3641,7 @@ function ReviewResultManager({
                           )
                         }
                       />
-                      <span>{row.year}/{pad2(row.month)}</span>
+                      <span>{fmtYm(row.year, row.month)}</span>
                     </label>
                     <strong>{row.rate == null ? "—" : `${row.rate}%`}</strong>
                   </header>
@@ -3706,17 +3704,8 @@ function submittedMillis(value: unknown): number | null {
 }
 
 function formatSubmittedAt(value: unknown): string {
-  if (!value || typeof value !== "object") return "—";
-  const timestamp = value as { toDate?: () => Date; seconds?: number };
-  const date =
-    typeof timestamp.toDate === "function"
-      ? timestamp.toDate()
-      : typeof timestamp.seconds === "number"
-        ? new Date(timestamp.seconds * 1000)
-        : null;
-  return date && !Number.isNaN(date.getTime())
-    ? date.toLocaleString("zh-Hant-TW", { hour12: false })
-    : "—";
+  // v1.88.15：走 ym.ts 共用函式（不補零）；非 Timestamp 回 "—"。
+  return fmtTsDate(value);
 }
 
 /* ================= 達閾值率矩陣（組別／單位分析共用） ================= */
@@ -3988,7 +3977,7 @@ function CauseDrillModal({
                     <tr key={`${entry.record.personEmpNo}-${entry.record.year}-${entry.record.month}-${entry.questionId}-${i}`}>
                       <td>{ind ? `${stripInternalIdPrefix(ind.code)}・${ind.name}` : stripInternalIdPrefix(entry.record.indicatorId)}</td>
                       <td>{entry.record.unitId === "" ? "NA" : `${entry.record.unitId}・${unitNameOf.get(entry.record.unitId) ?? ""}`}</td>
-                      <td>{entry.record.year}/{pad2(entry.record.month)}</td>
+                      <td>{fmtYm(entry.record.year, entry.record.month)}</td>
                       <td>{staffLabel(entry.record.personEmpNo, entry.record.personName)}</td>
                       <td>{entry.itemText}</td>
                       <td>{entry.optionLabel}</td>
@@ -4082,7 +4071,7 @@ function DrillModal({
       .map((key) => {
         const year = Math.floor(key / 100);
         const month = key % 100;
-        return { year, month, key, label: `${year}/${pad2(month)}` };
+        return { year, month, key, label: fmtYm(year, month) };
       });
   }, [recordIndex, drill.indicatorId, currentStartKey, recentResultCount]);
   // v1.50.0：分組／逐題／選項篩選——只顯示該分組／該題的個人結果
@@ -4321,8 +4310,8 @@ function DrillModal({
         return {
           key: `${row.personEmpNo}-${row.year}-${row.month}-${i}`,
           label: l2Matrix.headers[i] ?? row.personEmpNo,
-          monthLabel: `${row.year}/${pad2(row.month)}`,
-          reviewDate: row.reviewDate || "—",
+          monthLabel: fmtYm(row.year, row.month),
+          reviewDate: fmtYmd(row.reviewDate ?? ""),
           bedNo: row.bedNo,
           text,
         };
@@ -4354,7 +4343,7 @@ function DrillModal({
             <h2>{title}</h2>
             <p>
               {l2Active
-                ? `${drill.l2Months?.length === 1 ? `${drill.l2Months[0].year}/${pad2(drill.l2Months[0].month)}` : col.label}・${l2UnitLabel}・被審人員各選項結果${filterLabel ? `・${filterLabel}` : ""}`
+                ? `${drill.l2Months?.length === 1 ? fmtYm(drill.l2Months[0].year, drill.l2Months[0].month) : col.label}・${l2UnitLabel}・被審人員各選項結果${filterLabel ? `・${filterLabel}` : ""}`
                 : `${col.label}・各單位審查結果（點選格子看被審人員）${filterLabel ? `・${filterLabel}` : ""}`}
             </p>
           </div>
@@ -4421,7 +4410,7 @@ function DrillModal({
                                 title="點選只看該月被審人員"
                                 onClick={() => onSelectUnit(unitId, { year: m.year, month: m.month })}
                               >
-                                {m.year}/{pad2(m.month)}
+                                {fmtYm(m.year, m.month)}
                               </button>
                             ))}
                         </td>

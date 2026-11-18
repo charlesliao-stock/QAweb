@@ -34,7 +34,7 @@ import {
 } from "../lib/scheduling";
 import { categoryLabel, type CycleCategory } from "../lib/cycle";
 import { staffLabel } from "../lib/mask";
-import { pad2, parseYmOrder, ymInRange } from "../lib/ym";
+import { fmtIsoDateTime, fmtTsDate, pad2, parseYmOrder, ymInRange } from "../lib/ym";
 import {
   EmptyState,
   FilterPanel,
@@ -74,22 +74,6 @@ interface TaskLite {
   quotaIntervalEndMonth?: number;
 }
 
-/** Firestore Timestamp → 本地時間字串；解析失敗回 "—" */
-function fmtTs(ts: unknown): string {
-  try {
-    const t = ts as { toDate?: () => Date };
-    if (t && typeof t.toDate === "function") {
-      const d = t.toDate();
-      if (d instanceof Date && !Number.isNaN(d.getTime())) {
-        return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return "—";
-}
-
 /** Firestore Timestamp／ISO 字串 → ISO 字串（缺值回 ""；完成時間用） */
 function tsToIso(ts: unknown): string {
   if (typeof ts === "string") return ts;
@@ -105,11 +89,9 @@ function tsToIso(ts: unknown): string {
   return "";
 }
 
-/** ISO 時間字串 → 本地顯示（完成時間用；解析失敗回 "—"） */
+/** ISO 時間字串 → 本地顯示（完成時間用；解析失敗回 "—"，v1.88.15 走 ym.ts 共用函式） */
 function formatIsoTs(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString("zh-TW", { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return fmtIsoDateTime(iso);
 }
 
 type DetailTab = "basic" | "tracking";
@@ -511,13 +493,13 @@ export function ScheduleDetailPage({
               <tr>
                 <td style={{ whiteSpace: "nowrap" }}><b>最後編輯</b></td>
                 <td data-label="最後編輯">
-                  排程：{sched.updatedByName || "—"}・{fmtTs(sched.updatedAt)}
+                  排程：{sched.updatedByName || "—"}・{fmtTsDate(sched.updatedAt)}
                   <br />
                   分工表：
                   {isTemp
                     ? "—（臨時排程不存分工表）"
                     : assignment
-                      ? fmtTs(assignment.updatedAt)
+                      ? fmtTsDate(assignment.updatedAt)
                       : "尚未設定分工表"}
                 </td>
               </tr>

@@ -107,7 +107,7 @@ import {
   nextCalendarMonth,
   type BelowThresholdRow,
 } from "../lib/belowThreshold";
-import { pad2 } from "../lib/ym";
+import { fmtDateTime, fmtTsDate, fmtYm, pad2, reviewMonthToYm } from "../lib/ym";
 import { downloadTemplate, readSheetFile } from "../lib/sheetFile";
 import {
   ASSIGNMENT_IMPORT_HEADER,
@@ -117,22 +117,6 @@ import {
   type ParsedAssignmentRow,
   type ValidatedAssignmentRow,
 } from "../lib/assignmentImport";
-
-/** Firestore Timestamp → 本地時間字串；解析失敗回 "—" */
-function fmtTs(ts: unknown): string {
-  try {
-    const t = ts as { toDate?: () => Date };
-    if (t && typeof t.toDate === "function") {
-      const d = t.toDate();
-      if (d instanceof Date && !Number.isNaN(d.getTime())) {
-        return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return "—";
-}
 
 /** v1.88.3：組別 id 轉顯示名稱；審查員名單的未分類顯示為「未分類」，而非原始 id */
 function groupDisplayName(groupMap: Map<string, string>, gid: string): string {
@@ -1382,7 +1366,7 @@ export function SchedulePage({ onAction }: { onAction: (message: string) => void
                             <>
                               {sched.updatedByName || "—"}
                               <br />
-                              {fmtTs(sched.updatedAt)}
+                              {fmtTsDate(sched.updatedAt)}
                             </>
                           ) : (
                             "—"
@@ -2737,7 +2721,7 @@ function AddAuditDialog({
       const d = new Date(Number(dup.period));
       const dupTime = Number.isNaN(d.getTime())
         ? ""
-        : `（建立於 ${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}）`;
+        : `（建立於 ${fmtDateTime(d)}）`;
       const msg = `已有相同內容的加審${dupTime}建立（${[...dup.months].sort((a, b) => a - b).map((m) => MONTH_LABELS[m - 1]).join("、")}・${dup.unlimitedUnits ? "不限單位" : `${dup.unitIds.length} 單位`}），請先查閱既有加審，確認是否重複。`;
       setSubmitError(msg);
       onAction(msg);
@@ -3034,7 +3018,7 @@ function AddAuditDialog({
                           <button
                             className="text-button"
                             onClick={() => applyBelowThresholdRow(r)}
-                            title={`帶入 ${target.year}/${target.month} 與未達單位`}
+                            title={`帶入 ${fmtYm(target.year, target.month)} 與未達單位`}
                           >
                             <b>
                               {r.year}/{r.month}
@@ -4021,7 +4005,12 @@ function AssignmentEditor({
                     </td>
                     <td>
                       {it.reviewMonths && it.reviewMonths.length > 0
-                        ? it.reviewMonths.join("、")
+                        ? it.reviewMonths
+                            .map((m) => {
+                              const ym = reviewMonthToYm(m);
+                              return ym ? fmtYm(ym.year, ym.month) : m;
+                            })
+                            .join("、")
                         : "全部月份"}
                     </td>
                     {canEdit && (
