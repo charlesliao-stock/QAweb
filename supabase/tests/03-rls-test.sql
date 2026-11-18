@@ -55,7 +55,10 @@ insert into public.docs(col,id,data,ts) values
  ('indicators','i1','{"name":"跌倒"}',1),
  ('notifications','n1','{"userId":"nurse","read":false,"title":"hi"}',1),
  ('notifications','n2','{"userId":"other","read":false}',1),
- ('reviewTasks','t1','{"indicatorId":"i1","year":2026,"month":3,"unitId":"U1","status":"open"}',1),
+ ('reviewTasks','t1','{"indicatorId":"i1","year":2026,"month":3,"unitId":"U1","reviewerId":"nurse","status":"open"}',1),
+ ('reviewRecords','rr1','{"reviewerId":"nurse","reviewedPersonEmpNo":"受審者","unitId":"U1"}',1),
+ ('reviewRecords','rr2','{"reviewerId":"other","reviewedPersonEmpNo":"受審者","unitId":"U2"}',1),
+ ('capa','cp1','{"ownerId":"nurse","unitCode":"U1"}',1),
  ('reviewQuotaGroups','g1','{"slotIds":["s1","s2"]}',1);
 
 -- ---- 未登入／未知集合 ----
@@ -74,6 +77,12 @@ select test.check('管理員看得到全部人員', test.count_as('admin', $$sel
 select test.check('幹事可列出人員清單', test.count_as('gan', $$select count(*) from public.docs where col='users'$$), 6::bigint);
 select test.check('通知只看得到自己的', test.count_as('nurse', $$select count(*) from public.docs where col='notifications'$$), 1::bigint);
 select test.check('稽核紀錄非管理員讀不到', test.count_as('nurse', $$select count(*) from public.docs where col='auditLogs'$$), 0::bigint);
+select test.check('審查員可讀本人紀錄', test.count_as('nurse', $$select count(*) from public.docs where col='reviewRecords' and id='rr1'$$), 1::bigint);
+select test.check('無關單位不可讀他人紀錄', test.count_as('other', $$select count(*) from public.docs where col='reviewRecords' and id='rr1'$$), 0::bigint);
+select test.check('護理長可讀本單位審查紀錄', test.count_as('head', $$select count(*) from public.docs where col='reviewRecords' and id='rr1'$$), 1::bigint);
+select test.check('護理長不可讀外單位審查紀錄', test.count_as('head', $$select count(*) from public.docs where col='reviewRecords' and id='rr2'$$), 0::bigint);
+select test.check('案件負責人可讀 CAPA', test.count_as('nurse', $$select count(*) from public.docs where col='capa' and id='cp1'$$), 1::bigint);
+select test.check('無關人員不可讀 CAPA', test.count_as('other', $$select count(*) from public.docs where col='capa' and id='cp1'$$), 0::bigint);
 
 -- ---- 角色型寫入 ----
 select test.check('非管理員不能寫 systemParams', test.as_user('nurse', test.op('set','systemParams','p2',10,'{"v":2}')), 'err:QA403');
@@ -103,27 +112,27 @@ select test.check('稽核不可刪除', test.as_user('admin', test.op('del','aud
 select test.check('管理員讀得到稽核', test.count_as('admin', $$select count(*) from public.docs where col='auditLogs'$$), 1::bigint);
 
 -- ---- reviewTasks 快照 ----
-select test.check('任務狀態可更新', test.as_user('nurse', test.op('set','reviewTasks','t1',60,'{"indicatorId":"i1","year":2026,"month":3,"unitId":"U1","status":"done"}')), 'ok');
-select test.check('任務快照欄位不可改', test.as_user('nurse', test.op('set','reviewTasks','t1',70,'{"indicatorId":"i9","year":2026,"month":3,"unitId":"U1","status":"done"}')), 'err:QA403');
+select test.check('任務狀態可更新', test.as_user('nurse', test.op('set','reviewTasks','t1',60,'{"indicatorId":"i1","year":2026,"month":3,"unitId":"U1","reviewerId":"nurse","status":"done"}')), 'ok');
+select test.check('任務快照欄位不可改', test.as_user('nurse', test.op('set','reviewTasks','t1',70,'{"indicatorId":"i9","year":2026,"month":3,"unitId":"U1","reviewerId":"nurse","status":"done"}')), 'err:QA403');
 
 -- ---- reviewRecords／名額 ----
-select test.check('無名額欄位的紀錄可建立', test.as_user('nurse', test.op('set','reviewRecords','r0',80,'{"indicatorId":"i1","year":2026}')), 'ok');
-select test.check('名額文件 id 不在群組內 → 拒絕', test.as_user('nurse', test.op('set','reviewRecords','zz',80,'{"quotaGroupId":"g1","quotaSlotDocId":"zz"}')), 'err:QA403');
-select test.check('合法名額可建立', test.as_user('nurse', test.op('set','reviewRecords','s1',80,'{"quotaGroupId":"g1","quotaSlotDocId":"s1","version":1,"indicatorId":"i1"}')), 'ok');
-select test.check('名額紀錄更新必須 version+1', test.as_user('nurse', test.op('set','reviewRecords','s1',90,'{"quotaGroupId":"g1","quotaSlotDocId":"s1","version":1,"indicatorId":"i1"}')), 'err:QA403');
-select test.check('version+1 可更新', test.as_user('nurse', test.op('set','reviewRecords','s1',90,'{"quotaGroupId":"g1","quotaSlotDocId":"s1","version":2,"indicatorId":"i1"}')), 'ok');
+select test.check('無名額欄位的紀錄可建立', test.as_user('nurse', test.op('set','reviewRecords','r0',80,'{"indicatorId":"i1","year":2026,"reviewerId":"nurse","submittedBy":"nurse"}')), 'ok');
+select test.check('名額文件 id 不在群組內 → 拒絕', test.as_user('nurse', test.op('set','reviewRecords','zz',80,'{"quotaGroupId":"g1","quotaSlotDocId":"zz","reviewerId":"nurse","submittedBy":"nurse"}')), 'err:QA403');
+select test.check('合法名額可建立', test.as_user('nurse', test.op('set','reviewRecords','s1',80,'{"quotaGroupId":"g1","quotaSlotDocId":"s1","version":1,"indicatorId":"i1","reviewerId":"nurse","submittedBy":"nurse"}')), 'ok');
+select test.check('名額紀錄更新必須 version+1', test.as_user('nurse', test.op('set','reviewRecords','s1',90,'{"quotaGroupId":"g1","quotaSlotDocId":"s1","version":1,"indicatorId":"i1","reviewerId":"nurse","submittedBy":"nurse"}')), 'err:QA403');
+select test.check('version+1 可更新', test.as_user('nurse', test.op('set','reviewRecords','s1',90,'{"quotaGroupId":"g1","quotaSlotDocId":"s1","version":2,"indicatorId":"i1","reviewerId":"nurse","submittedBy":"nurse"}')), 'ok');
 select test.check('非管理員不能刪紀錄', test.as_user('nurse', test.op('del','reviewRecords','s1',100)), 'err:QA403');
 
 -- ---- 預約鎖（reviewReservations）----
-select test.check('只有紀錄沒有預約 → 提交時拒絕', test.as_user('nurse', test.op('set','reviewRecords','rk1',110,'{"uniqueKey":"K1","indicatorId":"i1"}')), 'err:QA403');
+select test.check('只有紀錄沒有預約 → 提交時拒絕', test.as_user('nurse', test.op('set','reviewRecords','rk1',110,'{"uniqueKey":"K1","indicatorId":"i1","reviewerId":"nurse","submittedBy":"nurse"}')), 'err:QA403');
 select test.check('預約 ownerId 必須是本人', test.as_user('nurse', test.op('set','reviewReservations','K1',110,'{"uniqueKey":"K1","ownerId":"other","targetCollection":"reviewRecords","targetId":"rk1"}')), 'err:QA403');
 select test.check('紀錄＋預約同一批 → 可建立', test.as_user('nurse',
   format('select public.apply_ops(%L::jsonb)', jsonb_build_array(
-    jsonb_build_object('kind','set','col','reviewRecords','id','rk1','ts',110,'data','{"uniqueKey":"K1","indicatorId":"i1"}'::jsonb),
+    jsonb_build_object('kind','set','col','reviewRecords','id','rk1','ts',110,'data','{"uniqueKey":"K1","indicatorId":"i1","reviewerId":"nurse","submittedBy":"nurse"}'::jsonb),
     jsonb_build_object('kind','set','col','reviewReservations','id','K1','ts',110,'data','{"uniqueKey":"K1","ownerId":"nurse","targetCollection":"reviewRecords","targetId":"rk1"}'::jsonb))::text)), 'ok');
 select test.check('同一唯一鍵第二次建立（別人）→ 被拒（不會覆蓋別人的預約）', test.as_user('other',
   format('select public.apply_ops(%L::jsonb)', jsonb_build_array(
-    jsonb_build_object('kind','set','col','reviewRecords','id','rk2','ts',120,'data','{"uniqueKey":"K1"}'::jsonb),
+    jsonb_build_object('kind','set','col','reviewRecords','id','rk2','ts',120,'data','{"uniqueKey":"K1","reviewerId":"other","submittedBy":"other"}'::jsonb),
     jsonb_build_object('kind','set','col','reviewReservations','id','K1','ts',120,'data','{"uniqueKey":"K1","ownerId":"other","targetCollection":"reviewRecords","targetId":"rk2"}'::jsonb))::text)), 'err:QA403');
 
 -- ---- reviewDrafts ----
@@ -135,9 +144,17 @@ select test.check('管理員可改草稿', test.as_user('admin', test.op('set','
 -- ---- 其他 ----
 select test.check('召集人類角色可建封存摘要，一般人不行（admin 可）', test.as_user('nurse', test.op('set','reviewArchives','ar1',150,'{}')), 'err:QA403');
 select test.check('管理員可建封存摘要', test.as_user('admin', test.op('set','reviewArchives','ar1',150,'{}')), 'ok');
-select test.check('開放集合（capa）登入者可寫', test.as_user('nurse', test.op('set','capa','c1',150,'{"a":1}')), 'ok');
+select test.check('無關人員不能建立他人 CAPA', test.as_user('nurse', test.op('set','capa','c1',150,'{"ownerId":"other"}')), 'err:QA403');
+select test.check('本人負責 CAPA 可建立', test.as_user('nurse', test.op('set','capa','c2',151,'{"ownerId":"nurse"}')), 'ok');
 select test.check('過時的重送略過（不報錯）', test.as_user('admin', test.op('set','systemParams','p2',5,'{"v":"stale"}')), 'ok');
 select test.check('過時的重送沒有蓋掉資料', (select data->>'v' from public.docs where col='systemParams' and id='p2'), '2');
+select test.check('管理員建立待刪文件', test.as_user('admin', test.op('set','systemParams','tomb1',200,'{"v":"live"}')), 'ok');
+select test.check('管理員軟刪文件', test.as_user('admin', test.op('del','systemParams','tomb1',300)), 'ok');
+select test.check('舊 set 在 tombstone 後重送不會復活', test.as_user('admin', test.op('set','systemParams','tomb1',250,'{"v":"stale"}')), 'ok');
+select test.check('tombstone 不暴露已刪原資料', test.count_as('admin', $$select count(*) from public.docs where col='systemParams' and id='tomb1' and data->>'v'='live'$$), 0::bigint);
+select test.check('tombstone 只保留同步標記', (select (deleted and data = '{"_dualTombstone":true,"_dualTs":300}'::jsonb)::text from public.docs where col='systemParams' and id='tomb1'), 'true');
+select test.check('新版本合法 set 可復活 tombstone', test.as_user('admin', test.op('set','systemParams','tomb1',400,'{"v":"new"}')), 'ok');
+select test.check('復活後為正常文件', (select (not deleted and data->>'v'='new')::text from public.docs where col='systemParams' and id='tomb1'), 'true');
 insert into public.docs(col,id,data,ts) values ('reviewSummaries','s9','{"ok":true}',1);   -- 以 postgres（後端／遷移）身分，守門放行
 select test.check('後端（postgres／service_role）可寫 reviewSummaries', test.count_as('nurse', $$select count(*) from public.docs where col='reviewSummaries'$$), 1::bigint);
 

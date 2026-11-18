@@ -68,6 +68,14 @@ export async function dualDrainNow(): Promise<{ done: number; left: number }> {
   return dualStoreRef.drain();
 }
 
+/** 修正拒絕原因後，人工解除死信並立即重試。 */
+export async function dualRetryDeadLetters(): Promise<{ retried: number; done: number; left: number }> {
+  if (!dualStoreRef) return { retried: 0, done: 0, left: 0 };
+  const retried = dualStoreRef.retryDeadLetters();
+  const result = retried ? await dualStoreRef.drain() : { done: 0, left: 0 };
+  return { retried, ...result };
+}
+
 /** Supabase 資料庫大小與文件數（僅系統管理員；需先執行 supabase/04-status.sql）。 */
 export async function fetchSupabaseUsage(): Promise<SupabaseUsage> {
   if (!supabaseRef) throw new Error("雙寫模式未啟用");
@@ -100,11 +108,13 @@ export function initDual(firestoreDb: any, getAuth: () => Auth): void {
       db: firestoreDb, collection, doc, getDoc, getDocs, query, where, orderBy, limit, startAfter, writeBatch, Timestamp,
     }),
     storage: typeof localStorage !== "undefined" ? localStorage : undefined,
+    requirePersistentQueue: true,
     onEvent: (e) => {
       lastEvent = e;
       if (e.type === "failover-write" || e.type === "dead-letter") console.warn("[dual]", e);
       if (e.type === "failover-write") logEvent("bad", `主資料庫無法寫入，${e.ops} 筆改寫到備援，待恢復後補回`);
-      else if (e.type === "dead-letter") logEvent("bad", `同步失敗被放棄：${e.col}/${e.id}（目標 ${dbLabel(e.target)}），請聯絡管理員對帳`);
+      else if (e.type === "dead-letter") logEvent("bad", `多次同步失敗，資料已保留待人工重試：${e.col}/${e.id}（目標 ${dbLabel(e.target)}）`);
+      else if (e.type === "queue-error") logEvent("bad", `雙庫同步佇列異常：${e.error.slice(0, 160)}`);
       else if (e.type === "error") logEvent(e.breaker === "open" ? "bad" : "warn", `${dbLabel(e.db)} 連線錯誤（${e.breaker === "open" ? "已判定無法使用" : "將重試"}）：${e.error.slice(0, 120)}`);
     },
   });

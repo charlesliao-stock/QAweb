@@ -18,7 +18,7 @@ const contains = (a: any, b: any): boolean => {
   return a === b;
 };
 function fakeSupabase() {
-  const rows = new Map<string, { col: string; id: string; data: any; ts: number }>();
+  const rows = new Map<string, { col: string; id: string; data: any; ts: number; deleted: boolean }>();
   const state = { down: false, urls: [] as string[], rpcCalls: 0, reply: null as null | { status: number; body: unknown } };
   const fetchImpl = (async (input: any, init?: any) => {
     const url = String(input);
@@ -33,13 +33,15 @@ function fakeSupabase() {
         const k = `${op.col}|${op.id}`;
         const cur = rows.get(k);
         if (op.kind === "set") {
-          if (!cur || cur.ts <= op.ts) rows.set(k, { col: op.col, id: op.id, data: op.data, ts: op.ts });
-        } else if (cur && cur.ts <= op.ts) rows.delete(k);
+          if (!cur || cur.ts < op.ts) rows.set(k, { col: op.col, id: op.id, data: op.data, ts: op.ts, deleted: false });
+        } else if (cur && cur.ts < op.ts) {
+          rows.set(k, { ...cur, data: { ...cur.data, _dualTombstone: true, _dualTs: op.ts }, ts: op.ts, deleted: true });
+        }
       }
       return new Response("1", { status: 200 });
     }
     const p = u.searchParams;
-    let out = [...rows.values()].filter((r) => r.col === p.get("col")!.slice(3));
+    let out = [...rows.values()].filter((r) => r.col === p.get("col")!.slice(3) && !r.deleted);
     if (p.get("id")) out = out.filter((r) => r.id === p.get("id")!.slice(3));
     if (p.get("data")) out = out.filter((r) => contains(r.data, JSON.parse(p.get("data")!.slice(3))));
     if (p.get("or")) {
@@ -186,7 +188,7 @@ test("5 deleteDoc 兩邊都刪", async () => {
   await db.setDoc(db.docOf(null, "t", "1"), { v: 1 }); await store.drain();
   advance(10);
   await db.deleteDoc(db.docOf(null, "t", "1")); await store.drain();
-  assert.equal(sb.rows.has("t|1"), false); assert.equal(fs.m.has("t/1"), false);
+  assert.equal(sb.rows.get("t|1")!.deleted, true); assert.equal(fs.m.has("t/1"), false);
   assert.equal((await db.getDoc(db.docOf(null, "t", "1"))).exists(), false);
 });
 
@@ -223,12 +225,16 @@ test("8 兩邊都掛：寫入丟錯、不吞資料", async () => {
   await assert.rejects(db.setDoc(db.docOf(null, "t", "1"), { v: 1 }), /寫入失敗/);
 });
 
-test("9 過時的重送不會蓋掉較新的資料（LWW）", async () => {
+test("9 過時的 set 和被刪資料的舊 set 都不能復活文件", async () => {
   const { sb, store } = setup();
   await db.setDoc(db.docOf(null, "t", "1"), { v: "new" });
   const adapter = store.p;
   await adapter.apply([{ col: "t", id: "1", kind: "set", ts: 1, data: { v: "old" } }]);
   assert.equal(sb.rows.get("t|1")!.data.v, "new");
+  await adapter.apply([{ col: "t", id: "1", kind: "del", ts: clock + 100 }]);
+  await adapter.apply([{ col: "t", id: "1", kind: "set", ts: clock + 50, data: { v: "stale" } }]);
+  assert.equal(sb.rows.get("t|1")!.deleted, true);
+  assert.equal((await adapter.get("t", "1")), null);
 });
 
 test("10 佇列可持久化：重新載入後仍在", async () => {
@@ -252,26 +258,35 @@ test("11 規則拒絕（QA403）：丟錯給使用者，不轉移、不開斷路
   assert.equal(store.pending().length, 0);
 });
 
-test("12 登入／設定問題（401）視為主庫不可用：轉移到 Firebase，使用者照常使用", async () => {
+test("12 認證拒絕（401/403）不會繞過主庫權限寫入備庫", async () => {
   const { sb, fs, store } = setup();
-  sb.state.reply = { status: 401, body: { code: "PGRST301", message: "JWT invalid" } };
-  const r = await db.setDoc(db.docOf(null, "t", "1"), { v: 1 });
-  assert.equal(r, undefined);
-  assert.equal(fs.m.get("t/1").v, 1);
-  assert.equal(store.pending("supabase").length, 1);   // 之後補寫 Supabase
+  for (const status of [401, 403]) {
+    sb.state.reply = { status, body: { code: status === 401 ? "PGRST301" : "42501", message: "authorization denied" } };
+    await assert.rejects(db.setDoc(db.docOf(null, "t", String(status)), { v: 1 }));
+  }
+  assert.equal(fs.m.size, 0);
+  assert.equal(store.pending().length, 0);
+  assert.equal(store.mode(), "primary");
 });
 
 test("13 補送時遇到規則拒絕：直接進死信，不無限重試", async () => {
   const { sb, store } = setup();
   const dead: unknown[] = [];
   (store as any).onEvent = (e: any) => { if (e.type === "dead-letter") dead.push(e); };
-  sb.state.reply = { status: 401, body: { code: "PGRST301" } };
+  sb.state.reply = { status: 503, body: { code: "PGRST503" } };
   await db.setDoc(db.docOf(null, "t", "1"), { v: 1 });          // 轉移到 Firebase，排入回補
   await store.drain();                                           // 等背景那一輪結束（它會因 401 而退避）
   sb.state.reply = { status: 400, body: { code: "QA403", message: "denied" } };
   advance(120_000); await store.drain();
   assert.equal(store.pending().length, 0);
   assert.equal(dead.length, 1);
+  assert.equal(store.health().deadLetters, 1); // dead letter remains durable, not dropped
+  sb.state.reply = null;
+  assert.equal(store.retryDeadLetters("supabase"), 1);
+  advance(120_000); await store.drain();
+  assert.equal(store.health().deadLetters, 0);
+  assert.equal(store.pending().length, 0);
+  assert.equal(sb.rows.has("t|1"), true);
 });
 
 test("14 health()／describeHealth：正常、備庫失聯、故障轉移三種狀態的說明", async () => {

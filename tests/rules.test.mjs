@@ -13,11 +13,14 @@ import {
   assertSucceeds,
   assertFails,
 } from "@firebase/rules-unit-testing";
-import { doc, setDoc, updateDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
+import { doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
+import { ref, uploadBytes, getBytes } from "firebase/storage";
 import { readFileSync } from "node:fs";
 
-const PROJECT_ID = "p0-rules-test";
+const PROJECT_ID = "demo-p0-rules-test";
 const RULES = readFileSync(new URL("../firestore.rules", import.meta.url), "utf8");
+const STORAGE_RULES = readFileSync(new URL("../storage.rules", import.meta.url), "utf8");
+const BUCKET = "gs://demo-p0-rules-test.appspot.com";
 
 let pass = 0;
 let fail = 0;
@@ -82,6 +85,7 @@ async function main() {
   const testEnv = await initializeTestEnvironment({
     projectId: PROJECT_ID,
     firestore: { rules: RULES, host: "127.0.0.1", port: 8080 },
+    storage: { rules: STORAGE_RULES, host: "127.0.0.1", port: 9199 },
   });
 
   // ---- seed（繞過規則）----
@@ -89,8 +93,8 @@ async function main() {
     const db = ctx.firestore();
     await setDoc(doc(db, "users", "1111111"), { staffId: "1111111", roles: ["召集人"], name: "召集人A" });
     await setDoc(doc(db, "users", "2222222"), { staffId: "2222222", roles: [], name: "審查員A", title: "護理師", titleId: "T1", unitCode: "U1", memberships: [] });
-    await setDoc(doc(db, "users", "3333333"), { staffId: "3333333", roles: [], name: "審查員B" });
-    await setDoc(doc(db, "users", "4444444"), { staffId: "4444444", roles: ["督導"], name: "督導A" });
+    await setDoc(doc(db, "users", "3333333"), { staffId: "3333333", roles: [], name: "審查員B", unitCode: "U2" });
+    await setDoc(doc(db, "users", "4444444"), { staffId: "4444444", roles: ["督導"], name: "督導A", titleUnitCodes: ["U1"] });
     await setDoc(doc(db, "users", "admin"), { staffId: "admin", roles: ["系統管理員"], name: "管理員" });
     await setDoc(doc(db, "reviewQuotaGroups", "g1"), {
       quotaGroupId: "g1",
@@ -101,6 +105,9 @@ async function main() {
     await setDoc(doc(db, "reviewTasks", "taskC"), baseTask({}));
     await setDoc(doc(db, "reviewTasks", "taskDel"), baseTask({ reviewerId: "3333333" }));
     await setDoc(doc(db, "reviewRecords", "recA"), baseRecord({}));
+    await setDoc(doc(db, "reviewRecords", "recOther"), baseRecord({ reviewerId: "3333333", reviewerEmpNo: "3333333", reviewedPersonEmpNo: "8888888", unitId: "U2" }));
+    await setDoc(doc(db, "reviewEditRequests", "reqA"), { requestedBy: "2222222", status: "pending" });
+    await setDoc(doc(db, "reviewDrafts", "draftA"), { createdBy: "2222222", taskId: "taskC", uniqueKey: "" });
     await setDoc(doc(db, "reviewReservations", "lockA"), {
       uniqueKey: "lockA",
       ownerId: "2222222",
@@ -134,7 +141,7 @@ async function main() {
   console.log("== 未登入 ==");
   await check("未登入建 reviewTasks 應擋", assertFails(setDoc(doc(dbU, "reviewTasks", "x1"), baseTask())));
   await check("未登入建 reviewRecords 應擋", assertFails(setDoc(doc(dbU, "reviewRecords", "x1"), baseRecord())));
-  await check("未登入建 mailLogs 應放行（設計如此）", assertSucceeds(setDoc(doc(dbU, "mailLogs", "m1"), { staffId: "930462", result: "sent", at: serverTimestamp() })));
+  await check("未登入建 mailLogs 應放行（設計如此）", assertSucceeds(setDoc(doc(dbU, "mailLogs", "m1"), { staffId: "930462", result: "sent", source: "client", at: serverTimestamp() })));
 
   console.log("== reviewRecords create ==");
   await check("非本人建他人 reviewRecord 應擋", assertFails(setDoc(doc(dbA, "reviewRecords", "taskC_c002"), baseRecord({ reviewerId: "3333333" }))));
@@ -143,6 +150,30 @@ async function main() {
   await check("佔用配額 slot ID 卻無 quotaGroupId 應擋", assertFails(setDoc(doc(dbA, "reviewRecords", "g1__slot__1"), baseRecord({ taskId: "taskA" }))));
   await check("配額紀錄帶有效 quotaGroupId 應放行", assertSucceeds(setDoc(doc(dbA, "reviewRecords", "g1__slot__2"), baseRecord({ taskId: "taskA", quotaGroupId: "g1", quotaSlotDocId: "g1__slot__2", quotaCaseNo: 1, version: 1 }))));
   await check("多寫白名單外欄位應擋", assertFails(setDoc(doc(dbA, "reviewRecords", "taskC_c004"), baseRecord({ forged: true }))));
+
+  console.log("== 讀取範圍 ==");
+  await check("本人審查員可讀自己的紀錄", assertSucceeds(getDoc(doc(dbA, "reviewRecords", "recA"))));
+  await check("無關單位審查員不可讀他人紀錄", assertFails(getDoc(doc(dbB, "reviewRecords", "recA"))));
+  await check("督導可讀轄區紀錄", assertSucceeds(getDoc(doc(dbSup, "reviewRecords", "recA"))));
+  await check("審查員可讀自己被指派任務", assertSucceeds(getDoc(doc(dbA, "reviewTasks", "taskC"))));
+  await check("無關單位審查員不可讀他人任務", assertFails(getDoc(doc(dbB, "reviewTasks", "taskC"))));
+  await check("申請人可讀自己的修正申請", assertSucceeds(getDoc(doc(dbA, "reviewEditRequests", "reqA"))));
+  await check("其他人不可讀他人修正申請", assertFails(getDoc(doc(dbB, "reviewEditRequests", "reqA"))));
+  await check("草稿建立者可讀草稿", assertSucceeds(getDoc(doc(dbA, "reviewDrafts", "draftA"))));
+  await check("其他人不可讀他人草稿", assertFails(getDoc(doc(dbB, "reviewDrafts", "draftA"))));
+  await check("CAPA 負責人可讀案件", assertSucceeds(getDoc(doc(dbA, "capa", "capaOther"))));
+  await check("無關人員不可讀 CAPA", assertFails(getDoc(doc(dbB, "capa", "capaOther"))));
+  await check("非鎖擁有者不可讀名額鎖", assertFails(getDoc(doc(dbB, "reviewReservations", "lockA"))));
+
+  console.log("== Storage 附件 scope ==");
+  const attachment = "reviews/recA/attachments/a.png";
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await uploadBytes(ref(ctx.storage(BUCKET), attachment), new Uint8Array([1, 2, 3]), { contentType: "image/png" });
+  });
+  await check("審查員可讀自己審查附件", assertSucceeds(getBytes(ref(ctxA.storage(BUCKET), attachment), 10)));
+  await check("督導可讀轄區審查附件", assertSucceeds(getBytes(ref(ctxSup.storage(BUCKET), attachment), 10)));
+  await check("跨單位人員不可讀附件", assertFails(getBytes(ref(ctxB.storage(BUCKET), attachment), 10)));
+  await check("跨單位人員不可覆寫附件", assertFails(uploadBytes(ref(ctxB.storage(BUCKET), attachment), new Uint8Array([4]), { contentType: "image/png" })));
 
   console.log("== reviewRecords update ==");
   await check("本人改自己紀錄應放行", assertSucceeds(updateDoc(doc(dbA, "reviewRecords", "recA"), { totalScore: 2, lastModifiedAt: serverTimestamp(), lastModifiedBy: "2222222" })));

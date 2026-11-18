@@ -4,7 +4,7 @@
  * Firebase 的當日用量條仍由下方「流量控管」區顯示；這裡只放 Supabase 的資料庫大小。
  */
 import { useCallback, useEffect, useState } from "react";
-import { dualClearEvents, dualDrainNow, dualEvents, dualHealth, dualRequested, fetchSupabaseUsage } from "../lib/dual/bootstrap";
+import { dualClearEvents, dualDrainNow, dualEvents, dualHealth, dualRequested, dualRetryDeadLetters, fetchSupabaseUsage } from "../lib/dual/bootstrap";
 import {
   SUPABASE_LIMITS, dbLabel, describeHealth, formatBytes, level, pct, type SupabaseUsage,
 } from "../lib/dual/status";
@@ -77,11 +77,17 @@ export function DbStatusSection() {
     setBusy(true);
     try { await dualDrainNow(); } finally { setBusy(false); tick((n) => n + 1); }
   };
+  const retryDead = async (): Promise<void> => {
+    setBusy(true);
+    try { await dualRetryDeadLetters(); } finally { setBusy(false); tick((n) => n + 1); }
+  };
 
   return (
     <section className="panel" id="db-status">
       <h3 style={{ marginTop: 0 }}>資料庫狀態</h3>
       <p style={{ margin: "0 0 8px", color: TONE_COLOR[line.tone], fontWeight: 600 }} role="status">{line.text}</p>
+      {health.queueError && <p role="alert" style={{ color: TONE_COLOR.bad }}>同步佇列異常：{health.queueError}；為避免遺失待同步資料，已拒絕新寫入。</p>}
+      {health.deadLetters > 0 && <p role="alert" style={{ color: TONE_COLOR.bad }}>有 {health.deadLetters} 筆同步項目已保留待人工重試；先修正資料庫權限／資料錯誤，再按「重試保留項目」。</p>}
       <table className="data-table" style={{ marginBottom: 12 }}>
         <thead>
           <tr><th>角色</th><th>資料庫</th><th>連線狀態</th><th>待同步</th></tr>
@@ -133,6 +139,9 @@ export function DbStatusSection() {
         <button className="button button-outline" type="button" onClick={() => void sync()} disabled={busy}>
           {busy ? "同步中…" : "立即同步"}
         </button>
+        {health.deadLetters > 0 && <button className="button button-outline" type="button" onClick={() => void retryDead()} disabled={busy}>
+          {busy ? "重試中…" : "重試保留項目"}
+        </button>}
         <button className="button button-outline" type="button" onClick={() => void loadUsage()}>重新整理用量</button>
       </div>
 
