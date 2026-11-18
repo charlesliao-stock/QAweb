@@ -384,7 +384,7 @@ body {
 .employee-barcode-frame{position:absolute;inset:20% 12%;border:2px solid #75dbc1;border-radius:14px;box-shadow:0 0 0 999px rgba(0,0,0,.18);pointer-events:none}
 .employee-barcode-hint,.employee-barcode-error{display:flex;align-items:center;gap:7px;min-height:36px;margin:10px 0;color:var(--muted,#657571);font-size:13px}
 .employee-barcode-error{color:var(--danger,#b42318)}
-.employee-barcode-actions{display:flex;justify-content:flex-end;margin-top:8px}
+.employee-barcode-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
 .employee-barcode-actions .button{min-height:44px}
 @media(max-width:640px){:root[data-layout="mobile"] .employee-id-input-row{grid-template-columns:minmax(0,1fr)}
 :root[data-layout="mobile"] .employee-barcode-trigger{width:100%;min-height:48px}

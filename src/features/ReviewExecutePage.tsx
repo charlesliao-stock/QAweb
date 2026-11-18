@@ -6,7 +6,7 @@ import {
   findArchiveIdsForRecord,
   hasPendingEditRequest,
 } from "../lib/editRequests";
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { ArrowLeft, Camera, Check, ChevronLeft, ChevronRight, ListChecks, Pencil } from "lucide-react";
 import {
   collection,
@@ -251,6 +251,49 @@ function taskFromDoc(id: string, data: Record<string, unknown>): TaskFull {
   };
 }
 
+/**
+ * 條碼掃描器載入邊界（v1.88.11）：掃描對話框是 React.lazy 動態載入。
+ * 1.88.10 部署後，已開著舊分頁的使用者按掃描時，舊 chunk 檔名已不存在
+ * （Hosting 回 index.html），import() 失敗又無邊界承接，整個頁面會被卸載、
+ * 看起來就是「掃了沒反應」。有邊界時改為明確提示重整頁面，重整後新分頁
+ * 載入健康的 chunk 即可恢復 1.88.9 的掃描行為。
+ */
+class BarcodeScannerErrorBoundary extends Component<
+  { onClose: () => void; children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="reviewer-modal-backdrop employee-barcode-backdrop" role="alert">
+          <div className="employee-barcode-loading">
+            <p>條碼掃描器載入失敗，可能是頁面停留在舊版本。請重整頁面後再試一次。</p>
+            <div className="employee-barcode-actions">
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => window.location.reload()}
+              >
+                重整頁面
+              </button>
+              <button type="button" className="button button-outline" onClick={this.props.onClose}>
+                關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export function ReviewExecutePage({
   target,
   onBack,
@@ -321,6 +364,10 @@ export function ReviewExecutePage({
   const [reviewerEmpNo, setReviewerEmpNo] = useState("");
   const [reviewerName, setReviewerName] = useState("");
   const [usersList, setUsersList] = useState<PersonOption[]>([]);
+  /** 人員名單是否已載完（v1.88.11）：掃碼比對要等名單載完，否則會誤判找不到人 */
+  const [usersLoaded, setUsersLoaded] = useState(false);
+  /** 掃碼時名單還沒載完，先記住職編，載完再重跑比對（v1.88.11） */
+  const [pendingBarcodeId, setPendingBarcodeId] = useState("");
 
   /** 受審人員（v1.15.0：必填，同單位在職人員搜尋；v1.51.0：不限單位任務改全院搜尋） */
   const [personEmpNo, setPersonEmpNo] = useState("");
@@ -932,6 +979,7 @@ export function ReviewExecutePage({
         } catch {
           /* 人員讀不到就只允許手填職編 */
         }
+        if (!cancelled) setUsersLoaded(true);
         // 任務
         const tsnap = await getDoc(doc(db, "reviewTasks", target.taskId));
         if (!tsnap.exists()) {
@@ -1244,13 +1292,17 @@ export function ReviewExecutePage({
     }
   }
 
-  function handlePersonBarcode(value: string) {
-    const raw = value.trim();
-    setPersonBarcodeOpen(false);
-    if (!raw) return;
-    // v1.88.10：條碼職編先正規化（去開頭 0，如 0930462 → 930462）再查人；
-    // 畫面顯示的也是去 0 後的值，不要顯示一個、查另一個。
-    const scannedId = canonicalStaffId(raw).toLocaleLowerCase();
+  /* 掃碼時人員名單還沒載完：先記住職編，名單與任務載完再重跑比對、自動選人（v1.88.11） */
+  useEffect(() => {
+    if (!usersLoaded || pendingBarcodeId === "" || !task) return;
+    const scannedId = pendingBarcodeId;
+    setPendingBarcodeId("");
+    resolveScannedPerson(scannedId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usersLoaded, pendingBarcodeId, task]);
+
+  /** 掃到的職編比對人員（v1.88.11）：精確命中直接選人；建議唯一一人也自動選人；都沒有才明確說找不到。 */
+  function resolveScannedPerson(scannedId: string) {
     const exactMatch = usersList.find(
       (user) => canonicalStaffId(user.staffId).toLocaleLowerCase() === scannedId,
     );
@@ -1258,10 +1310,41 @@ export function ReviewExecutePage({
       selectPerson(exactMatch);
       return;
     }
-
+    const matches = usersList
+      .filter(
+        (u) =>
+          u.staffId.includes(scannedId) ||
+          canonicalStaffId(u.staffId).toLocaleLowerCase().includes(scannedId) ||
+          u.name.includes(scannedId),
+      )
+      .slice(0, 8);
+    if (matches.length === 1) {
+      selectPerson(matches[0]);
+      return;
+    }
     setPersonQuery(scannedId);
     setShowPersonSugg(true);
-    onAction(`已讀取職編 ${scannedId}，請確認搜尋結果並選取受審人員。`);
+    if (matches.length === 0) {
+      onAction(`找不到職編 ${scannedId} 的人員，請確認條碼是否正確，或改用手動輸入職編。`);
+    } else {
+      onAction(`已讀取職編 ${scannedId}，請確認搜尋結果並選取受審人員。`);
+    }
+  }
+
+  function handlePersonBarcode(value: string) {
+    const raw = value.trim();
+    setPersonBarcodeOpen(false);
+    if (!raw) return;
+    // v1.88.10：條碼職編先正規化（去開頭 0，如 0930462 → 930462）再查人；
+    // 畫面顯示的也是去 0 後的值，不要顯示一個、查另一個。
+    const scannedId = canonicalStaffId(raw).toLocaleLowerCase();
+    if (!usersLoaded) {
+      // 人員名單還沒載完：先記住，載完再重跑比對，不要直接判找不到（v1.88.11）。
+      setPendingBarcodeId(scannedId);
+      onAction(`已讀取職編 ${scannedId}，正在確認人員資料…`);
+      return;
+    }
+    resolveScannedPerson(scannedId);
   }
 
   /**
@@ -2665,18 +2748,20 @@ export function ReviewExecutePage({
         </>
       )}
       {personBarcodeOpen && (
-        <Suspense
-          fallback={
-            <div className="reviewer-modal-backdrop employee-barcode-backdrop" role="status">
-              <div className="employee-barcode-loading">載入條碼掃描器…</div>
-            </div>
-          }
-        >
-          <BarcodeScannerDialog
-            onDetected={handlePersonBarcode}
-            onClose={() => setPersonBarcodeOpen(false)}
-          />
-        </Suspense>
+        <BarcodeScannerErrorBoundary onClose={() => setPersonBarcodeOpen(false)}>
+          <Suspense
+            fallback={
+              <div className="reviewer-modal-backdrop employee-barcode-backdrop" role="status">
+                <div className="employee-barcode-loading">載入條碼掃描器…</div>
+              </div>
+            }
+          >
+            <BarcodeScannerDialog
+              onDetected={handlePersonBarcode}
+              onClose={() => setPersonBarcodeOpen(false)}
+            />
+          </Suspense>
+        </BarcodeScannerErrorBoundary>
       )}
     </div>
   );
