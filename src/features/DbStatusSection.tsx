@@ -4,7 +4,7 @@
  * Firebase 的當日用量條仍由下方「流量控管」區顯示；這裡只放 Supabase 的資料庫大小。
  */
 import { useCallback, useEffect, useState } from "react";
-import { dualClearEvents, dualDrainNow, dualEvents, dualHealth, dualRequested, dualRetryDeadLetters, fetchSupabaseUsage } from "../lib/dual/bootstrap";
+import { dualClearEvents, dualDrainNow, dualEvents, dualHealth, dualRequested, dualRetryDeadLetters, fetchSupabaseUsage, watchDualHealth } from "../lib/dual/bootstrap";
 import {
   SUPABASE_LIMITS, dbLabel, describeHealth, formatBytes, level, pct, type SupabaseUsage,
 } from "../lib/dual/status";
@@ -55,8 +55,8 @@ export function DbStatusSection() {
 
   useEffect(() => {
     void loadUsage();
-    const t = window.setInterval(() => tick((n) => n + 1), 5000); // 狀態是記憶體內讀取，免費
-    return () => window.clearInterval(t);
+    // 狀態是記憶體內讀取，免費；與全站共用同一個輪詢，分頁在背景時不更新
+    return watchDualHealth(() => tick((n) => n + 1));
   }, [loadUsage]);
 
   if (!health) {

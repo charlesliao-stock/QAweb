@@ -62,6 +62,48 @@ export function dualHealth(): (DualHealth & { lastEvent: DualEvent | null }) | n
   return dualStoreRef ? { ...dualStoreRef.health(), lastEvent } : null;
 }
 
+/**
+ * 訂閱健康狀態輪詢（全站共用一個計時器）。
+ * - 只在分頁可見時輪詢；分頁切回前景會立刻檢查一次。
+ * - 有訂閱者才有計時器；最後一個取消訂閱時計時器隨之清除。
+ * - 輪詢只讀記憶體內的斷路器狀態，不發任何網路請求。
+ * 回傳取消訂閱函式（React effect 的 cleanup 直接回傳即可）。
+ */
+const HEALTH_POLL_MS = 5000;
+const healthListeners = new Set<() => void>();
+let healthTimer: number | undefined;
+
+function notifyHealth(): void {
+  for (const fn of [...healthListeners]) {
+    try { fn(); } catch { /* 單一訂閱者出錯不影響其他人 */ }
+  }
+}
+function onHealthVisibility(): void {
+  if (document.visibilityState === "visible") notifyHealth();
+}
+function startHealthTimer(): void {
+  if (healthTimer !== undefined || typeof window === "undefined") return;
+  healthTimer = window.setInterval(() => {
+    if (document.visibilityState === "visible") notifyHealth();
+  }, HEALTH_POLL_MS);
+  document.addEventListener("visibilitychange", onHealthVisibility);
+}
+function stopHealthTimer(): void {
+  if (healthTimer === undefined) return;
+  window.clearInterval(healthTimer);
+  healthTimer = undefined;
+  document.removeEventListener("visibilitychange", onHealthVisibility);
+}
+
+export function watchDualHealth(listener: () => void): () => void {
+  healthListeners.add(listener);
+  startHealthTimer();
+  return () => {
+    healthListeners.delete(listener);
+    if (healthListeners.size === 0) stopHealthTimer();
+  };
+}
+
 /** 立即補送同步佇列（管理頁按鈕用）。 */
 export async function dualDrainNow(): Promise<{ done: number; left: number }> {
   if (!dualStoreRef) return { done: 0, left: 0 };
@@ -123,12 +165,14 @@ export function initDual(firestoreDb: any, getAuth: () => Auth): void {
   logEvent("info", `雙寫模式啟動：主資料庫 ${dbLabel("supabase")}，備援 ${dbLabel("firebase")}`);
   if (typeof window !== "undefined") {
     let prev = store.mode();
-    window.setInterval(() => {
+    // 斷路器的 open → half-open 是依時間推進，沒有事件可訂閱，所以仍需輪詢；
+    // 但與橫幅、管理頁共用同一個計時器（見 watchDualHealth），背景分頁不再輪詢。
+    watchDualHealth(() => {
       const m = store.mode();
       if (m === prev) return;
       logEvent(m === "failover" ? "bad" : "info", m === "failover" ? "切換到備援：主資料庫暫時無法使用" : "主資料庫已恢復，切回主資料庫");
       prev = m;
-    }, 3000);
+    });
   }
   // 上線／回到前景時補送佇列
   if (typeof window !== "undefined") {

@@ -40,7 +40,7 @@ import { VERSION_LABEL } from "../version";
 import { pagePermissionKey } from "../lib/permissions";
 import { usePermissions } from "../lib/usePermissions";
 import { MAINTENANCE_EVENT } from "../lib/maintenance";
-import { dualHealth } from "../lib/dual/bootstrap";
+import { dualHealth, watchDualHealth } from "../lib/dual/bootstrap";
 import { describeHealth } from "../lib/dual/status";
 import { DashboardPage } from "../features/DashboardPage";
 // v1.28 階段 6（A1）：儀表板是登入後首頁，留在首屏 chunk；其餘 7 頁懶載入，
@@ -665,8 +665,7 @@ function Shell() {
       setDbBanner(h && h.mode === "failover" ? describeHealth(h).text : "");
     };
     check();
-    const t = window.setInterval(check, 10_000);
-    return () => window.clearInterval(t);
+    return watchDualHealth(check);
   }, []);
   useEffect(() => {
     const handler = (event: Event) => {
