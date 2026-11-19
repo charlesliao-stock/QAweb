@@ -1,0 +1,261 @@
+{
+  "_說明": "expect：pass／fail／unknown。unknown＝尚未取得基準，取得後以 node scripts/run-tests.mjs --update-baseline 更新。",
+  "scripts": {
+    "scripts/test-v1.11.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.12.2.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.12.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.13.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.15.1.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.15.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.16-lib.mjs": {
+      "suite": "dom",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.16-ui.mjs": {
+      "suite": "dom",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.17-lib.mjs": {
+      "suite": "dom",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.18.mjs": {
+      "suite": "dom",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.19.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.20.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.21.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.22.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.23.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.24-audit-form-import.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.24.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.25.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.26.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.27.1.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.27.2.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.27.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.28-dashboard.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.28-refcache.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.28-results.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.28-wave2.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.28-wave3.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.28-xlsx.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.31.mjs": {
+      "suite": "dom",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.32.1-rwd.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.32.mjs": {
+      "suite": "dom",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.38.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.39.2.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.39.3.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.39.4.mjs": {
+      "suite": "static",
+      "expect": "pass"
+    },
+    "scripts/test-v1.39.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.40.1.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.40.2.mjs": {
+      "suite": "static",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.40.3.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.40.4.mjs": {
+      "suite": "static",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.40.5.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.40.6.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.40.7.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.40.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.41.0.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.41.1.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.43.0.mjs": {
+      "suite": "static",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.43.1.mjs": {
+      "suite": "static",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.53.0.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.54.0.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.55.0.mjs": {
+      "suite": "static",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.56.0.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.57.0.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.58.0.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.59.0.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.59.1.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.60.0.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.64.0.mjs": {
+      "suite": "bundle",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.69-dashboard-visibility.mjs": {
+      "suite": "static",
+      "expect": "unknown"
+    },
+    "scripts/test-v1.83.0.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.84.0.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.84.1.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.84.2.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    },
+    "scripts/test-v1.85.0.mjs": {
+      "suite": "static",
+      "expect": "fail"
+    }
+  }
+}

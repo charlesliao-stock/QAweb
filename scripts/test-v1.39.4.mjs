@@ -13,7 +13,7 @@
 import { readFileSync } from "fs";
 import assert from "node:assert/strict";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 let pass = 0;
 function check(name, fn) {
   fn();

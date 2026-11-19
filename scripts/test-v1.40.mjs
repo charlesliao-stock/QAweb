@@ -16,7 +16,7 @@ import { build } from "esbuild";
 import { writeFileSync, readFileSync } from "fs";
 import { createRequire } from "module";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 
 const entry = `\nimport {\n  isHandoffEligible, filterHandoffTasks, sortHandoffTasks,\n  selectHandoffTasks, validateHandoff,\n} from "${ROOT}/src/lib/handoff";\nexport { isHandoffEligible, filterHandoffTasks, sortHandoffTasks, selectHandoffTasks, validateHandoff };\n`;
 writeFileSync("/tmp/v140-test-entry.ts", entry);

@@ -8,7 +8,7 @@ import { build } from "esbuild";
 import { writeFileSync } from "fs";
 import { createRequire } from "module";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 
 // 先建立 jsdom 全域環境，再載入被測 bundle
 const { JSDOM } = await import("jsdom");
