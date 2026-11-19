@@ -1,3 +1,4 @@
+import type { RowSpan } from "../../../lib/analysisSpans";
 import type { AuditQuestion } from "../../../lib/indicators";
 import type { PassRate, OptionDetailRow } from "../../../lib/analysisRates";
 import type { AnalysisPeriodColumn } from "../../../lib/analysisPeriod";
@@ -114,4 +115,18 @@ export interface UnitPanel {
   /** v1.53.0：分組版（只看該組）；無值＝整支指標 */
   sectionKey?: string;
   sectionLabel?: string;
+}
+
+/**
+ * v1.88.17：每列合併格（RowSpan）建構。
+ * 表頭固定一月一格；每列的資料格按該指標自己的排程區間 colspan 合併。
+ * 加審月份不併入合併格：有加審紀錄的月份從區間中切出、獨立成一格
+ * （temp: true，格面顯示該月全部紀錄並標「加審」），區間其餘月份仍合併。
+ */
+export interface MatrixRow {
+  id: string;
+  indicatorId: string;
+  label: string;
+  spans: RowSpan[];
+  details: { key: string; label: string; cells: Record<string, PassRate> }[];
 }
