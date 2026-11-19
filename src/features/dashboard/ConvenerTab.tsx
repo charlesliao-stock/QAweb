@@ -11,6 +11,7 @@ import {
 } from "../../lib/dashboardSections";
 import { avgRateOf } from "../../lib/resultAnalysis";
 import type { DashboardData } from "./useDashboardData";
+import { CapaPendingReviewCard } from "./CapaPendingReviewCard";
 import { fmtYm } from "../../lib/ym";
 
 export function ConvenerTab({
@@ -78,6 +79,8 @@ export function ConvenerTab({
 
   return (
     <>
+      {/* v1.88.28：召集人頁籤補 CAPA 待審核卡（範圍＝其品管組內全部單位） */}
+      {sections.capaPendingReview && <CapaPendingReviewCard variant="convener" />}
       <section className="panel">
         <div className="form-field" style={{ maxWidth: 320 }}>
           <label className="field-label">指標分類組別</label>

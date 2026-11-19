@@ -27,7 +27,7 @@ export const DASHBOARD_SECTION_KEYS_BY_VARIANT: Record<DashboardVariant, Dashboa
   reviewer: ["overdueLocked", "nextMonthPreview"],
   headNurse: ["capaPendingReview", "alert48h", "nextMonthPreview", "unitAvg", "overAudit"],
   officer: ["lagLights", "overdueLocked", "unlockReview"],
-  convener: ["groupPassRate", "pareto"],
+  convener: ["capaPendingReview", "groupPassRate", "pareto"],
   supervisor: ["capaPendingReview", "trendAlerts", "unitProgress"],
   director: ["capaPendingReview", "overview", "radar", "redFlags", "riskyUnits"],
 };
@@ -173,7 +173,7 @@ export function countCapaPendingReview(cases: Array<{
   approvalSteps?: unknown;
 }>): number {
   return cases.filter((item) => {
-    if (item.stage !== "結案核准" || !Array.isArray(item.approvalSteps)) return false;
+    if ((item.stage !== "督導審核" && item.stage !== "結案核准") || !Array.isArray(item.approvalSteps)) return false;
     return item.approvalSteps.some(
       (step) => isRecord(step) && step.decision === "待審核",
     );

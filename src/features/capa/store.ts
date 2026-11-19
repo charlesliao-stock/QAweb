@@ -51,13 +51,20 @@ export async function loadCapaCasesByUnit(unitCode: string): Promise<CapaCase[]>
 }
 
 /**
- * 儀表板「待結案核准」專用：只讀 stage＝結案核准 的案件（單欄位等號，免複合索引），
- * 不再整個 capa 集合全讀，降低 Spark 讀取量。
+ * 儀表板「待審核」專用：只讀 stage＝督導審核／結案核准 的案件
+ * （兩個單欄位等號查詢合併，免複合索引），不再整個 capa 集合全讀，
+ * 降低 Spark 讀取量。
  */
 export async function loadCapaPendingApprovalCases(): Promise<CapaCase[]> {
   await seedDemoIfNeeded();
-  const snapshot = await getDocs(query(collection(db(), CASES), where("stage", "==", "結案核准")));
-  return dataRows<CapaCase>(snapshot);
+  const snapshots = await Promise.all([
+    getDocs(query(collection(db(), CASES), where("stage", "==", "督導審核"))),
+    getDocs(query(collection(db(), CASES), where("stage", "==", "結案核准"))),
+  ]);
+  const seen = new Set<string>();
+  return snapshots
+    .flatMap((snapshot) => dataRows<CapaCase>(snapshot))
+    .filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)));
 }
 
 export async function loadCapaSettings(): Promise<CapaSettings> {
@@ -66,11 +73,17 @@ export async function loadCapaSettings(): Promise<CapaSettings> {
   if (!snapshot.exists()) return DEFAULT_CAPA_SETTINGS;
   const documentData = snapshot.data() as Record<string, unknown>;
   const raw = Object.fromEntries(Object.entries(documentData).filter(([key]) => key !== "templates")) as Partial<CapaSettings>;
+  // 舊設定只有一層「督導」時，視為新流程前的舊值，正規化為兩層
+  // （直屬督導→品管組召集人）；下次儲存設定時即寫回新值。
+  const approvalRoles = raw.approvalRoles?.length
+    ? raw.approvalRoles
+    : DEFAULT_CAPA_SETTINGS.approvalRoles;
   return {
     ...DEFAULT_CAPA_SETTINGS,
     ...raw,
     indicatorOverrides: raw.indicatorOverrides ?? {},
-    approvalRoles: raw.approvalRoles?.length ? raw.approvalRoles : DEFAULT_CAPA_SETTINGS.approvalRoles,
+    approvalRoles:
+      approvalRoles.length < 2 ? DEFAULT_CAPA_SETTINGS.approvalRoles : approvalRoles,
   };
 }
 

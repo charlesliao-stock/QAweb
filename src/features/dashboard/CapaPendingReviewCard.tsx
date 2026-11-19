@@ -2,13 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import { SectionTitle } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
 import { usePermissions } from "../../lib/usePermissions";
+import {
+  COMMITTEE_GROUP_ID,
+  UNGROUPED_GROUP_ID,
+  isConvenerRole,
+} from "../../lib/roleIdentity";
 import type { DashboardVariant } from "../../lib/dashboardVariant";
 import { countCapaPendingReview } from "../../lib/dashboardVisibility";
 import { loadCapaPendingApprovalCases } from "../capa/store";
 
-export function CapaPendingReviewCard({ variant }: { variant: Extract<DashboardVariant, "headNurse" | "supervisor" | "director"> }) {
+export function CapaPendingReviewCard({ variant }: { variant: Extract<DashboardVariant, "headNurse" | "supervisor" | "director" | "convener"> }) {
   const { user } = useAuth();
-  const { can, isAdmin, ready } = usePermissions();
+  const { can, isAdmin, ready, catalog } = usePermissions();
   const [count, setCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -16,8 +21,27 @@ export function CapaPendingReviewCard({ variant }: { variant: Extract<DashboardV
   const unitCodes = useMemo(() => {
     if (isAdmin || variant === "director") return null;
     if (variant === "headNurse") return user?.unitCode ? [user.unitCode] : [];
+    if (variant === "convener") {
+      // v1.88.28：召集人頁籤補 CAPA 待審核卡，範圍＝其品管組內全部單位
+      //（dataScope A5 口徑：memberships 的召集人角色所屬群組 → 該組全部單位；
+      // 單位→群組對照來自 catalog.unitGroups，鍵為單位代碼）。
+      const groupIds = new Set(
+        (user?.memberships ?? [])
+          .filter(
+            (m) =>
+              m.groupId &&
+              m.groupId !== COMMITTEE_GROUP_ID &&
+              m.groupId !== UNGROUPED_GROUP_ID &&
+              isConvenerRole(m.roles),
+          )
+          .map((m) => m.groupId),
+      );
+      return Object.entries(catalog.unitGroups)
+        .filter(([, gid]) => groupIds.has(gid))
+        .map(([code]) => code);
+    }
     return user?.titleUnitCodes ?? [];
-  }, [isAdmin, user?.unitCode, user?.titleUnitCodes, variant]);
+  }, [isAdmin, user?.unitCode, user?.titleUnitCodes, user?.memberships, catalog, variant]);
   const unitKey = unitCodes === null ? "all" : unitCodes.join("|");
 
   useEffect(() => {
@@ -47,11 +71,13 @@ export function CapaPendingReviewCard({ variant }: { variant: Extract<DashboardV
     ? "全院摘要"
     : variant === "headNurse"
       ? "所屬單位摘要"
-      : "負責轄區摘要";
+      : variant === "convener"
+        ? "所屬品管組摘要"
+        : "負責轄區摘要";
 
   return (
     <section className="panel dashboard-capa-summary" aria-live="polite">
-      <SectionTitle title="CAPA 待結案核准" note={`${scopeLabel} · 只顯示件數，不列案件或人員資料`} />
+      <SectionTitle title="CAPA 待審核" note={`${scopeLabel} · 只顯示件數，不列案件或人員資料`} />
       {!ready ? (
         <p className="settings-note">確認 CAPA 檢視權限中…</p>
       ) : !allowed ? (
@@ -61,12 +87,16 @@ export function CapaPendingReviewCard({ variant }: { variant: Extract<DashboardV
       ) : failed ? (
         <p className="settings-note">CAPA 摘要暫時無法載入，案件資料未受影響。</p>
       ) : unitCodes !== null && unitCodes.length === 0 ? (
-        <p className="settings-note">尚未設定負責單位，無法計算轄區摘要。</p>
+        <p className="settings-note">
+          {variant === "convener"
+            ? "尚未設定所屬品管組，無法計算品管組摘要。"
+            : "尚未設定負責單位，無法計算轄區摘要。"}
+        </p>
       ) : (
         <div className="dashboard-capa-count">
           <strong>{count ?? 0}</strong>
           <span>件待審</span>
-          {count === 0 && <small>目前沒有待結案核准案件。</small>}
+          {count === 0 && <small>目前沒有待審核案件。</small>}
         </div>
       )}
     </section>

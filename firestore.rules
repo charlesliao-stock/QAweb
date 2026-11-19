@@ -47,6 +47,16 @@ service cloud.firestore {
       return hasRole('督導') && data.get('unitCode', '') in myTitleUnitCodes();
     }
 
+    // CAPA 選督導／召集人專用（2026-11-19 定案）：CAPA 由負責人（護理長）提交，
+    // 只有掛「護理長」角色者可在 CAPA 內選督導／召集人。規則看不到呼叫頁面，
+    // 故以（請求者角色＝護理長）×（目標角色＝督導／品管組召集人）收窄，
+    // 不放寬一般人員清單讀取；現行只有 CAPA 會以角色查全院清單，其他頁面
+    // 查同角色清單時亦同受惠，非護理長的負責人仍讀不到。
+    function canListCapaApprover(data) {
+      return hasRole('護理長')
+        && ('督導' in data.get('roles', []) || '品管組召集人' in data.get('roles', []));
+    }
+
     function isAdmin() {
       return hasRole('系統管理員');
     }
@@ -166,8 +176,11 @@ service cloud.firestore {
 
     function canReadCapa(data) {
       return canReadAllReviews() || canManageSchedule() || hasRole('督導')
+        || hasRole('品管組召集人')
         || data.get('ownerId', '') == staffId()
         || data.get('writerId', data.get('ownerId', '')) == staffId()
+        || data.get('approverId', '') == staffId()
+        || data.get('convenerId', '') == staffId()
         || inReviewUnit(data);
     }
 
@@ -347,7 +360,7 @@ service cloud.firestore {
     // 幹事可查人員清單（建指標選負責人用），但不可新增/刪除
     match /users/{id} {
       allow get: if isAuthed() && (id == staffId() || isAdmin() || isUnitHeadOf(resource.data) || isSupervisorOf(resource.data));
-      allow list: if isAdmin() || isGanShi() || isUnitHeadOf(resource.data) || isSupervisorOf(resource.data);
+      allow list: if isAdmin() || isGanShi() || isUnitHeadOf(resource.data) || isSupervisorOf(resource.data) || canListCapaApprover(resource.data);
       allow create: if isAdmin();
       allow update: if isAuthed() && (isAdmin() || (id == staffId()
         && request.resource.data.get('roles', []) == resource.data.get('roles', [])
@@ -635,7 +648,8 @@ service cloud.firestore {
 
     // 業務資料：v1.85.5 收緊。schedules／reviews 為舊版集合，前端已無寫入點；
     // reportTemplates 前端亦無寫入點；三者寫入限排程管理者、刪除限管理員。
-    // capa 寫入限管理員／排程管理者／督導（結案核准人）／案件負責人／撰寫人；
+    // capa 寫入限管理員／排程管理者／督導（第 1 層核准人）／品管組召集人
+    // （第 2 層結案核准人）／案件負責人／撰寫人／被指派的督導或召集人；
     // 院／區主管等職稱層級寫入（titleFlags，非 roles）規則無法判斷，見報告。
     match /schedules/{id} {
       allow read: if isAuthed();
@@ -653,8 +667,11 @@ service cloud.firestore {
         || request.resource.data.get('ownerId', '') == staffId()
         || request.resource.data.get('writerId', '') == staffId();
       allow update: if isAdmin() || canManageSchedule() || hasRole('督導')
+        || hasRole('品管組召集人')
         || resource.data.get('ownerId', '') == staffId()
-        || resource.data.get('writerId', '') == staffId();
+        || resource.data.get('writerId', '') == staffId()
+        || resource.data.get('approverId', '') == staffId()
+        || resource.data.get('convenerId', '') == staffId();
       allow delete: if isAdmin();
     }
     match /reportTemplates/{id} {

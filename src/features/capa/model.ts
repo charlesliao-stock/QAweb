@@ -4,6 +4,7 @@ export type CapaStage =
   | "措施規劃"
   | "措施執行"
   | "成效驗證"
+  | "督導審核"
   | "結案核准"
   | "正式結案"
   | "已退回"
@@ -87,6 +88,11 @@ export interface CapaCase {
   /** v1.78.0：結案核准預設人員（單位督導），送審時帶入核准層級 */
   approverId?: string;
   approverName?: string;
+  /** 新流程（2026-11-19 定案）：第 1 層＝直屬督導（即 approverId／approverName），
+   * 第 2 層＝指標所屬品管組的品管組召集人；兩者皆可下拉改選（範圍不限） */
+  groupId?: string;
+  convenerId?: string;
+  convenerName?: string;
   /** v1.78.2：撰寫人（預設＝負責人；負責人可指定他人，指定後同樣可編輯）；舊案件缺值視同負責人 */
   writerId?: string;
   writerName?: string;
@@ -116,12 +122,12 @@ export const DEFAULT_CAPA_SETTINGS: CapaSettings = {
   defaultTriggerPeriods: 2,
   indicatorOverrides: {},
   multiLevelApproval: true,
-  approvalRoles: ["督導"],
+  approvalRoles: ["督導", "品管組召集人"],
   verifierRole: "督導／品管",
   ownerRole: "護理長",
 };
 export const CAPA_STAGES: CapaStage[] = [
-  "待確認", "原因分析", "措施規劃", "措施執行", "成效驗證", "結案核准", "正式結案",
+  "待確認", "原因分析", "措施規劃", "措施執行", "成效驗證", "督導審核", "結案核准", "正式結案",
 ];
 export const DEMO_CAPA_CASES: CapaCase[] = [
   {
@@ -173,7 +179,7 @@ export const DEMO_CAPA_TEMPLATES: CapaTemplate[] = [
 ];
 export const CAPA_STATUS_LABEL: Record<CapaStage, string> = {
   待確認: "待確認", 原因分析: "原因分析", 措施規劃: "措施規劃", 措施執行: "措施執行",
-  成效驗證: "成效驗證", 結案核准: "結案核准", 正式結案: "已核准結案", 已退回: "退回補充", 已撤案: "已撤案",
+  成效驗證: "成效驗證", 督導審核: "督導審核", 結案核准: "結案核准", 正式結案: "已核准結案", 已退回: "退回補充", 已撤案: "已撤案",
 };
 export function newId(prefix = "capa"): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -185,7 +191,7 @@ export function makeHistory(action: string, actorId: string, actorName: string, 
 /** 儲存階段 → 4 個進度（已退回與原因分析至成效驗證皆屬分析撰寫中） */
 export function progressOfStage(stage: CapaStage): CapaProgress {
   if (stage === "待確認") return "待確認";
-  if (stage === "結案核准") return "送審中";
+  if (stage === "督導審核" || stage === "結案核准") return "送審中";
   if (stage === "正式結案") return "結案";
   if (stage === "已撤案") return "已撤案";
   return "分析撰寫中";
