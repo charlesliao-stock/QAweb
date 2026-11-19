@@ -5,6 +5,7 @@ const norm = (t) => (typeof t === "string" ? t.replace(/\/tmp\/snap\/bundle-[^:)
 for (const o of [a, b]) for (const k of Object.keys(o.snaps)) o.snaps[k] = norm(o.snaps[k]);
 for (const k of Object.keys(b.snaps)) console.log(`  ${k}\t${b.snaps[k].length}${k.endsWith("例外") ? "\n    " + b.snaps[k].replace(/\n/g, "\n    ").slice(0, 700) : ""}`);
 for (const e of b.errors) console.log("  console.error:", e);
+if (process.env.DUMP) for (const k of (process.env.DUMP).split(",")) { const h = b.snaps[k] ?? ""; const btn = [...h.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim()).filter(Boolean); const sel = [...h.matchAll(/<select[^>]*>/g)].length; const txt = h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 500); console.log(`DUMP ${k}: buttons=${JSON.stringify(btn)} selects=${sel}\n   text=${txt}`); }
 const keys = [...new Set([...Object.keys(a.snaps), ...Object.keys(b.snaps)])];
 let bad = 0, same = 0, empty = 0;
 for (const k of keys) {
