@@ -95,7 +95,8 @@ export const EXCLUDED_ROLE_NAMES = ["系統管理員", "一般人員"] as const;
  * 權限按名稱存一份，不再按各群組／單位的文件各存一份。
  * 例如「召集人」只有一份範本，加護組、病房組、腫瘤組的召集人都共用
  * 同一組權限與跨設定；改一處，全部同名角色／職稱一起改。
- * 文件存於 `permissionTemplates` 集合，文件 id＝`${category}__${name}`。
+ * 文件存於 `permissionTemplates` 集合，文件 id＝`${category}__${encodeTemplateName(name)}`
+ *（名稱中的 `/` 以 `%2F` 編碼，見 templateDocId；其餘字元原樣保留）。
  * v1.39.0 起角色／職稱文件上的群組／範圍欄位不再作為判斷依據；
  * 範圍改看人員自己的指派情境（memberships、title、unitCode）＋範本跨設定。
  */
@@ -109,8 +110,23 @@ export interface PermissionTemplate {
   cross: boolean;
 }
 
+/**
+ * 範本名稱編碼（Charles 2026-11-20 定案 Q1：保留職稱名「護理長/副護理長」，修程式編碼）：
+ * Firestore 文件 id 不可含 `/`，名稱中的 `/` 與 `%` 以百分比編碼寫入
+ *（`/`→`%2F`、`%`→`%25`，可逆；`%` 先編，解碼時先還原 `%2F` 再還原 `%25`）；
+ * 其餘字元（含中文）原樣保留，所以不含 `/`、`%` 的既有名稱文件 id 完全不變，
+ * 既有範本不需遷移。讀取一律掃描集合、按文件內 category／name 對照，不靠文件 id 反推名稱。
+ */
+export function encodeTemplateName(name: string): string {
+  return name.replaceAll("%", "%25").replaceAll("/", "%2F");
+}
+
+export function decodeTemplateName(encoded: string): string {
+  return encoded.replaceAll("%2F", "/").replaceAll("%25", "%");
+}
+
 export function templateDocId(category: TemplateCategory, name: string): string {
-  return `${category}__${name}`;
+  return `${category}__${encodeTemplateName(name)}`;
 }
 
 export function templateKey(category: TemplateCategory, name: string): string {
@@ -318,11 +334,15 @@ function titleSideAllows(
 }
 
 /**
- * 權限採交集（v1.39.0 範本制＋指派情境）：至少一個有效角色範本
- * 與使用者職稱範本，都必須勾選同一功能。
- * 無職稱／無範本＝無權限。
+ * 權限採聯集（Charles 2026-11-20 定案 Q4 A，取代 v1.39.0 交集制）：
+ * 職稱範本有勾，或任一角色範本有勾，任一成立即有權限；
+ * 兩邊都沒有／都沒勾才無權限。「無職稱」或「無角色」不再是否決票：
+ * 只有職稱的護理長、只有角色的使用者，各自範本有勾即生效。
  * 傳 groupId 時，群組角色只對該群組生效（不跨群組時）；省略時用於導覽顯示，
  * 任一群組角色可開啟入口，但資料操作端仍必須傳入目標群組做二次判斷。
+ * 跨區規則：can() 只判斷功能是否授權，不判斷跨區；跨區（cross）由各頁的
+ * 資料範圍過濾另行處理——職稱側 cross 與角色側 cross 各自生效，任一側
+ * 允許跨即允許跨（見 dataScope deriveCrossFlags／resolveDataScope，聯集）。
  */
 export function can(
   user: PermUser | null | undefined,
@@ -330,7 +350,8 @@ export function can(
   catalog: PermissionCatalog,
   groupId?: string,
 ): boolean {
-  if (!user || !user.roles.length || !user.title || !user.unitCode) return false;
-  if (!roleSideAllows(user, key, catalog, groupId)) return false;
+  if (!user) return false;
+  if (!user.roles.length && !user.title) return false;
+  if (roleSideAllows(user, key, catalog, groupId)) return true;
   return titleSideAllows(user, key, catalog);
 }

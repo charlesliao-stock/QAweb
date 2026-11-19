@@ -26,9 +26,9 @@ type TemplateCategory,
 import {
 DEFAULT_ROLE_LEVELS,
 DEFAULT_TITLE_LEVELS,
-roleLevelIdForName,
+resolveRoleLevelId,
+resolveTitleLevelId,
 sortedLevels,
-titleLevelIdForName,
 type OrgLevel,
 } from "../lib/orgLevels";
 import { deriveRoleScopeFromLevel } from "../lib/roleDerivation";
@@ -367,8 +367,10 @@ setResetBusy(false);
 * v1.39.3 進頁改走伺服器讀取；v1.57.0 B：目標改動態按層級，
 * 列一律以角色／職稱文件的 levelId 歸層級、再由層級對範本桶）：
 * 角色按 levelId 歸入 roleLevels 的層級、職稱按 levelId 歸入 titleLevels
-* 的層級；未分層級（levelId 空或對不上任何層級）者視為一般使用者，
-* 不列入任何目標。系統管理員、一般人員永不列入。
+* 的層級；levelId 空或對不上任何層級者退回預設層級（角色：含「單位」
+* →單位層級，其餘→品管組層級；職稱：一律→單位層級），永不靜默丟棄
+*（Q3：以設定為主，使用者輸入的新職稱／新角色都要能出現在權限頁）。
+* 系統管理員、一般人員永不列入。
 * 層級集合讀到空（展示模式／遷移前）時以 v1.55.0 預設層級補齊，
 * levelId 缺失時以名稱推導（與 v1.55.0 遷移同一對照）；
 * 讀取失敗時不補（橫幅顯示失敗集合）。
@@ -480,7 +482,8 @@ const pushRole = (name: string, rawLevelId: string) => {
 if (!name || (EXCLUDED_ROLE_NAMES as readonly string[]).includes(name)) {
 return;
 }
-const levelId = rawLevelId || roleLevelIdForName(name);
+// Q3：層級對不上時退回預設層級（見 orgLevels.resolveRoleLevelId），永不靜默丟棄
+const levelId = resolveRoleLevelId(name, rawLevelId, roleLevels);
 const level = roleLevelById.get(levelId);
 if (!level) return;
 const targetKey = `role:${level.id}`;
@@ -500,7 +503,8 @@ cross: tpl? tpl.cross: isCommitteeLevel(level),
 };
 const pushTitle = (name: string, rawLevelId: string) => {
 if (!name) return;
-const levelId = rawLevelId || titleLevelIdForName(name);
+// Q3：層級對不上時退回單位層級（見 orgLevels.resolveTitleLevelId），永不靜默丟棄
+const levelId = resolveTitleLevelId(name, rawLevelId, titleLevels);
 const level = titleLevelById.get(levelId);
 if (!level) return;
 const targetKey = `title:${level.id}`;

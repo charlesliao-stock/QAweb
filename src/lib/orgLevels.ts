@@ -233,6 +233,39 @@ export function roleLevelIdForName(name: string): string {
   return "";
 }
 
+/**
+ * 角色層級解析（Q3：以設定為主，永不靜默丟棄）：
+ * 先認文件 levelId，再認名稱前綴推導，最後退回預設層級——
+ * 含「單位」→單位層級，其餘→品管組層級（與 deriveRoleScope 的名稱退回一致）。
+ * 層級清單為空時回空字串（正常情況預設層級會補齊，不會發生）。
+ */
+export function resolveRoleLevelId(
+  name: string,
+  rawLevelId: string,
+  levels: OrgLevel[],
+): string {
+  const byId = rawLevelId || roleLevelIdForName(name);
+  if (byId && levels.some((l) => l.id === byId)) return byId;
+  const fallbackId = name.includes("單位") ? "rl-unit" : "rl-qi";
+  if (levels.some((l) => l.id === fallbackId)) return fallbackId;
+  return [...levels].sort((a, b) => a.order - b.order)[0]?.id ?? "";
+}
+
+/**
+ * 職稱層級解析（Q3：以設定為主，永不靜默丟棄）：
+ * 先認文件 levelId，再認名稱對照，最後退回單位層級（職稱一律歸單位）。
+ */
+export function resolveTitleLevelId(
+  name: string,
+  rawLevelId: string,
+  levels: OrgLevel[],
+): string {
+  const byId = rawLevelId || titleLevelIdForName(name);
+  if (byId && levels.some((l) => l.id === byId)) return byId;
+  if (levels.some((l) => l.id === "tl-unit")) return "tl-unit";
+  return [...levels].sort((a, b) => a.order - b.order)[0]?.id ?? "";
+}
+
 /** 新角色規格（v1.55.0 一次建立，預設零權限；v1.57.0 A3：不再寫 category／kind，身分由名稱關鍵字推導、範圍由層級推導） */
 export interface NewRoleSpec {
   name: string;

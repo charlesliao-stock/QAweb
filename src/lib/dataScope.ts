@@ -43,7 +43,7 @@ export interface DataScopeTitleFlags {
 
 /**
  * 橫向 cross 旗標（直接讀 catalog.templates 的 cross，不經 can()——
- * can() 是角色範本與職稱範本的交集，會誤判）：
+ * can() 只回覆某功能是否授權，不帶 cross 旗標）：
  * - unitRole：任一單位層級角色名對應範本（unitRole__<角色名>）cross=true；
  * - groupRole：任一群組層級角色名對應範本（group__<角色名>）cross=true；
  * - title：職稱範本（unit__<職稱>）cross=true。

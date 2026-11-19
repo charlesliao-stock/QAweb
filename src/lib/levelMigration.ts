@@ -22,7 +22,7 @@ import {
   setDoc,
   updateDoc,
 } from "./db";
-import { templateDocId } from "./permissions";
+import { PERM_KEYS, emptyPermissions, parsePermissions, templateDocId } from "./permissions";
 import { syncReviewerDoc } from "./reviewerSync";
 import { deriveStoredRoles } from "./roleIdentity";
 import {
@@ -309,7 +309,8 @@ export interface TitleLevelsV188MigrationResult {
  *    對不上的自訂職稱不動）。
  * 3. 護理長／副護理長合併為「護理長/副護理長」（planHeadNurseMerge）：
  *    持有舊職稱者自動轉任（titleId 重指＋title 字串改名）；權限範本
- *    目標不存在時由舊名範本複製（只取其一：護理長優先）。
+ *    由兩份舊名範本逐鍵聯集（OR）寫入新範本，既有新範本已勾選的
+ *    不覆蓋；三份都不存在時不建新範本。
  * 4. 無「護士」職稱時新建（單位層）。
  * 5. 重對照後已無職稱引用的舊層級文件（tl-director／tl-deputy／
  *    tl-supervisor）刪除；仍有引用時保留（管理員可自行移轉後刪除）。
@@ -429,21 +430,43 @@ export async function migrateTitleLevelsV188(
   for (const id of plan.mergeFromIds) {
     await deleteDoc(doc(db, "titles", id));
   }
-  // 權限範本：目標不存在時由舊名範本複製（護理長優先），複製後刪舊範本
+  // 權限範本：兩份舊名範本逐鍵聯集（OR）寫入新範本，既有新範本
+  // 已勾選的不覆蓋；寫回後再刪舊範本。三份都不存在時不建新範本。
   const newTplRef = doc(
     db,
     "permissionTemplates",
     templateDocId("unit", MERGED_HEAD_NURSE_TITLE),
   );
-  if (!(await getDoc(newTplRef)).exists()) {
-    for (const oldName of ["護理長", "副護理長"]) {
-      const oldRef = doc(db, "permissionTemplates", templateDocId("unit", oldName));
-      const oldSnap = await getDoc(oldRef);
-      if (!oldSnap.exists()) continue;
-      await setDoc(newTplRef, { ...oldSnap.data(), name: MERGED_HEAD_NURSE_TITLE });
-      await deleteDoc(oldRef);
-      break;
+  const newTplSnap = await getDoc(newTplRef);
+  const mergedPermissions = newTplSnap.exists()
+    ? parsePermissions(newTplSnap.data()?.permissions)
+    : emptyPermissions();
+  let mergedCross = newTplSnap.exists() && newTplSnap.data()?.cross === true;
+  let hasOldTemplate = false;
+  for (const oldName of ["護理長", "副護理長"]) {
+    const oldRef = doc(db, "permissionTemplates", templateDocId("unit", oldName));
+    const oldSnap = await getDoc(oldRef);
+    if (!oldSnap.exists()) continue;
+    hasOldTemplate = true;
+    const oldPermissions = parsePermissions(oldSnap.data()?.permissions);
+    for (const key of PERM_KEYS) {
+      mergedPermissions[key] = mergedPermissions[key] || oldPermissions[key];
     }
+    if (oldSnap.data()?.cross === true) mergedCross = true;
+  }
+  if (newTplSnap.exists() || hasOldTemplate) {
+    await setDoc(newTplRef, {
+      ...(newTplSnap.exists() ? newTplSnap.data() : {}),
+      category: "unit",
+      name: MERGED_HEAD_NURSE_TITLE,
+      permissions: mergedPermissions,
+      cross: mergedCross,
+    });
+  }
+  // 兩個舊名範本皆清掉：已聯集進新範本，留著會成為無職稱對應的孤兒範本
+  for (const oldName of ["護理長", "副護理長"]) {
+    const oldRef = doc(db, "permissionTemplates", templateDocId("unit", oldName));
+    if ((await getDoc(oldRef)).exists()) await deleteDoc(oldRef);
   }
 
   // 4. 無「護士」職稱時新建（單位層）
