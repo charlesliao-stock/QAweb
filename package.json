@@ -8,6 +8,9 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "test": "node scripts/run-tests.mjs",
+    "test:static": "node scripts/run-tests.mjs --suite static",
     "test:dual": "tsx scripts/test-dual-write.mts",
     "test:rules": "node tests/rules.test.mjs",
     "test:supabase-rls": "node scripts/test-supabase-rls.mjs"

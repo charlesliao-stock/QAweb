@@ -16,7 +16,7 @@ import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 const ratesSrc = readFileSync(`${ROOT}/src/lib/analysisRates.ts`, "utf8");
 const resultsSrc = readFileSync(`${ROOT}/src/features/ResultsPage.tsx`, "utf8");
 const reviewRecordsSrc = readFileSync(`${ROOT}/src/lib/reviewRecords.ts`, "utf8");

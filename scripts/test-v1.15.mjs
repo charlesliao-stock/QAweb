@@ -6,7 +6,7 @@ import { build } from "esbuild";
 import { writeFileSync } from "fs";
 import { createRequire } from "module";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 const entry = `
 import { getDashboardVariants } from "${ROOT}/src/lib/dashboardVariant";
 import { shouldLockTask, unlockRequestDocId } from "${ROOT}/src/lib/scheduling";
