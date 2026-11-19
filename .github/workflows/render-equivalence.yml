@@ -1,0 +1,62 @@
+name: Render equivalence (split vs original)
+
+# 拆分驗證：同一份示範資料、固定時間／亂數，把「拆分前」與「拆分後」的三個頁面渲染出來，逐步比對 DOM。
+# 不部署、不連正式資料。
+on:
+  pull_request:
+    branches: [refactor/split-pages]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASE_SHA: 21c76bbdabf8722cf0dde5795ab3d977ae45a378
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (after split)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: head
+
+      - name: Checkout (original, pre-split)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.BASE_SHA }}
+          path: base
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.25.0
+          run_install: false
+
+      - name: Install dependencies (after-split tree)
+        working-directory: head
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm add -D esbuild@0.28.2 jsdom@^26.1.0
+
+      - name: Share node_modules with original tree
+        run: ln -s "$GITHUB_WORKSPACE/head/node_modules" "$GITHUB_WORKSPACE/base/node_modules"
+
+      - name: Render original
+        working-directory: head
+        run: node scripts/render-snapshots.mjs "$GITHUB_WORKSPACE/base" /tmp/snap-base.json
+
+      - name: Render after split
+        working-directory: head
+        run: node scripts/render-snapshots.mjs "$GITHUB_WORKSPACE/head" /tmp/snap-head.json
+
+      - name: Compare
+        working-directory: head
+        run: node scripts/compare-snapshots.mjs /tmp/snap-base.json /tmp/snap-head.json
