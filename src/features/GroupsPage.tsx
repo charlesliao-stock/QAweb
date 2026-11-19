@@ -10,12 +10,7 @@ import { UnitImportBar } from "./groups/tabs/units/UnitImportBar";
 import { TitleImportBar } from "./groups/tabs/titles/TitleImportBar";
 import { UserImportBar } from "./groups/tabs/users/UserImportBar";
 import { RoleImportBar } from "./groups/tabs/roles/RoleImportBar";
-import { GroupsListTab } from "./groups/tabs/groups/GroupsListTab";
-import { UnitsListTab } from "./groups/tabs/units/UnitsListTab";
-import { TitlesListTab } from "./groups/tabs/titles/TitlesListTab";
-import { UsersNoAccessTab } from "./groups/tabs/users/UsersNoAccessTab";
-import { UsersListTab } from "./groups/tabs/users/UsersListTab";
-import { RolesListTab } from "./groups/tabs/roles/RolesListTab";
+import { GroupsTabSwitch } from "./groups/tabs/GroupsTabSwitch";
 import { GroupFormTab } from "./groups/tabs/groups/GroupFormTab";
 import { UnitFormTab } from "./groups/tabs/units/UnitFormTab";
 import { TitleFormTab } from "./groups/tabs/titles/TitleFormTab";
@@ -231,7 +226,7 @@ export function GroupsPage(props: GroupsPageProps) {
       <UserImportBar ctx={ctx} />
       <RoleImportBar ctx={ctx} />
 
-      {tab === "groups" ? <GroupsListTab ctx={ctx} /> : tab === "units" ? <UnitsListTab ctx={ctx} /> : tab === "titles" ? <TitlesListTab ctx={ctx} /> : tab === "users" && !isAdmin ? <UsersNoAccessTab  /> : tab === "users" ? <UsersListTab ctx={ctx} /> : tab === "roles" ? <RolesListTab ctx={ctx} /> : null}
+      <GroupsTabSwitch ctx={ctx} />
 
       <GroupFormTab ctx={ctx} />
       <UnitFormTab ctx={ctx} />
