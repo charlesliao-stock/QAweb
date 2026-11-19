@@ -79,7 +79,7 @@ async function runPage(label, Page, script) {
   const origErr = console.error; console.error = (...a) => { errors.push(`${label}: ` + a.map(String).join(" ").slice(0, 300)); };
   try {
     await M.act(async () => { root.render(M.createElement(M.AuthProvider, null, M.createElement(Page, { onAction: () => {} }))); });
-    await settle(10);
+    await settle(40);
     snap(`${label}/初始`);
     await script();
   } catch (e) { snaps[`${label}/例外`] = String(e && e.stack ? e.stack : e).slice(0, 500); }
