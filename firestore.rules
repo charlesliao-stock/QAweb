@@ -124,7 +124,7 @@ service cloud.firestore {
     }
 
     function isGanShi() {
-      return hasRole('品管執行幹事') || isAdmin();
+      return hasRole('品管組執行幹事') || isAdmin();
     }
 
     function canManageSchedule() {
@@ -334,7 +334,8 @@ service cloud.firestore {
         && optStr(data, 'targetType', 50)
         && optStr(data, 'targetId', 500)
         && optStr(data, 'detail', 10000)
-        && data.get('createdAt', null) == request.time
+        && data.get('createdAt', null) is timestamp
+        && data.get('createdAt', null) <= request.time
         && (!('before' in data) || (data.get('before', {}) is map && data.get('before', {}).keys().size() <= 100))
         && (!('after' in data) || (data.get('after', {}) is map && data.get('after', {}).keys().size() <= 100))
         && (!('criteria' in data) || (data.get('criteria', {}) is map && data.get('criteria', {}).keys().size() <= 50))
@@ -361,14 +362,15 @@ service cloud.firestore {
     }
 
     // 開通信寄送記錄（v1.84.0，前端回報、僅供參考）：寄信時尚未登入，所以允許未登入建立，
-    // 但只收固定欄位與長度、時間以伺服器為準；僅管理員可讀與刪除，不可修改。
+    // 但只收固定欄位與長度、時間不得晚於伺服器時間（允許回填過去時間）；僅管理員可讀與刪除，不可修改。
     match /mailLogs/{id} {
       allow create: if request.resource.data.keys().hasOnly(['staffId', 'result', 'source', 'at'])
         && request.resource.data.staffId is string
         && request.resource.data.staffId.size() > 0 && request.resource.data.staffId.size() <= 32
         && request.resource.data.result is string && request.resource.data.result.size() <= 40
         && request.resource.data.source == 'client'
-        && request.resource.data.at == request.time;
+        && request.resource.data.at is timestamp
+        && request.resource.data.at <= request.time;
       allow read, delete: if isAdmin();
       allow update: if false;
     }
@@ -410,7 +412,8 @@ service cloud.firestore {
     }
 
     // 稽核軌跡：僅允許新增（append-only），查詢限管理員。
-    // v1.85.5：create 加欄位白名單＋字串長度上限＋createdAt 須為伺服器時間，
+    // v1.85.5：create 加欄位白名單＋字串長度上限＋createdAt 不得晚於伺服器時間
+    // （雙寫複寫以固定毫秒值回填過去時間，須允許；仍擋未來時間造假），
     // 任一登入者仍可寫（稽核寫入點遍布各頁），但寫不進 1 MiB 假紀錄。
     match /auditLogs/{id} {
       allow get, list: if isAdmin();
@@ -534,7 +537,8 @@ service cloud.firestore {
         && 'year' in request.resource.data
         && 'month' in request.resource.data
         && 'uniqueKey' in request.resource.data
-        && request.resource.data.get('submittedAt', null) == request.time
+        && request.resource.data.get('submittedAt', null) is timestamp
+        && request.resource.data.get('submittedAt', null) <= request.time
         && (!('quotaGroupId' in request.resource.data) || validQuotaSlot(id))
         && (!isQuotaSlotId(id) || (('quotaGroupId' in request.resource.data) && validQuotaSlot(id)))
         && (request.resource.data.get('uniqueKey', '') == '' || recordHasReservation(id, request.resource.data));
