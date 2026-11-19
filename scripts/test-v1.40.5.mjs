@@ -41,7 +41,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 const read = (p) => readFileSync(`${ROOT}/${p}`, "utf8");
 const groupsSrc = read("src/features/GroupsPage.tsx");
 const auditSrc = read("src/features/AuditPage.tsx");

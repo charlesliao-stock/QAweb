@@ -11,7 +11,7 @@ import { build } from "esbuild";
 import { writeFileSync } from "fs";
 import { createRequire } from "module";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 
 const entry = `
 import {

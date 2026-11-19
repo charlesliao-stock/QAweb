@@ -31,7 +31,7 @@ import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 const groupsSrc = readFileSync(`${ROOT}/src/features/GroupsPage.tsx`, "utf8");
 const roleIdentitySrc = readFileSync(`${ROOT}/src/lib/roleIdentity.ts`, "utf8");
 const versionTs = readFileSync(`${ROOT}/src/version.ts`, "utf8");

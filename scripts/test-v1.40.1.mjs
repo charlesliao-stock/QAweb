@@ -9,7 +9,7 @@
  */
 import { readFileSync } from "fs";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 const src = readFileSync(`${ROOT}/src/features/ResultsPage.tsx`, "utf8");
 const versionTs = readFileSync(`${ROOT}/src/version.ts`, "utf8");
 const pkg = JSON.parse(readFileSync(`${ROOT}/package.json`, "utf8"));

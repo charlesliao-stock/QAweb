@@ -24,7 +24,7 @@ import {
   pacificOffsetMinutes,
 } from "./quota-lib.mjs";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 const read = (p) => readFileSync(`${ROOT}/${p}`, "utf8");
 
 let pass = 0;

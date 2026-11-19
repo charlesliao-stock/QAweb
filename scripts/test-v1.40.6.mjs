@@ -27,7 +27,7 @@
  */
 import { readFileSync } from "node:fs";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 const read = (p) => readFileSync(`${ROOT}/${p}`, "utf8");
 const authSrc = read("src/lib/auth.tsx");
 const groupsSrc = read("src/features/GroupsPage.tsx");

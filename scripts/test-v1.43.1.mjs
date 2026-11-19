@@ -21,7 +21,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 const versionTs = readFileSync(`${ROOT}/src/version.ts`, "utf8");
 const pkg = JSON.parse(readFileSync(`${ROOT}/package.json`, "utf8"));
 const resultsPage = readFileSync(`${ROOT}/src/features/ResultsPage.tsx`, "utf8");

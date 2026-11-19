@@ -33,7 +33,7 @@
  */
 import { readFileSync } from "node:fs";
 
-const ROOT = "/home/hatch/workspace/repos/QAweb";
+import { ROOT } from "./lib/paths.mjs";
 const read = (p) => readFileSync(`${ROOT}/${p}`, "utf8");
 const css = read("src/styles.css");
 const versionTs = read("src/version.ts");
