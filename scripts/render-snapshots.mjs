@@ -107,17 +107,17 @@ await runPage("groups", M.GroupsPage, async () => {
 
 // ---- Results：查詢後逐頁籤 ----
 await runPage("results", M.ResultsPage, async () => {
-  await click(byText("button", "查詢")); snap("results/查詢後");
+  await click(byText("button", "搜尋")); snap("results/查詢後");
   for (const t of $$(".results-tabs [role=tab]")) {
     const name = (t.textContent ?? "").trim();
     await click(t); snap(`results/${name}`);
-    await click(byText("button", "查詢")); snap(`results/${name}/查詢後`);
+    await click(byText("button", "搜尋")); snap(`results/${name}/查詢後`);
   }
 });
 
 // ---- Schedule：查詢後列表、進入前三列的各按鈕 ----
 await runPage("schedule", M.SchedulePage, async () => {
-  await click(byText("button", "查詢")); snap("schedule/查詢後");
+  await click(byText("button", "搜尋")); snap("schedule/查詢後");
   const rows = $$("tbody tr");
   for (let r = 0; r < Math.min(rows.length, 2); r++) {
     const nBtn = $$("tbody tr")[r]?.querySelectorAll("button").length ?? 0;
@@ -128,7 +128,7 @@ await runPage("schedule", M.SchedulePage, async () => {
       await click(btn); snap(`schedule/列${r}/${label}`);
       const back = byText("button", "返回") ?? byText("button", "取消") ?? byText("button", "關閉");
       if (back) await click(back);
-      if (!$$("tbody tr").length) { await click(byText("button", "查詢")); }
+      if (!$$("tbody tr").length) { await click(byText("button", "搜尋")); }
     }
   }
 });

@@ -59,4 +59,4 @@ jobs:
 
       - name: Compare
         working-directory: head
-        run: DUMP="results/初始,results/查詢後,schedule/初始,schedule/查詢後" node scripts/compare-snapshots.mjs /tmp/snap-base.json /tmp/snap-head.json
+        run: DUMP="results/查詢後,results/組別分析/查詢後,results/單位分析/查詢後,results/指標分析/查詢後,schedule/查詢後" node scripts/compare-snapshots.mjs /tmp/snap-base.json /tmp/snap-head.json
