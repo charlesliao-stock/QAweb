@@ -47,11 +47,12 @@ import { createRoot } from "react-dom/client";
 import { act } from "react";
 import { AuthProvider } from "${TREE}/src/lib/auth";
 import { loadDemoStore } from "${TREE}/src/lib/demoLoader";
+import * as demo from "${TREE}/src/lib/demoStore";
 import { GroupsPage } from "${TREE}/src/features/GroupsPage";
 import { ResultsPage } from "${TREE}/src/features/ResultsPage";
 import { SchedulePage } from "${TREE}/src/features/SchedulePage";
-function Gate({ Page }) { const { user } = useAuth(); return user ? createElement(Page, { onAction: () => {} }) : null; }
-export { Gate, createElement, createRoot, act, AuthProvider, loadDemoStore, GroupsPage, ResultsPage, SchedulePage };
+function Gate({ Page, extra }) { const { user } = useAuth(); return user ? createElement(Page, { onAction: () => {}, ...extra }) : null; }
+export { demo, Gate, createElement, createRoot, act, AuthProvider, loadDemoStore, GroupsPage, ResultsPage, SchedulePage };
 `;
 mkdirSync("/tmp/snap", { recursive: true });
 const tag = TREE.replace(/[^a-z0-9]/gi, "_").slice(-30);
@@ -74,13 +75,13 @@ const snaps = {};
 const errors = [];
 const snap = (name) => { snaps[name] = document.getElementById("root").innerHTML; };
 
-async function runPage(label, Page, script) {
+async function runPage(label, Page, script, extra = {}) {
   const container = document.createElement("div"); container.id = "root";
   document.body.innerHTML = ""; document.body.appendChild(container);
   const root = M.createRoot(container);
   const origErr = console.error; console.error = (...a) => { errors.push(`${label}: ` + a.map(String).join(" ").slice(0, 300)); };
   try {
-    await M.act(async () => { root.render(M.createElement(M.AuthProvider, null, M.createElement(M.Gate, { Page }))); });
+    await M.act(async () => { root.render(M.createElement(M.AuthProvider, null, M.createElement(M.Gate, { Page, extra }))); });
     await settle(40);
     snap(`${label}/初始`);
     await script();
@@ -90,6 +91,39 @@ async function runPage(label, Page, script) {
 }
 
 await M.loadDemoStore();
+M.demo.ensureSeeded();
+{ // 種入審查紀錄，讓結果分析有資料
+  const units = ["9A", "9B"]; const inds = [["g-ward__QI-001", 7], ["g-ward__QI-002", 4]]; const months = [[2026, 9], [2026, 10], [2026, 11]];
+  let n = 0;
+  for (const [ind, nq] of inds) for (const u of units) for (const [y, m] of months) for (let seq = 1; seq <= 2; seq++) {
+    const answers = Array.from({ length: nq }, (_, q) => { const yes = (n + q) % 5 !== 0; return { questionId: `q${q}`, itemText: `題${q + 1}`, optionLabel: yes ? "是" : "否", score: yes ? 1 : 0 }; });
+    const total = answers.reduce((a, b) => a + b.score, 0);
+    const id = `rec-${ind}-${u}-${y}${m}-${seq}`; n++;
+    M.demo.setDoc(M.demo.docOf("db", "reviewRecords", id), { taskId: `task-${ind}-${u}-${y}${m}`, indicatorId: ind, unitId: u, reviewerId: "B67890", year: y, month: m, caseSeq: seq, reviewDate: `${y}-${String(m).padStart(2, "0")}-15`, reviewerEmpNo: "B67890", reviewerName: "王小明", reviewedPersonEmpNo: `E${n}`, reviewedPersonName: `受審${n}`, bedNo: "", answers, totalScore: total, maxScore: nq, rate: Math.round((total / nq) * 1000) / 10, submittedAt: M.demo.serverTimestamp(), submittedBy: "B67890" });
+  }
+}
+async function setSelect(sel, optionText) {
+  if (!sel) return false;
+  const opt = [...sel.options].find((o) => (o.textContent ?? "").includes(optionText));
+  if (!opt) return false;
+  await M.act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(w.HTMLSelectElement.prototype, "value").set;
+    setter.call(sel, opt.value);
+    sel.dispatchEvent(new w.Event("change", { bubbles: true }));
+  });
+  await settle();
+  return true;
+}
+const closeAny = async () => { const b = $$("button").find((x) => /^(關閉|取消|返回|返回清單)$/.test((x.textContent ?? "").replace(/\s+/g, "")) || x.getAttribute("aria-label") === "關閉"); if (b) await click(b); return !!b; };
+async function probeCells(label, max = 3) {
+  const cells = $$(".results-page table tbody button, .results-page table tbody [role=button]").filter((b) => !b.disabled);
+  for (let i = 0; i < Math.min(cells.length, max); i++) {
+    const c = $$(".results-page table tbody button, .results-page table tbody [role=button]").filter((b) => !b.disabled)[i];
+    if (!c) break;
+    await click(c); snap(`${label}/格${i}`);
+    await closeAny();
+  }
+}
 
 // ---- Groups：逐頁籤、使用者搜尋、新增表單 ----
 await runPage("groups", M.GroupsPage, async () => {
@@ -105,30 +139,41 @@ await runPage("groups", M.GroupsPage, async () => {
   }
 });
 
-// ---- Results：查詢後逐頁籤 ----
+for (const [name, target] of [["群組單位", { kind: "group", id: "g-ward" }], ["單位成員", { kind: "unit", id: "9A" }]]) {
+  await runPage(`groups-member/${name}`, M.GroupsPage, async () => {
+    for (const b of $$("button").slice(0, 6)) { const t = (b.textContent ?? "").trim(); snap(`groups-member/${name}/按鈕:${t}`); break; }
+  }, { memberPage: target });
+}
+
+// ---- Results：種入資料後，三個分析頁籤選取條件、搜尋、點格子 ----
 await runPage("results", M.ResultsPage, async () => {
-  await click(byText("button", "查詢")); snap("results/查詢後");
-  for (const t of $$(".results-tabs [role=tab]")) {
+  await click(byText("button", "搜尋")); snap("results/查詢後");
+  const tabs = $$(".results-tabs [role=tab]");
+  for (const t of tabs) {
     const name = (t.textContent ?? "").trim();
     await click(t); snap(`results/${name}`);
-    await click(byText("button", "查詢")); snap(`results/${name}/查詢後`);
+    if (name === "組別分析") { await setSelect($$(".results-page select")[0], "病房組"); }
+    if (name === "單位分析") { await setSelect($$(".results-page select").find((x) => [...x.options].some((o) => (o.textContent ?? "").includes("9A"))), "9A"); }
+    if (name === "指標分析") { const ss = $$(".results-page select"); await setSelect(ss[0], "病房組"); await setSelect($$(".results-page select")[1], "QI-001"); }
+    await click(byText("button", "搜尋")); snap(`results/${name}/搜尋後`);
+    if (["組別分析", "單位分析", "指標分析"].includes(name)) await probeCells(`results/${name}`);
   }
 });
 
 // ---- Schedule：查詢後列表、進入前三列的各按鈕 ----
 await runPage("schedule", M.SchedulePage, async () => {
-  await click(byText("button", "查詢")); snap("schedule/查詢後");
+  await click(byText("button", "搜尋")); snap("schedule/查詢後");
   const rows = $$("tbody tr");
   for (let r = 0; r < Math.min(rows.length, 2); r++) {
     const nBtn = $$("tbody tr")[r]?.querySelectorAll("button").length ?? 0;
     for (let b = 0; b < nBtn; b++) {
       const btn = $$("tbody tr")[r]?.querySelectorAll("button")[b];
       if (!btn) continue;
-      const label = (btn.textContent ?? "").trim() || `btn${b}`;
+      const label = `${b}-` + ((btn.textContent ?? "").trim() || "btn");
       await click(btn); snap(`schedule/列${r}/${label}`);
       const back = byText("button", "返回") ?? byText("button", "取消") ?? byText("button", "關閉");
       if (back) await click(back);
-      if (!$$("tbody tr").length) { await click(byText("button", "查詢")); }
+      if (!$$("tbody tr").length) { await click(byText("button", "搜尋")); }
     }
   }
 });
