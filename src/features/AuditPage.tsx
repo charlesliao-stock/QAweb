@@ -2100,7 +2100,7 @@ export function AuditPage({
                       <th>審查人員</th>
                       <th>受審人員</th>
                       <th>正確率</th>
-                      <th>個人結果</th>
+                      <th>操作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2111,7 +2111,7 @@ export function AuditPage({
                         <td data-label="審查人員">{staffLabel(record.reviewerEmpNo, record.reviewerName)}</td>
                         <td data-label="受審人員">{staffLabel(record.reviewedPersonEmpNo, record.reviewedPersonName)}</td>
                         <td data-label="正確率">{record.rate == null ? "—" : `${record.rate}%`}</td>
-                        <td data-label="個人結果">
+                        <td data-label="操作">
                           <div className="review-record-actions">
                             <button type="button" className="text-button" onClick={() => void toggleRecordDetail(record)}>
                               <Eye size={14} /> 檢視
@@ -2127,6 +2127,33 @@ export function AuditPage({
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+            {viewRecords.length > 0 && (
+              <div className="audit-detail-cards" aria-label="審查明細">
+                {viewRecords.map((record) => (
+                  <article className="audit-detail-card" key={`mobile-${record.id}`}>
+                    <h3>{staffLabel(record.reviewedPersonEmpNo, record.reviewedPersonName)}</h3>
+                    <div className="audit-unit-summary-metrics">
+                      <div><span>年月</span><b>{record.year}年{record.month}月</b></div>
+                      <div><span>審查日期</span><b>{fmtYmd(record.reviewDate)}</b></div>
+                      <div><span>審查人員</span><b>{staffLabel(record.reviewerEmpNo, record.reviewerName)}</b></div>
+                      <div><span>正確率</span><b>{record.rate == null ? "—" : `${record.rate}%`}</b></div>
+                    </div>
+                    <div className="audit-review-card-actions">
+                      <button type="button" className="button button-outline" onClick={() => void toggleRecordDetail(record)}>
+                        <Eye size={14} /> 檢視
+                      </button>
+                      {canEditRecord(record) ? (
+                        <button type="button" className="button button-outline" onClick={() => editRecord(record)}>
+                          <Pencil size={14} /> 修改
+                        </button>
+                      ) : (
+                        <span className="muted-text">無修改權限</span>
+                      )}
+                    </div>
+                  </article>
+                ))}
               </div>
             )}
             <div className="form-actions">

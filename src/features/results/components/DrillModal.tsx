@@ -213,11 +213,19 @@ export function DrillModal({
   // 連續未達標偵測（v1.88.18）：一個排程區間（span）算一次審查，不按月算；
   // 不論區間或單月，連續 need 次未達標就觸發；沒有審查資料的期不列入；
   // 期數取 CAPA 設定（指標覆寫優先，否則全院預設，預設 2）。選定期本身須有資料且為最新一期。
+  // 分組／逐題／選項篩選下探時，觸發率與顯示格用同一篩選計分（section 計分），
+  // 不再整欄停用——否則篩選下探的操作欄永遠空白。
   const capaTriggers = useMemo(() => {
     const map = new Map<string, CapaTrigger>();
-    if (!capaSettings?.triggerEnabled || th <= 0 || filterIds) return map;
+    if (!capaSettings?.triggerEnabled || th <= 0) return map;
     const need = Math.max(1, capaSettings.indicatorOverrides[drill.indicatorId] ?? capaSettings.defaultTriggerPeriods);
     const rateOf = (months: { year: number; month: number }[], unitId: string): PassRate => {
+      if (filterIds && filterKind) {
+        const recs = recordsForIndex(recordIndex, drill.indicatorId, months, unitId);
+        return drill.mode === "unit"
+          ? sectionUnitPassRateOf(recs, filterIds, th)
+          : sectionPassRateOf(recs, filterIds, filterKind, th);
+      }
       const cells = summaryCellsFor(drill.indicatorId, months, unitId);
       if (cells) return passRateFromCells(cells.filter((c) => c.unitId === unitId));
       return passRateOf(recordsForIndex(recordIndex, drill.indicatorId, months, unitId), th);
@@ -234,7 +242,7 @@ export function DrillModal({
       if (trig) map.set(unitId, trig);
     }
     return map;
-  }, [capaSettings, th, filterIds, drill.indicatorId, capaSpans, col, l1Units, summaryCellsFor, recordIndex]);
+  }, [capaSettings, th, filterIds, filterKind, drill.indicatorId, drill.mode, capaSpans, col, l1Units, summaryCellsFor, recordIndex]);
   const startCapa = (unitId: string) => {
     const trig = capaTriggers.get(unitId);
     if (!trig) return;
@@ -442,10 +450,14 @@ export function DrillModal({
                         </td>
                         <td className="rate-cell">
                           {(() => {
-                            if (!capaTriggers.has(unitId) || capaCases == null) return null;
-                            const open = capaCases.some((c) => c.unitCode === unitId && c.stage !== "正式結案" && c.stage !== "已撤案");
+                            const trig = capaTriggers.get(unitId);
+                            if (!trig || capaCases == null) return null;
+                            // 已啟動：同一指標、同一單位已有未結案／未撤案案件，
+                            // 且案件期別與本次連續未達標的期別重疊（其他期別的舊案不擋新案）。
+                            const triggerKeys = new Set(trig.series.map((s) => s.ym));
+                            const open = capaCases.some((c) => c.unitCode === unitId && c.stage !== "正式結案" && c.stage !== "已撤案" && (c.periodKeys ?? []).some((k) => triggerKeys.has(k)));
                             return open ? (
-                              <span className="muted-text">CAPA 進行中</span>
+                              <span className="muted-text">CAPA啟動中</span>
                             ) : (
                               <button type="button" className="text-button capa-start-link" onClick={() => startCapa(unitId)}>
                                 啟動CAPA

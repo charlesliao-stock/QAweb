@@ -1274,15 +1274,43 @@ export function ReviewExecutePage({
     task?.unitId && selectedPersonOption?.unitCode && selectedPersonOption.unitCode !== task.unitId,
   );
 
-  function selectPerson(u: PersonOption) {
-    setPersonEmpNo(u.staffId);
-    setPersonName(u.name);
+  /** 清空受審人員選取、回到職編輸入態（與「更換」按鈕相同） */
+  function clearPersonSelection() {
+    setPersonEmpNo("");
+    setPersonName("");
     setPersonQuery("");
-    setShowPersonSugg(false);
-    void checkPersonDuplicate(u.staffId);
-    if (task?.unitId && u.unitCode && u.unitCode !== task.unitId) {
-      onAction(`提醒：受審人員編制單位為 ${u.unitCode}，與排程單位 ${task.unitId} 不同；仍可繼續審查。`);
-    }
+    setShowPersonSugg(true);
+    setPersonDupWarn(null);
+    personDupSeq.current += 1;
+  }
+
+  function selectPerson(u: PersonOption) {
+    void (async () => {
+      const seqBefore = personDupSeq.current;
+      const dup = await checkPersonDuplicate(u.staffId);
+      // 檢查期間已被更新的選取／重設取代時，直接放棄（避免舊結果覆蓋新選取）
+      if (personDupSeq.current !== seqBefore + 1) return;
+      if (dup) {
+        const kind = dup.hasImport && dup.hasFormal
+          ? "正式審查紀錄及匯入紀錄"
+          : dup.hasImport
+            ? "匯入紀錄"
+            : "正式審查紀錄";
+        const months = dup.months.length > 0 ? dup.months.join("、") : "本審查區間";
+        window.alert(
+          `「${staffLabel(u.staffId, u.name)}」已在 ${months}接受「${indicatorCodeOf(task?.indicatorId ?? "")}・${indicatorName}」審查（${kind}），同一指標、同一月份一人只審一次，請重新輸入受審人員職編。`,
+        );
+        clearPersonSelection();
+        return;
+      }
+      setPersonEmpNo(u.staffId);
+      setPersonName(u.name);
+      setPersonQuery("");
+      setShowPersonSugg(false);
+      if (task?.unitId && u.unitCode && u.unitCode !== task.unitId) {
+        onAction(`提醒：受審人員編制單位為 ${u.unitCode}，與排程單位 ${task.unitId} 不同；仍可繼續審查。`);
+      }
+    })();
   }
 
   /* 掃碼時人員名單還沒載完：先記住職編，名單與任務載完再重跑比對、自動選人（v1.88.11） */
@@ -1344,12 +1372,18 @@ export function ReviewExecutePage({
    * 選取受審人員時即時警示（v1.47.0）：查該指標該區間是否已有該人紀錄
    * （含匯入紀錄 source="import"，以月份落在區間內比對）；只警告、提前
    * 告知，送出時 assertUniqueReviewee 仍擋下。正在編輯的紀錄本身除外。
+   * 有重複時回傳重複資訊（供 selectPerson 跳提醒後重設回職編輸入態）；
+   * 無重複／查不到回傳 null。
    */
-  async function checkPersonDuplicate(empNo: string) {
+  async function checkPersonDuplicate(empNo: string): Promise<{
+    months: string[];
+    hasImport: boolean;
+    hasFormal: boolean;
+  } | null> {
     const seq = ++personDupSeq.current;
     if (!task || !empNo.trim()) {
       setPersonDupWarn(null);
-      return;
+      return null;
     }
     try {
       const db = getFirebaseDb();
@@ -1364,6 +1398,7 @@ export function ReviewExecutePage({
       const taskKeys = intervalMonthKeys(task);
       let hasImport = false;
       let hasFormal = false;
+      const dupMonths: string[] = [];
       for (const d of snap.docs) {
         if (d.id === editingId) continue;
         const data = d.data() as Record<string, unknown>;
@@ -1398,8 +1433,15 @@ export function ReviewExecutePage({
         if (!overlap) continue;
         if (String(data.source ?? "") === "import") hasImport = true;
         else hasFormal = true;
+        // 重複紀錄本身的審查月份（供提醒文案指明是哪個月）
+        const dupYear = Number(data.year ?? 0);
+        const dupMonth = Number(data.month ?? 0);
+        if (dupYear > 0 && dupMonth >= 1 && dupMonth <= 12) {
+          const ym = `${dupYear}年${dupMonth}月`;
+          if (!dupMonths.includes(ym)) dupMonths.push(ym);
+        }
       }
-      if (seq !== personDupSeq.current) return;
+      if (seq !== personDupSeq.current) return null;
       if (hasImport && hasFormal)
         setPersonDupWarn(
           "提醒：此受審人員在本審查區間已有正式審查紀錄及匯入紀錄，同一區間同一指標一人只審一次，送出時將無法重複審查。",
@@ -1413,8 +1455,11 @@ export function ReviewExecutePage({
           "提醒：此受審人員在本審查區間已有正式審查紀錄，同一區間同一指標一人只審一次，送出時將無法重複審查。",
         );
       else setPersonDupWarn(null);
+      if (!hasImport && !hasFormal) return null;
+      return { months: dupMonths, hasImport, hasFormal };
     } catch {
       if (seq === personDupSeq.current) setPersonDupWarn(null);
+      return null;
     }
   }
 
@@ -2461,14 +2506,7 @@ export function ReviewExecutePage({
                       </b>{" "}
                       <button
                         className="text-button"
-                        onClick={() => {
-                          setPersonEmpNo("");
-                          setPersonName("");
-                          setPersonQuery("");
-                          setShowPersonSugg(true);
-                          setPersonDupWarn(null);
-                          personDupSeq.current += 1;
-                        }}
+                        onClick={() => clearPersonSelection()}
                       >
                         更換
                       </button>
@@ -2726,15 +2764,15 @@ export function ReviewExecutePage({
                 type="button"
                 className="button button-primary review-mobile-footer-next"
                 disabled={submitting || (reviewMobileStep === "questions" && activeQuestionIndex < 0)}
-                aria-label={reviewMobileStep === "basic" ? "開始逐題審查" : activeQuestionIndex >= questions.length - 1 ? "送出審查結果" : "前往下一題"}
+                aria-label={reviewMobileStep === "basic" ? "開始逐題審查" : activeQuestionIndex >= questions.length - 1 || (questions.length > 0 && answeredCount === questions.length) ? "送出審查結果" : "前往下一題"}
                 onClick={() => {
                   if (reviewMobileStep === "basic") setReviewMobileStep("questions");
-                  else if (activeQuestionIndex >= questions.length - 1) void handleSubmit();
+                  else if (activeQuestionIndex >= questions.length - 1 || (questions.length > 0 && answeredCount === questions.length)) void handleSubmit();
                   else setActiveQuestionId(questions[activeQuestionIndex + 1]?.id ?? "");
                 }}
               >
-                {reviewMobileStep === "basic" ? "開始審查" : activeQuestionIndex >= questions.length - 1 ? (editingId ? "更新結果" : "完成審查") : "下一題"}
-                {reviewMobileStep === "questions" && activeQuestionIndex >= questions.length - 1 ? <Check size={17} /> : <ChevronRight size={17} />}
+                {reviewMobileStep === "basic" ? "開始審查" : activeQuestionIndex >= questions.length - 1 || (questions.length > 0 && answeredCount === questions.length) ? (editingId ? "更新結果" : "完成審查") : "下一題"}
+                {reviewMobileStep === "questions" && (activeQuestionIndex >= questions.length - 1 || (questions.length > 0 && answeredCount === questions.length)) ? <Check size={17} /> : <ChevronRight size={17} />}
               </button>
             </div>
           )}
