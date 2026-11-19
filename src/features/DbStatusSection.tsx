@@ -88,6 +88,7 @@ export function DbStatusSection() {
       <p style={{ margin: "0 0 8px", color: TONE_COLOR[line.tone], fontWeight: 600 }} role="status">{line.text}</p>
       {health.queueError && <p role="alert" style={{ color: TONE_COLOR.bad }}>同步佇列異常：{health.queueError}；為避免遺失待同步資料，已拒絕新寫入。</p>}
       {health.deadLetters > 0 && <p role="alert" style={{ color: TONE_COLOR.bad }}>有 {health.deadLetters} 筆同步項目已保留待人工重試；先修正資料庫權限／資料錯誤，再按「重試保留項目」。</p>}
+      <div className="table-scroll">
       <table className="data-table" style={{ marginBottom: 12 }}>
         <thead>
           <tr><th>角色</th><th>資料庫</th><th>連線狀態</th><th>待同步</th></tr>
@@ -107,6 +108,7 @@ export function DbStatusSection() {
           </tr>
         </tbody>
       </table>
+      </div>
 
       <p className="settings-note" style={{ marginBottom: 6 }}>{dbLabel(health.primary.name)} 用量</p>
       {usage ? (

@@ -418,8 +418,13 @@ th[aria-sort="descending"] .th-sort .lucide {
     min-width: 0;
     flex: 1 1 45%;
   }
+  /* 2026-11-19：手機版篩選器不再 static。桌機 sticky 自帶 z-index: 15 的層級；
+     手機版 static 會失去該層級，月份彈層超出卡片下緣時會被後面的結果卡片蓋住。
+     relative＋z-index 讓彈層穩贏後面的卡片與底部導覽（z-index: 15），
+     仍低於側邊欄／遮罩／toast／彈窗，不搶其他層級。 */
   .results-page .results-sticky-filter {
-    position: static;
+    position: relative;
+    z-index: 25;
   }
 }
 

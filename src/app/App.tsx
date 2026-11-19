@@ -655,6 +655,41 @@ function Shell() {
       window.matchMedia("(max-width: 760px)").matches,
   );
   const [toast, setToast] = useState("");
+  // 2026-11-19 小螢幕提示：寬度未滿 768px 時出現、可關閉、不擋操作。
+  // 門檻理由：768px 是平板直向寬度（iPad mini 直向），低於它即手機直向；
+  // 站內手機版規則集中在 ≤720／760px，資料表最小寬 720px，低於 768 的螢幕
+  // 看表格一定得左右滑動。建議 1100px 以上：側邊欄 248px＋表格最小寬 780px
+  // ＋頁面內距，約 1100px 起才不用左右滑動（與舊 1100px 版面斷點一致）。
+  // 關閉後記在 localStorage，不再重複打擾；提示而已，絕不鎖住手機使用。
+  const [isSmallScreen, setIsSmallScreen] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 767px)").matches,
+  );
+  const [smallScreenHintDismissed, setSmallScreenHintDismissed] = useState(
+    () => {
+      try {
+        return window.localStorage.getItem("qaweb:small-screen-hint-dismissed:v1") === "1";
+      } catch {
+        return false;
+      }
+    },
+  );
+  const dismissSmallScreenHint = useCallback(() => {
+    setSmallScreenHintDismissed(true);
+    try {
+      window.localStorage.setItem("qaweb:small-screen-hint-dismissed:v1", "1");
+    } catch {
+      /* 無痕模式等寫入失敗時不阻擋關閉 */
+    }
+  }, []);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsSmallScreen(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
   // v1.41.0 流量控管：攔截到維護中阻擋時，db.ts 會發出事件，這裡顯示橫幅
   const [maintenanceBanner, setMaintenanceBanner] = useState("");
   // 雙寫模式：主資料庫失聯、改由備援服務時，所有人都看得到提示（平常不顯示）
@@ -821,6 +856,18 @@ function Shell() {
               type="button"
               onClick={() => setMaintenanceBanner("")}
               aria-label="關閉維護提示"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+        {isSmallScreen && !smallScreenHintDismissed && (
+          <div className="maintenance-banner" role="status">
+            <span>目前使用小螢幕（寬度未滿 768px）瀏覽，表格需左右滑動查看；建議改用平板橫放或電腦（寬度 1100px 以上），畫面最完整。</span>
+            <button
+              type="button"
+              onClick={dismissSmallScreenHint}
+              aria-label="關閉小螢幕提示"
             >
               <X size={14} />
             </button>

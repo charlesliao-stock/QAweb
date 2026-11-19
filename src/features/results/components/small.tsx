@@ -25,8 +25,27 @@ export function ResultMonthPicker({
   const [open, setOpen] = useState(false);
   const [displayYear, setDisplayYear] = useState(() => Number(value.slice(0, 4)));
   const pickerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [year, month] = value.split("-").map(Number);
   const months = Array.from({ length: 12 }, (_, index) => index + 1);
+  // 2026-11-19：下方空間不足時改往上開（手機橫放／矮螢幕、篩選器靠近頁面底部時），
+  // 避免日曆下半被底部導覽或視窗下緣切掉；高度另以 CSS 上限＋內部捲動兜底。
+  const [openAbove, setOpenAbove] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const measure = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const popoverHeight = 320;
+      const below = window.innerHeight - rect.bottom;
+      const above = rect.top;
+      setOpenAbove(below < popoverHeight + 8 && above > below);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [open ]);
   useEffect(() => {
     if (!open) return;
     const closeOutside = (event: MouseEvent) => {
@@ -51,6 +70,7 @@ export function ResultMonthPicker({
         <button
           type="button"
           className="results-month-trigger"
+          ref={triggerRef}
           aria-label={ariaLabel}
           aria-expanded={open}
           onClick={() => {
@@ -62,7 +82,7 @@ export function ResultMonthPicker({
           <ChevronDown size={15} />
         </button>
         {open && (
-          <div className="results-month-popover" role="dialog" aria-label={`${ariaLabel}選擇器`}>
+          <div className={`results-month-popover${openAbove ? " results-month-popover--above" : ""}`} role="dialog" aria-label={`${ariaLabel}選擇器`}>
             <span className="results-month-year">
               <button
                 type="button"

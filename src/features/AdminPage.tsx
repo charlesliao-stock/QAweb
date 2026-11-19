@@ -1583,6 +1583,7 @@ function ReadMeterPanel() {
         比對封存前後：按「重置」→ 開結果分析／審查頁 → 記下數字；封存後重複一次。
       </p>
       {meter.rows.length > 0 && (
+        <div className="table-scroll">
         <table className="data-table">
           <thead>
             <tr><th>集合</th><th>伺服器讀取（計費）</th><th>快取命中（免費）</th><th>查詢次數</th></tr>
@@ -1598,6 +1599,7 @@ function ReadMeterPanel() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
       <button className="button button-outline" type="button" onClick={resetReadMeter}>重置計數</button>
     </div>

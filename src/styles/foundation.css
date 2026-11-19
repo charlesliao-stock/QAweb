@@ -794,7 +794,11 @@ button:disabled {
   opacity: 1;
 }
 .panel:hover {
-  transform: translateY(calc(var(--lift, 0) * -1px));
+  /* hover 不再套 transform（2026-11-19 日曆彈層修復）。--lift 全站皆為 0，translateY(0) 視覺上
+     無變化，卻會建立 stacking context；觸控點按後 :hover 會黏住，導致 .panel
+     內的 absolute 彈層（如結果分析 .results-month-popover、指標頁 .suggest-list）
+     被困在卡片層級內，超出卡片下緣的部分被後面的卡片蓋住（手機版篩選器
+     position: static 時無 z-index 可擋）。只留陰影變化。 */
   box-shadow: var(--shadow-card-hover, 0 2px 7px rgba(30, 54, 60, 0.018));
 }
 /* data-panel 內放滿版表格／工具列時維持貼邊，由內部元素自帶內距 */

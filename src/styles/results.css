@@ -45,11 +45,18 @@
   left: 0;
   display: block;
   width: 260px;
+  max-height: min(340px, calc(100dvh - 96px));
+  overflow-y: auto;
   padding: 12px;
   border: 1px solid #dce4e4;
   border-radius: 12px;
   background: #fff;
   box-shadow: 0 12px 32px rgba(22, 45, 48, 0.17);
+}
+/* 2026-11-19：下方空間不足時往上開（見 ResultMonthPicker 的 openAbove）。 */
+.results-month-popover--above {
+  top: auto;
+  bottom: calc(100% + 7px);
 }
 .results-month-year {
   display: flex;
