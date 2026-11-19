@@ -1,7 +1,7 @@
 // 比對兩份渲染快照；有差異則列出第一個差異位置並以非 0 結束
 import { readFileSync } from "node:fs";
 const [a, b] = process.argv.slice(2).map((f) => JSON.parse(readFileSync(f, "utf8")));
-const norm = (t) => (typeof t === "string" ? t.replace(/\/tmp\/snap\/bundle-[^:)]*/g, "BUNDLE") : t);
+const norm = (t) => (typeof t === "string" ? t.replace(/\/tmp\/snap\/bundle-[^:)]*/g, "BUNDLE").split("\n    at ")[0] : t);
 for (const o of [a, b]) for (const k of Object.keys(o.snaps)) o.snaps[k] = norm(o.snaps[k]);
 for (const k of Object.keys(b.snaps)) console.log(`  ${k}\t${b.snaps[k].length}${k.endsWith("例外") ? "\n    " + b.snaps[k].replace(/\n/g, "\n    ").slice(0, 700) : ""}`);
 for (const e of b.errors) console.log("  console.error:", e);

@@ -42,6 +42,7 @@ sessionStorage.setItem("nurseboard-demo-mode", "1");
 // ---- 打包被測樹 ----
 const entry = `
 import { createElement } from "react";
+import { useAuth } from "${TREE}/src/lib/auth";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 import { AuthProvider } from "${TREE}/src/lib/auth";
@@ -49,7 +50,8 @@ import { loadDemoStore } from "${TREE}/src/lib/demoLoader";
 import { GroupsPage } from "${TREE}/src/features/GroupsPage";
 import { ResultsPage } from "${TREE}/src/features/ResultsPage";
 import { SchedulePage } from "${TREE}/src/features/SchedulePage";
-export { createElement, createRoot, act, AuthProvider, loadDemoStore, GroupsPage, ResultsPage, SchedulePage };
+function Gate({ Page }) { const { user } = useAuth(); return user ? createElement(Page, { onAction: () => {} }) : null; }
+export { Gate, createElement, createRoot, act, AuthProvider, loadDemoStore, GroupsPage, ResultsPage, SchedulePage };
 `;
 mkdirSync("/tmp/snap", { recursive: true });
 const tag = TREE.replace(/[^a-z0-9]/gi, "_").slice(-30);
@@ -58,7 +60,7 @@ const bundle = `/tmp/snap/bundle-${tag}.cjs`;
 writeFileSync(entryFile, entry);
 await build({
   entryPoints: [entryFile], bundle: true, format: "cjs", platform: "node", outfile: bundle, logLevel: "error",
-  jsx: "automatic", define: { "import.meta.env": "{}" }, absWorkingDir: TREE, nodePaths: [`${TREE}/node_modules`],
+  jsx: "automatic", define: { "import.meta.env": JSON.stringify({ VITE_FIREBASE_API_KEY: "x", VITE_FIREBASE_AUTH_DOMAIN: "x.firebaseapp.com", VITE_FIREBASE_PROJECT_ID: "demo-project", VITE_FIREBASE_APP_ID: "1:1:web:1", VITE_DB_MODE: "firebase" }) }, absWorkingDir: TREE, nodePaths: [`${TREE}/node_modules`],
   loader: { ".css": "empty" },
 });
 const M = createRequire(bundle)(bundle);
@@ -78,7 +80,7 @@ async function runPage(label, Page, script) {
   const root = M.createRoot(container);
   const origErr = console.error; console.error = (...a) => { errors.push(`${label}: ` + a.map(String).join(" ").slice(0, 300)); };
   try {
-    await M.act(async () => { root.render(M.createElement(M.AuthProvider, null, M.createElement(Page, { onAction: () => {} }))); });
+    await M.act(async () => { root.render(M.createElement(M.AuthProvider, null, M.createElement(M.Gate, { Page }))); });
     await settle(40);
     snap(`${label}/初始`);
     await script();
