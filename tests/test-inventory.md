@@ -28,3 +28,7 @@
 ## 注意
 - 28 支測試直接讀三個大頁面的原始碼；拆分後這些斷言會因檔案移動而失敗，屬預期，須在對應 PR 中同步更新斷言（僅調整讀取路徑，不放寬檢查內容）。
 - 本 PR 不含 fixtures／golden helper，將隨 S1／R2／G4 提供。
+
+## 拆分期間新增的驗證
+- `scripts/check-boundaries.mjs`：模組邊界。
+- `scripts/render-snapshots.mjs`＋`scripts/compare-snapshots.mjs`：拆分前後渲染等價比對（CI，見 `docs/page-split.md`）。
