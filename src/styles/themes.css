@@ -90,6 +90,13 @@
 :root[data-mode="dark"] .field-label {
   color: var(--muted);
 }
+:root[data-mode="dark"] .login-links .login-link-btn {
+  color: var(--ink);
+  border-color: #3a4a50;
+}
+:root[data-mode="dark"] .login-password-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
 :root[data-mode="dark"] .field-hint {
   color: #d3a75e;
 }

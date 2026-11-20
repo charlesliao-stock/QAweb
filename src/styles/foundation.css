@@ -247,6 +247,64 @@ button:disabled {
   color: #a7b3b4;
   font-size: var(--font-small);
 }
+/* 登入輸入框圖示（帳號／密碼框內左側圖示＋密碼顯示切換） */
+.login-input-wrap {
+  position: relative;
+  margin-bottom: 14px;
+}
+.login-input-wrap .text-input {
+  margin-bottom: 0;
+  padding-left: 40px;
+}
+.login-input-wrap.has-toggle .text-input {
+  padding-right: 44px;
+}
+.login-input-icon {
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  color: #7b898b;
+  pointer-events: none;
+}
+.login-password-toggle {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #7b898b;
+}
+.login-password-toggle:hover {
+  color: var(--teal);
+  background: #eef5f3;
+}
+.login-password-toggle:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 1px;
+}
+/* 開通帳號／忘記密碼：加框粗體，兩顆同級 */
+.login-links {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.login-links .login-link-btn {
+  flex: 1;
+  height: 44px;
+  border-width: 1.5px;
+  border-color: #b9ccc7;
+  font-weight: 800;
+  font-size: var(--font-body);
+  color: #193d3a;
+}
 .demo-pill {
   display: inline-flex;
   align-items: center;

@@ -10,6 +10,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  Eye,
+  EyeOff,
   FileBarChart2,
   GitBranch,
   LayoutDashboard,
@@ -19,6 +21,7 @@ import {
   Menu,
   Settings2,
   ShieldCheck,
+  User,
   X,
 } from "lucide-react";
 import { AuthProvider, requestActivationMail, STAFF_MAIL_DOMAIN, normalizeStaffId, staffEmail, useAuth } from "../lib/auth";
@@ -140,8 +143,11 @@ function LoginScreen() {
   const { login, changePassword, needsPasswordChange } = useAuth();
   const [staffId, setStaffId] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   // v1.83.0：開通帳號／忘記密碼（寄 Firebase 認證連結到「職編@kmuh.org.tw」）
@@ -224,30 +230,58 @@ function LoginScreen() {
             <label className="field-label" htmlFor="new-password">
               新密碼
             </label>
-            <input
-              id="new-password"
-              className="text-input"
-              type="password"
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-              placeholder="請輸入新密碼"
-              autoComplete="new-password"
-            />
+            <div className="login-input-wrap has-toggle">
+              <span className="login-input-icon" aria-hidden="true">
+                <LockKeyhole size={17} />
+              </span>
+              <input
+                id="new-password"
+                className="text-input"
+                type={showNewPassword ? "text" : "password"}
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                placeholder="請輸入新密碼"
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                className="login-password-toggle"
+                onClick={() => setShowNewPassword((v) => !v)}
+                aria-label={showNewPassword ? "隱藏新密碼" : "顯示新密碼"}
+                aria-pressed={showNewPassword}
+              >
+                {showNewPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </div>
             <label className="field-label" htmlFor="confirm-password">
               確認新密碼
             </label>
-            <input
-              id="confirm-password"
-              className="text-input"
-              type="password"
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              placeholder="請再輸入一次新密碼"
-              autoComplete="new-password"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void submitPasswordChange();
-              }}
-            />
+            <div className="login-input-wrap has-toggle">
+              <span className="login-input-icon" aria-hidden="true">
+                <LockKeyhole size={17} />
+              </span>
+              <input
+                id="confirm-password"
+                className="text-input"
+                type={showConfirmPassword ? "text" : "password"}
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                placeholder="請再輸入一次新密碼"
+                autoComplete="new-password"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void submitPasswordChange();
+                }}
+              />
+              <button
+                type="button"
+                className="login-password-toggle"
+                onClick={() => setShowConfirmPassword((v) => !v)}
+                aria-label={showConfirmPassword ? "隱藏確認新密碼" : "顯示確認新密碼"}
+                aria-pressed={showConfirmPassword}
+              >
+                {showConfirmPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </div>
             {error && <div className="login-error">{error}</div>}
             <button
               className="button button-primary login-action"
@@ -274,17 +308,22 @@ function LoginScreen() {
             <label className="field-label" htmlFor="activate-staff-id">
               職編
             </label>
-            <input
-              id="activate-staff-id"
-              className="text-input"
-              value={staffId}
-              onChange={(event) => setStaffId(event.target.value)}
-              placeholder={`請輸入職編（不需輸入 @${STAFF_MAIL_DOMAIN}）`}
-              autoComplete="username"
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && cooldown <= 0) void submitActivation();
-              }}
-            />
+            <div className="login-input-wrap">
+              <span className="login-input-icon" aria-hidden="true">
+                <User size={17} />
+              </span>
+              <input
+                id="activate-staff-id"
+                className="text-input"
+                value={staffId}
+                onChange={(event) => setStaffId(event.target.value)}
+                placeholder={`請輸入職編（不需輸入 @${STAFF_MAIL_DOMAIN}）`}
+                autoComplete="username"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && cooldown <= 0) void submitActivation();
+                }}
+              />
+            </div>
             {notice && <div className="login-demo-hint">{notice}</div>}
             {error && <div className="login-error">{error}</div>}
             <button
@@ -325,29 +364,48 @@ function LoginScreen() {
             <label className="field-label" htmlFor="staff-id">
               職編
             </label>
-            <input
-              id="staff-id"
-              className="text-input"
-              value={staffId}
-              onChange={(event) => setStaffId(event.target.value)}
-              placeholder="請輸入職編"
-              autoComplete="username"
-            />
+            <div className="login-input-wrap">
+              <span className="login-input-icon" aria-hidden="true">
+                <User size={17} />
+              </span>
+              <input
+                id="staff-id"
+                className="text-input"
+                value={staffId}
+                onChange={(event) => setStaffId(event.target.value)}
+                placeholder="請輸入職編"
+                autoComplete="username"
+              />
+            </div>
             <label className="field-label" htmlFor="password">
               密碼
             </label>
-            <input
-              id="password"
-              className="text-input"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="請輸入密碼"
-              autoComplete="current-password"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void submitLogin();
-              }}
-            />
+            <div className="login-input-wrap has-toggle">
+              <span className="login-input-icon" aria-hidden="true">
+                <LockKeyhole size={17} />
+              </span>
+              <input
+                id="password"
+                className="text-input"
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="請輸入密碼"
+                autoComplete="current-password"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void submitLogin();
+                }}
+              />
+              <button
+                type="button"
+                className="login-password-toggle"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "隱藏密碼" : "顯示密碼"}
+                aria-pressed={showPassword}
+              >
+                {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </div>
             {error && <div className="login-error">{error}</div>}
             <button
               className="button button-primary login-action"
@@ -361,16 +419,26 @@ function LoginScreen() {
               <LockKeyhole size={13} /> 連續錯誤 5 次將鎖定 15 分鐘
             </div>
             <div className="login-version">{VERSION_LABEL}</div>
-            <div className="login-demo-hint">
-              首次使用或忘記密碼？
+            <div className="login-links">
               <button
-                className="button button-ghost"
+                type="button"
+                className="button button-outline login-link-btn"
                 onClick={() => {
                   setMode("activate");
                   setError("");
                 }}
               >
                 開通帳號
+              </button>
+              <button
+                type="button"
+                className="button button-outline login-link-btn"
+                onClick={() => {
+                  setMode("activate");
+                  setError("");
+                }}
+              >
+                忘記密碼
               </button>
             </div>
             <div className="login-demo-hint">
