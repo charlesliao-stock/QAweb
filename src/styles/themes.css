@@ -49,6 +49,13 @@
   background: #1a262b;
   color: #cfd9dd;
 }
+/* 深色模式：側邊欄立體彩色圖示增亮，維持對比 */
+:root[data-mode="dark"] .nav-item .nav-3d-icon {
+  filter: saturate(0.85) brightness(1.06);
+}
+:root[data-mode="dark"] .nav-item.active .nav-3d-icon {
+  filter: saturate(1.1) brightness(1.08) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.55));
+}
 :root[data-mode="dark"] .text-input,
 :root[data-mode="dark"] .select-wrap select,
 :root[data-mode="dark"] textarea.text-input {

@@ -1,24 +1,14 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
-  Activity,
   ArrowRight,
-  ArrowRightLeft,
   Bell,
-  CalendarDays,
   Check,
   ChevronLeft,
   ChevronRight,
-  ClipboardCheck,
   Eye,
   EyeOff,
-  FileBarChart2,
-  GitBranch,
-  LayoutDashboard,
-  ListChecks,
   LockKeyhole,
   LogOut,
-  Settings2,
-  ShieldCheck,
   User,
   X,
 } from "lucide-react";
@@ -112,7 +102,7 @@ type CapaLaunchContext = {
 const NAV_GROUPS = [
   {
     label: "工作台",
-    items: [{ id: "dashboard", label: "總覽儀表板", icon: LayoutDashboard }],
+    items: [{ id: "dashboard", label: "總覽儀表板", kind: "dashboard" as BottomNavIconKind }],
   },
   {
     label: "品質管理",
@@ -120,21 +110,21 @@ const NAV_GROUPS = [
       // 指標總覽：五項功能的整合入口，放在品質管理首位；
       // 指標管理已整合進總覽（每列「管理」直達編輯頁、頁首可新增），
       // 側邊欄不再單列「指標管理」入口，頁面本身保留供總覽深連。
-      { id: "overview", label: "指標總覽", icon: ListChecks },
-      { id: "schedule", label: "品管審查排程", icon: CalendarDays },
-      { id: "audit", label: "品管審查", icon: ClipboardCheck },
-      { id: "results", label: "結果分析", icon: FileBarChart2 },
+      { id: "overview", label: "指標總覽", kind: "overview" as BottomNavIconKind },
+      { id: "schedule", label: "品管審查排程", kind: "schedule" as BottomNavIconKind },
+      { id: "audit", label: "品管審查", kind: "audit" as BottomNavIconKind },
+      { id: "results", label: "結果分析", kind: "results" as BottomNavIconKind },
       // v1.56.0：任務交接由組織與設定移入品質管理（只改導覽位置與所屬分區，功能與權限不動）。
-      { id: "handoff", label: "任務交接", icon: ArrowRightLeft },
-      { id: "capa", label: "CAPA 改善追蹤", icon: Activity },
+      { id: "handoff", label: "任務交接", kind: "handoff" as BottomNavIconKind },
+      { id: "capa", label: "CAPA 改善追蹤", kind: "capa" as BottomNavIconKind },
     ],
   },
   {
     label: "組織與設定",
     items: [
-      { id: "groups", label: "品管組與人員", icon: GitBranch },
-      { id: "admin", label: "系統管理", icon: Settings2 },
-      { id: "permissions", label: "權限管理", icon: ShieldCheck },
+      { id: "groups", label: "品管組與人員", kind: "groups" as BottomNavIconKind },
+      { id: "admin", label: "系統管理", kind: "admin" as BottomNavIconKind },
+      { id: "permissions", label: "權限管理", kind: "permissions" as BottomNavIconKind },
     ],
   },
 ] as const;
@@ -607,7 +597,6 @@ function Sidebar({
               <div className="nav-group" key={group.label}>
                 <span className="nav-group-label">{group.label}</span>
                 {visibleItems.map((item) => {
-                  const Icon = item.icon;
                   return (
                     <button
                       key={item.id}
@@ -617,7 +606,7 @@ function Sidebar({
                         onClose();
                       }}
                     >
-                      <Icon size={18} strokeWidth={1.8} />
+                      <BottomNavIcon kind={item.kind} size={20} active={page === item.id} />
                       <span>{item.label}</span>
                     </button>
                   );

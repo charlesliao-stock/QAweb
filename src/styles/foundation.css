@@ -533,6 +533,17 @@ button:disabled {
   border-radius: 0 4px 4px 0;
   background: var(--accent);
 }
+/* 側邊欄立體彩色圖示（與底導同一元件 BottomNavIcon）：未選中彩度稍降仍為彩色；
+   選中放大＋陰影加深＋光暈，與底導一致 */
+.nav-item .nav-3d-icon {
+  flex: none;
+  filter: saturate(0.75) brightness(0.97);
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+.nav-item.active .nav-3d-icon {
+  transform: scale(1.15);
+  filter: saturate(1.05) brightness(1.03) drop-shadow(0 2px 3px rgba(15, 23, 42, 0.3));
+}
 
 .sidebar-bottom {
   border-top: 1px solid #edf0f1;
