@@ -1,5 +1,6 @@
 export type PageId =
   | "dashboard"
+  | "overview"
   | "indicators"
   | "schedule"
   | "audit"

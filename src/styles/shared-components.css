@@ -535,3 +535,20 @@ th[aria-sort="descending"] .th-sort .lucide {
 .chart-capa-box rect{fill:#f4faf9;stroke:#0f766e;stroke-width:1}
 .chart-capa-box text{fill:#244b47;font-size:10px}
 .chart-capa-box:hover rect,.chart-capa-box:focus-visible rect{fill:#e3f3f0}
+
+/* 指標總覽：操作列五顆按鈕，小螢幕換行不溢出（沿用既有 .button 樣式，只補排版）。 */
+.indicator-overview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.indicator-overview-actions .button {
+  padding: 4px 10px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .indicator-overview-actions .button {
+    flex: 1 1 auto;
+  }
+}

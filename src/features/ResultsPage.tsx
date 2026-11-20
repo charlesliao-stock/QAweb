@@ -11,8 +11,10 @@
  * 權限：can("resultQuery")；資料範圍：管理員全部、審查員只看負責單位、
  * 一般人員只看自己單位（沿用舊頁規則）。
  */
+import { useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { stripInternalIdPrefix } from "../lib/indicators";
+import { overviewResultRange } from "../lib/indicatorOverview";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { recordsInMonths } from "../lib/analysisRates";
 import { fmtDateTime } from "../lib/ym";
@@ -35,6 +37,27 @@ import { DrillViewBlock } from "./results/tabs/DrillViewBlock";
 export function ResultsPage(props: ResultsPageProps) {
   const ctx = useResultsCtx(props);
   const { can, isAdmin, allMonths, indOf, indUnit, tab, applied, perIndMode, rawHint, summaryPlan, summaryPlans, staleSummaryLabels, unconfirmed, setTab, loading, fetchedAt, indexFallback, indexFallbackDismissed, setIndexFallbackDismissed, setRawHint, setRawFull, causeCountRows, setCauseDrill, unitNameOf, causeDrill, scopedRecords } = ctx;
+
+  // 指標總覽帶入：切「指標分析」頁籤、預選該指標、查詢該年 1～12 月。
+  // 查詢仍走現行 handleQuery 與 dataScope 過濾（scopedRecords），不繞過權限。
+  const initialRef = useRef(props.initial ?? null);
+  const [initialReady, setInitialReady] = useState(false);
+  useEffect(() => {
+    const init = initialRef.current;
+    if (!init || initialReady || !ctx.metaLoaded) return;
+    const ind = ctx.indicators.find((item) => item.id === init.indicatorId);
+    const range = overviewResultRange(init.year);
+    ctx.setTab("indicator");
+    if (ind) ctx.setSelGroup2(ind.groupId);
+    ctx.setSelIndicator(init.indicatorId);
+    ctx.setStartMonth(range.startMonth);
+    ctx.setEndMonth(range.endMonth);
+    setInitialReady(true);
+  }, [ctx, initialReady]);
+  useEffect(() => {
+    if (!initialReady || applied) return;
+    ctx.handleQuery();
+  }, [initialReady, applied, ctx]);
 
   if (!can("resultQuery") && !isAdmin) {
     return (

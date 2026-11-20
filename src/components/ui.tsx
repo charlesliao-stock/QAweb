@@ -28,6 +28,10 @@ export const PAGE_COPY: Record<PageId, { title: string; description: string }> =
       title: "品質總覽",
       description: "本月指標進度與需要關注的單位",
     },
+    overview: {
+      title: "指標總覽",
+      description: "一列一支指標：管理、排程、審查、結果分析與 CAPA 的整合入口",
+    },
     indicators: {
       title: "指標管理",
       description: "管理指標版本、閾值與審核狀態",

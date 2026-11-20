@@ -5,6 +5,7 @@
  * 排程讀寫一律走 src/lib/scheduling.ts 的新模型（indicatorSchedules），
  * 稽核由 lib 內自動寫入。
  */
+import { useEffect, useRef } from "react";
 import { ArrowLeft } from "lucide-react";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { stripInternalIdPrefix } from "../lib/indicators";
@@ -21,6 +22,20 @@ export { schedulePillState, mergeItemsWithUnits, mergeItemsUnlimited, assignment
 export function SchedulePage(props: SchedulePageProps) {
   const ctx = useScheduleCtx(props);
   const { view, canEdit, groupMap, rows, myUnitCode, assignments, units, reviewersByGroup, scheduleRestrictedUnits, unitNameOf, actor, schedules, onAction, usersMap, indicatorOf, backToList, reviewerRoleIds, inactiveIds, scheduleScopeUnits, user } = ctx;
+
+  // 指標總覽帶入：指標清單載入完成後，預選該指標與年份（只設篩選、留在清單頁，
+  // 不直接跳進排程編輯器；編輯仍由使用者在清單上點選，權限與範圍邏輯不動）。
+  const initialRef = useRef(props.initial ?? null);
+  const initialAppliedRef = useRef(false);
+  useEffect(() => {
+    const init = initialRef.current;
+    if (!init || initialAppliedRef.current || !ctx.queried) return;
+    initialAppliedRef.current = true;
+    const ind = ctx.indicatorOf(init.indicatorId);
+    ctx.setFilterYear(init.year);
+    if (ind) ctx.setFilterGroup(ind.groupId);
+    ctx.setFilterIndicator(init.indicatorId);
+  }, [ctx]);
 
   // ================= 主畫面 =================
   if (view.kind === "list") {

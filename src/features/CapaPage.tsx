@@ -43,7 +43,12 @@ function makeCase(context: LaunchContext, staffId: string, staffName: string, un
     approvalSteps: [], history: [makeHistory("建立待確認案件", staffId, staffName, context.indicatorId ? "由結果分析帶入來源脈絡" : "人工立案")], createdAt: now, updatedAt: now, dueDate: addDaysKey(now, 30), stageTimes: { 待確認: now } };
 }
 
-export function CapaPage({ onAction, launchContext, onLaunchConsumed, managementOnly = false }: { onAction: (message: string) => void; launchContext?: LaunchContext | null; onLaunchConsumed?: () => void; managementOnly?: boolean }) {
+export function CapaPage({ onAction, launchContext, onLaunchConsumed, managementOnly = false, initialIndicatorId }: { onAction: (message: string) => void; launchContext?: LaunchContext | null; onLaunchConsumed?: () => void; managementOnly?: boolean;
+  /**
+   * 指標總覽帶入：只列該指標的案件（仍先經 dataScope 範圍過濾，
+   * 再按指標篩選；不自動開立案件）。無此參數時列出全部可見案件。
+   */
+  initialIndicatorId?: string }) {
   const { user } = useAuth(); const { isAdmin, catalog } = usePermissions(); const orgMeta = useOrgMeta();
   const [tab, setTab] = useState<ViewTab>(() => managementOnly ? "settings" : "cases"); const [cases, setCases] = useState<CapaCase[]>([]); const [settings, setSettings] = useState<CapaSettings>(DEFAULT_CAPA_SETTINGS); const [templates, setTemplates] = useState<CapaTemplate[]>([]);
   // v1.88.4：範圍過濾用的單位對照（單位→所屬群組＋沿革；讀不到時退回空表，範圍退回本人單位）
@@ -77,6 +82,9 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
     return cases.filter((item) => visible.has(item.unitCode));
   }, [cases, dataScope]);
   const [selectedId, setSelectedId] = useState(""); const [keywordDraft, setKeywordDraft] = useState(""); const [keyword, setKeyword] = useState(""); const [progressFilter, setProgressFilter] = useState(""); const [sourceFilter, setSourceFilter] = useState("");
+  // 指標總覽帶入：按指標篩選案件（掛載時帶入一次，可由使用者清除）。
+  const [indicatorFilter, setIndicatorFilter] = useState("");
+  useEffect(() => { if (initialIndicatorId) setIndicatorFilter(initialIndicatorId); }, [initialIndicatorId]);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 } | null>(null);
   const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState(""); const [draft, setDraft] = useState<CapaCase | null>(null);
   const [withdrawOpen, setWithdrawOpen] = useState(false); const [withdrawNote, setWithdrawNote] = useState("");
@@ -100,7 +108,7 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
     const word = keyword.trim().toLowerCase();
     const list = scopedCases.filter((item) => {
       const text = `${item.caseNumber} ${item.unitCode} ${item.unitName} ${item.ownerName} ${item.indicatorCode} ${item.indicatorName} ${item.findingSummary} ${item.rootCause}`.toLowerCase();
-      return (!word || text.includes(word)) && (!progressFilter || progressOfStage(item.stage) === progressFilter) && (!sourceFilter || item.source === sourceFilter);
+      return (!word || text.includes(word)) && (!progressFilter || progressOfStage(item.stage) === progressFilter) && (!sourceFilter || item.source === sourceFilter) && (!indicatorFilter || item.indicatorId === indicatorFilter);
     });
     const value = (item: CapaCase, key: SortKey) => key === "number" ? item.caseNumber : key === "unit" ? item.unitName || item.unitCode : key === "owner" ? item.ownerName : key === "indicator" ? `${item.indicatorCode} ${item.indicatorName}` : key === "reason" ? item.findingSummary : key === "due" ? dueDateOf(item) : CAPA_PROGRESS.indexOf(progressOfStage(item.stage));
     return list.sort((a, b) => {
@@ -109,7 +117,7 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
       const result = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "zh-Hant", { numeric: true });
       return result * sort.dir || b.updatedAt.localeCompare(a.updatedAt);
     });
-  }, [scopedCases, keyword, progressFilter, sourceFilter, sort]);
+  }, [scopedCases, keyword, progressFilter, sourceFilter, sort, indicatorFilter]);
   const selected = scopedCases.find((item) => item.id === selectedId) ?? null;
   useEffect(() => { setDraft(selected ? structuredClone(selected) : null); setApprovalNote(""); setWithdrawOpen(false); setWithdrawNote(""); }, [selectedId, selected]);
   const updateDraft = (patch: Partial<CapaCase>) => setDraft((current) => current ? { ...current, ...patch } : current);
@@ -238,11 +246,17 @@ export function CapaPage({ onAction, launchContext, onLaunchConsumed, management
         <Stat label="送審中" value={scopedCases.filter((item) => progressOfStage(item.stage) === "送審中").length} tone="teal" caption="待直屬督導／品管組召集人審核" />
         <Stat label="結案" value={scopedCases.filter((item) => progressOfStage(item.stage) === "結案").length} tone="green" caption="結案核准完成" />
       </div>
-      <FilterPanel actions={(keyword || progressFilter || sourceFilter) && <button type="button" className="button button-outline" onClick={() => { setKeyword(""); setKeywordDraft(""); setProgressFilter(""); setSourceFilter(""); }}>清除篩選</button>}>
+      <FilterPanel actions={(keyword || progressFilter || sourceFilter || indicatorFilter) && <button type="button" className="button button-outline" onClick={() => { setKeyword(""); setKeywordDraft(""); setProgressFilter(""); setSourceFilter(""); setIndicatorFilter(""); }}>清除篩選</button>}>
         <FormSelect label="進度" value={progressFilter} onChange={(event) => setProgressFilter(event.target.value)}><option value="">全部進度</option>{[...CAPA_PROGRESS, "已撤案" as CapaProgress].map((item) => <option key={item} value={item}>{item}</option>)}</FormSelect>
         <FormSelect label="來源" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="">全部來源</option><option value="人工立案">人工立案</option><option value="結果分析">結果分析</option><option value="系統觸發">系統觸發</option></FormSelect>
         <FilterSearchField label="關鍵字" placeholder="搜尋編號、單位、負責人、指標或原因" value={keywordDraft} onChange={setKeywordDraft} onSearch={() => setKeyword(keywordDraft)} />
       </FilterPanel>
+      {indicatorFilter && (
+        <p className="settings-note" role="status" style={{ fontWeight: 600 }}>
+          只顯示指標「{(() => { const c = cases.find((item) => item.indicatorId === indicatorFilter); return c ? `${c.indicatorCode} ${c.indicatorName}` : indicatorFilter; })()}」的 CAPA 案件
+          <button type="button" className="text-button" onClick={() => setIndicatorFilter("")}>顯示全部指標</button>
+        </p>
+      )}
       <ListPanel title="改善案件" count={filtered.length} actions={<button className="icon-button" onClick={() => void reload()} title="重新載入案件" aria-label="重新載入案件"><Activity size={16} /></button>}>
         {loading ? <p className="muted-text" role="status">正在載入案件資料…</p> : scopedCases.length === 0 ? <EmptyState title="目前尚無 CAPA 案件" description="可由結果分析下探單位清單的「啟動CAPA」帶入指標脈絡，或人工開立改善追蹤。" /> : filtered.length === 0 ? <p className="muted-text">沒有符合篩選條件的案件。</p> :
           <table className="data-table capa-list-table"><thead><tr><SortTh label="編號" k="number" /><SortTh label="單位" k="unit" /><SortTh label="負責人" k="owner" /><SortTh label="指標名稱" k="indicator" /><SortTh label="原因" k="reason" /><SortTh label="改善期限" k="due" /><SortTh label="進度／更新日期" k="progress" /></tr></thead>

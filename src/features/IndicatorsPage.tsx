@@ -799,8 +799,14 @@ function AuditFormEditor({
 
 export function IndicatorsPage({
   onAction,
+  initialEditId,
 }: {
   onAction: (message: string) => void;
+  /**
+   * 指標總覽帶入：掛載時直接開啟該指標的編輯頁
+   * （基本資料／10 Steps／審核表三頁籤）。無此參數時停在清單頁。
+   */
+  initialEditId?: string;
 }) {
   const { user } = useAuth();
   const [view, setView] = useState<
@@ -1134,6 +1140,15 @@ export function IndicatorsPage({
       onAction(`讀取指標失敗：${toErrorMessage(error)}`);
     }
   }
+
+  // 指標總覽帶入：掛載時直接開啟該指標的編輯頁（只跑一次）。
+  const initialEditRef = useRef(initialEditId ?? "");
+  useEffect(() => {
+    if (initialEditRef.current) {
+      void openEdit(initialEditRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ---- 步驟四「指標」 / 步驟五「閾值」（兩者一一對應、同步增刪） ----
   function addSubIndicator() {

@@ -26,7 +26,7 @@
  */
 import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ClipboardCheck,
@@ -77,6 +77,7 @@ import {
 } from "../lib/editRequests";
 import { usePermissions } from "../lib/usePermissions";
 import { maskName, staffLabel } from "../lib/mask";
+import { hasCurrentMonthSchedule } from "../lib/indicatorOverview";
 import { fmtIsoDateTime, fmtYmd } from "../lib/ym";
 import {
   normalizeAssignmentItem,
@@ -308,8 +309,15 @@ function CompactProgress({
 
 export function AuditPage({
   onAction,
+  initialIndicatorId,
 }: {
   onAction: (message: string) => void;
+  /**
+   * 指標總覽帶入：預選該指標。只設篩選、不自動建立排程；
+   * 當月無排程時在清單上方顯示「本月無審查排程」（仍列出其他月份的排程，
+   * 不進空白審查頁）。無此參數時與現行行為完全相同。
+   */
+  initialIndicatorId?: string;
 }) {
   const { user } = useAuth();
   const { can } = usePermissions();
@@ -328,6 +336,13 @@ export function AuditPage({
   // v1.46.0：篩選區依序為組別／指標／進度／關鍵字；進度預設進行中
   const [selGroup, setSelGroup] = useState("");
   const [selIndicator, setSelIndicator] = useState("");
+  // 指標總覽帶入：掛載時預選該指標（只設篩選，不自動建排程）。
+  const initialIndicatorRef = useRef(initialIndicatorId ?? "");
+  useEffect(() => {
+    if (initialIndicatorRef.current) {
+      setSelIndicator(initialIndicatorRef.current);
+    }
+  }, []);
   const [selProgress, setSelProgress] =
     useState<AuditProgressState>("active");
   const [keyword, setKeyword] = useState("");
@@ -1636,6 +1651,17 @@ export function AuditPage({
           </button>
         </p>
       )}
+      {initialIndicatorRef.current &&
+        !loading &&
+        !hasCurrentMonthSchedule(
+          rows
+            .filter((r) => r.indicatorId === initialIndicatorRef.current)
+            .map((r) => r.interval),
+        ) && (
+          <p className="settings-note" role="status" style={{ fontWeight: 600 }}>
+            本月無審查排程：此指標本月沒有排定的審查區間，請先至「品管審查排程」建立排程，或查看其他月份的排程。
+          </p>
+        )}
       <FilterPanel
         actions={
           (selGroup || selIndicator || keyword) && (

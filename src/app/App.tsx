@@ -13,6 +13,7 @@ import {
   FileBarChart2,
   GitBranch,
   LayoutDashboard,
+  ListChecks,
   LockKeyhole,
   LogOut,
   Menu,
@@ -71,6 +72,11 @@ const IndicatorsPage = lazy(() =>
     default: m.IndicatorsPage,
   })),
 );
+const IndicatorOverviewPage = lazy(() =>
+  import("../features/IndicatorOverviewPage").then((m) => ({
+    default: m.IndicatorOverviewPage,
+  })),
+);
 const ResultsPage = lazy(() =>
   import("../features/ResultsPage").then((m) => ({
     default: m.ResultsPage,
@@ -82,6 +88,7 @@ const SchedulePage = lazy(() =>
   })),
 );
 import type { PageId } from "../types";
+import type { OverviewAction, OverviewRow } from "../lib/indicatorOverview";
 import type { GroupsTab, OrgMemberTarget } from "../features/GroupsPage";
 import { toErrorMessage } from "../lib/errors";
 
@@ -108,6 +115,8 @@ const NAV_GROUPS = [
   {
     label: "品質管理",
     items: [
+      // 指標總覽：五項功能的整合入口，放在品質管理首位；既有入口全部保留。
+      { id: "overview", label: "指標總覽", icon: ListChecks },
       { id: "indicators", label: "指標管理", icon: BookOpenCheck },
       { id: "schedule", label: "品管審查排程", icon: CalendarDays },
       { id: "audit", label: "品管審查", icon: ClipboardCheck },
@@ -647,6 +656,45 @@ function Shell() {
     memberPageId && page === memberPageId ? "groups" : page;
   const [capaLaunch, setCapaLaunch] = useState<CapaLaunchContext | null>(null);
   const clearCapaLaunch = useCallback(() => setCapaLaunch(null), []);
+  // 指標總覽帶入的各頁 initial 參數（切頁時帶入，離開該頁即清除；
+  // 直接由導覽進各頁時為 null，各頁行為與現行完全相同）。
+  const [indicatorEdit, setIndicatorEdit] = useState<{ id: string; nonce: number } | null>(null);
+  const [scheduleLaunch, setScheduleLaunch] = useState<{ indicatorId: string; year: number; nonce: number } | null>(null);
+  const [auditLaunch, setAuditLaunch] = useState<{ indicatorId: string; nonce: number } | null>(null);
+  const [resultsLaunch, setResultsLaunch] = useState<{ indicatorId: string; year: number; nonce: number } | null>(null);
+  const [capaFilterLaunch, setCapaFilterLaunch] = useState<{ indicatorId: string; nonce: number } | null>(null);
+  const clearLaunches = useCallback(() => {
+    setIndicatorEdit(null);
+    setScheduleLaunch(null);
+    setAuditLaunch(null);
+    setResultsLaunch(null);
+    setCapaFilterLaunch(null);
+  }, []);
+  // 一般導覽切頁：先清掉總覽帶入參數，避免下次直接進頁時殘留上次的指標。
+  const goPage = useCallback((target: PageId) => {
+    clearLaunches();
+    setPage(target);
+  }, [clearLaunches]);
+  // 指標總覽五個操作：帶參數切頁（key 換 nonce 強制重新掛載，initial 才會重新生效）。
+  const openOverviewAction = useCallback((action: OverviewAction, row: OverviewRow, year: number) => {
+    const nonce = Date.now();
+    if (action === "manage") {
+      setIndicatorEdit({ id: row.id, nonce });
+      setPage("indicators");
+    } else if (action === "schedule") {
+      setScheduleLaunch({ indicatorId: row.id, year, nonce });
+      setPage("schedule");
+    } else if (action === "audit") {
+      setAuditLaunch({ indicatorId: row.id, nonce });
+      setPage("audit");
+    } else if (action === "results") {
+      setResultsLaunch({ indicatorId: row.id, year, nonce });
+      setPage("results");
+    } else {
+      setCapaFilterLaunch({ indicatorId: row.id, nonce });
+      setPage("capa");
+    }
+  }, []);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [isMobile, setIsMobile] = useState(
@@ -723,6 +771,13 @@ function Shell() {
   }, []);
   const canViewPage = useCallback(
     (target: PageId) => {
+      // 指標總覽無獨立權限鍵：五項功能任一有權限即可見入口；
+      // 列內各操作按鈕再依各自 page 權限顯示／停用。
+      if (target === "overview") {
+        return (
+          ["page.indicators", "page.schedule", "page.audit", "page.results", "page.capa"] as const
+        ).some((key) => can(key));
+      }
       const key = pagePermissionKey(target);
       return Boolean(key && can(key));
     },
@@ -804,7 +859,7 @@ function Shell() {
       <Sidebar
         page={navPage}
         canViewPage={canViewPage}
-        onPage={setPage}
+        onPage={goPage}
         onExit={() => void logout()}
         mobileOpen={mobileOpen}
         onClose={() => setMobileOpen(false)}
@@ -882,10 +937,37 @@ function Shell() {
             ) : (
               <>
                 {page === "dashboard" && <DashboardPage onAction={notify} />}
-                {page === "indicators" && <IndicatorsPage onAction={notify} />}
-                {page === "schedule" && <SchedulePage onAction={notify} />}
-                {page === "audit" && <AuditPage onAction={notify} />}
-                {page === "results" && <ResultsPage onAction={notify} />}
+                {page === "overview" && (
+                  <IndicatorOverviewPage onAction={notify} onOpenAction={openOverviewAction} />
+                )}
+                {page === "indicators" && (
+                  <IndicatorsPage
+                    key={indicatorEdit ? `ind-edit-${indicatorEdit.nonce}` : "ind-list"}
+                    onAction={notify}
+                    initialEditId={indicatorEdit?.id}
+                  />
+                )}
+                {page === "schedule" && (
+                  <SchedulePage
+                    key={scheduleLaunch ? `sched-${scheduleLaunch.nonce}` : "sched"}
+                    onAction={notify}
+                    initial={scheduleLaunch ? { indicatorId: scheduleLaunch.indicatorId, year: scheduleLaunch.year } : null}
+                  />
+                )}
+                {page === "audit" && (
+                  <AuditPage
+                    key={auditLaunch ? `audit-${auditLaunch.nonce}` : "audit"}
+                    onAction={notify}
+                    initialIndicatorId={auditLaunch?.indicatorId}
+                  />
+                )}
+                {page === "results" && (
+                  <ResultsPage
+                    key={resultsLaunch ? `results-${resultsLaunch.nonce}` : "results"}
+                    onAction={notify}
+                    initial={resultsLaunch ? { indicatorId: resultsLaunch.indicatorId, year: resultsLaunch.year } : null}
+                  />
+                )}
                 {page === "groups" && (
                   <GroupsPage
                     onAction={notify}
@@ -907,7 +989,7 @@ function Shell() {
                   />
                 )}
                 {page === "handoff" && <TaskHandoffPage onAction={notify} />}
-                {page === "capa" && <CapaPage onAction={notify} launchContext={capaLaunch} onLaunchConsumed={clearCapaLaunch} />}
+                {page === "capa" && <CapaPage key={capaFilterLaunch ? `capa-${capaFilterLaunch.nonce}` : "capa"} onAction={notify} launchContext={capaLaunch} onLaunchConsumed={clearCapaLaunch} initialIndicatorId={capaFilterLaunch?.indicatorId} />}
                 {page === "admin" && <AdminPage onAction={notify} />}
                 {page === "permissions" && <PermissionManagementPage onAction={notify} />}
               </>
@@ -939,7 +1021,7 @@ function Shell() {
             <button
               key={item.id}
               className={navPage === item.id ? "active" : ""}
-              onClick={() => setPage(item.id as PageId)}
+              onClick={() => goPage(item.id as PageId)}
             >
               <Icon size={19} />
               <span>{item.label}</span>
