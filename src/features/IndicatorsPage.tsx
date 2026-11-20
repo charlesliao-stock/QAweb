@@ -26,6 +26,7 @@ import {
   FilterPanel,
   FilterSearchField,
   ListPanel,
+  LoadingState,
   PageHeading,
   SectionTitle,
   SortableTh,
@@ -800,6 +801,8 @@ function AuditFormEditor({
 export function IndicatorsPage({
   onAction,
   initialEditId,
+  fromOverview,
+  onBackToOverview,
 }: {
   onAction: (message: string) => void;
   /**
@@ -807,11 +810,26 @@ export function IndicatorsPage({
    * （基本資料／10 Steps／審核表三頁籤）。無此參數時停在清單頁。
    */
   initialEditId?: string;
+  /**
+   * 從指標總覽進來：編輯頁的返回／取消／儲存成功後回到指標總覽，
+   * 而不是指標管理清單。直接由導覽進來時不帶，行為與現行相同。
+   */
+  fromOverview?: boolean;
+  onBackToOverview?: () => void;
 }) {
   const { user } = useAuth();
+  // 帶 initialEditId 掛載時直接以編輯 view 起始，不先顯示清單頁
+  // （舊行為：先掛 list view、等 openEdit 讀完才切編輯，中間會閃過
+  // 清單頁的「請先查詢」空狀態，看起來像先跳清單再跳轉）。
+  // 載入完成前以 editLoading 擋住空表單，只顯示載入狀態。
   const [view, setView] = useState<
     { kind: "list" } | { kind: "create" } | { kind: "edit"; id: string }
-  >({ kind: "list" });
+  >(
+    initialEditId
+      ? { kind: "edit", id: initialEditId }
+      : { kind: "list" },
+  );
+  const [editLoading, setEditLoading] = useState(Boolean(initialEditId));
   const [rows, setRows] = useState<IndicatorRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [queried, setQueried] = useState(false);
@@ -1023,14 +1041,16 @@ export function IndicatorsPage({
     setView({ kind: "create" });
   }
 
-  async function openEdit(code: string) {
+  async function openEdit(code: string): Promise<boolean> {
     setFormError("");
     setFormTab("basic");
+    setEditLoading(true);
     try {
       const snap = await getDoc(doc(getFirebaseDb(), "indicators", code));
       if (!snap.exists()) {
         onAction("找不到該指標");
-        return;
+        setEditLoading(false);
+        return false;
       }
       const data = snap.data();
       const steps = normalizeTenSteps(data.tenSteps, data.steps);
@@ -1136,16 +1156,36 @@ export function IndicatorsPage({
         setVersions([]);
       }
       setView({ kind: "edit", id: snap.id });
+      setEditLoading(false);
+      return true;
     } catch (error) {
       onAction(`讀取指標失敗：${toErrorMessage(error)}`);
+      setEditLoading(false);
+      return false;
     }
   }
 
+  /**
+   * 離開編輯頁：從總覽進來回總覽，否則回清單（現行行為）。
+   * 儲存成功、取消、頁頂返回鈕共用。
+   */
+  const exitEdit = useCallback(() => {
+    if (fromOverview && onBackToOverview) onBackToOverview();
+    else setView({ kind: "list" });
+  }, [fromOverview, onBackToOverview]);
+
   // 指標總覽帶入：掛載時直接開啟該指標的編輯頁（只跑一次）。
+  // view 已在 useState 以編輯起始，此處只負責載入資料；讀不到時
+  // （指標不存在／讀取失敗）回到總覽，不留在清單頁。
   const initialEditRef = useRef(initialEditId ?? "");
   useEffect(() => {
     if (initialEditRef.current) {
-      void openEdit(initialEditRef.current);
+      void openEdit(initialEditRef.current).then((ok) => {
+        if (!ok) {
+          if (fromOverview && onBackToOverview) onBackToOverview();
+          else setView({ kind: "list" });
+        }
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1505,8 +1545,13 @@ export function IndicatorsPage({
         }
       }
       setWasEnableEligible(nowEligible);
-      setView({ kind: "list" });
-      await loadList();
+      // 從總覽進來：存檔後回總覽，不回清單；否則回清單並重載（現行行為）。
+      if (fromOverview && onBackToOverview) {
+        onBackToOverview();
+      } else {
+        setView({ kind: "list" });
+        await loadList();
+      }
     } catch (error) {
       showFormError(`儲存失敗：${toErrorMessage(error)}`);
     } finally {
@@ -1650,10 +1695,10 @@ export function IndicatorsPage({
           view.kind !== "list" ? (
             <button
               className="button button-outline"
-              onClick={() => setView({ kind: "list" })}
+              onClick={exitEdit}
             >
               <X size={15} />
-              返回清單
+              {fromOverview ? "返回指標總覽" : "返回清單"}
             </button>
           ) : undefined
         }
@@ -1848,6 +1893,10 @@ export function IndicatorsPage({
               </table>
           </ListPanel>
         )
+      ) : editLoading ? (
+        <section className="panel">
+          <LoadingState label="載入指標資料中…" />
+        </section>
       ) : (
         <section className="panel data-panel indicator-form">
           <SectionTitle
@@ -2304,7 +2353,7 @@ export function IndicatorsPage({
             </button>
             <button
               className="button button-outline"
-              onClick={() => setView({ kind: "list" })}
+              onClick={exitEdit}
             >
               取消
             </button>

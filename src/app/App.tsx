@@ -675,6 +675,12 @@ function Shell() {
     clearLaunches();
     setPage(target);
   }, [clearLaunches]);
+  // 從總覽進指標編輯頁的返回：清掉帶入參數、回到指標總覽
+  // （不經指標管理清單；指標頁內部以 fromOverview 決定返回目的地）。
+  const backToOverview = useCallback(() => {
+    clearLaunches();
+    setPage("overview");
+  }, [clearLaunches]);
   // 指標總覽五個操作：帶參數切頁（key 換 nonce 強制重新掛載，initial 才會重新生效）。
   const openOverviewAction = useCallback((action: OverviewAction, row: OverviewRow, year: number) => {
     const nonce = Date.now();
@@ -945,6 +951,8 @@ function Shell() {
                     key={indicatorEdit ? `ind-edit-${indicatorEdit.nonce}` : "ind-list"}
                     onAction={notify}
                     initialEditId={indicatorEdit?.id}
+                    fromOverview={Boolean(indicatorEdit)}
+                    onBackToOverview={backToOverview}
                   />
                 )}
                 {page === "schedule" && (
