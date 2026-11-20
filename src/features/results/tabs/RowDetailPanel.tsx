@@ -1,14 +1,11 @@
 /**
- * v1.88.33 Q8：矩陣列點開的展開面板（組別／單位模式共用）。
- * 點指標列即在矩陣下方展開，同時呈現該指標曲線圖＋細項結果（各選項得分狀況）；
- * 取代組別模式的曲線／文件彈窗與單位模式的曲線／文件分開面板。
- * 指標模式維持直接展開，不走這裡。
+ * v1.88.33 Q8：矩陣列點開的展開面板（組別／單位模式共用），現只呈現曲線圖。
+ * 點曲線圖示即在矩陣下方展開該指標曲線圖；細項結果改走文件圖示的彈窗，
+ * 不再與曲線同現於此面板。指標模式維持直接展開，不走這裡。
  */
 import { useEffect, useState } from "react";
 import { TrendChart } from "../../../components/TrendChart";
-import { UnitBelowPanel, OptionDetailTable } from "../components/small";
-import { recordsForIndex } from "../../../lib/resultsMatrix";
-import { optionDetailRows } from "../../../lib/analysisRates";
+import { UnitBelowPanel } from "../components/small";
 import { capaInColumn } from "../model/format";
 import { loadCapaCasesByIndicator } from "../../capa/store";
 import type { CapaCase } from "../../capa/model";
@@ -30,20 +27,11 @@ export function RowDetailPanel({
     visibleColumns,
     chartSeries,
     sectionChartSeries,
-    sectionOptionRows,
-    recordIndex,
-    allMonths,
     periodDesc,
     groupUnit,
     unitUnit,
     selUnit,
     openDrill,
-    perIndMode,
-    summaryPlans,
-    rawFull,
-    setRawHint,
-    setRawFull,
-    loading,
     unitCapaCases,
   } = ctx;
   const panel = rowPanel?.scope === scope ? rowPanel : null;
@@ -90,23 +78,13 @@ export function RowDetailPanel({
   const s = panel.sectionKey
     ? sectionChartSeries(ind.id, unitId, mode, panel.sectionKey, chartSpans)
     : chartSeries(ind.id, unitId, mode, chartSpans);
-  const recs = recordsForIndex(recordIndex, ind.id, allMonths, unitId);
-  const optionRows = panel.sectionKey
-    ? sectionOptionRows(
-        optionDetailRows(recs, ind.questions),
-        ind.questions,
-        panel.sectionKey,
-        recs,
-      )
-    : optionDetailRows(recs, ind.questions);
   const capaCases =
     scope === "unit"
       ? unitCapaCases.filter((c) => c.indicatorId === ind.id)
       : indCases;
-  const needsRaw = perIndMode && summaryPlans.has(ind.id) && !rawFull;
   const title = panel.sectionKey
-    ? `${ind.code}・${ind.name}・${panel.sectionLabel} 曲線圖與細項結果`
-    : `${ind.code}・${ind.name} 曲線圖與細項結果`;
+    ? `${ind.code}・${ind.name}・${panel.sectionLabel} 曲線圖`
+    : `${ind.code}・${ind.name} 曲線圖`;
   return (
     <UnitBelowPanel
       title={title}
@@ -149,35 +127,6 @@ export function RowDetailPanel({
               unitId,
               panel.sectionKey ? { sectionKey: panel.sectionKey } : undefined,
             )
-          }
-        />
-      )}
-      {needsRaw ? (
-        <p className="settings-note">
-          已封存月份只保留彙總數字。
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => {
-              setRawHint("已載入原始紀錄。");
-              setRawFull(true);
-            }}
-          >
-            載入原始紀錄
-          </button>
-          後可顯示各選項明細並下探。
-        </p>
-      ) : loading ? (
-        <p className="settings-note">原始紀錄載入中…</p>
-      ) : (
-        <OptionDetailTable
-          rows={optionRows}
-          threshold={ind.threshold}
-          onQuestionClick={(questionId) =>
-            openDrill(ind.id, ctx.allPeriodColumn, mode, unitId, {
-              questionId,
-              l2All: true,
-            })
           }
         />
       )}

@@ -349,9 +349,6 @@ export function RateMatrix({
   onDoc,
   onDetailChart,
   onDetailDoc,
-  /** v1.88.33 Q8：點指標列展開（曲線圖＋細項結果同現於矩陣下方） */
-  expandedId,
-  onToggleExpand,
 }: {
   rows: {
     id: string;
@@ -378,8 +375,6 @@ export function RateMatrix({
   /** v1.53.0：分組子列曲線圖／文件圖示（點開看該組；同主列做法） */
   onDetailChart?: (rowId: string, detailKey: string, detailLabel: string) => void;
   onDetailDoc?: (rowId: string, detailKey: string, detailLabel: string) => void;
-  expandedId?: string | null;
-  onToggleExpand?: (rowId: string) => void;
 }) {
   return (
     <div className="analysis-table-wrap">
@@ -399,18 +394,6 @@ export function RateMatrix({
             <tr key={row.id}>
               <td className="ind-col">
                 <div className="analysis-indicator-sticky">
-                  {onToggleExpand && (
-                    <button
-                      type="button"
-                      className="row-expand-toggle"
-                      title={expandedId === row.id ? "收合曲線圖與細項結果" : "展開曲線圖與細項結果"}
-                      aria-label={`${row.label} ${expandedId === row.id ? "收合" : "展開"}曲線圖與細項結果`}
-                      aria-expanded={expandedId === row.id}
-                      onClick={() => onToggleExpand(row.id)}
-                    >
-                      {expandedId === row.id ? "▾" : "▸"}
-                    </button>
-                  )}
                   <span className="analysis-indicator-name">{row.label}</span>
                   <span className="analysis-indicator-actions">
                     <button

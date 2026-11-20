@@ -19,7 +19,7 @@ import { useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { stripInternalIdPrefix } from "../lib/indicators";
 import { defaultRangeForCycle } from "./results/model/defaults";
-import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
+import { EmptyState, PageHeading } from "../components/ui";
 import { recordsInMonths } from "../lib/analysisRates";
 import { fmtDateTime } from "../lib/ym";
 import { type ResultsSection } from "./results/model/types";
@@ -40,7 +40,7 @@ import { DrillViewBlock } from "./results/tabs/DrillViewBlock";
 
 export function ResultsPage(props: ResultsPageProps) {
   const ctx = useResultsCtx(props);
-  const { can, isAdmin, allMonths, indOf, indUnit, tab, section, setSection, applied, perIndMode, rawHint, summaryPlan, summaryPlans, staleSummaryLabels, unconfirmed, loading, fetchedAt, indexFallback, indexFallbackDismissed, setIndexFallbackDismissed, setRawHint, setRawFull, causeCountRows, setCauseDrill, unitNameOf, causeDrill, scopedRecords } = ctx;
+  const { can, isAdmin, allMonths, indOf, indUnit, tab, section, setSection, applied, perIndMode, rawHint, summaryPlan, summaryPlans, staleSummaryLabels, unconfirmed, loading, fetchedAt, indexFallback, indexFallbackDismissed, setIndexFallbackDismissed, setRawHint, setRawFull, setCauseDrill, unitNameOf, causeDrill, scopedRecords } = ctx;
 
   // 指標總覽帶入：預選該指標、起迄用結果分析預設
   // （Q5 系統設定：學年度 8 月～本月，年度 1 月～本月；等 statsCycle 讀進來才定）。
@@ -190,12 +190,7 @@ export function ResultsPage(props: ResultsPageProps) {
           後顯示。
         </p>
       )}
-      {section === "analysis" && applied && !loading && !perIndMode && causeCountRows.length > 0 && (
-        <section className="panel results-cause-summary">
-          <SectionTitle title="原因詞庫件數" note="依目前使用者可見資料及已查詢期間統計；只計入題目原因詞庫中已勾選的項目。點選列下探到勾選該原因的個人審查結果。" />
-          <div className="table-scroll"><table className="data-table"><thead><tr><th>原因詞庫項目</th><th>勾選件數</th></tr></thead><tbody>{causeCountRows.map((row) => <tr key={row.cause} className="clickable" title="點選下探到勾選該原因的個人審查結果" onClick={() => setCauseDrill(row.cause)}><td>{row.cause}</td><td>{row.count}</td></tr>)}</tbody></table></div>
-        </section>
-      )}
+      {/* 原因詞庫件數表已拿掉（Q1a）：CauseDrillModal 與 causeCountRows 計算留著當死碼，不再有入口。 */}
 
       <GroupTab ctx={view} />
 

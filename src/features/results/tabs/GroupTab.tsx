@@ -1,7 +1,9 @@
 /**
  * 組別模式（v1.88.33）：品管組＋起迄列出該組全部指標、每月審查結果。
  * 複合篩選（Q3）：指標／單位可再過濾（指標優先於單位優先於品管組）。
- * 點指標列即在矩陣下方展開該指標曲線圖＋細項結果（Q8，不再開彈窗）。
+ * 主列：左邊無三角形；點曲線圖示在矩陣下方展開曲線圖面板（只開不關，
+ * 收合按面板右上 X；一次一列），點文件圖示開啟細項結果彈窗。
+ * 分組子列：曲線／文件圖示各自開曲線／細項彈窗。
  */
 import { EmptyState, SectionTitle } from "../../../components/ui";
 import { RateMatrix, UnitModeToggle } from "../components/small";
@@ -11,12 +13,10 @@ import type { ResultsView } from "../hooks/useResultsAnalysis";
 export function GroupTab({ ctx }: { ctx: ResultsView }) {
   const { section, tab, applied, loading, ownUnitUngrouped, groupIndicators, groupUnitCode, groupNameOf, selGroup, periodDesc, groupUnit, setUnitMode, matrixRows, visibleColumns, cellValue, rowIndOf, hasTempReview, openDrill, openChart, rowSpansOf, openDoc, rowPanel, setRowPanel, requireRaw } = ctx;
 
-  const toggleRow = (rowId: string) => {
+  // 曲線圖示：只開不關（已展開同一列時不再收合，收合按面板右上 X）。
+  const openRowChart = (rowId: string) => {
     const indicatorId = rowIndOf(rowId);
-    if (rowPanel?.scope === "group" && rowPanel.rowId === rowId) {
-      setRowPanel(null);
-      return;
-    }
+    if (rowPanel?.scope === "group" && rowPanel.rowId === rowId) return;
     requireRaw(indicatorId);
     setRowPanel({
       scope: "group",
@@ -49,7 +49,7 @@ export function GroupTab({ ctx }: { ctx: ResultsView }) {
             <section className="panel">
               <SectionTitle
                 title={`${groupNameOf.get(selGroup) ?? selGroup}・達閾值率`}
-                note={`${periodDesc}・單元：${groupUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}・點指標列展開曲線圖與細項結果`}
+                note={`${periodDesc}・單元：${groupUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}・點曲線圖示展開曲線圖，點文件圖示開啟細項結果彈窗`}
               />
               <div className="results-matrix-toggle">
                 <UnitModeToggle mode={groupUnit} onChange={setUnitMode} />
@@ -65,8 +65,10 @@ export function GroupTab({ ctx }: { ctx: ResultsView }) {
                 onDetailCell={(rowId, detailKey, col) =>
                   openDrill(rowIndOf(rowId), col, groupUnit, groupUnitCode, { sectionKey: detailKey })
                 }
-                onChart={toggleRow}
-                onDoc={toggleRow}
+                onChart={openRowChart}
+                onDoc={(rowId) =>
+                  openDoc(rowIndOf(rowId), groupUnitCode, "全部單位", groupUnit)
+                }
                 onDetailChart={(rowId, detailKey, detailLabel) =>
                   openChart(rowIndOf(rowId), groupUnitCode, groupUnit, "全部單位", {
                     key: detailKey,
@@ -79,8 +81,6 @@ export function GroupTab({ ctx }: { ctx: ResultsView }) {
                     label: detailLabel,
                   })
                 }
-                expandedId={rowPanel?.scope === "group" ? rowPanel.rowId ?? null : null}
-                onToggleExpand={toggleRow}
               />
               <RowDetailPanel ctx={ctx} scope="group" />
             </section>
