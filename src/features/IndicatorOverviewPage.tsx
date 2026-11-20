@@ -6,6 +6,7 @@
  * 年份僅為排程／審查／結果的年度上下文，不隱藏指標列（見 lib/indicatorOverview）。
  */
 import { useEffect, useMemo, useState } from "react";
+import { Plus } from "lucide-react";
 import {
   EmptyState,
   FilterPanel,
@@ -48,9 +49,14 @@ const ACTION_LABELS: Record<OverviewAction, string> = {
 export function IndicatorOverviewPage({
   onAction,
   onOpenAction,
+  onCreateIndicator,
+  onBatchCreateIndicator,
 }: {
   onAction: (message: string) => void;
   onOpenAction: (action: OverviewAction, row: OverviewRow, year: number) => void;
+  /** 總覽頁首新增指標／批次新增（指標管理無側邊欄入口後的新增進入點）。 */
+  onCreateIndicator?: () => void;
+  onBatchCreateIndicator?: () => void;
 }) {
   const { can } = usePermissions();
   const [rows, setRows] = useState<OverviewRow[]>([]);
@@ -122,6 +128,36 @@ export function IndicatorOverviewPage({
     () => filterOverviewRows(rows, { groupId: groupFilter, keyword }),
     [rows, groupFilter, keyword],
   );
+
+  // 頁首統計（隨篩選變動）：全部／啟用中／已停用支數。
+  const stats = useMemo(
+    () => ({
+      total: filtered.length,
+      active: filtered.filter((r) => r.status === "啟用").length,
+      inactive: filtered.filter((r) => r.status === "停用").length,
+    }),
+    [filtered],
+  );
+  // 新增指標與「管理」同一權限（page.indicators），無權限不顯示按鈕。
+  const canManage = canShowOverviewAction(can, "manage");
+
+  // 狀態徽章：啟用綠、停用灰、其餘中性；空白狀態顯示 —。
+  const renderStatus = (status: string) =>
+    status ? (
+      <span
+        className={`indicator-overview-status${
+          status === "啟用"
+            ? " is-active"
+            : status === "停用"
+              ? " is-inactive"
+              : ""
+        }`}
+      >
+        {status}
+      </span>
+    ) : (
+      "—"
+    );
 
   // 五顆操作按鈕：桌機表格與手機卡片共用同一組（目的地與權限邏輯不變，
   // 只差外觀 class；手機版由 CSS 的 .action-* 淡彩色區分）。
@@ -196,11 +232,47 @@ export function IndicatorOverviewPage({
           onChange={setKeywordDraft}
           onSearch={() => setKeyword(keywordDraft)}
         />
+        {canManage && (
+          <div className="filter-panel-end">
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() => onCreateIndicator?.()}
+            >
+              <Plus size={16} />
+              新增指標
+            </button>
+            <button
+              type="button"
+              className="button button-outline"
+              onClick={() => onBatchCreateIndicator?.()}
+            >
+              <Plus size={16} />
+              批次新增
+            </button>
+          </div>
+        )}
       </FilterPanel>
-      <p className="settings-note">
-        年份僅作為排程、審查與結果分析的年度上下文，不會隱藏任何指標；共{" "}
-        {filtered.length} 支指標。
-      </p>
+      <div
+        className="indicator-overview-stats"
+        aria-label="指標統計"
+      >
+        <div className="indicator-overview-stat">
+          <strong>{stats.total}</strong>
+          <span>全部指標</span>
+        </div>
+        <div className="indicator-overview-stat is-active">
+          <strong>{stats.active}</strong>
+          <span>啟用中</span>
+        </div>
+        <div className="indicator-overview-stat is-inactive">
+          <strong>{stats.inactive}</strong>
+          <span>已停用</span>
+        </div>
+        <p className="indicator-overview-stats-note">
+          年份僅作為排程、審查與結果分析的年度上下文，不會隱藏任何指標。
+        </p>
+      </div>
       {loading ? (
         <LoadingState label="指標清單載入中…" />
       ) : loadError ? (
@@ -240,10 +312,14 @@ export function IndicatorOverviewPage({
                 {filtered.map((row) => (
                   <tr key={row.id}>
                     <td>{row.groupName}</td>
-                    <td>{indicatorCodeOf(row.id)}</td>
-                    <td>{row.name}</td>
-                    <td>{row.threshold}%</td>
-                    <td>{row.status || "—"}</td>
+                    <td className="indicator-overview-code">
+                      {indicatorCodeOf(row.id)}
+                    </td>
+                    <td className="indicator-overview-name">{row.name}</td>
+                    <td className="indicator-overview-threshold">
+                      {row.threshold}%
+                    </td>
+                    <td>{renderStatus(row.status)}</td>
                     <td>{renderActions(row)}</td>
                   </tr>
                 ))}
@@ -267,11 +343,13 @@ export function IndicatorOverviewPage({
                   </div>
                   <div>
                     <dt>閾值</dt>
-                    <dd>{row.threshold}%</dd>
+                    <dd className="indicator-overview-threshold">
+                      {row.threshold}%
+                    </dd>
                   </div>
                   <div>
                     <dt>狀態</dt>
-                    <dd>{row.status || "—"}</dd>
+                    <dd>{renderStatus(row.status)}</dd>
                   </div>
                 </dl>
                 {renderActions(row)}

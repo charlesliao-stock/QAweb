@@ -3,7 +3,6 @@ import {
   Activity,
   ArrowRight,
   ArrowRightLeft,
-  BookOpenCheck,
   Bell,
   CalendarDays,
   Check,
@@ -118,9 +117,10 @@ const NAV_GROUPS = [
   {
     label: "品質管理",
     items: [
-      // 指標總覽：五項功能的整合入口，放在品質管理首位；既有入口全部保留。
+      // 指標總覽：五項功能的整合入口，放在品質管理首位；
+      // 指標管理已整合進總覽（每列「管理」直達編輯頁、頁首可新增），
+      // 側邊欄不再單列「指標管理」入口，頁面本身保留供總覽深連。
       { id: "overview", label: "指標總覽", icon: ListChecks },
-      { id: "indicators", label: "指標管理", icon: BookOpenCheck },
       { id: "schedule", label: "品管審查排程", icon: CalendarDays },
       { id: "audit", label: "品管審查", icon: ClipboardCheck },
       { id: "results", label: "結果分析", icon: FileBarChart2 },
@@ -727,12 +727,18 @@ function Shell() {
   // 指標總覽帶入的各頁 initial 參數（切頁時帶入，離開該頁即清除；
   // 直接由導覽進各頁時為 null，各頁行為與現行完全相同）。
   const [indicatorEdit, setIndicatorEdit] = useState<{ id: string; nonce: number } | null>(null);
+  // 從總覽新增指標／批次新增：掛載時直接進建立表單／批次彈窗（指標管理
+  // 無側邊欄入口後的新增進入點；離開該頁即清除，返回目的地為總覽）。
+  const [indicatorCreate, setIndicatorCreate] = useState<{ nonce: number } | null>(null);
+  const [indicatorBatch, setIndicatorBatch] = useState<{ nonce: number } | null>(null);
   const [scheduleLaunch, setScheduleLaunch] = useState<{ indicatorId: string; year: number; nonce: number } | null>(null);
   const [auditLaunch, setAuditLaunch] = useState<{ indicatorId: string; nonce: number } | null>(null);
   const [resultsLaunch, setResultsLaunch] = useState<{ indicatorId: string; nonce: number } | null>(null);
   const [capaFilterLaunch, setCapaFilterLaunch] = useState<{ indicatorId: string; nonce: number } | null>(null);
   const clearLaunches = useCallback(() => {
     setIndicatorEdit(null);
+    setIndicatorCreate(null);
+    setIndicatorBatch(null);
     setScheduleLaunch(null);
     setAuditLaunch(null);
     setResultsLaunch(null);
@@ -745,6 +751,8 @@ function Shell() {
   }, [clearLaunches]);
   // 手機版底部導覽「更多」選單開關（v1.88.35；桌機維持側邊欄）
   const [moreOpen, setMoreOpen] = useState(false);
+  // MORE_PAGE_IDS 只決定「更多」鈕在使用中頁面時是否亮起；"indicators"
+  // 雖不在更多選單內，但由總覽深連進指標頁時仍要亮起，故保留。
   const MORE_PAGE_IDS: PageId[] = ["indicators", "schedule", "capa", "handoff", "groups", "admin", "permissions"];
   // 從總覽進指標編輯頁的返回：清掉帶入參數、回到指標總覽
   // （不經指標管理清單；指標頁內部以 fromOverview 決定返回目的地）。
@@ -772,6 +780,15 @@ function Shell() {
       setCapaFilterLaunch({ indicatorId: row.id, nonce });
       setPage("capa");
     }
+  }, []);
+  // 總覽頁首新增指標／批次新增：進指標頁的建立表單／批次彈窗。
+  const openIndicatorCreate = useCallback(() => {
+    setIndicatorCreate({ nonce: Date.now() });
+    setPage("indicators");
+  }, []);
+  const openIndicatorBatch = useCallback(() => {
+    setIndicatorBatch({ nonce: Date.now() });
+    setPage("indicators");
   }, []);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
@@ -1016,14 +1033,29 @@ function Shell() {
               <>
                 {page === "dashboard" && <DashboardPage onAction={notify} />}
                 {page === "overview" && (
-                  <IndicatorOverviewPage onAction={notify} onOpenAction={openOverviewAction} />
+                  <IndicatorOverviewPage
+                    onAction={notify}
+                    onOpenAction={openOverviewAction}
+                    onCreateIndicator={openIndicatorCreate}
+                    onBatchCreateIndicator={openIndicatorBatch}
+                  />
                 )}
                 {page === "indicators" && (
                   <IndicatorsPage
-                    key={indicatorEdit ? `ind-edit-${indicatorEdit.nonce}` : "ind-list"}
+                    key={
+                      indicatorCreate
+                        ? `ind-create-${indicatorCreate.nonce}`
+                        : indicatorBatch
+                          ? `ind-batch-${indicatorBatch.nonce}`
+                          : indicatorEdit
+                            ? `ind-edit-${indicatorEdit.nonce}`
+                            : "ind-list"
+                    }
                     onAction={notify}
                     initialEditId={indicatorEdit?.id}
-                    fromOverview={Boolean(indicatorEdit)}
+                    initialCreate={Boolean(indicatorCreate)}
+                    initialBatch={Boolean(indicatorBatch)}
+                    fromOverview={Boolean(indicatorEdit || indicatorCreate || indicatorBatch)}
                     onBackToOverview={backToOverview}
                   />
                 )}
@@ -1125,7 +1157,8 @@ function Shell() {
             />
             <div className="mobile-bottom-nav-more" role="menu">
               {[
-                { id: "indicators", label: "指標管理", icon: BookOpenCheck },
+                // 「指標管理」已整合進指標總覽，更多選單不再單列入口；
+                // 指標頁本身仍可由總覽深連進入（見 MORE_PAGE_IDS 註解）。
                 { id: "schedule", label: "排程", icon: CalendarDays },
                 { id: "capa", label: "CAPA", icon: Activity },
                 { id: "handoff", label: "任務交接", icon: ArrowRightLeft },

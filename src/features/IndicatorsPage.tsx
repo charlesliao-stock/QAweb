@@ -801,6 +801,8 @@ function AuditFormEditor({
 export function IndicatorsPage({
   onAction,
   initialEditId,
+  initialCreate,
+  initialBatch,
   fromOverview,
   onBackToOverview,
 }: {
@@ -810,6 +812,13 @@ export function IndicatorsPage({
    * （基本資料／10 Steps／審核表三頁籤）。無此參數時停在清單頁。
    */
   initialEditId?: string;
+  /**
+   * 指標總覽頁首「新增指標」帶入：掛載時直接進建立表單。
+   * 「批次新增」帶入：掛載時停在清單頁並開啟批次彈窗。
+   * 兩者皆由總覽進來，返回／取消／儲存成功後回到指標總覽。
+   */
+  initialCreate?: boolean;
+  initialBatch?: boolean;
   /**
    * 從指標總覽進來：編輯頁的返回／取消／儲存成功後回到指標總覽，
    * 而不是指標管理清單。直接由導覽進來時不帶，行為與現行相同。
@@ -827,7 +836,9 @@ export function IndicatorsPage({
   >(
     initialEditId
       ? { kind: "edit", id: initialEditId }
-      : { kind: "list" },
+      : initialCreate
+        ? { kind: "create" }
+        : { kind: "list" },
   );
   const [editLoading, setEditLoading] = useState(Boolean(initialEditId));
   const [rows, setRows] = useState<IndicatorRow[]>([]);
@@ -848,7 +859,7 @@ export function IndicatorsPage({
    */
   const [wasEnableEligible, setWasEnableEligible] = useState(false);
   const [versions, setVersions] = useState<VersionRow[]>([]);
-  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(Boolean(initialBatch));
   const [groupMap, setGroupMap] = useState<Map<string, string>>(new Map());
   const [staffMap, setStaffMap] = useState<Map<string, StaffOption>>(new Map());
   const [staffLoaded, setStaffLoaded] = useState(false);
@@ -1699,6 +1710,15 @@ export function IndicatorsPage({
             >
               <X size={15} />
               {fromOverview ? "返回指標總覽" : "返回清單"}
+            </button>
+          ) : fromOverview ? (
+            // 從總覽批次新增進清單頁：側邊欄無指標管理入口，補返回總覽鈕。
+            <button
+              className="button button-outline"
+              onClick={exitEdit}
+            >
+              <X size={15} />
+              返回指標總覽
             </button>
           ) : undefined
         }

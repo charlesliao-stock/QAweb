@@ -536,6 +536,113 @@ th[aria-sort="descending"] .th-sort .lucide {
 .chart-capa-box text{fill:#244b47;font-size:10px}
 .chart-capa-box:hover rect,.chart-capa-box:focus-visible rect{fill:#e3f3f0}
 
+/* 指標總覽：頁首統計列（全部／啟用中／已停用，隨篩選變動）。 */
+.indicator-overview-stats {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: 12px 20px;
+  margin-bottom: 14px;
+}
+.indicator-overview-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 20px;
+}
+.indicator-overview-stat:first-child {
+  padding-left: 0;
+}
+.indicator-overview-stat + .indicator-overview-stat {
+  border-left: 1px solid var(--line);
+}
+.indicator-overview-stat strong {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.indicator-overview-stat span {
+  font-size: var(--font-small);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.indicator-overview-stat.is-active strong {
+  color: #2e7d6f;
+}
+.indicator-overview-stat.is-inactive strong {
+  color: #89979a;
+}
+.indicator-overview-stats-note {
+  margin: 0 0 0 auto;
+  font-size: var(--font-small);
+  color: var(--muted);
+  text-align: right;
+}
+@media (max-width: 767px) {
+  .indicator-overview-stats {
+    flex-wrap: wrap;
+    gap: 8px 0;
+    padding: 12px 16px;
+  }
+  .indicator-overview-stat {
+    padding: 0 14px;
+  }
+  .indicator-overview-stats-note {
+    flex: 1 1 100%;
+    margin-left: 0;
+    text-align: left;
+  }
+}
+
+/* 指標總覽：桌機表格視覺（斑馬紋、hover、表頭加深、數字與名稱強調）。 */
+.indicator-overview-table .data-table th {
+  background: #f4f7f8;
+  color: #6b7a7e;
+}
+.indicator-overview-table .data-table tbody tr:nth-child(even) td {
+  background: #fbfcfc;
+}
+.indicator-overview-table .data-table tbody tr:hover td {
+  background: #f6f9fa;
+}
+.indicator-overview-code {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.indicator-overview-name {
+  font-weight: 600;
+  color: var(--ink);
+}
+.indicator-overview-threshold {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* 指標總覽：狀態徽章（啟用綠、停用灰、其餘中性）。 */
+.indicator-overview-status {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: var(--font-small);
+  font-weight: 600;
+  background: #eef1f2;
+  color: #5c6b70;
+  white-space: nowrap;
+}
+.indicator-overview-status.is-active {
+  background: #e6f2ef;
+  color: #2e7d6f;
+}
+.indicator-overview-status.is-inactive {
+  background: #f0f3f4;
+  color: #89979a;
+}
+
 /* 指標總覽：操作列五顆按鈕，小螢幕換行不溢出（沿用既有 .button 樣式，只補排版）。 */
 .indicator-overview-actions {
   display: flex;
@@ -551,6 +658,55 @@ th[aria-sort="descending"] .th-sort .lucide {
   .indicator-overview-actions .button {
     flex: 1 1 auto;
   }
+}
+/* 五顆淡彩按鈕：淺底＋深色文字，彼此可區分；桌機與手機共用同一組配色。 */
+.indicator-overview-action.action-manage {
+  color: #4a6fa5;
+  background: #e8eef7;
+  border-color: color-mix(in srgb, #4a6fa5 35%, transparent);
+}
+.indicator-overview-action.action-schedule {
+  color: #2e7d6f;
+  background: #e6f2ef;
+  border-color: color-mix(in srgb, #2e7d6f 35%, transparent);
+}
+.indicator-overview-action.action-audit {
+  color: #b28a40;
+  background: #fbf5e9;
+  border-color: color-mix(in srgb, #b28a40 35%, transparent);
+}
+.indicator-overview-action.action-results {
+  color: #7b5ea7;
+  background: #f1edf7;
+  border-color: color-mix(in srgb, #7b5ea7 35%, transparent);
+}
+.indicator-overview-action.action-capa {
+  color: #b3372f;
+  background: #fbefec;
+  border-color: color-mix(in srgb, #b3372f 35%, transparent);
+}
+.indicator-overview-action.action-manage:hover:not(:disabled) {
+  background: #dbe7f4;
+}
+.indicator-overview-action.action-schedule:hover:not(:disabled) {
+  background: #d8ebe6;
+}
+.indicator-overview-action.action-audit:hover:not(:disabled) {
+  background: #f7ecd4;
+}
+.indicator-overview-action.action-results:hover:not(:disabled) {
+  background: #e7def2;
+}
+.indicator-overview-action.action-capa:hover:not(:disabled) {
+  background: #f8ded9;
+}
+/* 停用態維持灰化（不帶彩色，避免誤導可點）。 */
+.indicator-overview-actions .button:disabled {
+  color: #89979a;
+  background: #f0f3f4;
+  border-color: #e1e8e9;
+  opacity: 1;
+  transform: none;
 }
 
 /* 指標總覽手機版卡片（寬度 <768px 才顯示，桌機維持表格）。
@@ -572,6 +728,7 @@ th[aria-sort="descending"] .th-sort .lucide {
     background: #fff;
     border: 1px solid var(--line);
     border-radius: var(--radius-card);
+    box-shadow: 0 1px 3px rgba(24, 52, 60, 0.08);
     padding: 14px 16px;
   }
   .indicator-overview-card-name {
@@ -605,53 +762,5 @@ th[aria-sort="descending"] .th-sort .lucide {
     font-size: var(--font-body);
     font-weight: 700;
   }
-  /* 五顆淡彩按鈕：淺底＋深色文字，彼此可區分。 */
-  .indicator-overview-action.action-manage {
-    color: #4a6fa5;
-    background: #e8eef7;
-    border-color: color-mix(in srgb, #4a6fa5 35%, transparent);
-  }
-  .indicator-overview-action.action-schedule {
-    color: #2e7d6f;
-    background: #e6f2ef;
-    border-color: color-mix(in srgb, #2e7d6f 35%, transparent);
-  }
-  .indicator-overview-action.action-audit {
-    color: #b28a40;
-    background: #fbf5e9;
-    border-color: color-mix(in srgb, #b28a40 35%, transparent);
-  }
-  .indicator-overview-action.action-results {
-    color: #7b5ea7;
-    background: #f1edf7;
-    border-color: color-mix(in srgb, #7b5ea7 35%, transparent);
-  }
-  .indicator-overview-action.action-capa {
-    color: #b3372f;
-    background: #fbefec;
-    border-color: color-mix(in srgb, #b3372f 35%, transparent);
-  }
-  .indicator-overview-action.action-manage:hover:not(:disabled) {
-    background: #dbe7f4;
-  }
-  .indicator-overview-action.action-schedule:hover:not(:disabled) {
-    background: #d8ebe6;
-  }
-  .indicator-overview-action.action-audit:hover:not(:disabled) {
-    background: #f7ecd4;
-  }
-  .indicator-overview-action.action-results:hover:not(:disabled) {
-    background: #e7def2;
-  }
-  .indicator-overview-action.action-capa:hover:not(:disabled) {
-    background: #f8ded9;
-  }
-  /* 停用態維持灰化（不帶彩色，避免誤導可點）。 */
-  .indicator-overview-card .indicator-overview-actions .button:disabled {
-    color: #89979a;
-    background: #f0f3f4;
-    border-color: #e1e8e9;
-    opacity: 1;
-    transform: none;
-  }
+  /* 淡彩按鈕配色已移至全域（桌機與手機共用），此處只留手機版尺寸。 */
 }

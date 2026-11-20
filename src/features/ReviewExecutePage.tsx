@@ -2619,7 +2619,7 @@ export function ReviewExecutePage({
           {questions.length === 0 ? (
             <EmptyState
               title="該指標尚未建立審查題目"
-              description="請先至「指標管理」→ 該指標 →「審核表」頁籤建立題目後再回來填寫。"
+              description="請先至「指標總覽」→ 該指標「管理」→「審核表」頁籤建立題目後再回來填寫。"
             />
           ) : (
             <>

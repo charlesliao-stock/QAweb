@@ -644,14 +644,14 @@ export function importIndicatorEmptyHint(
   groupId: string,
 ): string | null {
   if (indicators.length === 0)
-    return "尚未載入任何指標資料，請重新整理頁面；若持續為空，請到指標管理確認指標資料。";
+    return "尚未載入任何指標資料，請重新整理頁面；若持續為空，請到指標總覽確認指標資料。";
   if (!indicators.some((i) => i.status === "啟用"))
-    return "尚無「啟用」狀態的指標，請先到指標管理將指標設為啟用。";
+    return "尚無「啟用」狀態的指標，請先到指標總覽將指標設為啟用。";
   if (
     groupId &&
     !indicators.some((i) => i.status === "啟用" && i.groupId === groupId)
   )
-    return "該組別尚無啟用指標，請到指標管理確認指標的組別與狀態，或改選「全部組別」查看。";
+    return "該組別尚無啟用指標，請到指標總覽確認指標的組別與狀態，或改選「全部組別」查看。";
   return null;
 }
 

@@ -122,7 +122,7 @@ export function ScheduleListView({ ctx }: { ctx: ScheduleCtx }) {
         ) : rows.length === 0 ? (
           <EmptyState
             title="尚無指標"
-            description="請先到「指標管理」建立指標，再回來設定排程。"
+            description="請先到「指標總覽」新增指標，再回來設定排程。"
           />
         ) : (
           <ListPanel title="排程清單" count={rows.length}>
