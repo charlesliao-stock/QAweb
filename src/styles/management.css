@@ -848,6 +848,24 @@
     color: var(--teal);
     font-weight: 700;
   }
+  /* 底部導覽立體彩色圖示：未選中彩度稍降仍為彩色；選中放大＋陰影加深＋光暈 */
+  .mobile-bottom-nav .nav-3d-icon {
+    flex: none;
+    filter: saturate(0.72) brightness(0.95);
+    transition: transform 0.15s ease, filter 0.15s ease;
+  }
+  .mobile-bottom-nav button.active .nav-3d-icon {
+    transform: scale(1.18) translateY(-1px);
+    filter: saturate(1.05) brightness(1.03) drop-shadow(0 3px 4px rgba(15, 23, 42, 0.3));
+  }
+  .mobile-bottom-nav-more .nav-3d-icon {
+    flex: none;
+    filter: saturate(0.8) brightness(0.96);
+  }
+  .mobile-bottom-nav-more button.active .nav-3d-icon {
+    transform: scale(1.12);
+    filter: saturate(1.05) brightness(1.03) drop-shadow(0 2px 3px rgba(15, 23, 42, 0.28));
+  }
   /* 底部導覽「更多」彈出選單（v1.88.35） */
   .mobile-bottom-nav-backdrop {
     position: fixed;
@@ -886,6 +904,20 @@
   }
   .mobile-bottom-nav-more button.active {
     background: var(--hatch-widget-surface-muted, #f2f6f7);
+  }
+  /* 深色模式：底導改深色底，立體彩色圖示維持對比 */
+  :root[data-mode="dark"] .mobile-bottom-nav {
+    background: rgba(23, 32, 36, 0.97);
+    border-top-color: #3a464b;
+  }
+  :root[data-mode="dark"] .mobile-bottom-nav button {
+    color: #a7b4b8;
+  }
+  :root[data-mode="dark"] .mobile-bottom-nav .nav-3d-icon {
+    filter: saturate(0.85) brightness(1.05);
+  }
+  :root[data-mode="dark"] .mobile-bottom-nav button.active .nav-3d-icon {
+    filter: saturate(1.1) brightness(1.08) drop-shadow(0 3px 5px rgba(0, 0, 0, 0.55));
   }
   .toast-message {
     right: 12px;

@@ -17,7 +17,6 @@ import {
   ListChecks,
   LockKeyhole,
   LogOut,
-  Menu,
   Settings2,
   ShieldCheck,
   User,
@@ -38,6 +37,7 @@ import {
   type FontSizeOption,
 } from "../lib/uiPrefs";
 import { BrandMark } from "../components/ui";
+import { BottomNavIcon, type BottomNavIconKind } from "../components/BottomNavIcon";
 import { maskName } from "../lib/mask";
 import { VERSION_LABEL } from "../version";
 import { pagePermissionKey } from "../lib/permissions";
@@ -1122,19 +1122,18 @@ function Shell() {
       )}
       <nav className="mobile-bottom-nav" aria-label="手機主要導覽">
         {[
-          { id: "dashboard", label: "首頁", icon: LayoutDashboard },
-          { id: "overview", label: "總覽", icon: ListChecks },
-          { id: "audit", label: "審查", icon: ClipboardCheck },
-          { id: "results", label: "分析", icon: FileBarChart2 },
+          { id: "dashboard", label: "首頁", kind: "dashboard" as BottomNavIconKind },
+          { id: "overview", label: "總覽", kind: "overview" as BottomNavIconKind },
+          { id: "audit", label: "審查", kind: "audit" as BottomNavIconKind },
+          { id: "results", label: "分析", kind: "results" as BottomNavIconKind },
         ].filter((item) => canViewPage(item.id as PageId)).map((item) => {
-          const Icon = item.icon;
           return (
             <button
               key={item.id}
               className={navPage === item.id ? "active" : ""}
               onClick={() => { setMoreOpen(false); goPage(item.id as PageId); }}
             >
-              <Icon size={19} />
+              <BottomNavIcon kind={item.kind} size={22} active={navPage === item.id} />
               <span>{item.label}</span>
             </button>
           );
@@ -1145,7 +1144,7 @@ function Shell() {
           aria-haspopup="true"
           onClick={() => setMoreOpen((v) => !v)}
         >
-          <Menu size={19} />
+          <BottomNavIcon kind="more" size={22} active={moreOpen || MORE_PAGE_IDS.includes(navPage)} />
           <span>更多</span>
         </button>
         {moreOpen && (
@@ -1159,14 +1158,13 @@ function Shell() {
               {[
                 // 「指標管理」已整合進指標總覽，更多選單不再單列入口；
                 // 指標頁本身仍可由總覽深連進入（見 MORE_PAGE_IDS 註解）。
-                { id: "schedule", label: "排程", icon: CalendarDays },
-                { id: "capa", label: "CAPA", icon: Activity },
-                { id: "handoff", label: "任務交接", icon: ArrowRightLeft },
-                { id: "groups", label: "品管組與人員", icon: GitBranch },
-                { id: "admin", label: "系統管理", icon: Settings2 },
-                { id: "permissions", label: "權限管理", icon: ShieldCheck },
+                { id: "schedule", label: "排程", kind: "schedule" as BottomNavIconKind },
+                { id: "capa", label: "CAPA", kind: "capa" as BottomNavIconKind },
+                { id: "handoff", label: "任務交接", kind: "handoff" as BottomNavIconKind },
+                { id: "groups", label: "品管組與人員", kind: "groups" as BottomNavIconKind },
+                { id: "admin", label: "系統管理", kind: "admin" as BottomNavIconKind },
+                { id: "permissions", label: "權限管理", kind: "permissions" as BottomNavIconKind },
               ].filter((item) => canViewPage(item.id as PageId)).map((item) => {
-                const Icon = item.icon;
                 return (
                   <button
                     key={item.id}
@@ -1174,7 +1172,7 @@ function Shell() {
                     className={navPage === item.id ? "active" : ""}
                     onClick={() => { setMoreOpen(false); goPage(item.id as PageId); }}
                   >
-                    <Icon size={17} />
+                    <BottomNavIcon kind={item.kind} size={19} active={navPage === item.id} />
                     <span>{item.label}</span>
                   </button>
                 );
