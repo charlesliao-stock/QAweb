@@ -1,6 +1,6 @@
 /**
  * 結果分析共用篩選列（v1.88.33 結果分析介面修改；其後改為篩選器決定檢視）。
- * 單一組篩選器：品管組、指標名稱（可下拉、可搜尋）、單位、
+ * 單一組篩選器：品管組、指標名稱（原生下拉）、單位、
  * 西元年/月（起）、西元年/月（迄）、未審月份不顯示。
  * 三者皆可「未選」——檢視由篩選決定，不再有組別／單位／指標模式標籤：
  * 指標有選 → 單一指標分析；未選指標、單位有選 → 單位分析；
@@ -11,7 +11,7 @@
  * 單位／人次切換開關已移出篩選列（搜尋後才出現在結果矩陣區，見 UnitModeToggle）。
  */
 import { FilterPanel } from "../../../components/ui";
-import { SelectField, SearchableSelect, ResultMonthPicker } from "../components/small";
+import { SelectField, ResultMonthPicker } from "../components/small";
 import { Search } from "lucide-react";
 import type { ResultsView } from "../hooks/useResultsAnalysis";
 
@@ -100,18 +100,17 @@ export function ResultsQueryPanel({ ctx }: { ctx: ResultsView }) {
           ...scopedGroups.map((g) => ({ value: g.id, label: g.name })),
         ]}
       />
-      <SearchableSelect
+      <SelectField
         label="指標名稱"
         value={selIndicator}
         onChange={onIndicatorChange}
         options={[
-          { value: "", label: "未選" },
+          { value: "", label: "全部指標" },
           ...indicatorList.map((indicator) => ({
             value: indicator.id,
-            label: `${indicator.code}・${indicator.name}`,
+            label: `${indicator.code} ${indicator.name}`,
           })),
         ]}
-        placeholder="輸入編號或名稱搜尋"
       />
       <SelectField
         label="單位"
