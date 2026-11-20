@@ -1,7 +1,8 @@
 import { useAuth } from "../../../lib/auth";
 import { usePermissions } from "../../../lib/usePermissions";
-import { useState, useEffect } from "react";
-import type { IndicatorOpt, GroupOpt, UnitOpt, TabId, UnitMode, SectionRef, ChartModalData, DocModalData, DrillState } from "../model/types";
+import { useState, useEffect, useRef } from "react";
+import type { IndicatorOpt, GroupOpt, UnitOpt, TabId, ResultsSection, UnitMode, SectionRef, ChartModalData, DocModalData, DrillState } from "../model/types";
+import { defaultRangeForCycle, type StatsCycle } from "../model/defaults";
 import type { AnalysisRecord } from "../../../lib/analysisRates";
 import type { AnalysisGranularity } from "../../../lib/analysisPeriod";
 import { pad2 } from "../../../lib/ym";
@@ -64,6 +65,11 @@ export function useResultsState() {
   const [indexFallback, setIndexFallback] = useState(false);
   const [indexFallbackDismissed, setIndexFallbackDismissed] = useState(false);
   const [tab, setTab] = useState<TabId>("group");
+  /** v1.88.33 Q1：頂層只留三部分；tab 的 group／unit／indicator 改為分析內的查詢模式。 */
+  const [section, setSection] = useState<ResultsSection>("analysis");
+  /** v1.88.33 Q5：系統設定統計週期（systemParams/config.statsCycle；缺值預設 year）。 */
+  const [statsCycle, setStatsCycle] = useState<StatsCycle>("year");
+  const [statsCycleLoaded, setStatsCycleLoaded] = useState(false);
   const isAdmin = Boolean(user?.roles?.includes("系統管理員"));
   // 期間篩選（四個頁籤共用）
   const [startMonth, setStartMonth] = useState(
@@ -78,6 +84,9 @@ export function useResultsState() {
   // 組別分析
   const [selGroup, setSelGroup] = useState("");
   const [groupUnit, setGroupUnit] = useState<UnitMode>("unit");
+  /** v1.88.33 Q3 複合篩選：組別模式的指標／單位過濾（"all"＝不過濾）。 */
+  const [selIndG, setSelIndG] = useState("all");
+  const [selUnitG, setSelUnitG] = useState("all");
   // 單位分析
   const [selUnit, setSelUnit] = useState("");
   const [unitUnit, setUnitUnit] = useState<UnitMode>("unit");
@@ -88,6 +97,17 @@ export function useResultsState() {
   const [selIndicator, setSelIndicator] = useState("");
   const [indUnit, setIndUnit] = useState<UnitMode>("unit");
   const [errorUnit, setErrorUnit] = useState("all");
+  /** v1.88.33 Q3 複合篩選：指標模式的單位過濾（"all"＝全部單位；同步驅動錯誤分析 errorUnit）。 */
+  const [selUnitI, setSelUnitI] = useState("all");
+  /**
+   * v1.88.33 Q10：單位／人次切換開關（單一開關，三模式共用）。
+   * 三個單元 state 保留（下游矩陣／曲線／細項／下探皆讀它們），由這裡一次同步。
+   */
+  const setUnitMode = (mode: UnitMode) => {
+    setGroupUnit(mode);
+    setUnitUnit(mode);
+    setIndUnit(mode);
+  };
   // v1.65.1：已結束超過一個月仍未封存的區間（結果分析提示「尚待確認封存」）
   const [archiveCtx, setArchiveCtx] = useState<{
     schedules: Awaited<ReturnType<typeof listSchedules>>;
@@ -109,6 +129,8 @@ export function useResultsState() {
     section?: SectionRef;
     spans?: RowSpan[];
   } | null>(null);
+  /** v1.88.33 Q5：系統設定讀進來後才決定預設起月（只套用一次、尚未查詢前）。 */
+  const rangeDefaultApplied = useRef(false);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -119,18 +141,31 @@ export function useResultsState() {
           loadAllSummaries(db),
           getDoc(doc(db, "systemParams", "config")),
         ]);
-        const dd = (cfg.data() as Record<string, unknown> | undefined)?.supplementDeadlineDay;
-        if (!cancelled)
+        const cfgData = cfg.data() as Record<string, unknown> | undefined;
+        const dd = cfgData?.supplementDeadlineDay;
+        const cycle: StatsCycle =
+          cfgData?.statsCycle === "academic" ? "academic" : "year";
+        if (!cancelled) {
           setArchiveCtx({
             schedules,
             archiveIds: new Set(summaries.keys()),
             summaries,
             deadlineDay: typeof dd === "number" && dd >= 1 && dd <= 31 ? dd : 10,
           });
+          setStatsCycle(cycle);
+          // 年度預設 1 月～本月（已是初始值，不動）；學年度預設 8 月～本月。
+          if (cycle === "academic" && !rangeDefaultApplied.current) {
+            rangeDefaultApplied.current = true;
+            setStartMonth(defaultRangeForCycle(cycle, new Date()).startMonth);
+          }
+        }
       } catch {
         // 讀不到就不顯示封存提示；指標分析退回全讀原始紀錄
       } finally {
-        if (!cancelled) setArchiveReady(true);
+        if (!cancelled) {
+          setArchiveReady(true);
+          setStatsCycleLoaded(true);
+        }
       }
     })();
     return () => {
@@ -164,6 +199,17 @@ export function useResultsState() {
     units,
     catalog,
     tab,
+    section,
+    setSection,
+    statsCycle,
+    statsCycleLoaded,
+    selIndG,
+    setSelIndG,
+    selUnitG,
+    setSelUnitG,
+    selUnitI,
+    setSelUnitI,
+    setUnitMode,
     selIndicator,
     selIndU,
     setSelfReviewTempKeys,

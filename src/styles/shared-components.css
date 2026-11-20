@@ -552,3 +552,106 @@ th[aria-sort="descending"] .th-sort .lucide {
     flex: 1 1 auto;
   }
 }
+
+/* 指標總覽手機版卡片（寬度 <768px 才顯示，桌機維持表格）。
+   一張卡片三行：第 1 行指標名稱、第 2 行基本資料、第 3 行淡彩操作按鈕。
+   淡彩色沿用系統現有色票（雷達圖／狀態燈號色），淺底＋深色文字。 */
+.indicator-overview-cards {
+  display: none;
+}
+@media (max-width: 767px) {
+  .indicator-overview-table {
+    display: none;
+  }
+  .indicator-overview-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .indicator-overview-card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    padding: 14px 16px;
+  }
+  .indicator-overview-card-name {
+    margin: 0 0 10px;
+    font-size: var(--font-subtitle);
+    font-weight: 700;
+    line-height: 1.4;
+  }
+  .indicator-overview-card-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 16px;
+    margin: 0 0 12px;
+  }
+  .indicator-overview-card-meta dt {
+    font-size: var(--font-small);
+    color: var(--muted);
+  }
+  .indicator-overview-card-meta dd {
+    margin: 2px 0 0;
+    font-size: var(--font-body);
+    overflow-wrap: anywhere;
+  }
+  .indicator-overview-card .indicator-overview-actions {
+    gap: 8px;
+  }
+  .indicator-overview-card .indicator-overview-actions .button {
+    flex: 1 1 calc(33.333% - 8px);
+    min-height: 44px;
+    padding: 10px 8px;
+    font-size: var(--font-body);
+    font-weight: 700;
+  }
+  /* 五顆淡彩按鈕：淺底＋深色文字，彼此可區分。 */
+  .indicator-overview-action.action-manage {
+    color: #4a6fa5;
+    background: #e8eef7;
+    border-color: color-mix(in srgb, #4a6fa5 35%, transparent);
+  }
+  .indicator-overview-action.action-schedule {
+    color: #2e7d6f;
+    background: #e6f2ef;
+    border-color: color-mix(in srgb, #2e7d6f 35%, transparent);
+  }
+  .indicator-overview-action.action-audit {
+    color: #b28a40;
+    background: #fbf5e9;
+    border-color: color-mix(in srgb, #b28a40 35%, transparent);
+  }
+  .indicator-overview-action.action-results {
+    color: #7b5ea7;
+    background: #f1edf7;
+    border-color: color-mix(in srgb, #7b5ea7 35%, transparent);
+  }
+  .indicator-overview-action.action-capa {
+    color: #b3372f;
+    background: #fbefec;
+    border-color: color-mix(in srgb, #b3372f 35%, transparent);
+  }
+  .indicator-overview-action.action-manage:hover:not(:disabled) {
+    background: #dbe7f4;
+  }
+  .indicator-overview-action.action-schedule:hover:not(:disabled) {
+    background: #d8ebe6;
+  }
+  .indicator-overview-action.action-audit:hover:not(:disabled) {
+    background: #f7ecd4;
+  }
+  .indicator-overview-action.action-results:hover:not(:disabled) {
+    background: #e7def2;
+  }
+  .indicator-overview-action.action-capa:hover:not(:disabled) {
+    background: #f8ded9;
+  }
+  /* 停用態維持灰化（不帶彩色，避免誤導可點）。 */
+  .indicator-overview-card .indicator-overview-actions .button:disabled {
+    color: #89979a;
+    background: #f0f3f4;
+    border-color: #e1e8e9;
+    opacity: 1;
+    transform: none;
+  }
+}

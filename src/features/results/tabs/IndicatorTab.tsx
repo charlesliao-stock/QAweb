@@ -8,9 +8,9 @@ import { staffLabel } from "../../../lib/mask";
 import type { ResultsView } from "../hooks/useResultsAnalysis";
 
 export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
-  const { tab, applied, loading, indSel, indSummary, isNurseLeader, openDrill, selIndicator, allPeriodColumn, indUnit, openChart, openDoc, periodDesc, indCapaCases, summaryPlan, setRawHint, setRawFull, errorUnit, errorAnalysisRows, indNotes } = ctx;
+  const { section, tab, applied, loading, indSel, indSummary, isNurseLeader, openDrill, selIndicator, allPeriodColumn, indUnit, indUnitCode, openChart, openDoc, periodDesc, indCapaCases, summaryPlan, setRawHint, setRawFull, errorUnit, errorAnalysisRows, indNotes } = ctx;
 
-  return <>{tab === "indicator" && (
+  return <>{section === "analysis" && tab === "indicator" && (
         <>
           {!applied ? (
             <EmptyState
@@ -33,7 +33,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                   note={isNurseLeader ? "僅顯示本人所屬單位；不列其他單位" : "所選期間內有紀錄的單位"}
                   onClick={
                     indSummary.total > 0
-                      ? () => openDrill(selIndicator, allPeriodColumn, indUnit)
+                      ? () => openDrill(selIndicator, allPeriodColumn, indUnit, indUnitCode)
                       : undefined
                   }
                 />
@@ -45,7 +45,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                       note="所選期間內本單位總人次數"
                       onClick={
                         indSummary.total > 0
-                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, undefined, { l2All: true })
+                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, indUnitCode, { l2All: true })
                           : undefined
                       }
                     />
@@ -55,7 +55,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                       note="達閾值單位數／審查單位數（unit-period 計）"
                       onClick={
                         indSummary.unitPr.rate != null
-                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit)
+                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, indUnitCode)
                           : undefined
                       }
                     />
@@ -65,7 +65,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                       note="本單位達閾值人次／本單位總人次"
                       onClick={
                         indSummary.ownPersonPr.rate != null
-                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, undefined, { l2All: true })
+                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, indUnitCode, { l2All: true })
                           : undefined
                       }
                     />
@@ -83,7 +83,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                       note="所選期間內總人次數"
                       onClick={
                         indSummary.total > 0
-                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, undefined, { l2All: true })
+                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, indUnitCode, { l2All: true })
                           : undefined
                       }
                     />
@@ -93,7 +93,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                       note="達閾值單位數／審查單位數（unit-period 計）"
                       onClick={
                         indSummary.unitPr.rate != null
-                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit)
+                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, indUnitCode)
                           : undefined
                       }
                     />
@@ -103,7 +103,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                       note="達閾值人次／總人次"
                       onClick={
                         indSummary.personPr.rate != null
-                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, undefined, { l2All: true })
+                          ? () => openDrill(selIndicator, allPeriodColumn, indUnit, indUnitCode, { l2All: true })
                           : undefined
                       }
                     />
@@ -128,7 +128,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                           onClick={
                             clickable
                               ? () =>
-                                  openDrill(selIndicator, allPeriodColumn, indUnit, undefined, {
+                                  openDrill(selIndicator, allPeriodColumn, indUnit, indUnitCode, {
                                     sectionKey: row.isTotal ? undefined : row.key,
                                   })
                               : undefined
@@ -140,7 +140,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                               ? (e) => {
                                   if (e.key === "Enter" || e.key === " ") {
                                     e.preventDefault();
-                                    openDrill(selIndicator, allPeriodColumn, indUnit, undefined, {
+                                    openDrill(selIndicator, allPeriodColumn, indUnit, indUnitCode, {
                                       sectionKey: row.isTotal ? undefined : row.key,
                                     });
                                   }
@@ -158,7 +158,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                                 aria-label={`${row.label} 曲線圖`}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  openChart(selIndicator, undefined, indUnit, isNurseLeader ? "本單位" : "全部單位", {
+                                  openChart(selIndicator, indUnitCode, indUnit, indUnitCode !== undefined ? `單位 ${indUnitCode}` : isNurseLeader ? "本單位" : "全部單位", {
                                     key: row.key,
                                     label: row.label,
                                   });
@@ -175,7 +175,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                                   aria-label={`${row.label} 各選項得分狀況`}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    openDoc(selIndicator, undefined, isNurseLeader ? "本單位" : "全部單位", indUnit, {
+                                    openDoc(selIndicator, indUnitCode, indUnitCode !== undefined ? `單位 ${indUnitCode}` : isNurseLeader ? "本單位" : "全部單位", indUnit, {
                                       key: row.key,
                                       label: row.label,
                                     });
@@ -220,7 +220,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                       if (hit) window.dispatchEvent(new CustomEvent("capa:open", { detail: { caseId: hit.id } }));
                     }}
                     onPointClick={(i) =>
-                      openDrill(selIndicator, indSummary.chartCols[i], indUnit)
+                      openDrill(selIndicator, indSummary.chartCols[i], indUnit, indUnitCode)
                     }
                   />
                 )}
@@ -250,7 +250,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                   rows={indSummary.optionRows}
                   threshold={indSel.threshold}
                   onQuestionClick={(questionId) =>
-                    openDrill(selIndicator, allPeriodColumn, indUnit, undefined, {
+                    openDrill(selIndicator, allPeriodColumn, indUnit, indUnitCode, {
                       questionId,
                       l2All: true,
                     })
@@ -270,7 +270,7 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
                       selIndicator,
                       allPeriodColumn,
                       indUnit,
-                      errorUnit === "all" ? undefined : errorUnit,
+                      indUnitCode,
                       { questionId, optionLabel: "否", l2All: true },
                     )
                   }

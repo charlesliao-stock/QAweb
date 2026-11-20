@@ -661,7 +661,7 @@ function Shell() {
   const [indicatorEdit, setIndicatorEdit] = useState<{ id: string; nonce: number } | null>(null);
   const [scheduleLaunch, setScheduleLaunch] = useState<{ indicatorId: string; year: number; nonce: number } | null>(null);
   const [auditLaunch, setAuditLaunch] = useState<{ indicatorId: string; nonce: number } | null>(null);
-  const [resultsLaunch, setResultsLaunch] = useState<{ indicatorId: string; year: number; nonce: number } | null>(null);
+  const [resultsLaunch, setResultsLaunch] = useState<{ indicatorId: string; nonce: number } | null>(null);
   const [capaFilterLaunch, setCapaFilterLaunch] = useState<{ indicatorId: string; nonce: number } | null>(null);
   const clearLaunches = useCallback(() => {
     setIndicatorEdit(null);
@@ -694,7 +694,8 @@ function Shell() {
       setAuditLaunch({ indicatorId: row.id, nonce });
       setPage("audit");
     } else if (action === "results") {
-      setResultsLaunch({ indicatorId: row.id, year, nonce });
+      // v1.88.33：總覽「結果」不再帶入該年全年，改由結果分析預設起迄（Q5 系統設定）。
+      setResultsLaunch({ indicatorId: row.id, nonce });
       setPage("results");
     } else {
       setCapaFilterLaunch({ indicatorId: row.id, nonce });
@@ -973,7 +974,7 @@ function Shell() {
                   <ResultsPage
                     key={resultsLaunch ? `results-${resultsLaunch.nonce}` : "results"}
                     onAction={notify}
-                    initial={resultsLaunch ? { indicatorId: resultsLaunch.indicatorId, year: resultsLaunch.year } : null}
+                    initial={resultsLaunch ? { indicatorId: resultsLaunch.indicatorId } : null}
                   />
                 )}
                 {page === "groups" && (

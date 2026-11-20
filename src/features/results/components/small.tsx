@@ -184,6 +184,116 @@ export function SelectField({
   );
 }
 
+/**
+ * v1.88.33 Q4：可搜尋的下拉選單（依品管組過濾後的指標選項，打字模糊比對編號／名稱）。
+ * 未打字時行為與一般下拉相同；輸入關鍵字即過濾清單，點選後帶入 value。
+ */
+export function SearchableSelect({
+  label,
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef<HTMLLabelElement>(null);
+  const selected = options.find((o) => o.value === value);
+  const filtered = useMemo(() => {
+    const kw = query.trim().toLowerCase();
+    if (!kw) return options;
+    return options.filter(
+      (o) =>
+        o.label.toLowerCase().includes(kw) ||
+        o.value.toLowerCase().includes(kw),
+    );
+  }, [options, query]);
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: MouseEvent) => {
+      if (event.target instanceof Node && !wrapRef.current?.contains(event.target)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open ]);
+  return (
+    <label className="field-label searchable-select" ref={wrapRef}>
+      {label}
+      <div className="select-wrap">
+        <input
+          type="text"
+          value={open ? query : (selected?.label ?? "")}
+          placeholder={placeholder ?? "輸入關鍵字搜尋，或點選下拉"}
+          aria-label={`${label}搜尋`}
+          onFocus={() => {
+            setQuery("");
+            setOpen(true);
+          }}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setOpen(true);
+          }}
+        />
+        <button
+          type="button"
+          className="searchable-select-chevron"
+          aria-label={`展開${label}選單`}
+          onClick={() => {
+            setQuery("");
+            setOpen((current) => !current);
+          }}
+        >
+          <ChevronDown size={15} />
+        </button>
+        {open && (
+          <div className="searchable-select-list" role="listbox">
+            {filtered.length === 0 ? (
+              <div className="searchable-select-empty">無符合的選項</div>
+            ) : (
+              filtered.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  role="option"
+                  aria-selected={o.value === value}
+                  className={o.value === value ? "active" : ""}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    onChange(o.value);
+                    setQuery("");
+                    setOpen(false);
+                  }}
+                >
+                  {o.label}
+                </button>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+    </label>
+  );
+}
+
 /* ================= 達閾值率矩陣（組別／單位分析共用） ================= */
 
 export function RateMatrix({
@@ -199,6 +309,9 @@ export function RateMatrix({
   onDoc,
   onDetailChart,
   onDetailDoc,
+  /** v1.88.33 Q8：點指標列展開（曲線圖＋細項結果同現於矩陣下方） */
+  expandedId,
+  onToggleExpand,
 }: {
   rows: {
     id: string;
@@ -225,6 +338,8 @@ export function RateMatrix({
   /** v1.53.0：分組子列曲線圖／文件圖示（點開看該組；同主列做法） */
   onDetailChart?: (rowId: string, detailKey: string, detailLabel: string) => void;
   onDetailDoc?: (rowId: string, detailKey: string, detailLabel: string) => void;
+  expandedId?: string | null;
+  onToggleExpand?: (rowId: string) => void;
 }) {
   return (
     <div className="analysis-table-wrap">
@@ -244,6 +359,18 @@ export function RateMatrix({
             <tr key={row.id}>
               <td className="ind-col">
                 <div className="analysis-indicator-sticky">
+                  {onToggleExpand && (
+                    <button
+                      type="button"
+                      className="row-expand-toggle"
+                      title={expandedId === row.id ? "收合曲線圖與細項結果" : "展開曲線圖與細項結果"}
+                      aria-label={`${row.label} ${expandedId === row.id ? "收合" : "展開"}曲線圖與細項結果`}
+                      aria-expanded={expandedId === row.id}
+                      onClick={() => onToggleExpand(row.id)}
+                    >
+                      {expandedId === row.id ? "▾" : "▸"}
+                    </button>
+                  )}
                   <span className="analysis-indicator-name">{row.label}</span>
                   <span className="analysis-indicator-actions">
                     <button

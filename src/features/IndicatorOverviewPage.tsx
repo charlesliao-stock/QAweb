@@ -123,6 +123,29 @@ export function IndicatorOverviewPage({
     [rows, groupFilter, keyword],
   );
 
+  // 五顆操作按鈕：桌機表格與手機卡片共用同一組（目的地與權限邏輯不變，
+  // 只差外觀 class；手機版由 CSS 的 .action-* 淡彩色區分）。
+  const renderActions = (row: OverviewRow) => (
+    <div className="indicator-overview-actions">
+      {ACTIONS.map((action) => {
+        const allowed = canShowOverviewAction(can, action);
+        return (
+          <button
+            key={action}
+            type="button"
+            className={`button indicator-overview-action action-${action}`}
+            data-action={action}
+            disabled={!allowed}
+            title={allowed ? "" : "無此頁面權限，請聯絡系統管理員"}
+            onClick={() => onOpenAction(action, row, year)}
+          >
+            {ACTION_LABELS[action]}
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
     <div>
       <PageHeading page="overview" />
@@ -199,54 +222,63 @@ export function IndicatorOverviewPage({
           description="請調整組別或關鍵字，或清除篩選。"
         />
       ) : (
-        <div className="table-scroll">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>品管組</th>
-                <th>指標編號</th>
-                <th>指標名稱</th>
-                <th>閾值</th>
-                <th>狀態</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.groupName}</td>
-                  <td>{indicatorCodeOf(row.id)}</td>
-                  <td>{row.name}</td>
-                  <td>{row.threshold}%</td>
-                  <td>{row.status || "—"}</td>
-                  <td>
-                    <div className="indicator-overview-actions">
-                      {ACTIONS.map((action) => {
-                        const allowed = canShowOverviewAction(can, action);
-                        return (
-                          <button
-                            key={action}
-                            type="button"
-                            className="button button-outline"
-                            disabled={!allowed}
-                            title={
-                              allowed
-                                ? ""
-                                : "無此頁面權限，請聯絡系統管理員"
-                            }
-                            onClick={() => onOpenAction(action, row, year)}
-                          >
-                            {ACTION_LABELS[action]}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </td>
+        <>
+          {/* 桌機版：現行表格不變（寬度 ≥768px 顯示，見 CSS）。 */}
+          <div className="table-scroll indicator-overview-table">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>品管組</th>
+                  <th>指標編號</th>
+                  <th>指標名稱</th>
+                  <th>閾值</th>
+                  <th>狀態</th>
+                  <th>操作</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {filtered.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.groupName}</td>
+                    <td>{indicatorCodeOf(row.id)}</td>
+                    <td>{row.name}</td>
+                    <td>{row.threshold}%</td>
+                    <td>{row.status || "—"}</td>
+                    <td>{renderActions(row)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {/* 手機版（寬度 <768px）：一支指標一張卡片、三行。
+              第 1 行指標名稱、第 2 行基本資料、第 3 行淡彩操作按鈕。 */}
+          <div className="indicator-overview-cards">
+            {filtered.map((row) => (
+              <article className="indicator-overview-card" key={row.id}>
+                <h3 className="indicator-overview-card-name">{row.name}</h3>
+                <dl className="indicator-overview-card-meta">
+                  <div>
+                    <dt>品管組別</dt>
+                    <dd>{row.groupName}</dd>
+                  </div>
+                  <div>
+                    <dt>指標編號</dt>
+                    <dd>{indicatorCodeOf(row.id)}</dd>
+                  </div>
+                  <div>
+                    <dt>閾值</dt>
+                    <dd>{row.threshold}%</dd>
+                  </div>
+                  <div>
+                    <dt>狀態</dt>
+                    <dd>{row.status || "—"}</dd>
+                  </div>
+                </dl>
+                {renderActions(row)}
+              </article>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

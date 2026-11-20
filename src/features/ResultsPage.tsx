@@ -1,6 +1,8 @@
 /**
  * 結果分析頁（v1.25.0：取代舊畫面；v1.44.0：分組計分改 1A／2B 口徑，不再讀預存摘要）。
- * 四個分析／匯入頁籤；系統管理員另可使用審查結果管理。
+ * v1.88.33：頂層只留三部分——結果分析、結果匯入、結果管理；
+ * 組別／單位／指標改為結果分析內的查詢模式切換。
+ * 匯入與管理僅系統管理員（Q12）；分析依角色／職稱權限與 dataScope。
  * 期間模型：年別／年份（起算年）／年數（往後數）／區間（月／季／年）／子選項
  * （月→只有全部；季→第一～四季／全部；年→半年／一年／全部），矩陣欄＝期間欄。
  * 達閾值＝紀錄 rate ≥ 指標閾值（逐筆優先用排程快照 thresholdAtSchedule，
@@ -14,11 +16,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { stripInternalIdPrefix } from "../lib/indicators";
-import { overviewResultRange } from "../lib/indicatorOverview";
+import { defaultRangeForCycle } from "./results/model/defaults";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { recordsInMonths } from "../lib/analysisRates";
 import { fmtDateTime } from "../lib/ym";
-import { type TabId } from "./results/model/types";
+import { type ResultsSection, type TabId } from "./results/model/types";
 import { CauseDrillModal } from "./results/components/small";
 import type { ResultsPageProps } from "./results/model/pageProps";
 import { useResultsCtx } from "./results/hooks/useResultsCtx";
@@ -36,17 +38,19 @@ import { DrillViewBlock } from "./results/tabs/DrillViewBlock";
 
 export function ResultsPage(props: ResultsPageProps) {
   const ctx = useResultsCtx(props);
-  const { can, isAdmin, allMonths, indOf, indUnit, tab, applied, perIndMode, rawHint, summaryPlan, summaryPlans, staleSummaryLabels, unconfirmed, setTab, loading, fetchedAt, indexFallback, indexFallbackDismissed, setIndexFallbackDismissed, setRawHint, setRawFull, causeCountRows, setCauseDrill, unitNameOf, causeDrill, scopedRecords } = ctx;
+  const { can, isAdmin, allMonths, indOf, indUnit, tab, section, setSection, applied, perIndMode, rawHint, summaryPlan, summaryPlans, staleSummaryLabels, unconfirmed, setTab, loading, fetchedAt, indexFallback, indexFallbackDismissed, setIndexFallbackDismissed, setRawHint, setRawFull, causeCountRows, setCauseDrill, unitNameOf, causeDrill, scopedRecords } = ctx;
 
-  // 指標總覽帶入：切「指標分析」頁籤、預選該指標、查詢該年 1～12 月。
+  // 指標總覽帶入：切「指標分析」模式、預選該指標、起迄用結果分析預設
+  // （Q5 系統設定：學年度 8 月～本月，年度 1 月～本月；等 statsCycle 讀進來才定）。
   // 查詢仍走現行 handleQuery 與 dataScope 過濾（scopedRecords），不繞過權限。
   const initialRef = useRef(props.initial ?? null);
   const [initialReady, setInitialReady] = useState(false);
   useEffect(() => {
     const init = initialRef.current;
-    if (!init || initialReady || !ctx.metaLoaded) return;
+    if (!init || initialReady || !ctx.metaLoaded || !ctx.statsCycleLoaded) return;
     const ind = ctx.indicators.find((item) => item.id === init.indicatorId);
-    const range = overviewResultRange(init.year);
+    const range = defaultRangeForCycle(ctx.statsCycle, new Date());
+    ctx.setSection("analysis");
     ctx.setTab("indicator");
     if (ind) ctx.setSelGroup2(ind.groupId);
     ctx.setSelIndicator(init.indicatorId);
@@ -78,7 +82,7 @@ export function ResultsPage(props: ResultsPageProps) {
     <div className="results-page">
       <PageHeading
         page="results"
-        action={tab === "indicator" && indSel ? (
+        action={section === "analysis" && tab === "indicator" && indSel ? (
           <button
             className="button button-primary"
             onClick={() => {
@@ -99,7 +103,7 @@ export function ResultsPage(props: ResultsPageProps) {
         ) : undefined}
       />
 
-      {tab !== "import" && tab !== "manage" && applied && (perIndMode || rawHint) && (
+      {section === "analysis" && applied && (perIndMode || rawHint) && (
         <p className="settings-note" role="status">
           {perIndMode
             ? tab === "indicator" && summaryPlan
@@ -125,38 +129,61 @@ export function ResultsPage(props: ResultsPageProps) {
         </p>
       )}
 
+      {/* v1.88.33 Q1：頂層只留三部分；匯入與管理僅系統管理員（Q12）。 */}
       <div className="results-tabs" role="tablist" aria-label="結果分析檢視">
         {(
           [
-            ["group", "組別分析"],
-            ["unit", "單位分析"],
-            ["indicator", "指標分析"],
-            ["import", "結果匯入"],
-            ...(isAdmin ? [["manage", "審查結果管理"] as [TabId, string]] : []),
-          ] as [TabId, string][]
+            ["analysis", "結果分析"],
+            ...(isAdmin ? [["import", "結果匯入"] as [ResultsSection, string]] : []),
+            ...(isAdmin ? [["manage", "結果管理"] as [ResultsSection, string]] : []),
+          ] as [ResultsSection, string][]
         ).map(([id, label]) => (
           <button
             key={id}
             type="button"
             role="tab"
-            aria-selected={tab === id}
-            className={tab === id ? "active" : ""}
-            onClick={() => setTab(id)}
+            aria-selected={section === id}
+            className={section === id ? "active" : ""}
+            onClick={() => setSection(id)}
           >
             {label}
           </button>
         ))}
       </div>
 
+      {/* v1.88.33 Q1：組別／單位／指標改為結果分析內的查詢模式切換。 */}
+      {section === "analysis" && (
+        <div className="results-tabs results-mode-tabs" role="tablist" aria-label="結果分析查詢模式">
+          {(
+            [
+              ["group", "組別"],
+              ["unit", "單位"],
+              ["indicator", "指標"],
+            ] as [TabId, string][]
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              className={tab === id ? "active" : ""}
+              onClick={() => setTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
       <ResultsQueryPanel ctx={view} />
       <ResultsManageTab ctx={view} />
-      {tab !== "import" && tab !== "manage" && applied && fetchedAt != null && !loading && (
+      {section === "analysis" && applied && fetchedAt != null && !loading && (
         <p className="results-data-time">
           資料時間：
           {fmtDateTime(new Date(fetchedAt))}
         </p>
       )}
-      {tab !== "import" && tab !== "manage" &&
+      {section === "analysis" &&
         applied &&
         indexFallback &&
         !indexFallbackDismissed &&
@@ -174,7 +201,7 @@ export function ResultsPage(props: ResultsPageProps) {
           </p>
         )}
 
-      {tab !== "import" && tab !== "manage" && applied && !loading && perIndMode && (
+      {section === "analysis" && applied && !loading && perIndMode && (
         <p className="settings-note">
           原因詞庫統計需讀取原始紀錄（封存摘要不含原因詞）。
           <button type="button" className="text-button" onClick={() => { setRawHint("已載入原始紀錄。"); setRawFull(true); }}>
@@ -183,7 +210,7 @@ export function ResultsPage(props: ResultsPageProps) {
           後顯示。
         </p>
       )}
-      {tab !== "import" && tab !== "manage" && applied && !loading && !perIndMode && causeCountRows.length > 0 && (
+      {section === "analysis" && applied && !loading && !perIndMode && causeCountRows.length > 0 && (
         <section className="panel results-cause-summary">
           <SectionTitle title="原因詞庫件數" note="依目前使用者可見資料及已查詢期間統計；只計入題目原因詞庫中已勾選的項目。點選列下探到勾選該原因的個人審查結果。" />
           <div className="table-scroll"><table className="data-table"><thead><tr><th>原因詞庫項目</th><th>勾選件數</th></tr></thead><tbody>{causeCountRows.map((row) => <tr key={row.cause} className="clickable" title="點選下探到勾選該原因的個人審查結果" onClick={() => setCauseDrill(row.cause)}><td>{row.cause}</td><td>{row.count}</td></tr>)}</tbody></table></div>

@@ -3,9 +3,9 @@ import { invalidateCachedYears } from "../../../lib/resultsCache";
 import type { ResultsView } from "../hooks/useResultsAnalysis";
 
 export function ResultsManageTab({ ctx }: { ctx: ResultsView }) {
-  const { tab, isAdmin, units, groups, indicators, user, onAction, cacheScope, applied, setReloadNonce } = ctx;
+  const { section, isAdmin, units, groups, indicators, user, onAction, cacheScope, applied, setReloadNonce } = ctx;
 
-  return <>{tab === "manage" && isAdmin && (
+  return <>{section === "manage" && isAdmin && (
         <ReviewResultManager
           units={units}
           groups={groups}

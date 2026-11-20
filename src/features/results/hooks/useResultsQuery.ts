@@ -17,7 +17,7 @@ import type { useResultsState } from "./useResultsState";
 import type { useResultsScope } from "./useResultsScope";
 
 export function useResultsQuery(prev: ReturnType<typeof useResultsState> & ReturnType<typeof useResultsScope>) {
-  const { tab, selIndicator, selIndU, setSelfReviewTempKeys, setIndicators, setGroups, setUnits, setMetaLoaded, startMonth, endMonth, interval, applied, rawFull, scope, archiveCtx, indicators, selGroup, selGroupU, visibleUnitCodes, setRawHint, setRawFull, setPendingChart, archiveReady, setLoading, cacheScope, setRecords, setTasks, setIndexFallback, setIndexFallbackDismissed, setFetchedAt, reloadNonce, isNurseLeader, setInterval, now, setStartMonth, setEndMonth, setApplied, setReloadNonce, tasks, records, selfReviewTempKeys } = prev;
+  const { tab, section, selIndG, selIndicator, selIndU, setSelfReviewTempKeys, setIndicators, setGroups, setUnits, setMetaLoaded, startMonth, endMonth, interval, applied, rawFull, scope, archiveCtx, indicators, selGroup, selGroupU, visibleUnitCodes, setRawHint, setRawFull, setPendingChart, archiveReady, setLoading, cacheScope, setRecords, setTasks, setIndexFallback, setIndexFallbackDismissed, setFetchedAt, reloadNonce, isNurseLeader, setInterval, now, setStartMonth, setEndMonth, setApplied, setReloadNonce, tasks, records, selfReviewTempKeys } = prev;
 
   /**
    * v1.28 階段 7（B7）：單一指標限縮查詢的指標。
@@ -29,8 +29,10 @@ export function useResultsQuery(prev: ReturnType<typeof useResultsState> & Retur
   const singleIndicatorId = useMemo(() => {
     if (tab === "indicator") return selIndicator || null;
     if (tab === "unit" && selIndU !== "all") return selIndU;
+    // v1.88.33 Q3：組別模式選了特定指標時亦限縮查詢。
+    if (tab === "group" && selIndG !== "all") return selIndG;
     return null;
-  }, [tab, selIndicator, selIndU]);
+  }, [tab, selIndicator, selIndU, selIndG]);
 
   // 指標／組別／單位（掛載時載入一次）
   useEffect(() => {
@@ -175,7 +177,9 @@ export function useResultsQuery(prev: ReturnType<typeof useResultsState> & Retur
     if (!applied || rawFull || scope.kind === "reviewer" || !archiveCtx) return [];
     if (tab === "indicator") return selIndicator ? [selIndicator] : [];
     if (tab === "group")
-      return indicators.filter((i) => i.groupId === selGroup).map((i) => i.id);
+      return indicators
+        .filter((i) => i.groupId === selGroup && (selIndG === "all" || i.id === selIndG))
+        .map((i) => i.id);
     if (tab === "unit")
       return indicators
         .filter(
@@ -185,7 +189,7 @@ export function useResultsQuery(prev: ReturnType<typeof useResultsState> & Retur
         )
         .map((i) => i.id);
     return [];
-  }, [tab, selIndicator, selGroup, selGroupU, selIndU, applied, rawFull, scope.kind, archiveCtx, indicators]);
+  }, [tab, selIndicator, selGroup, selGroupU, selIndU, selIndG, applied, rawFull, scope.kind, archiveCtx, indicators]);
   const summaryPlans = useMemo(() => {
     const out = new Map<
       string,
@@ -272,7 +276,8 @@ export function useResultsQuery(prev: ReturnType<typeof useResultsState> & Retur
   // 缺的年份才按年發查詢，併回後畫面永遠從合併後的快取渲染。
   // 快取鍵含權限範圍（見 resultsCache），不同範圍不共用。
   useEffect(() => {
-    if (!applied || tab === "manage" || tab === "import") return;
+    // v1.88.33：頂層切到匯入／管理時不查分析紀錄（tab 只剩查詢模式）。
+    if (!applied || section !== "analysis") return;
     if ((tab === "indicator" || tab === "group" || tab === "unit") && scope.kind !== "reviewer" && !archiveReady) {
       setLoading(true);
       return;
@@ -535,7 +540,7 @@ export function useResultsQuery(prev: ReturnType<typeof useResultsState> & Retur
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appliedYearsKey, reloadNonce, archiveReady, plansKey, rawFull, scope.kind, scope.kind === "reviewer" ? scope.staffId : "", scope.kind === "staff" ? scope.unitCode : "", tab, singleIndicatorId, isNurseLeader, visibleUnitCodes]);
+  }, [appliedYearsKey, reloadNonce, archiveReady, plansKey, rawFull, scope.kind, scope.kind === "reviewer" ? scope.staffId : "", scope.kind === "staff" ? scope.unitCode : "", tab, section, singleIndicatorId, isNurseLeader, visibleUnitCodes]);
 
   /** 每次查詢皆失效所選年份，避免再次查詢命中過期快取。 */
   /**
@@ -560,7 +565,7 @@ export function useResultsQuery(prev: ReturnType<typeof useResultsState> & Retur
     }
   }
   function handleQuery() {
-    if (!rangeValid || tab === "manage") return;
+    if (!rangeValid || section !== "analysis") return;
     invalidateCachedYears("reviewRecords", queryLoadYears, cacheScope);
     invalidateCachedYears("reviewTasks", queryLoadYears, cacheScope);
     setApplied({ years: queryLoadYears, startMonth, endMonth, interval });

@@ -631,3 +631,132 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* v1.88.33：結果分析查詢模式切換（頂層三部分下的第二列頁籤）。 */
+.results-tabs.results-mode-tabs {
+  margin: 8px 0 4px;
+}
+.results-tabs.results-mode-tabs button {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+/* v1.88.33 Q10：結果列表上方的單位／人次切換開關（預設單位）。 */
+.unit-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--line, #e6ebec);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface, #fff);
+}
+.unit-mode-toggle-label {
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--muted, #506165);
+}
+.unit-mode-toggle button {
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  color: var(--muted, #506165);
+  cursor: pointer;
+  font-size: 14px;
+}
+.unit-mode-toggle button.active {
+  background: #0f766e;
+  color: #fff;
+}
+
+/* v1.88.33 Q4：可搜尋的下拉選單。 */
+.searchable-select {
+  position: relative;
+}
+.searchable-select .select-wrap input {
+  width: 100%;
+  border: 1px solid #dce4e4;
+  border-radius: 9px;
+  background: #fff;
+  color: #314447;
+  padding: 12px 38px 12px 13px;
+}
+.searchable-select .select-wrap input:focus {
+  border-color: #6bb3a8;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 10%, transparent);
+  outline: none;
+}
+.searchable-select-chevron {
+  position: absolute;
+  right: 8px;
+  display: inline-flex;
+  border: none;
+  background: transparent;
+  color: #7b898b;
+  cursor: pointer;
+  padding: 4px;
+}
+.searchable-select-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid #dce4e4;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+.searchable-select-list button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 10px 13px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #314447;
+}
+.searchable-select-list button:hover,
+.searchable-select-list button.active {
+  background: #eef6f4;
+}
+.searchable-select-empty {
+  padding: 10px 13px;
+  font-size: 14px;
+  color: var(--muted, #506165);
+}
+
+/* v1.88.33 Q8：矩陣列展開／收合按鈕。 */
+.row-expand-toggle {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: #0f766e;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+/* v1.88.33 Q2：審查結果修正表單。 */
+.review-edit-panel h3 {
+  margin: 0 0 8px;
+}
+.review-edit-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+.review-edit-fields .field-label {
+  min-width: 160px;
+}
+.review-edit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}

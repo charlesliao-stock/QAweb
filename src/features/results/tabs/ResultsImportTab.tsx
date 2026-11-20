@@ -3,9 +3,10 @@ import { invalidateCachedYears } from "../../../lib/resultsCache";
 import type { ResultsView } from "../hooks/useResultsAnalysis";
 
 export function ResultsImportTab({ ctx }: { ctx: ResultsView }) {
-  const { tab, indicators, metaLoaded, user, onAction, applied, cacheScope, setReloadNonce } = ctx;
+  const { section, isAdmin, indicators, metaLoaded, user, onAction, applied, cacheScope, setReloadNonce } = ctx;
 
-  return <>{tab === "import" && (
+  // v1.88.33 Q12：結果匯入僅系統管理員可見可用。
+  return <>{section === "import" && isAdmin && (
         <ResultImportPanel
           indicators={indicators}
           indicatorsLoaded={metaLoaded}

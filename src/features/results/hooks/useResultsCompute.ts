@@ -8,6 +8,7 @@ import type { IndicatorOpt, UnitMode, MatrixRow, CellValue } from "../model/type
 import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { recordsInMonths, type AnalysisRecord, unitPassRate, passRateOf, type PassRate, unitScoringBreakdownRows, personScoringBreakdownRows, columnThresholdOf, formatPassRate, resolveDrillSection, sectionPassRateOf, type OptionDetailRow } from "../../../lib/analysisRates";
 import { getFirebaseDb } from "../../../lib/firebase";
+import { scheduledIndicatorIdsForUnit } from "../model/defaults";
 import { recordDocToAnalysis } from "../../../lib/summaryStore";
 import { fetchIndicatorMonths, dbIndexedQueryApi, fetchYearDocs } from "../../../lib/indexedRecords";
 import { collection } from "../../../lib/db";
@@ -21,7 +22,7 @@ import type { useResultsScope } from "./useResultsScope";
 import type { useResultsQuery } from "./useResultsQuery";
 
 export function useResultsCompute(prev: ReturnType<typeof useResultsState> & ReturnType<typeof useResultsScope> & ReturnType<typeof useResultsQuery>) {
-  const { tempTaskIds, tempTaskKeys, appliedColumns, archiveCtx, scopedRecords, allMonths, records, scope, visibleUnitCodes, reviewerTaskUnitCodes, tasks, summaryPlans, indicators, units, selUnit, tab, applied, errorUnit, selIndicator, groups, user, selGroup, setSelGroup, selGroup2, setSelGroup2, setSelUnit, setSelIndicator, selGroupU, selIndU, setSelGroupU, setSelIndU, hideEmptyMonths, unitUnit, groupUnit, startMonth, endMonth, interval } = prev;
+  const { tempTaskIds, tempTaskKeys, appliedColumns, archiveCtx, scopedRecords, allMonths, records, scope, visibleUnitCodes, reviewerTaskUnitCodes, tasks, summaryPlans, indicators, units, selUnit, tab, applied, errorUnit, selIndicator, groups, user, selGroup, setSelGroup, selGroup2, setSelGroup2, setSelUnit, setSelIndicator, selGroupU, selIndU, setSelGroupU, setSelIndU, selIndG, selUnitG, setSelIndG, hideEmptyMonths, unitUnit, groupUnit, startMonth, endMonth, interval } = prev;
 
   const hasTempReview = (
     indicatorId: string,
@@ -466,10 +467,26 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
     [groups],
   );
 
+  /**
+   * v1.88.33 Q3：組別模式複合篩選——選了特定指標時矩陣只列該支（"all"＝該組全部）。
+   * v1.88.33 Q3：組別模式的單位過濾（"all"＝全部單位；"NA"＝不限單位的紀錄）。
+   */
   const groupIndicators = useMemo(
-    () => indicators.filter((i) => i.groupId === selGroup),
-    [indicators, selGroup],
+    () =>
+      indicators.filter(
+        (i) => i.groupId === selGroup && (selIndG === "all" || i.id === selIndG),
+      ),
+    [indicators, selGroup, selIndG],
   );
+  const groupUnitCode = useMemo(
+    () =>
+      selUnitG === "all" ? undefined : selUnitG === "NA" ? "" : selUnitG,
+    [selUnitG],
+  );
+  useEffect(() => {
+    if (selIndG !== "all" && !indicators.some((i) => i.id === selIndG && i.groupId === selGroup))
+      setSelIndG("all");
+  }, [indicators, selGroup, selIndG]);
   const indTabIndicators = useMemo(
     () => indicators.filter((i) => i.groupId === selGroup2),
     [indicators, selGroup2],
@@ -482,7 +499,9 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
       setSelIndicator(indTabIndicators[0].id);
   }, [indTabIndicators, selIndicator]);
 
-  // 單位分析：該單位在所選期間審查過的指標（依編號排序，再經組別／指標過濾）
+  // 單位分析：該單位在所選期間的指標（依編號排序，再經組別／指標過濾）。
+  // v1.88.33 Q11：有排程即列——除了有審查紀錄者，該單位在期間內有審查任務
+  // （任務由排程產生）但尚未審查的指標也列出，格子顯示 —。
   const unitIndicatorsBase = useMemo(() => {
     const periodRecs = recordsInMonths(
       scopedRecords.filter((r) => r.unitId === selUnitCode),
@@ -491,12 +510,14 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
     const idSet = new Set<string>(periodRecs.map((r) => r.indicatorId));
     for (const [id, plan] of summaryPlans)
       if (plan.archivedCells.some((c) => c.unitId === selUnitCode)) idSet.add(id);
+    for (const id of scheduledIndicatorIdsForUnit(tasks, selUnitCode, allMonths))
+      idSet.add(id);
     const ids = [...idSet];
     return ids
       .map((id) => indOf.get(id))
       .filter((i): i is IndicatorOpt => i != null)
       .sort((a, b) => a.code.localeCompare(b.code, "zh-Hant"));
-  }, [scopedRecords, selUnitCode, allMonths, indOf, summaryPlans]);
+  }, [scopedRecords, selUnitCode, allMonths, indOf, summaryPlans, tasks]);
   const unitIndicators = useMemo(
     () =>
       unitIndicatorsBase.filter(
@@ -556,7 +577,7 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
     if (tab === "unit") {
       return buildMatrixRows(unitIndicators, months, selUnitCode, unitUnit, false);
     }
-    return buildMatrixRows(groupIndicators, months, undefined, groupUnit, false);
+    return buildMatrixRows(groupIndicators, months, groupUnitCode, groupUnit, false);
     // buildMatrixRows 為當次 render 的閉包（讀最新值）；deps 列其全部反應式輸入。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -566,6 +587,7 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
     groupIndicators,
     unitIndicators,
     selUnitCode,
+    groupUnitCode,
     groupUnit,
     unitUnit,
     archiveCtx,
@@ -584,7 +606,7 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
       return appliedColumns.filter(hasRecords);
     }
     if (tab !== "group" && tab !== "unit") return appliedColumns;
-    const unitId = tab === "unit" ? selUnitCode : undefined;
+    const unitId = tab === "unit" ? selUnitCode : groupUnitCode;
     const visibleKeys = new Set<string>();
     for (const row of allMonthRows) {
       for (const span of row.spans) {
@@ -603,6 +625,7 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
     tab,
     selIndicator,
     selUnitCode,
+    groupUnitCode,
     summaryPlans,
     allMonthRows,
     inArchivedMonths,
@@ -612,7 +635,7 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
   const matrixRows = useMemo<MatrixRow[]>(() => {
     const months = visibleColumns.flatMap((c) => c.months);
     if (tab === "group") {
-      return buildMatrixRows(groupIndicators, months, undefined, groupUnit, true);
+      return buildMatrixRows(groupIndicators, months, groupUnitCode, groupUnit, true);
     }
     if (tab === "unit") {
       return buildMatrixRows(unitIndicators, months, selUnitCode, unitUnit, true);
@@ -626,6 +649,7 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
     groupIndicators,
     unitIndicators,
     selUnitCode,
+    groupUnitCode,
     groupUnit,
     unitUnit,
     archiveCtx,
@@ -906,6 +930,7 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
     causeCountRows,
     ownUnitUngrouped,
     groupIndicators,
+    groupUnitCode,
     groupNameOf,
     matrixRows,
     rowIndOf,

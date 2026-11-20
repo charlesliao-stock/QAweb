@@ -7,16 +7,25 @@ import { formatPassRate, optionDetailRows, unitPeriodPassRate, passRateOf, unitP
 import type { ResultsCtx } from "./useResultsCtx";
 
 export function useResultsAnalysis(prev: ResultsCtx) {
-  const { selIndicator, recordIndex, allMonths, indOf, hybridByInd, spansForIndicator, visibleColumns, archiveCtx, appliedColumns, tempTaskIds, tempTaskKeys, drill, capaSpansForIndicator, indUnit, errorUnit, errorUnitCode } = prev;
+  const { selIndicator, selUnitI, recordIndex, allMonths, indOf, hybridByInd, spansForIndicator, visibleColumns, archiveCtx, appliedColumns, tempTaskIds, tempTaskKeys, drill, capaSpansForIndicator, indUnit, errorUnit, errorUnitCode } = prev;
 
+  /** v1.88.33 Q3：指標模式選了單位時，摘要／曲線／細項皆只看該單位（"all"＝全部）。 */
+  const indUnitCode = selUnitI === "all" ? undefined : selUnitI === "NA" ? "" : selUnitI;
   // 指標分析：所選期間內有使用該指標審查的人員、單位皆列入
   const indRecs = useMemo(() => {
     if (!selIndicator) return [];
     // A3：查表取該指標全部期間的紀錄。
-    return recordsForIndex(recordIndex, selIndicator, allMonths);
-  }, [recordIndex, selIndicator, allMonths]);
+    const recs = recordsForIndex(recordIndex, selIndicator, allMonths);
+    return indUnitCode === undefined
+      ? recs
+      : recs.filter((r) => r.unitId === indUnitCode);
+  }, [recordIndex, selIndicator, allMonths, indUnitCode]);
   const indSel = indOf.get(selIndicator);
-  const hybridCells = (selIndicator ? hybridByInd.get(selIndicator) : undefined) ?? null;
+  const hybridCellsRaw = (selIndicator ? hybridByInd.get(selIndicator) : undefined) ?? null;
+  const hybridCells =
+    hybridCellsRaw && indUnitCode !== undefined
+      ? hybridCellsRaw.filter((c) => c.unitId === indUnitCode)
+      : hybridCellsRaw;
   /** 指標分析頁籤該指標的合併格（曲線圖一點一格、unit-period 計分用；與矩陣列同 spans）。 */
   const indSpans = useMemo<RowSpan[]>(
     () =>
@@ -182,6 +191,7 @@ export function useResultsAnalysis(prev: ResultsCtx) {
     errorAnalysisRows,
     indNotes,
     drillCapaSpans,
+    indUnitCode,
   };
 }
 

@@ -72,13 +72,11 @@ export function overviewYearOptions(now: Date = new Date()): number[] {
   return [y - 2, y - 1, y, y + 1];
 }
 
-/** 結果分析的年度查詢區間：該年 1 月～12 月。 */
-export function overviewResultRange(year: number): {
-  startMonth: string;
-  endMonth: string;
-} {
-  return { startMonth: `${year}-01`, endMonth: `${year}-12` };
-}
+/**
+ * v1.88.33：總覽「結果」不再帶入該年全年。
+ * 起迄改由結果分析頁的預設（Q5 系統設定：學年度 8 月～本月，年度 1 月～本月），
+ * 見 src/features/results/model/defaults.ts defaultRangeForCycle。
+ */
 
 export function currentYearMonth(now: Date = new Date()): {
   year: number;
@@ -110,8 +108,7 @@ export type OverviewDestination =
   | { page: "audit"; initialIndicatorId: string }
   | {
       page: "results";
-      initial: { indicatorId: string; year: number };
-      range: { startMonth: string; endMonth: string };
+      initial: { indicatorId: string };
     }
   | { page: "capa"; initialIndicatorId: string };
 
@@ -131,8 +128,7 @@ export function resolveOverviewDestination(
     case "results":
       return {
         page: "results",
-        initial: { indicatorId: row.id, year },
-        range: overviewResultRange(year),
+        initial: { indicatorId: row.id },
       };
     case "capa":
       return { page: "capa", initialIndicatorId: row.id };

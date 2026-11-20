@@ -8,13 +8,13 @@ import type { ResultsPageProps } from "../model/pageProps";
 export function useResultsCtx(props: ResultsPageProps) {
   const { onAction } = props;
   const s0 = useResultsState();
-  const { user, units, tab, selIndicator, selIndU, startMonth, endMonth, interval, applied, archiveCtx, indicators, selGroup, selGroupU, setRawHint, setRawFull, setIndexFallbackDismissed, setStartMonth, setEndMonth, setReloadNonce, selUnit, errorUnit, groups, setSelGroup, selGroup2, setSelGroup2, setSelUnit, setSelIndicator, setSelGroupU, setSelIndU, hideEmptyMonths, unitUnit, groupUnit, setChartModal, loading, setDrill, setDocModal, can, isAdmin, drill, indUnit, rawHint, setTab, setGroupUnit, setErrorUnit, setUnitUnit, setIndUnit, setHideEmptyMonths, fetchedAt, indexFallback, indexFallbackDismissed, setCauseDrill, metaLoaded, chartModal, chartModalCapaCases, docModal, causeDrill } = s0;
+  const { user, units, tab, section, setSection, statsCycle, statsCycleLoaded, selIndG, setSelIndG, selUnitG, setSelUnitG, selUnitI, setSelUnitI, setUnitMode, selIndicator, selIndU, startMonth, endMonth, interval, applied, archiveCtx, indicators, selGroup, selGroupU, setRawHint, setRawFull, rawFull, setIndexFallbackDismissed, setStartMonth, setEndMonth, setReloadNonce, selUnit, errorUnit, groups, setSelGroup, selGroup2, setSelGroup2, setSelUnit, setSelIndicator, setSelGroupU, setSelIndU, hideEmptyMonths, unitUnit, groupUnit, setChartModal, loading, setDrill, setDocModal, can, isAdmin, drill, indUnit, rawHint, setTab, setGroupUnit, setErrorUnit, setUnitUnit, setIndUnit, setHideEmptyMonths, fetchedAt, indexFallback, indexFallbackDismissed, setCauseDrill, metaLoaded, chartModal, chartModalCapaCases, docModal, causeDrill } = s0;
   const s1 = useResultsScope(s0);
-  const { cacheScope, isNurseLeader, setUnitPanel, unitPanel } = s1;
+  const { cacheScope, isNurseLeader, setRowPanel, rowPanel } = s1;
   const s2 = useResultsQuery({ ...s0, ...s1 });
   const { tempTaskIds, tempTaskKeys, appliedColumns, scopedRecords, allMonths, summaryPlans, requireRaw, perIndMode, summaryPlan, handleIntervalChange, handleQuery, rangeValid } = s2;
   const s3 = useResultsCompute({ ...s0, ...s1, ...s2 });
-  const { indOf, spansForIndicator, visibleColumns, sectionChartSeries, chartSeries, periodDesc, cellValue, recordIndex, sectionOptionRows, hybridByInd, capaSpansForIndicator, errorUnitCode, staleSummaryLabels, unconfirmed, scopedGroups, scopedUnits, hasNaUnit, unitIndOptions, indTabIndicators, causeCountRows, ownUnitUngrouped, groupIndicators, groupNameOf, matrixRows, rowIndOf, hasTempReview, rowSpansOf, unitIndicators, unitNameOf, selUnitCode, unitCapaCases, indCapaCases, ensureHistory, ensureMonths, cellsOfInd, historyBusy, historyNote } = s3;
+  const { indOf, spansForIndicator, visibleColumns, sectionChartSeries, chartSeries, periodDesc, cellValue, recordIndex, sectionOptionRows, hybridByInd, capaSpansForIndicator, errorUnitCode, staleSummaryLabels, unconfirmed, scopedGroups, scopedUnits, hasNaUnit, unitIndOptions, indTabIndicators, causeCountRows, ownUnitUngrouped, groupIndicators, groupUnitCode, groupNameOf, matrixRows, rowIndOf, hasTempReview, rowSpansOf, unitIndicators, unitNameOf, selUnitCode, unitCapaCases, indCapaCases, ensureHistory, ensureMonths, cellsOfInd, historyBusy, historyNote } = s3;
   const s4 = useResultsActions({ ...s0, ...s1, ...s2, ...s3 });
   const { openDrill, openChart, openDoc, allPeriodColumn } = s4;
 
@@ -38,6 +38,17 @@ export function useResultsCtx(props: ResultsPageProps) {
     errorUnit,
     errorUnitCode,
     tab,
+    section,
+    setSection,
+    statsCycle,
+    statsCycleLoaded,
+    selIndG,
+    setSelIndG,
+    selUnitG,
+    setSelUnitG,
+    selUnitI,
+    setSelUnitI,
+    setUnitMode,
     applied,
     perIndMode,
     rawHint,
@@ -96,6 +107,7 @@ export function useResultsCtx(props: ResultsPageProps) {
     setCauseDrill,
     ownUnitUngrouped,
     groupIndicators,
+    groupUnitCode,
     groupNameOf,
     periodDesc,
     matrixRows,
@@ -110,9 +122,10 @@ export function useResultsCtx(props: ResultsPageProps) {
     unitNameOf,
     selUnitCode,
     unitCapaCases,
-    setUnitPanel,
+    setRowPanel,
     requireRaw,
-    unitPanel,
+    rowPanel,
+    rawFull,
     sectionChartSeries,
     chartSeries,
     sectionOptionRows,

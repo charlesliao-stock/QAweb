@@ -1,16 +1,37 @@
+/**
+ * 組別模式（v1.88.33）：品管組＋起迄列出該組全部指標、每月審查結果。
+ * 複合篩選（Q3）：指標／單位可再過濾（指標優先於單位優先於品管組）。
+ * 點指標列即在矩陣下方展開該指標曲線圖＋細項結果（Q8，不再開彈窗）。
+ */
 import { EmptyState, SectionTitle } from "../../../components/ui";
 import { RateMatrix } from "../components/small";
+import { RowDetailPanel } from "./RowDetailPanel";
 import type { ResultsView } from "../hooks/useResultsAnalysis";
 
 export function GroupTab({ ctx }: { ctx: ResultsView }) {
-  const { tab, applied, loading, ownUnitUngrouped, groupIndicators, groupNameOf, selGroup, periodDesc, groupUnit, matrixRows, visibleColumns, cellValue, rowIndOf, hasTempReview, openDrill, openChart, rowSpansOf, openDoc } = ctx;
+  const { section, tab, applied, loading, ownUnitUngrouped, groupIndicators, groupUnitCode, groupNameOf, selGroup, periodDesc, groupUnit, matrixRows, visibleColumns, cellValue, rowIndOf, hasTempReview, openDrill, openChart, rowSpansOf, openDoc, rowPanel, setRowPanel, requireRaw } = ctx;
 
-  return <>{tab === "group" && (
+  const toggleRow = (rowId: string) => {
+    const indicatorId = rowIndOf(rowId);
+    if (rowPanel?.scope === "group" && rowPanel.rowId === rowId) {
+      setRowPanel(null);
+      return;
+    }
+    requireRaw(indicatorId);
+    setRowPanel({
+      scope: "group",
+      indicatorId,
+      rowId,
+      unitId: groupUnitCode,
+    });
+  };
+
+  return <>{section === "analysis" && tab === "group" && (
         <>
           {!applied ? (
             <EmptyState
               title="尚未搜尋"
-              description="請先選擇期間，再按「搜尋」開始分析。只想匯入結果，可直接切換至「結果匯入」頁籤，不需查詢。"
+              description="請先選擇期間，再按「搜尋」開始分析。"
             />
           ) : loading ? (
             <EmptyState title="載入中" description="正在讀取審查紀錄…" />
@@ -28,36 +49,37 @@ export function GroupTab({ ctx }: { ctx: ResultsView }) {
             <section className="panel">
               <SectionTitle
                 title={`${groupNameOf.get(selGroup) ?? selGroup}・達閾值率`}
-                note={`${periodDesc}・單元：${groupUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}`}
+                note={`${periodDesc}・單元：${groupUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}・點指標列展開曲線圖與細項結果`}
               />
               <RateMatrix
                 rows={matrixRows}
                 columns={visibleColumns}
                 cellOf={(rowId, col) =>
-                  cellValue(rowIndOf(rowId), col, undefined, groupUnit)
+                  cellValue(rowIndOf(rowId), col, groupUnitCode, groupUnit)
                 }
-                hasExtraReview={(rowId, col) => hasTempReview(rowIndOf(rowId), col)}
-                onCell={(rowId, col) => openDrill(rowIndOf(rowId), col, groupUnit)}
+                hasExtraReview={(rowId, col) => hasTempReview(rowIndOf(rowId), col, groupUnitCode)}
+                onCell={(rowId, col) => openDrill(rowIndOf(rowId), col, groupUnit, groupUnitCode)}
                 onDetailCell={(rowId, detailKey, col) =>
-                  openDrill(rowIndOf(rowId), col, groupUnit, undefined, { sectionKey: detailKey })
+                  openDrill(rowIndOf(rowId), col, groupUnit, groupUnitCode, { sectionKey: detailKey })
                 }
-                onChart={(rowId) =>
-                  openChart(rowIndOf(rowId), undefined, groupUnit, "全部單位", undefined, rowSpansOf(rowId))
-                }
-                onDoc={(rowId) => openDoc(rowIndOf(rowId), undefined, "全部單位", groupUnit)}
+                onChart={toggleRow}
+                onDoc={toggleRow}
                 onDetailChart={(rowId, detailKey, detailLabel) =>
-                  openChart(rowIndOf(rowId), undefined, groupUnit, "全部單位", {
+                  openChart(rowIndOf(rowId), groupUnitCode, groupUnit, "全部單位", {
                     key: detailKey,
                     label: detailLabel,
                   }, rowSpansOf(rowId))
                 }
                 onDetailDoc={(rowId, detailKey, detailLabel) =>
-                  openDoc(rowIndOf(rowId), undefined, "全部單位", groupUnit, {
+                  openDoc(rowIndOf(rowId), groupUnitCode, "全部單位", groupUnit, {
                     key: detailKey,
                     label: detailLabel,
                   })
                 }
+                expandedId={rowPanel?.scope === "group" ? rowPanel.rowId ?? null : null}
+                onToggleExpand={toggleRow}
               />
+              <RowDetailPanel ctx={ctx} scope="group" />
             </section>
           )}
         </>

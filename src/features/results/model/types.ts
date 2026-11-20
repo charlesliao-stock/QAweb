@@ -32,6 +32,13 @@ export interface UnitOpt {
 
 export type TabId = "group" | "unit" | "indicator" | "import" | "manage";
 
+/**
+ * v1.88.33：結果分析頂層只留三部分（Q1）。
+ * TabId 的 group／unit／indicator 改為「結果分析」內的查詢模式；
+ * import／manage 仍保留在 TabId 供舊參照比對，但頂層切換走 section。
+ */
+export type ResultsSection = "analysis" | "import" | "manage";
+
 export type UnitMode = "person" | "unit";
 
 export interface CellValue extends PassRate {
@@ -106,12 +113,18 @@ export interface DrillState {
   pickMonths?: boolean;
 }
 
-/** 矩陣下方展開面板（僅單位分析）：曲線圖／選項明細 */
-export interface UnitPanel {
-  kind: "chart" | "doc";
+/**
+ * v1.88.33 Q8：矩陣列點開的展開面板（組別／單位模式共用）。
+ * 點指標列即展開，下方同時呈現該指標曲線圖＋細項結果（不再分曲線／文件兩種面板，
+ * 也不再用彈窗）。scope 區分面板屬於哪個模式；unitId 有值時只看該單位。
+ */
+export interface RowPanel {
+  scope: "group" | "unit";
   indicatorId: string;
   /** v1.88.17：開啟面板的那一列 id（同一指標分列時，用來取該列的 spans 畫曲線） */
   rowId?: string;
+  /** 限看單位（單位模式＝該單位；組別模式＝複合篩選選的單位，無則全部） */
+  unitId?: string;
   /** v1.53.0：分組版（只看該組）；無值＝整支指標 */
   sectionKey?: string;
   sectionLabel?: string;

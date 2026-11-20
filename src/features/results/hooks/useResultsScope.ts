@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import type { UnitPanel } from "../model/types";
+import type { RowPanel } from "../model/types";
 import { useOrgMeta } from "../../../lib/useOrgMeta";
 import { titleFlagsOf, hasRoleCategory } from "../../../lib/orgMeta";
 import { isReviewerRole } from "../../../lib/roleIdentity";
@@ -10,8 +10,8 @@ import type { useResultsState } from "./useResultsState";
 export function useResultsScope(prev: ReturnType<typeof useResultsState>) {
   const { user, units, catalog } = prev;
 
-  // 單位分析矩陣下方展開面板（曲線圖／選項明細）
-  const [unitPanel, setUnitPanel] = useState<UnitPanel | null>(null);
+  // v1.88.33 Q8：矩陣列點開的展開面板（組別／單位模式共用，曲線圖＋細項結果同現）
+  const [rowPanel, setRowPanel] = useState<RowPanel | null>(null);
 
   // 資料範圍（v1.88.4：改走共用 dataScope——縱向從屬＋橫向 cross 取聯集，
   // 取代原先寫死的推導；護理長仍優先 staff 分支，沿用舊順序，保留摘要模式）
@@ -78,7 +78,7 @@ export function useResultsScope(prev: ReturnType<typeof useResultsState>) {
     visibleUnitCodes,
     cacheScope,
     isNurseLeader,
-    setUnitPanel,
-    unitPanel,
+    setRowPanel,
+    rowPanel,
   };
 }
