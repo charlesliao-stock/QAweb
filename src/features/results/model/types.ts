@@ -102,6 +102,8 @@ export interface DrillState {
   l2Months?: { year: number; month: number }[];
   /** v1.50.0：直接開 L2 人員層級（全部單位），不經 L1 單位列表 */
   l2All?: boolean;
+  /** 指標分析卡片下探（人次模式）：L2 只看該人員（與 l2UnitId／l2Months 併用） */
+  l2PersonEmpNo?: string;
   /** v1.50.0：分組／逐題篩選（section key：group-…／question-…／historical-…），只顯示該分組／該題的個人結果 */
   sectionKey?: string;
   /** v1.50.0：單題篩選（選項明細／錯題排行用） */

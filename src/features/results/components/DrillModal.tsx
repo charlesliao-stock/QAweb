@@ -1,12 +1,14 @@
 import type { DrillState, IndicatorOpt, CellValue } from "../model/types";
-import { type SummaryCell as ArchiveCell, passRateFromCells } from "../../../lib/reviewSummary";
+import { type SummaryCell as ArchiveCell, passRateFromCells, unitPassRateFromCells } from "../../../lib/reviewSummary";
 import { type RecordIndex, recordsForIndex } from "../../../lib/resultsMatrix";
 import type { RowSpan } from "../../../lib/analysisSpans";
-import { useEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
+import { visibleDrillMonths, drillPersonRows } from "../../../lib/drillMonths";
+import { staffLabel } from "../../../lib/mask";
 import type { CapaCase, CapaSettings } from "../../capa/model";
 import { loadCapaCasesByIndicator, loadCapaSettings } from "../../capa/store";
 import { fmtYm, fmtYmd } from "../../../lib/ym";
-import { resolveDrillSection, unitsForDrill, sectionUnitPassRateOf, sectionPassRateOf, passRateOf, type PassRate, personOptionRows, transposePersonOptionRows } from "../../../lib/analysisRates";
+import { resolveDrillSection, unitsForDrill, sectionUnitPassRateOf, sectionPassRateOf, passRateOf, unitPassRate, type PassRate, personOptionRows, transposePersonOptionRows } from "../../../lib/analysisRates";
 import type { AuditQuestion } from "../../../lib/indicators";
 import { type CapaTrigger, detectCapaTrigger } from "../../../lib/capaTrigger";
 import { mergeNoteParts } from "../../../lib/import";
@@ -20,6 +22,9 @@ export function DrillModal({
   onClose,
   onBackToL1,
   onSelectUnit,
+  onSelectPerson,
+  hideEmptyMonths,
+  onToggleHideEmptyMonths,
   onNeedHistory,
   onNeedMonths,
   summaryCellsFor,
@@ -35,6 +40,11 @@ export function DrillModal({
   onClose: () => void;
   onBackToL1: () => void;
   onSelectUnit: (unitId: string, month?: { year: number; month: number }) => void;
+  /** 人次模式逐月格：點人員格進 L2 只看該人員該月 */
+  onSelectPerson: (unitId: string, empNo: string, month: { year: number; month: number }) => void;
+  /** 與結果分析頁同一「未審月份不顯示」選項（預設不勾，span 層級隱藏） */
+  hideEmptyMonths: boolean;
+  onToggleHideEmptyMonths: (value: boolean) => void;
   onNeedHistory: (indicatorId: string, beforeKey: number, n: number) => Promise<void>;
   onNeedMonths: (indicatorId: string, months: { year: number; month: number }[]) => Promise<void>;
   summaryCellsFor: (indicatorId: string, months: { year: number; month: number }[], unitId?: string) => ArchiveCell[] | null;
@@ -208,6 +218,82 @@ export function DrillModal({
     }
     return map;
   }, [recordIndex, drill.indicatorId, drill.mode, l1Units, l1Summary, col, th, filterIds, filterKind]);
+  // 指標分析卡片下探：全期間欄（key "__all__"，多月）展開為逐月欄——
+  // 列＝單位（人次模式為受審人員）、欄＝月份，格＝該指標該月審查結果，
+  // 與組別分析矩陣同一呈現、只含該支指標。非全期間欄（矩陣格／曲線點）
+  // 維持現行單欄 L1。
+  const monthly = col.key === "__all__" && col.months.length > 1;
+  // 人次模式列人員須有原始紀錄明細（封存月份無人員明細，缺了就補讀）
+  useEffect(() => {
+    if (monthly && drill.mode === "person") void onNeedMonths(drill.indicatorId, col.months);
+  }, [monthly, drill.mode, drill.indicatorId, col.months, onNeedMonths]);
+  // span 層級未審月份判定（與組別／單位矩陣 visibleColumns 同規則）
+  const monthHasData = useCallback(
+    (months: { year: number; month: number }[]) => {
+      if (recordsForIndex(recordIndex, drill.indicatorId, months, drill.scopeUnitId).length > 0) return true;
+      const cells = summaryCellsFor(drill.indicatorId, months, drill.scopeUnitId);
+      return (cells ?? []).some((c) => c.total > 0);
+    },
+    [recordIndex, drill.indicatorId, drill.scopeUnitId, summaryCellsFor],
+  );
+  const visibleMonths = useMemo(
+    () => (monthly && hideEmptyMonths ? visibleDrillMonths(col.months, capaSpans, monthHasData) : col.months),
+    [monthly, hideEmptyMonths, col.months, capaSpans, monthHasData],
+  );
+  // 人次模式列：期間內受審人員（去重、按職編排序）
+  const personRows = useMemo(() => {
+    if (!monthly || drill.mode !== "person") return [];
+    const recs = recordsForIndex(recordIndex, drill.indicatorId, col.months, drill.scopeUnitId);
+    return drillPersonRows(recs);
+  }, [monthly, drill.mode, recordIndex, drill.indicatorId, drill.scopeUnitId, col.months]);
+  /**
+   * 逐月格：口徑與組別分析矩陣 cellValue 一致——單位模式為該單位該月
+   * 是否達閾值（unitPassRate，單一單位＝100%／0%）；人次模式為該單位／
+   * 該人員該月合併人次率（passRateOf）。達標＝紀錄 rate ≥ 指標閾值
+   * （逐筆優先用排程快照 thresholdAtSchedule），閾值 ≤0 不達標。
+   * 分組／逐題篩選時沿用現行 L1 的 section 計分。
+   */
+  const monthCell = (
+    unitId: string,
+    month: { year: number; month: number },
+    personEmpNo?: string,
+  ): CellValue => {
+    const months = [month];
+    const recsAll = recordsForIndex(recordIndex, drill.indicatorId, months, unitId);
+    const recs = personEmpNo ? recsAll.filter((r) => r.personEmpNo === personEmpNo) : recsAll;
+    const titleOf = (pr: PassRate, unitLabel: string) =>
+      pr.total === 0 ? "無資料" : `達閾值 ${pr.pass}／${pr.total} ${unitLabel}`;
+    if (filterIds && filterKind) {
+      const pr =
+        drill.mode === "unit"
+          ? sectionUnitPassRateOf(recs, filterIds, th)
+          : sectionPassRateOf(recs, filterIds, filterKind, th);
+      return { ...pr, title: titleOf(pr, "人次") };
+    }
+    if (!personEmpNo) {
+      const cells = summaryCellsFor(drill.indicatorId, months, unitId);
+      if (cells) {
+        const pr = drill.mode === "unit" ? unitPassRateFromCells(cells, th) : passRateFromCells(cells);
+        return { ...pr, title: titleOf(pr, drill.mode === "unit" ? "單位" : "人次") };
+      }
+    }
+    const pr = drill.mode === "unit" ? unitPassRate(recs, th) : passRateOf(recs, th);
+    return { ...pr, title: titleOf(pr, drill.mode === "unit" ? "單位" : "人次") };
+  };
+  // 逐月表 CAPA 操作欄（單位模式才有；偵測仍以全期間 spans 計）
+  const capaAction = (unitId: string) => {
+    const trig = capaTriggers.get(unitId);
+    if (!trig || capaCases == null) return null;
+    const triggerKeys = new Set(trig.series.map((s) => s.ym));
+    const open = capaCases.some((c) => c.unitCode === unitId && c.stage !== "正式結案" && c.stage !== "已撤案" && (c.periodKeys ?? []).some((k) => triggerKeys.has(k)));
+    return open ? (
+      <span className="muted-text">CAPA啟動中</span>
+    ) : (
+      <button type="button" className="text-button capa-start-link" onClick={() => startCapa(unitId)}>
+        啟動CAPA
+      </button>
+    );
+  };
   // v1.88.19：L1「審查月份」欄已移除（B：單月多月都不要；多月單月下探改走
   // 矩陣成績格 → 選月彈窗，v1.88.17 Q5=C 路徑）。
   // 連續未達標偵測（v1.88.18）：一個排程區間（span）算一次審查，不按月算；
@@ -273,14 +359,18 @@ export function DrillModal({
       drill.l2UnitId ?? drill.scopeUnitId,
     );
     const rows = personOptionRows(recs, th);
+    // 人次模式逐月格下探：L2 只看該人員該月
+    const scoped = drill.l2PersonEmpNo
+      ? rows.filter((row) => row.personEmpNo === drill.l2PersonEmpNo)
+      : rows;
     // 選項篩選：只顯示答此選項的人員
     if (drill.optionLabel && drill.questionId) {
-      return rows.filter(
+      return scoped.filter(
         (row) => row.answers.get(drill.questionId as string) === drill.optionLabel,
       );
     }
-    return rows;
-  }, [recordIndex, drill.indicatorId, drill.l2UnitId, drill.scopeUnitId, l2Months, th, l2Active, drill.optionLabel, drill.questionId]);
+    return scoped;
+  }, [recordIndex, drill.indicatorId, drill.l2UnitId, drill.scopeUnitId, l2Months, th, l2Active, drill.optionLabel, drill.questionId, drill.l2PersonEmpNo]);
   // L2 轉置（v1.27.1）：直向＝題目、橫向＝人員（職編/遮罩姓名，v1.40.2），中間＝審查結果
   const l2Matrix = useMemo(
     () =>
@@ -340,7 +430,9 @@ export function DrillModal({
             <p>
               {l2Active
                 ? `${drill.l2Months?.length === 1 ? fmtYm(drill.l2Months[0].year, drill.l2Months[0].month) : col.label}・${l2UnitLabel}・被審人員各選項結果${filterLabel ? `・${filterLabel}` : ""}`
-                : `${col.label}・各單位審查結果（點選格子看被審人員）${filterLabel ? `・${filterLabel}` : ""}`}
+                : monthly
+                  ? `${col.label}・${drill.mode === "person" ? "各人員每月審查結果（點選格子看該人員審查結果）" : "各單位每月審查結果（點選格子看被審人員）"}${filterLabel ? `・${filterLabel}` : ""}`
+                  : `${col.label}・各單位審查結果（點選格子看被審人員）${filterLabel ? `・${filterLabel}` : ""}`}
             </p>
           </div>
           <button
@@ -352,6 +444,99 @@ export function DrillModal({
           </button>
         </div>
         {!l2Active ? (
+          monthly ? (
+            <>
+              <div className="drill-history-controls">
+                <label className="check-row">
+                  <input type="checkbox" checked={hideEmptyMonths} onChange={(event) => onToggleHideEmptyMonths(event.target.checked)} />
+                  未審月份不顯示
+                </label>
+              </div>
+              <div className="analysis-table-wrap">
+                <table className="data-table analysis-matrix">
+                  <thead>
+                    <tr>
+                      <th className="ind-col">{drill.mode === "person" ? "人員" : "單位"}</th>
+                      {visibleMonths.map((m) => (
+                        <th key={`${m.year}-${m.month}`} className="rate-col">{fmtYm(m.year, m.month)}</th>
+                      ))}
+                      {drill.mode === "unit" && <th className="rate-col">操作</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {drill.mode === "person" ? (
+                      personRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={1 + visibleMonths.length}>{historyBusy ? "讀取中…" : historyNote || "無資料"}</td>
+                        </tr>
+                      ) : (
+                        personRows.map((person) => (
+                          <tr key={person.empNo}>
+                            <td className="ind-col">{staffLabel(person.empNo, person.name)}</td>
+                            {visibleMonths.map((m) => {
+                              const cell = monthCell(person.unitId, m, person.empNo);
+                              const clickable = cell.rate != null;
+                              const pick = () => onSelectPerson(person.unitId, person.empNo, m);
+                              return (
+                                <td
+                                  key={`${m.year}-${m.month}`}
+                                  className={`rate-cell${clickable ? " clickable" : ""}${cell.rate != null && th > 0 && cell.rate < th ? " below" : ""}`}
+                                  title={clickable ? `${cell.title}（點選看該人員審查結果）` : cell.title}
+                                  onClick={clickable ? pick : undefined}
+                                  role={clickable ? "button" : undefined}
+                                  tabIndex={clickable ? 0 : undefined}
+                                  onKeyDown={clickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } } : undefined}
+                                >
+                                  {cell.total === 0 ? "—" : <RateCellBody cell={cell} extra={tempReviewOf?.([m], person.unitId) ?? false} />}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))
+                      )
+                    ) : l1Units.length === 0 ? (
+                      <tr>
+                        <td colSpan={2 + visibleMonths.length}>{historyBusy ? "讀取中…" : historyNote || "無資料"}</td>
+                      </tr>
+                    ) : (
+                      l1Units.map((unitId) => (
+                        <tr key={unitId}>
+                          <td className="ind-col">
+                            {unitId === "" ? "NA" : `${unitId}・${unitNameOf.get(unitId) ?? ""}`}
+                          </td>
+                          {visibleMonths.map((m) => {
+                            const cell = monthCell(unitId, m);
+                            const clickable = cell.rate != null;
+                            const pick = () => onSelectUnit(unitId, m);
+                            return (
+                              <td
+                                key={`${m.year}-${m.month}`}
+                                className={`rate-cell${clickable ? " clickable" : ""}${cell.rate != null && th > 0 && cell.rate < th ? " below" : ""}`}
+                                title={clickable ? `${cell.title}（點選看被審人員）` : cell.title}
+                                onClick={clickable ? pick : undefined}
+                                role={clickable ? "button" : undefined}
+                                tabIndex={clickable ? 0 : undefined}
+                                onKeyDown={clickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } } : undefined}
+                              >
+                                {cell.total === 0 ? "—" : (
+                                  <RateCellBody
+                                    cell={cell}
+                                    extra={tempReviewOf?.([m], unitId) ?? false}
+                                    capa={(capaCases ?? []).find((c) => c.unitCode === unitId && c.stage !== "已撤案" && capaInColumn(c, [m]))}
+                                  />
+                                )}
+                              </td>
+                            );
+                          })}
+                          <td className="rate-cell">{capaAction(unitId)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
           <>
           <div className="drill-history-controls">
             <label className="check-row">
@@ -473,6 +658,7 @@ export function DrillModal({
             </table>
           </div>
           </>
+          )
         ) : (
           <>
             <div className="drill-back">
@@ -481,7 +667,7 @@ export function DrillModal({
                 className="button button-ghost button-sm"
                 onClick={onBackToL1}
               >
-                <ChevronLeft size={15} /> 返回單位列表
+                <ChevronLeft size={15} /> {drill.l2PersonEmpNo ? "返回人員列表" : "返回單位列表"}
               </button>
             </div>
             {l2Rows.length === 0 ? (

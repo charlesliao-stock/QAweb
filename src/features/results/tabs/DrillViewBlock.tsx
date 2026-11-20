@@ -2,7 +2,7 @@ import { DrillModal } from "../components/DrillModal";
 import type { ResultsView } from "../hooks/useResultsAnalysis";
 
 export function DrillViewBlock({ ctx }: { ctx: ResultsView }) {
-  const { drill, setDrill, ensureHistory, ensureMonths, cellsOfInd, historyBusy, historyNote, recordIndex, indOf, unitNameOf, drillCapaSpans, hasTempReview } = ctx;
+  const { drill, setDrill, ensureHistory, ensureMonths, cellsOfInd, historyBusy, historyNote, recordIndex, indOf, unitNameOf, drillCapaSpans, hasTempReview, hideEmptyMonths, setHideEmptyMonths } = ctx;
 
   return <>{drill && !drill.pickMonths && (
         <DrillModal
@@ -14,6 +14,7 @@ export function DrillViewBlock({ ctx }: { ctx: ResultsView }) {
               l2UnitId: null,
               l2Months: undefined,
               l2All: false,
+              l2PersonEmpNo: undefined,
               sectionKey: undefined,
               questionId: undefined,
               optionLabel: undefined,
@@ -22,6 +23,11 @@ export function DrillViewBlock({ ctx }: { ctx: ResultsView }) {
           onSelectUnit={(unitId, month) =>
             setDrill({ ...drill, l2UnitId: unitId, l2Months: month ? [month] : undefined })
           }
+          onSelectPerson={(unitId, empNo, month) =>
+            setDrill({ ...drill, l2UnitId: unitId, l2Months: [month], l2PersonEmpNo: empNo })
+          }
+          hideEmptyMonths={hideEmptyMonths}
+          onToggleHideEmptyMonths={setHideEmptyMonths}
           onNeedHistory={ensureHistory}
           onNeedMonths={ensureMonths}
           summaryCellsFor={cellsOfInd}
