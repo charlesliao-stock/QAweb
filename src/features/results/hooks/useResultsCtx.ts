@@ -8,7 +8,7 @@ import type { ResultsPageProps } from "../model/pageProps";
 export function useResultsCtx(props: ResultsPageProps) {
   const { onAction } = props;
   const s0 = useResultsState();
-  const { user, units, tab, section, setSection, statsCycle, statsCycleLoaded, selIndG, setSelIndG, selUnitG, setSelUnitG, selUnitI, setSelUnitI, setUnitMode, selIndicator, selIndU, startMonth, endMonth, interval, applied, archiveCtx, indicators, selGroup, selGroupU, setRawHint, setRawFull, rawFull, setIndexFallbackDismissed, setStartMonth, setEndMonth, setReloadNonce, selUnit, errorUnit, groups, setSelGroup, selGroup2, setSelGroup2, setSelUnit, setSelIndicator, setSelGroupU, setSelIndU, hideEmptyMonths, unitUnit, groupUnit, setChartModal, loading, setDrill, setDocModal, can, isAdmin, drill, indUnit, rawHint, setTab, setGroupUnit, setErrorUnit, setUnitUnit, setIndUnit, setHideEmptyMonths, fetchedAt, indexFallback, indexFallbackDismissed, setCauseDrill, metaLoaded, chartModal, chartModalCapaCases, docModal, causeDrill } = s0;
+  const { user, units, tab, section, setSection, statsCycle, statsCycleLoaded, selIndG, setSelIndG, selUnitG, setSelUnitG, selUnitI, setSelUnitI, setUnitMode, selIndicator, selIndU, startMonth, endMonth, interval, applied, archiveCtx, indicators, selGroup, selGroupU, setRawHint, setRawFull, rawFull, setIndexFallbackDismissed, setStartMonth, setEndMonth, setReloadNonce, selUnit, errorUnit, groups, setSelGroup, selGroup2, setSelGroup2, setSelUnit, setSelIndicator, setSelGroupU, setSelIndU, hideEmptyMonths, unitUnit, groupUnit, setChartModal, loading, setDrill, setDocModal, can, isAdmin, drill, indUnit, rawHint, setTab, setGroupUnit, setErrorUnit, setUnitUnit, setIndUnit, setHideEmptyMonths, fetchedAt, indexFallback, indexFallbackDismissed, setCauseDrill, metaLoaded, chartModal, chartModalCapaCases, docModal, causeDrill, searchPrompt, setSearchPrompt } = s0;
   const s1 = useResultsScope(s0);
   const { cacheScope, isNurseLeader, setRowPanel, rowPanel } = s1;
   const s2 = useResultsQuery({ ...s0, ...s1 });
@@ -68,6 +68,8 @@ export function useResultsCtx(props: ResultsPageProps) {
     selGroupU,
     setSelGroupU,
     setSelIndU,
+    searchPrompt,
+    setSearchPrompt,
     selUnit,
     setSelUnit,
     unitUnit,

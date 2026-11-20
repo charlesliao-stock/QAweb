@@ -3,12 +3,12 @@ import { formatPassRate } from "../../../lib/analysisRates";
 import { TrendingUp, FileText } from "lucide-react";
 import { TrendChart } from "../../../components/TrendChart";
 import { capaInColumn } from "../model/format";
-import { OptionDetailTable, QuestionErrorTable } from "../components/small";
+import { OptionDetailTable, QuestionErrorTable, UnitModeToggle } from "../components/small";
 import { staffLabel } from "../../../lib/mask";
 import type { ResultsView } from "../hooks/useResultsAnalysis";
 
 export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
-  const { section, tab, applied, loading, indSel, indSummary, isNurseLeader, openDrill, selIndicator, allPeriodColumn, indUnit, indUnitCode, openChart, openDoc, periodDesc, indCapaCases, summaryPlan, setRawHint, setRawFull, errorUnit, errorAnalysisRows, indNotes } = ctx;
+  const { section, tab, applied, loading, indSel, indSummary, isNurseLeader, openDrill, selIndicator, allPeriodColumn, indUnit, setUnitMode, indUnitCode, openChart, openDoc, periodDesc, indCapaCases, summaryPlan, setRawHint, setRawFull, errorUnit, errorAnalysisRows, indNotes } = ctx;
 
   return <>{section === "analysis" && tab === "indicator" && (
         <>
@@ -26,6 +26,9 @@ export function IndicatorTab({ ctx }: { ctx: ResultsView }) {
             />
           ) : (
             <>
+              <div className="results-matrix-toggle">
+                <UnitModeToggle mode={indUnit} onChange={setUnitMode} />
+              </div>
               <div className="analysis-stats">
                 <SummaryCell
                   label={isNurseLeader ? "本單位受審" : "受審單位數"}

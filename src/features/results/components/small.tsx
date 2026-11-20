@@ -5,7 +5,7 @@ import { type PassRate, formatPassRate, type AnalysisRecord, causeRecordEntries,
 import type { CapaCase } from "../../capa/model";
 import { type RowSpan, singleMonthSpan } from "../../../lib/analysisSpans";
 import type { AnalysisPeriodColumn } from "../../../lib/analysisPeriod";
-import type { CellValue, IndicatorOpt } from "../model/types";
+import type { CellValue, IndicatorOpt, UnitMode } from "../model/types";
 import { isBelow, fmtRate } from "../model/format";
 import { EmptyState } from "../../../components/ui";
 import { stripInternalIdPrefix } from "../../../lib/indicators";
@@ -291,6 +291,45 @@ export function SearchableSelect({
         )}
       </div>
     </label>
+  );
+}
+
+/**
+ * 單位／人次切換開關（搜尋後才出現在結果矩陣區；搜尋前不顯示）。
+ * 預設單位；三個檢視共用同一個開關狀態（setUnitMode 一次同步三模式），
+ * 切換連動矩陣＋曲線＋細項＋下探。結果區只有一個開關，不會打架。
+ */
+export function UnitModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: UnitMode;
+  onChange: (mode: UnitMode) => void;
+}) {
+  return (
+    <div
+      className="unit-mode-toggle"
+      role="group"
+      aria-label="單元切換：單位或人次"
+    >
+      <span className="unit-mode-toggle-label">單元</span>
+      {(
+        [
+          ["unit", "單位"],
+          ["person", "人次"],
+        ] as [UnitMode, string][]
+      ).map(([value, label]) => (
+        <button
+          key={value}
+          type="button"
+          aria-pressed={mode === value}
+          className={mode === value ? "active" : ""}
+          onClick={() => onChange(value)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
   );
 }
 

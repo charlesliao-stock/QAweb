@@ -2,6 +2,8 @@
  * 結果分析頁（v1.25.0：取代舊畫面；v1.44.0：分組計分改 1A／2B 口徑，不再讀預存摘要）。
  * v1.88.33：頂層只留三部分——結果分析、結果匯入、結果管理；
  * 組別／單位／指標改為結果分析內的查詢模式切換。
+ * 其後再改：模式切換列拿掉，檢視由篩選器決定（指標＞單位＞品管組，
+ * 見 handleQuery）；三者皆未選時按搜尋只顯示提示、不查詢。
  * 匯入與管理僅系統管理員（Q12）；分析依角色／職稱權限與 dataScope。
  * 期間模型：年別／年份（起算年）／年數（往後數）／區間（月／季／年）／子選項
  * （月→只有全部；季→第一～四季／全部；年→半年／一年／全部），矩陣欄＝期間欄。
@@ -20,7 +22,7 @@ import { defaultRangeForCycle } from "./results/model/defaults";
 import { EmptyState, PageHeading, SectionTitle } from "../components/ui";
 import { recordsInMonths } from "../lib/analysisRates";
 import { fmtDateTime } from "../lib/ym";
-import { type ResultsSection, type TabId } from "./results/model/types";
+import { type ResultsSection } from "./results/model/types";
 import { CauseDrillModal } from "./results/components/small";
 import type { ResultsPageProps } from "./results/model/pageProps";
 import { useResultsCtx } from "./results/hooks/useResultsCtx";
@@ -38,10 +40,11 @@ import { DrillViewBlock } from "./results/tabs/DrillViewBlock";
 
 export function ResultsPage(props: ResultsPageProps) {
   const ctx = useResultsCtx(props);
-  const { can, isAdmin, allMonths, indOf, indUnit, tab, section, setSection, applied, perIndMode, rawHint, summaryPlan, summaryPlans, staleSummaryLabels, unconfirmed, setTab, loading, fetchedAt, indexFallback, indexFallbackDismissed, setIndexFallbackDismissed, setRawHint, setRawFull, causeCountRows, setCauseDrill, unitNameOf, causeDrill, scopedRecords } = ctx;
+  const { can, isAdmin, allMonths, indOf, indUnit, tab, section, setSection, applied, perIndMode, rawHint, summaryPlan, summaryPlans, staleSummaryLabels, unconfirmed, loading, fetchedAt, indexFallback, indexFallbackDismissed, setIndexFallbackDismissed, setRawHint, setRawFull, causeCountRows, setCauseDrill, unitNameOf, causeDrill, scopedRecords } = ctx;
 
-  // 指標總覽帶入：切「指標分析」模式、預選該指標、起迄用結果分析預設
+  // 指標總覽帶入：預選該指標、起迄用結果分析預設
   // （Q5 系統設定：學年度 8 月～本月，年度 1 月～本月；等 statsCycle 讀進來才定）。
+  // 檢視不直接切 tab——handleQuery 會按篩選推導為單一指標分析。
   // 查詢仍走現行 handleQuery 與 dataScope 過濾（scopedRecords），不繞過權限。
   const initialRef = useRef(props.initial ?? null);
   const [initialReady, setInitialReady] = useState(false);
@@ -51,7 +54,6 @@ export function ResultsPage(props: ResultsPageProps) {
     const ind = ctx.indicators.find((item) => item.id === init.indicatorId);
     const range = defaultRangeForCycle(ctx.statsCycle, new Date());
     ctx.setSection("analysis");
-    ctx.setTab("indicator");
     if (ind) ctx.setSelGroup2(ind.groupId);
     ctx.setSelIndicator(init.indicatorId);
     ctx.setStartMonth(range.startMonth);
@@ -151,29 +153,7 @@ export function ResultsPage(props: ResultsPageProps) {
         ))}
       </div>
 
-      {/* v1.88.33 Q1：組別／單位／指標改為結果分析內的查詢模式切換。 */}
-      {section === "analysis" && (
-        <div className="results-tabs results-mode-tabs" role="tablist" aria-label="結果分析查詢模式">
-          {(
-            [
-              ["group", "組別"],
-              ["unit", "單位"],
-              ["indicator", "指標"],
-            ] as [TabId, string][]
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={tab === id}
-              className={tab === id ? "active" : ""}
-              onClick={() => setTab(id)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* 檢視由篩選器決定，不再有組別／單位／指標模式切換列。 */}
 
       <ResultsQueryPanel ctx={view} />
       <ResultsManageTab ctx={view} />

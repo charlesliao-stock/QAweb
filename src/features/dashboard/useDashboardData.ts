@@ -12,6 +12,9 @@
  * 載入時自動校正任務狀態（完成→done；逾期→locked；其餘→pending，沿用 v1.12.2 模式）。
  */
 import { loadRefCollection } from "../../lib/refLoad";
+import { useAuth } from "../../lib/auth";
+import { loadCapaCases } from "../capa/store";
+import type { CapaCase } from "../capa/model";
 import { useCallback, useEffect, useState } from "react";
 import {
   collection,
@@ -77,6 +80,17 @@ export interface DashUnlock {
   status: string;
 }
 
+/** 審查員未送出的伺服器端暫存（reviewDrafts，createdBy＝本人）。 */
+export interface DashDraft {
+  id: string;
+  taskId: string;
+  indicatorId: string;
+  reviewedPersonEmpNo: string;
+  reviewedPersonName: string;
+  reviewDate: string;
+  updatedAt: unknown;
+}
+
 export interface DashboardData {
   indicators: DashIndicator[];
   indicatorMap: Map<string, string>;
@@ -88,6 +102,10 @@ export interface DashboardData {
   tasks: DashTask[];
   records: DashRecord[];
   unlockPending: DashUnlock[];
+  /** v1.88.35 四群：CAPA 全量（完成率用；已撤案排除由呼叫端算）、本人草稿、本人全部紀錄（第 4 群期間統計用）。 */
+  capaCases: CapaCase[];
+  drafts: DashDraft[];
+  myRecords: DashRecord[];
   loading: boolean;
   reload: () => void;
   /**
@@ -204,6 +222,9 @@ interface DashboardSnapshot {
   tasks: DashTask[];
   records: DashRecord[];
   unlockPending: DashUnlock[];
+  capaCases: CapaCase[];
+  drafts: DashDraft[];
+  myRecords: DashRecord[];
   correctionSkipped: boolean;
 }
 let dashboardCache: DashboardSnapshot | null = null;
@@ -212,12 +233,17 @@ let forceNextRead = false;
 export function useDashboardData(): DashboardData {
   const win = dashboardMonthWindow(new Date());
   const { curYear, curMonth, nextYear, nextMonth } = win;
+  const { user } = useAuth();
+  const staffId = user?.staffId ?? "";
   const [indicators, setIndicators] = useState<DashIndicator[]>([]);
   const [groups, setGroups] = useState<DashGroup[]>([]);
   const [units, setUnits] = useState<DashUnit[]>([]);
   const [tasks, setTasks] = useState<DashTask[]>([]);
   const [records, setRecords] = useState<DashRecord[]>([]);
   const [unlockPending, setUnlockPending] = useState<DashUnlock[]>([]);
+  const [capaCases, setCapaCases] = useState<CapaCase[]>([]);
+  const [drafts, setDrafts] = useState<DashDraft[]>([]);
+  const [myRecords, setMyRecords] = useState<DashRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [correctionSkipped, setCorrectionSkipped] = useState(false);
   const [correctionFailed, setCorrectionFailed] = useState(false);
@@ -250,6 +276,9 @@ export function useDashboardData(): DashboardData {
       setTasks(hit.tasks);
       setRecords(hit.records);
       setUnlockPending(hit.unlockPending);
+      setCapaCases(hit.capaCases);
+      setDrafts(hit.drafts);
+      setMyRecords(hit.myRecords);
       setCorrectionSkipped(hit.correctionSkipped);
       setLoading(false);
       return;
@@ -261,7 +290,7 @@ export function useDashboardData(): DashboardData {
       try {
         const db = getFirebaseDb();
         const today = todayStr();
-        const [isnap, gsnap, usnap, monthTsnap, nextTsnap, lockedTsnap, monthRsnap, alertRsnap, usnap2] = await Promise.all([
+        const [isnap, gsnap, usnap, monthTsnap, nextTsnap, lockedTsnap, monthRsnap, alertRsnap, usnap2, capaList, draftSnap, myRecSnap] = await Promise.all([
           loadRefCollection("indicators"),
           loadRefCollection("groups"),
           loadRefCollection("units"),
@@ -306,6 +335,25 @@ export function useDashboardData(): DashboardData {
               where("status", "==", "pending"),
             ),
           ).catch(() => ({ docs: [] as never[] })),
+          // v1.88.35 四群：CAPA 全量（完成率用）、本人草稿、本人全部紀錄
+          //（第 4 群年度／學年度統計用；皆為單欄位等號查詢，免複合索引）。
+          loadCapaCases().catch(() => [] as CapaCase[]),
+          staffId
+            ? getDocs(
+                query(
+                  collection(db, "reviewDrafts"),
+                  where("createdBy", "==", staffId),
+                ),
+              ).catch(() => ({ docs: [] as never[] }))
+            : Promise.resolve({ docs: [] as never[] }),
+          staffId
+            ? getDocs(
+                query(
+                  collection(db, "reviewRecords"),
+                  where("reviewedPersonEmpNo", "==", staffId),
+                ),
+              ).catch(() => ({ docs: [] as never[] }))
+            : Promise.resolve({ docs: [] as never[] }),
         ]);
         if (cancelled) return;
         const inds: DashIndicator[] = [];
@@ -590,6 +638,26 @@ export function useDashboardData(): DashboardData {
           },
         );
         if (cancelled) return;
+        // 本人草稿（未送出暫存；reviewDrafts 的 status 恆為 "draft"）
+        const draftList: DashDraft[] = (
+          draftSnap.docs as { id: string; data: () => Record<string, unknown> }[]
+        )
+          .map((d) => {
+            const v = d.data();
+            return {
+              id: d.id,
+              taskId: String(v.taskId ?? ""),
+              indicatorId: String(v.indicatorId ?? ""),
+              reviewedPersonEmpNo: String(v.reviewedPersonEmpNo ?? ""),
+              reviewedPersonName: String(v.reviewedPersonName ?? ""),
+              reviewDate: String(v.reviewDate ?? ""),
+              updatedAt: v.updatedAt,
+            };
+          })
+          .sort((a, b) => (b.reviewDate || "").localeCompare(a.reviewDate || ""));
+        const myRecList: DashRecord[] = (
+          myRecSnap.docs as { id: string; data: () => Record<string, unknown> }[]
+        ).map((d) => parseRecord(d.id, d.data()));
         dashboardCache = {
           key: cacheKey,
           at: Date.now(),
@@ -599,6 +667,9 @@ export function useDashboardData(): DashboardData {
           tasks: list,
           records: recs,
           unlockPending: ups,
+          capaCases: capaList,
+          drafts: draftList,
+          myRecords: myRecList,
           correctionSkipped: skipped,
         };
         setIndicators(inds);
@@ -607,6 +678,9 @@ export function useDashboardData(): DashboardData {
         setTasks(list);
         setRecords(recs);
         setUnlockPending(ups);
+        setCapaCases(capaList);
+        setDrafts(draftList);
+        setMyRecords(myRecList);
         setCorrectionSkipped(skipped);
       } catch {
         /* 讀不到就顯示空狀態 */
@@ -636,6 +710,9 @@ export function useDashboardData(): DashboardData {
     tasks,
     records,
     unlockPending,
+    capaCases,
+    drafts,
+    myRecords,
     loading,
     reload,
     correctionSkipped,

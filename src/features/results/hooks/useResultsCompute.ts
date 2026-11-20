@@ -22,7 +22,7 @@ import type { useResultsScope } from "./useResultsScope";
 import type { useResultsQuery } from "./useResultsQuery";
 
 export function useResultsCompute(prev: ReturnType<typeof useResultsState> & ReturnType<typeof useResultsScope> & ReturnType<typeof useResultsQuery>) {
-  const { tempTaskIds, tempTaskKeys, appliedColumns, archiveCtx, scopedRecords, allMonths, records, scope, visibleUnitCodes, reviewerTaskUnitCodes, tasks, summaryPlans, indicators, units, selUnit, tab, applied, errorUnit, selIndicator, groups, user, selGroup, setSelGroup, selGroup2, setSelGroup2, setSelUnit, setSelIndicator, selGroupU, selIndU, setSelGroupU, setSelIndU, selIndG, selUnitG, setSelIndG, hideEmptyMonths, unitUnit, groupUnit, startMonth, endMonth, interval } = prev;
+  const { tempTaskIds, tempTaskKeys, appliedColumns, archiveCtx, scopedRecords, allMonths, records, scope, visibleUnitCodes, reviewerTaskUnitCodes, tasks, summaryPlans, indicators, units, selUnit, tab, applied, errorUnit, selIndicator, groups, user, selGroup, selGroup2, selGroupU, selIndU, setSelGroupU, setSelIndU, selIndG, selUnitG, setSelIndG, hideEmptyMonths, unitUnit, groupUnit, startMonth, endMonth, interval } = prev;
 
   const hasTempReview = (
     indicatorId: string,
@@ -434,25 +434,10 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
     return scopedUnits.every((u) => !u.groupId);
   }, [user?.unitCode, scope.kind, units, scopedUnits]);
 
-  // 選項預設（資料載入後補）
-  useEffect(() => {
-    if (scopedGroups.length > 0 && !scopedGroups.some((g) => g.id === selGroup))
-      setSelGroup(scopedGroups[0].id);
-  }, [scopedGroups, selGroup]);
-  useEffect(() => {
-    if (scopedGroups.length > 0 && !scopedGroups.some((g) => g.id === selGroup2))
-      setSelGroup2(scopedGroups[0].id);
-  }, [scopedGroups, selGroup2]);
-  useEffect(() => {
-    if (
-      scopedUnits.length > 0 &&
-      selUnit !== NA_UNIT &&
-      !scopedUnits.some((u) => u.code === selUnit)
-    )
-      setSelUnit(scopedUnits[0].code);
-    else if (selUnit === NA_UNIT && !hasNaUnit)
-      setSelUnit(scopedUnits[0]?.code ?? "");
-  }, [scopedUnits, selUnit, hasNaUnit]);
+  // 不再自動預設第一個組別／單位：檢視由使用者在篩選器決定，
+  // 三者皆未選時按搜尋只顯示提示、不查詢（見 handleQuery）。
+  // 篩選值若因權限範圍變動而失效，仍由下方各別的重設 effect 收斂
+  // （例如選了範圍外的組別時，組別分析不列該組指標）。
 
   const indOf = useMemo(
     () => new Map(indicators.map((i) => [i.id, i])),
@@ -491,13 +476,9 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
     () => indicators.filter((i) => i.groupId === selGroup2),
     [indicators, selGroup2],
   );
-  useEffect(() => {
-    if (
-      indTabIndicators.length > 0 &&
-      !indTabIndicators.some((i) => i.id === selIndicator)
-    )
-      setSelIndicator(indTabIndicators[0].id);
-  }, [indTabIndicators, selIndicator]);
+  // 不再自動挑該組第一支指標：選了品管組但未選指標時，應顯示品管組
+  // 分析（該組全部指標），而非跳到單一指標分析。換組別時指標由篩選列
+  // 的 onChange 重設（不在該組者清空），這裡不代勞。
 
   // 單位分析：該單位在所選期間的指標（依編號排序，再經組別／指標過濾）。
   // v1.88.33 Q11：有排程即列——除了有審查紀錄者，該單位在期間內有審查任務

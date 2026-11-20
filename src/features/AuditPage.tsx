@@ -23,6 +23,8 @@
  * 含無分工表的臨時加審／自審）；檢視彈窗按身分限縮單位摘要／明細
  * （審查員＝被指派單位、護理長＝自審本人單位、召集人／執行幹事＝所屬群組
  * 整列、管理員／高階主管＝全部）。執行頁 assignedUnitIds 限縮不動。
+ * 解鎖申請核准／駁回（舊 OfficerTab 解鎖待辦移入本頁）：僅「品管組執行幹事」／
+ * 系統管理員（firestore.rules isGanShi()）看得到、才能操作。
  */
 import { loadRefCollection } from "../lib/refLoad";
 import { toErrorMessage } from "../lib/errors";
@@ -41,6 +43,8 @@ import {
   getDocs,
   limit,
   query,
+  serverTimestamp,
+  updateDoc,
   where,
 } from "../lib/db";
 import { getFirebaseDb } from "../lib/firebase";
@@ -76,9 +80,9 @@ import {
   type EditRequest,
 } from "../lib/editRequests";
 import { usePermissions } from "../lib/usePermissions";
-import { maskName, staffLabel } from "../lib/mask";
+import { displayUnitCode, maskName, staffLabel } from "../lib/mask";
 import { hasCurrentMonthSchedule } from "../lib/indicatorOverview";
-import { fmtIsoDateTime, fmtYmd } from "../lib/ym";
+import { fmtIsoDateTime, fmtTsDate, fmtYm, fmtYmd } from "../lib/ym";
 import {
   normalizeAssignmentItem,
   parseIndicatorSchedule,
@@ -171,6 +175,21 @@ interface MonthOption {
   month: number;
   year: number;
   label: string;
+}
+
+/** 解鎖申請（unlockRequests，status 待審核者；欄位與舊 OfficerTab 解鎖待辦一致）。 */
+interface UnlockReq {
+  id: string;
+  taskId: string;
+  indicatorId: string;
+  unitId: string;
+  year: number;
+  month: number;
+  requestedBy: string;
+  requestedByName: string;
+  reason: string;
+  /** 申請時間（createdAt，Firestore Timestamp 或空值） */
+  createdAt: unknown;
 }
 
 interface ActiveRow {
@@ -383,6 +402,19 @@ export function AuditPage({
   const [reqModalOpen, setReqModalOpen] = useState(false);
   const [viewLoadingKey, setViewLoadingKey] = useState<string | null>(null);
   const [reqBusyId, setReqBusyId] = useState<string | null>(null);
+  /** 解鎖申請（舊 OfficerTab 解鎖待辦移至本頁）：待審核清單與指標名稱對照。 */
+  const [unlockPending, setUnlockPending] = useState<UnlockReq[]>([]);
+  const [unlockIndicatorNames, setUnlockIndicatorNames] = useState<
+    Map<string, string>
+  >(new Map());
+  /**
+   * 可核准解鎖者＝firestore.rules isGanShi() 對應身分（「品管組執行幹事」
+   * 或系統管理員）；只有他們看得到解鎖區、才能操作。舊 OfficerTab 顯示
+   * 給較廣的執行幹事版型，但 rules 只放行上述身分寫回，寫了也會被擋，
+   * 故本區直接以實際可核准者為門檻。
+   */
+  const [canUnlockApprove, setCanUnlockApprove] = useState(false);
+  const [unlockBusyId, setUnlockBusyId] = useState<string | null>(null);
   /** v1.65.2：自上次進入品管審查後，有效排程的新增／取消 */
   const [scheduleChanges, setScheduleChanges] = useState<{
     added: string[];
@@ -961,6 +993,65 @@ export function AuditPage({
         } catch {
           // 讀不到待審申請不影響清單
         }
+        // 解鎖申請（舊 OfficerTab 解鎖待辦移至本頁；寫回門檻見 canUnlockApprove）：
+        // 只有可核准者才讀取、才看得到；沿用舊版行為，待審核者全數列出（不另限範圍）。
+        const unlockApprover =
+          isAdmin || roles.includes("品管組執行幹事");
+        if (!cancelled) setCanUnlockApprove(unlockApprover);
+        if (!cancelled)
+          setUnlockIndicatorNames(
+            new Map([...indicators.entries()].map(([id, ind]) => [id, ind.name])),
+          );
+        if (unlockApprover) {
+          try {
+            const uSnap = await getDocs(
+              query(
+                collection(db, "unlockRequests"),
+                where("status", "==", "pending"),
+              ),
+            );
+            if (!cancelled) {
+              const list: UnlockReq[] = uSnap.docs.map((d) => {
+                const v = d.data() as Record<string, unknown>;
+                return {
+                  id: d.id,
+                  taskId: String(v.taskId ?? ""),
+                  indicatorId: String(v.indicatorId ?? ""),
+                  unitId: String(v.unitId ?? ""),
+                  year: Number(v.year ?? 0),
+                  month: Number(v.month ?? 0),
+                  requestedBy: String(v.requestedBy ?? ""),
+                  requestedByName: String(v.requestedByName ?? ""),
+                  reason: String(v.reason ?? ""),
+                  createdAt: v.createdAt,
+                };
+              });
+              // 申請時間新者在前；無時間者排後（舊 OfficerTab 無排序，依查詢順序）
+              const createdMs = (u: UnlockReq): number => {
+                try {
+                  const t = u.createdAt as { toDate?: () => Date };
+                  const d =
+                    t && typeof t.toDate === "function" ? t.toDate() : null;
+                  return d ? d.getTime() : 0;
+                } catch {
+                  return 0;
+                }
+              };
+              list.sort(
+                (a, b) =>
+                  createdMs(b) - createdMs(a) ||
+                  a.year - b.year ||
+                  a.month - b.month,
+              );
+              setUnlockPending(list);
+            }
+          } catch {
+            // 讀不到解鎖申請不影響清單
+            if (!cancelled) setUnlockPending([]);
+          }
+        } else if (!cancelled) {
+          setUnlockPending([]);
+        }
         setRows(out);
       } catch (e) {
         if (!cancelled) onAction(`讀取品管審查清單失敗：${toErrorMessage(e)}`);
@@ -1330,6 +1421,36 @@ export function AuditPage({
     }
   }
 
+  /**
+   * 解鎖核准／駁回（舊 OfficerTab handleUnlock 原樣搬移）：unlockRequests
+   * 狀態＋handledBy／handledAt，核准時 reviewTasks 回到 pending。
+   * 寫回門檻由 firestore.rules isGanShi() 把關（品管組執行幹事／管理員）。
+   */
+  async function handleUnlockDecision(u: UnlockReq, approve: boolean) {
+    if (!user) return;
+    setUnlockBusyId(u.id);
+    try {
+      const db = getFirebaseDb();
+      await updateDoc(doc(db, "unlockRequests", u.id), {
+        status: approve ? "approved" : "rejected",
+        handledBy: user.staffId,
+        handledAt: serverTimestamp(),
+      });
+      if (approve) {
+        await updateDoc(doc(db, "reviewTasks", u.taskId), {
+          status: "pending",
+        });
+      }
+      setUnlockPending((prev) => prev.filter((x) => x.id !== u.id));
+      onAction(approve ? "已核准解鎖，任務回到待完成" : "已駁回解鎖申請");
+      setDataRefreshKey((k) => k + 1);
+    } catch (e) {
+      onAction(`處理失敗：${toErrorMessage(e)}`);
+    } finally {
+      setUnlockBusyId(null);
+    }
+  }
+
   function openExec(row: ActiveRow) {
     setExecRow(row);
     setExecTaskKeys(null);
@@ -1650,6 +1771,68 @@ export function AuditPage({
             前往審核
           </button>
         </p>
+      )}
+      {canUnlockApprove && (
+        <section className="panel">
+          <SectionTitle
+            title="解鎖申請"
+            note={`共 ${unlockPending.length} 筆待審核`}
+          />
+          {unlockPending.length === 0 ? (
+            <p className="settings-note">目前無待審核的解鎖申請。</p>
+          ) : (
+            <div className="table-scroll dashboard-responsive-table">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>任務月份</th>
+                    <th>指標名稱</th>
+                    <th>審查單位</th>
+                    <th>申請人</th>
+                    <th>申請原因</th>
+                    <th>申請時間</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unlockPending.map((u) => (
+                    <tr key={u.id}>
+                      <td data-label="任務月份">{fmtYm(u.year, u.month)}</td>
+                      <td data-label="指標名稱">
+                        {unlockIndicatorNames.get(u.indicatorId) ??
+                          stripInternalIdPrefix(u.indicatorId)}
+                      </td>
+                      <td data-label="審查單位">{displayUnitCode(u.unitId)}</td>
+                      <td data-label="申請人">
+                        {staffLabel(u.requestedBy, u.requestedByName ?? "")}
+                      </td>
+                      <td data-label="申請原因" style={{ maxWidth: 240 }}>
+                        {u.reason || "—"}
+                      </td>
+                      <td data-label="申請時間">{fmtTsDate(u.createdAt)}</td>
+                      <td data-label="操作">
+                        <button
+                          className="text-button"
+                          disabled={unlockBusyId === u.id}
+                          onClick={() => void handleUnlockDecision(u, true)}
+                        >
+                          核准
+                        </button>{" "}
+                        <button
+                          className="text-button"
+                          disabled={unlockBusyId === u.id}
+                          onClick={() => void handleUnlockDecision(u, false)}
+                        >
+                          駁回
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       )}
       {initialIndicatorRef.current &&
         !loading &&

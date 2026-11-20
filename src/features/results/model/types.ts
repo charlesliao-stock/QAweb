@@ -36,6 +36,8 @@ export type TabId = "group" | "unit" | "indicator" | "import" | "manage";
  * v1.88.33：結果分析頂層只留三部分（Q1）。
  * TabId 的 group／unit／indicator 改為「結果分析」內的查詢模式；
  * import／manage 仍保留在 TabId 供舊參照比對，但頂層切換走 section。
+ * 其後再改：模式切換列拿掉，tab 改為內部檢視狀態，由篩選器推導
+ * （指標＞單位＞品管組，見 handleQuery），不再由使用者直接切換。
  */
 export type ResultsSection = "analysis" | "import" | "manage";
 

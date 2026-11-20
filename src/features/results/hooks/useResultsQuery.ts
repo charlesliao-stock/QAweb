@@ -17,7 +17,7 @@ import type { useResultsState } from "./useResultsState";
 import type { useResultsScope } from "./useResultsScope";
 
 export function useResultsQuery(prev: ReturnType<typeof useResultsState> & ReturnType<typeof useResultsScope>) {
-  const { tab, section, selIndG, selIndicator, selIndU, setSelfReviewTempKeys, setIndicators, setGroups, setUnits, setMetaLoaded, startMonth, endMonth, interval, applied, rawFull, scope, archiveCtx, indicators, selGroup, selGroupU, visibleUnitCodes, setRawHint, setRawFull, setPendingChart, archiveReady, setLoading, cacheScope, setRecords, setTasks, setIndexFallback, setIndexFallbackDismissed, setFetchedAt, reloadNonce, isNurseLeader, setInterval, now, setStartMonth, setEndMonth, setApplied, setReloadNonce, tasks, records, selfReviewTempKeys } = prev;
+  const { tab, setTab, section, selIndG, selIndicator, selIndU, setSelfReviewTempKeys, setIndicators, setGroups, setUnits, setMetaLoaded, startMonth, endMonth, interval, applied, rawFull, scope, archiveCtx, indicators, selGroup, selGroupU, selUnit, setSearchPrompt, visibleUnitCodes, setRawHint, setRawFull, setPendingChart, archiveReady, setLoading, cacheScope, setRecords, setTasks, setIndexFallback, setIndexFallbackDismissed, setFetchedAt, reloadNonce, isNurseLeader, setInterval, now, setStartMonth, setEndMonth, setApplied, setReloadNonce, tasks, records, selfReviewTempKeys } = prev;
 
   /**
    * v1.28 階段 7（B7）：單一指標限縮查詢的指標。
@@ -564,8 +564,27 @@ export function useResultsQuery(prev: ReturnType<typeof useResultsState> & Retur
       setEndMonth(`${y}-${pad2(m)}`);
     }
   }
+  /**
+   * 檢視由篩選器決定（不再有組別／單位／指標模式標籤）：
+   * 指標有選 → 單一指標分析；未選指標、單位有選 → 單位分析；
+   * 未選指標與單位、品管組有選 → 品管組分析。
+   * 複合篩選維持交集，優先順序指標＞單位＞品管組。
+   */
+  function resolveView(): "group" | "unit" | "indicator" | null {
+    if (selIndicator) return "indicator";
+    if (selUnit) return "unit";
+    if (selGroup) return "group";
+    return null;
+  }
   function handleQuery() {
     if (!rangeValid || section !== "analysis") return;
+    const view = resolveView();
+    if (!view) {
+      setSearchPrompt("請先選擇品管組、單位或指標其中之一，再按「搜尋」。");
+      return;
+    }
+    setSearchPrompt("");
+    setTab(view);
     invalidateCachedYears("reviewRecords", queryLoadYears, cacheScope);
     invalidateCachedYears("reviewTasks", queryLoadYears, cacheScope);
     setApplied({ years: queryLoadYears, startMonth, endMonth, interval });

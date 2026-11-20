@@ -6,13 +6,13 @@
  * 不再分曲線／文件兩種面板）。
  */
 import { EmptyState, SectionTitle } from "../../../components/ui";
-import { RateMatrix } from "../components/small";
+import { RateMatrix, UnitModeToggle } from "../components/small";
 import { RowDetailPanel } from "./RowDetailPanel";
 import { capaInColumn } from "../model/format";
 import type { ResultsView } from "../hooks/useResultsAnalysis";
 
 export function UnitTab({ ctx }: { ctx: ResultsView }) {
-  const { section, tab, applied, loading, unitIndicators, selUnit, unitNameOf, periodDesc, unitUnit, matrixRows, visibleColumns, cellValue, rowIndOf, selUnitCode, hasTempReview, indOf, unitCapaCases, openDrill, requireRaw, rowPanel, setRowPanel } = ctx;
+  const { section, tab, applied, loading, unitIndicators, selUnit, unitNameOf, periodDesc, unitUnit, setUnitMode, matrixRows, visibleColumns, cellValue, rowIndOf, selUnitCode, hasTempReview, indOf, unitCapaCases, openDrill, requireRaw, rowPanel, setRowPanel } = ctx;
 
   const toggleRow = (
     rowId: string,
@@ -59,6 +59,9 @@ export function UnitTab({ ctx }: { ctx: ResultsView }) {
                 title={`${selUnit}・${unitNameOf.get(selUnit) ?? ""} 達閾值率`}
                 note={`${periodDesc}・單元：${unitUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}・點指標列展開曲線圖與細項結果`}
               />
+              <div className="results-matrix-toggle">
+                <UnitModeToggle mode={unitUnit} onChange={setUnitMode} />
+              </div>
               <RateMatrix
                 rows={matrixRows}
                 columns={visibleColumns}

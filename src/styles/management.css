@@ -848,6 +848,45 @@
     color: var(--teal);
     font-weight: 700;
   }
+  /* 底部導覽「更多」彈出選單（v1.88.35） */
+  .mobile-bottom-nav-backdrop {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 59px;
+    background: transparent;
+    border: 0;
+    padding: 0;
+  }
+  .mobile-bottom-nav-more {
+    position: absolute;
+    right: 6px;
+    bottom: 66px;
+    min-width: 190px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    background: var(--hatch-widget-surface, #ffffff);
+    border: 1px solid var(--hatch-widget-border, #e8edef);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+  }
+  .mobile-bottom-nav-more button {
+    flex: none;
+    flex-direction: row;
+    justify-content: flex-start;
+    height: auto;
+    padding: 10px 12px;
+    gap: 10px;
+    color: var(--hatch-widget-text, #1f2a2e);
+    font-size: 14px;
+    border-radius: 8px;
+  }
+  .mobile-bottom-nav-more button.active {
+    background: var(--hatch-widget-surface-muted, #f2f6f7);
+  }
   .toast-message {
     right: 12px;
     bottom: 72px;

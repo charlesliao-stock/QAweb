@@ -4,12 +4,12 @@
  * 點指標列即在矩陣下方展開該指標曲線圖＋細項結果（Q8，不再開彈窗）。
  */
 import { EmptyState, SectionTitle } from "../../../components/ui";
-import { RateMatrix } from "../components/small";
+import { RateMatrix, UnitModeToggle } from "../components/small";
 import { RowDetailPanel } from "./RowDetailPanel";
 import type { ResultsView } from "../hooks/useResultsAnalysis";
 
 export function GroupTab({ ctx }: { ctx: ResultsView }) {
-  const { section, tab, applied, loading, ownUnitUngrouped, groupIndicators, groupUnitCode, groupNameOf, selGroup, periodDesc, groupUnit, matrixRows, visibleColumns, cellValue, rowIndOf, hasTempReview, openDrill, openChart, rowSpansOf, openDoc, rowPanel, setRowPanel, requireRaw } = ctx;
+  const { section, tab, applied, loading, ownUnitUngrouped, groupIndicators, groupUnitCode, groupNameOf, selGroup, periodDesc, groupUnit, setUnitMode, matrixRows, visibleColumns, cellValue, rowIndOf, hasTempReview, openDrill, openChart, rowSpansOf, openDoc, rowPanel, setRowPanel, requireRaw } = ctx;
 
   const toggleRow = (rowId: string) => {
     const indicatorId = rowIndOf(rowId);
@@ -51,6 +51,9 @@ export function GroupTab({ ctx }: { ctx: ResultsView }) {
                 title={`${groupNameOf.get(selGroup) ?? selGroup}・達閾值率`}
                 note={`${periodDesc}・單元：${groupUnit === "unit" ? "單位（達閾值單位數／總單位數）" : "人次（合併）"}・點指標列展開曲線圖與細項結果`}
               />
+              <div className="results-matrix-toggle">
+                <UnitModeToggle mode={groupUnit} onChange={setUnitMode} />
+              </div>
               <RateMatrix
                 rows={matrixRows}
                 columns={visibleColumns}

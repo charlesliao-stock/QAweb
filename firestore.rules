@@ -409,6 +409,19 @@ service cloud.firestore {
       allow create, delete: if false;
     }
 
+    // 系統公告（v1.88.35 儀表板設定）：登入者可讀（前端再依對象／有效期過濾）；
+    // 建立／刪除僅系統管理員；更新限管理員，或本人僅在 readBy 加入自己職編。
+    match /announcements/{id} {
+      allow get, list: if isAuthed();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        isAuthed()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
+        && request.resource.data.get('readBy', []).hasAll(resource.data.get('readBy', []))
+        && request.resource.data.get('readBy', []).hasAll([staffId()])
+      );
+    }
+
     // 系統參數：登入可讀，管理員可寫
     match /systemParams/{id} {
       allow read: if isAuthed();

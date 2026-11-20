@@ -743,6 +743,9 @@ function Shell() {
     clearLaunches();
     setPage(target);
   }, [clearLaunches]);
+  // 手機版底部導覽「更多」選單開關（v1.88.35；桌機維持側邊欄）
+  const [moreOpen, setMoreOpen] = useState(false);
+  const MORE_PAGE_IDS: PageId[] = ["indicators", "schedule", "capa", "handoff", "groups", "admin", "permissions"];
   // 從總覽進指標編輯頁的返回：清掉帶入參數、回到指標總覽
   // （不經指標管理清單；指標頁內部以 fromOverview 決定返回目的地）。
   const backToOverview = useCallback(() => {
@@ -1087,24 +1090,65 @@ function Shell() {
       )}
       <nav className="mobile-bottom-nav" aria-label="手機主要導覽">
         {[
-          { id: "dashboard", label: "總覽", icon: LayoutDashboard },
-          { id: "indicators", label: "指標", icon: BookOpenCheck },
-          { id: "audit", label: "品管", icon: ClipboardCheck },
-          { id: "results", label: "結果", icon: FileBarChart2 },
-          { id: "groups", label: "更多", icon: Menu },
+          { id: "dashboard", label: "首頁", icon: LayoutDashboard },
+          { id: "overview", label: "總覽", icon: ListChecks },
+          { id: "audit", label: "審查", icon: ClipboardCheck },
+          { id: "results", label: "分析", icon: FileBarChart2 },
         ].filter((item) => canViewPage(item.id as PageId)).map((item) => {
           const Icon = item.icon;
           return (
             <button
               key={item.id}
               className={navPage === item.id ? "active" : ""}
-              onClick={() => goPage(item.id as PageId)}
+              onClick={() => { setMoreOpen(false); goPage(item.id as PageId); }}
             >
               <Icon size={19} />
               <span>{item.label}</span>
             </button>
           );
         })}
+        <button
+          className={moreOpen || MORE_PAGE_IDS.includes(navPage) ? "active" : ""}
+          aria-expanded={moreOpen}
+          aria-haspopup="true"
+          onClick={() => setMoreOpen((v) => !v)}
+        >
+          <Menu size={19} />
+          <span>更多</span>
+        </button>
+        {moreOpen && (
+          <>
+            <button
+              className="mobile-bottom-nav-backdrop"
+              aria-label="關閉更多選單"
+              onClick={() => setMoreOpen(false)}
+            />
+            <div className="mobile-bottom-nav-more" role="menu">
+              {[
+                { id: "indicators", label: "指標管理", icon: BookOpenCheck },
+                { id: "schedule", label: "排程", icon: CalendarDays },
+                { id: "capa", label: "CAPA", icon: Activity },
+                { id: "handoff", label: "任務交接", icon: ArrowRightLeft },
+                { id: "groups", label: "品管組與人員", icon: GitBranch },
+                { id: "admin", label: "系統管理", icon: Settings2 },
+                { id: "permissions", label: "權限管理", icon: ShieldCheck },
+              ].filter((item) => canViewPage(item.id as PageId)).map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    role="menuitem"
+                    className={navPage === item.id ? "active" : ""}
+                    onClick={() => { setMoreOpen(false); goPage(item.id as PageId); }}
+                  >
+                    <Icon size={17} />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
       </nav>
     </div>
   );

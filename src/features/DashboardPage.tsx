@@ -1,5 +1,19 @@
+/**
+ * 儀表板（v1.88.35 四群設定；取代 7 版變體）。
+ * 四群：(1)委員會各角色、部級各職稱；(2)品管組召集人、執行幹事、組長；
+ * 單位護理長／副護理長；(3)品管組審查員；(4)護理師。
+ * 各群只顯示定案項目＋系統公告；舊版專屬區塊（48h 通報、轄區進度表、
+ * 組別達標率、雷達／紅旗等）已從儀表板拿掉，那些是純資訊顯示，底層資料
+ * 仍可在品管審查／結果分析查到。注意：解鎖核准／駁回的唯一 UI 原本在
+ * OfficerTab（儀表板），本次刪除後目前無入口（useDashboardData 仍載入
+ * unlockPending 備用）；去處待用戶定案（建議排程頁或品管審查頁）。
+ * CAPA 待審核卡只是快捷入口，審核流程本身在 CAPA 頁完整保留。
+ * 舊「匯出摘要」鈕本就是佔位（點了只提示尚未串接），拿掉無功能損失。
+ * 顯示設定舊旗標（dashboardSections）不再使用：管理頁「儀表板顯示」
+ * 頁籤已移除，旗標鍵保留在 lib 內僅供相容，不再影響畫面。
+ */
 import { useEffect, useMemo, useState } from "react";
-import { Download, Eye, RotateCcw } from "lucide-react";
+import { Eye } from "lucide-react";
 import { PageHeading } from "../components/ui";
 import { maskName } from "../lib/mask";
 import { useAuth } from "../lib/auth";
@@ -8,46 +22,26 @@ import { getFirebaseDb } from "../lib/firebase";
 import { doc } from "../lib/db";
 import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
 import { getDocCacheFirst } from "../lib/cacheFirst";
-import { sortByLevel } from "../lib/orgLevels";
 import {
-  getDashboardVariants,
-  VARIANT_LABELS,
-  VARIANT_ORDER,
-  type DashboardVariant,
-} from "../lib/dashboardVariant";
-import {
-  parseDashboardSectionOverrides,
-  dashboardVariantForRole,
-  dashboardVariantForTitle,
-  resolveDashboardSectionsForTarget,
-  type DashboardSectionOverrides,
-} from "../lib/dashboardVisibility";
-import {
-  parseDashboardSections,
-  type DashboardSections,
-} from "../lib/dashboardSections";
+  dashboardGroupFor,
+  dashboardGroupScope,
+  DASHBOARD_GROUP_LABELS,
+  DASHBOARD_GROUP_TITLES,
+  type DashboardGroup,
+} from "../lib/dashboardGroups";
 import { useDashboardData } from "./dashboard/useDashboardData";
+import { AnnouncementsSection } from "./dashboard/AnnouncementsSection";
+import { Group1Tab } from "./dashboard/Group1Tab";
+import { Group2Tab } from "./dashboard/Group2Tab";
+import { Group3Tab } from "./dashboard/Group3Tab";
+import { Group4Tab } from "./dashboard/Group4Tab";
 import {
   ReviewExecutePage,
   type ExecuteTarget,
 } from "./ReviewExecutePage";
-import { ReviewerTab } from "./dashboard/ReviewerTab";
-import { NurseTab } from "./dashboard/NurseTab";
-import { HeadNurseTab } from "./dashboard/HeadNurseTab";
-import { OfficerTab } from "./dashboard/OfficerTab";
-import { ConvenerTab } from "./dashboard/ConvenerTab";
-import { SupervisorTab } from "./dashboard/SupervisorTab";
-import { DirectorTab } from "./dashboard/DirectorTab";
 import type { StatsCycle } from "../lib/resultAnalysis";
 
-interface DashboardPreview {
-  kind: "role" | "title";
-  id: string;
-  name: string;
-  variant: DashboardVariant;
-}
-
-const EMPTY_OVERRIDES: DashboardSectionOverrides = { roles: {}, titles: {} };
+const GROUP_ORDER: DashboardGroup[] = ["g1", "g2", "g3", "g4"];
 
 export function DashboardPage({
   onAction,
@@ -58,29 +52,10 @@ export function DashboardPage({
   const data = useDashboardData();
   const orgMeta = useOrgMeta();
   const [executing, setExecuting] = useState<ExecuteTarget | null>(null);
-  const [previewValue, setPreviewValue] = useState("");
   /** 統計週期（systemParams/config.statsCycle；缺值預設 year） */
   const [statsCycle, setStatsCycle] = useState<StatsCycle>("year");
-  const [adminSections, setAdminSections] = useState<Partial<DashboardSections>>({});
-  const [sectionOverrides, setSectionOverrides] = useState<DashboardSectionOverrides>(EMPTY_OVERRIDES);
+  const [previewGroup, setPreviewGroup] = useState<DashboardGroup | "">("");
   const isAdmin = (user?.roles ?? []).includes("系統管理員");
-  // 預覽下拉：依層級順序排列（層級 order → 儀表板優先序 → 名稱），無層級者排最後
-  const roleOptions = useMemo(
-    () => sortByLevel(
-      orgMeta.roleTargets.filter((target) => target.name !== "系統管理員"),
-      orgMeta.roleLevels,
-      (target) => VARIANT_ORDER.indexOf(dashboardVariantForRole(target.name, orgMeta.roleMeta)),
-    ),
-    [orgMeta.roleTargets, orgMeta.roleLevels, orgMeta.roleMeta],
-  );
-  const titleOptions = useMemo(
-    () => sortByLevel(
-      orgMeta.titleTargets,
-      orgMeta.titleLevels,
-      (target) => VARIANT_ORDER.indexOf(dashboardVariantForTitle(target.flags)),
-    ),
-    [orgMeta.titleTargets, orgMeta.titleLevels],
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -92,8 +67,6 @@ export function DashboardPage({
         if (cancelled) return;
         const config = snap.data() as Record<string, unknown> | undefined;
         setStatsCycle(config?.statsCycle === "academic" ? "academic" : "year");
-        setAdminSections(parseDashboardSections(config?.dashboardSections));
-        setSectionOverrides(parseDashboardSectionOverrides(config?.dashboardSectionOverrides));
       } catch {
         if (!cancelled) setStatsCycle("year");
       }
@@ -101,72 +74,55 @@ export function DashboardPage({
     return () => { cancelled = true; };
   }, []);
 
-  const variants = useMemo(
-    () => getDashboardVariants(
-      {
-        roles: user?.roles ?? [],
-        title: user?.title ?? "",
-        titleId: user?.titleId,
-        isAdmin,
-      },
-      {
-        roleMeta: orgMeta.roleMeta,
-        titleMeta: orgMeta.titleMeta,
-        titleMetaById: orgMeta.titleMetaById,
-      },
-    ),
-    [user, isAdmin, orgMeta.roleMeta, orgMeta.titleMeta, orgMeta.titleMetaById],
+  const roleLevelIdByName = useMemo(
+    () =>
+      new Map(orgMeta.roleTargets.map((t) => [t.name, t.levelId] as const)),
+    [orgMeta.roleTargets],
+  );
+  const roleLevelNameById = useMemo(
+    () =>
+      new Map(orgMeta.roleLevels.map((l) => [l.id, l.name] as const)),
+    [orgMeta.roleLevels],
   );
 
-  const preview = useMemo<DashboardPreview | null>(() => {
-    if (!isAdmin || !previewValue) return null;
-    if (previewValue.startsWith("role:")) {
-      const id = previewValue.slice("role:".length);
-      const target = roleOptions.find((item) => item.id === id);
-      return target
-        ? { kind: "role", id, name: target.name, variant: dashboardVariantForRole(target.name, orgMeta.roleMeta) }
-        : null;
-    }
-    if (previewValue.startsWith("title:")) {
-      const id = previewValue.slice("title:".length);
-      const target = titleOptions.find((item) => item.id === id);
-      return target
-        ? { kind: "title", id, name: target.name, variant: dashboardVariantForTitle(target.flags) }
-        : null;
-    }
-    return null;
-  }, [isAdmin, previewValue, roleOptions, titleOptions, orgMeta.roleMeta]);
+  const ownGroup = useMemo(
+    () =>
+      dashboardGroupFor(
+        {
+          roles: user?.roles ?? [],
+          title: user?.title ?? "",
+          titleId: user?.titleId,
+          isAdmin,
+          roleMeta: orgMeta.roleMeta,
+          titleMeta: orgMeta.titleMeta,
+          titleMetaById: orgMeta.titleMetaById,
+          roleLevelIdByName,
+          roleLevelNameById,
+        },
+      ),
+    [user, isAdmin, orgMeta, roleLevelIdByName, roleLevelNameById],
+  );
+
+  const active: DashboardGroup =
+    isAdmin && previewGroup ? previewGroup : ownGroup;
+  const scope = useMemo(
+    () =>
+      dashboardGroupScope(
+        active,
+        {
+          title: user?.title ?? "",
+          titleId: user?.titleId,
+          titleUnitCodes: user?.titleUnitCodes ?? [],
+          unitCode: user?.unitCode ?? "",
+        },
+        { titleMeta: orgMeta.titleMeta, titleMetaById: orgMeta.titleMetaById },
+      ),
+    [active, user, orgMeta.titleMeta, orgMeta.titleMetaById],
+  );
 
   useEffect(() => {
-    if (isAdmin && previewValue && !preview) setPreviewValue("");
-    if (!isAdmin && previewValue) setPreviewValue("");
-  }, [isAdmin, previewValue, preview]);
-
-  const active: DashboardVariant = isAdmin
-    ? preview?.variant ?? "director"
-    : variants[0] ?? "nurse";
-  const roleIdsForPolicy = useMemo(() => {
-    if (isAdmin) return preview?.kind === "role" ? [preview.id] : [];
-    const assigned = new Set(user?.roles ?? []);
-    return orgMeta.roleTargets
-      .filter((target) => assigned.has(target.name) && dashboardVariantForRole(target.name, orgMeta.roleMeta) === active)
-      .map((target) => target.id);
-  }, [active, isAdmin, preview, user?.roles, orgMeta.roleTargets, orgMeta.roleMeta]);
-  const titleIdForPolicy = useMemo(() => {
-    if (isAdmin) return preview?.kind === "title" ? preview.id : "";
-    const profileTitleId = user?.titleId ?? "";
-    if (profileTitleId && orgMeta.titleTargets.some((target) => target.id === profileTitleId)) return profileTitleId;
-    return orgMeta.titleTargets.find((target) => target.name === user?.title)?.id ?? "";
-  }, [isAdmin, preview, user?.titleId, user?.title, orgMeta.titleTargets]);
-  const sections = useMemo(
-    () => resolveDashboardSectionsForTarget({
-      base: adminSections,
-      overrides: sectionOverrides,
-      roleIds: roleIdsForPolicy,
-      titleId: titleIdForPolicy,
-    }),
-    [adminSections, sectionOverrides, roleIdsForPolicy, titleIdForPolicy],
-  );
+    if (!isAdmin && previewGroup) setPreviewGroup("");
+  }, [isAdmin, previewGroup]);
 
   // 審查表單／查詢執行中 → 顯示執行頁（返回時重讀資料）
   if (executing) {
@@ -182,31 +138,29 @@ export function DashboardPage({
     );
   }
 
+  const scopeNote =
+    scope.kind === "all"
+      ? "範圍：全院"
+      : scope.kind === "units"
+        ? `範圍：負責轄區（${scope.unitCodes.length} 個單位）`
+        : "範圍：自己單位";
   const welcomeText = isAdmin
-    ? preview
-      ? `目前以「${preview.name}」的${VARIANT_LABELS[active]}儀表板版型預覽；實際資料與權限仍依系統管理員登入身分。`
-      : "目前為系統管理者視角；您可預覽其他角色／職稱的儀表板呈現。"
-    : `以下為您唯一的${VARIANT_LABELS[active]}儀表板；頁面與資料權限仍依系統實際授權。`;
+    ? previewGroup
+      ? `目前預覽「${DASHBOARD_GROUP_LABELS[previewGroup]}」版面；實際資料與權限仍依系統管理員登入身分。`
+      : "目前為系統管理者視角（第 1 群）；您可預覽其他群的儀表板呈現。"
+    : `以下為您所屬${DASHBOARD_GROUP_LABELS[active]}的儀表板；頁面與資料權限仍依系統實際授權。`;
 
   return (
-    <div className="dashboard-page" data-dashboard-variant={active}>
-      <PageHeading
-        page="dashboard"
-        action={
-          <button
-            className="button button-outline"
-            onClick={() => onAction("資料串接完成後才能匯出摘要")}
-          >
-            <Download size={16} />
-            匯出摘要
-          </button>
-        }
-      />
+    <div className="dashboard-page" data-dashboard-group={active}>
+      <PageHeading page="dashboard" />
       <div className="dashboard-welcome">
         <div>
           <span className="welcome-kicker">QUALITY SNAPSHOT</span>
-          <h2>本月品質查核進度總覽</h2>
-          <p>{user?.name ? `${maskName(user.name)}，` : ""}{welcomeText}</p>
+          <h2>{DASHBOARD_GROUP_TITLES[active]}</h2>
+          <p>
+            {user?.name ? `${maskName(user.name)}，` : ""}
+            {welcomeText} {scopeNote}
+          </p>
         </div>
         <div className="welcome-art" aria-hidden="true">
           <div className="art-ring ring-one" />
@@ -225,19 +179,27 @@ export function DashboardPage({
         <section className="dashboard-preview-bar" aria-label="系統管理者儀表板預覽">
           <div className="dashboard-preview-copy">
             <span className="dashboard-preview-kicker"><Eye size={14} />系統管理者專用</span>
-            <strong>角色／職稱畫面預覽</strong>
+            <strong>群組畫面預覽</strong>
             <p>僅預覽版面與顯示項目，不會切換登入身分、資料範圍或頁面權限。</p>
           </div>
           <div className="dashboard-preview-controls">
             <label>
-              <span className="sr-only">選擇要預覽的角色或職稱</span>
-              <select value={previewValue} onChange={(event) => setPreviewValue(event.target.value)} aria-label="選擇要預覽的角色或職稱">
-                <option value="">系統管理者視角</option>
-                {titleOptions.length > 0 && <optgroup label="依職稱預覽">{titleOptions.map((target) => <option key={`title:${target.id}`} value={`title:${target.id}`}>{target.name} · {VARIANT_LABELS[dashboardVariantForTitle(target.flags)]}</option>)}</optgroup>}
-                {roleOptions.length > 0 && <optgroup label="依角色預覽">{roleOptions.map((target) => <option key={`role:${target.id}`} value={`role:${target.id}`}>{target.name} · {VARIANT_LABELS[dashboardVariantForRole(target.name, orgMeta.roleMeta)]}</option>)}</optgroup>}
+              <span className="sr-only">選擇要預覽的群組</span>
+              <select
+                value={previewGroup}
+                onChange={(event) =>
+                  setPreviewGroup(event.target.value as DashboardGroup | "")
+                }
+                aria-label="選擇要預覽的群組"
+              >
+                <option value="">系統管理者視角（第 1 群）</option>
+                {GROUP_ORDER.map((g) => (
+                  <option key={g} value={g}>
+                    預覽{DASHBOARD_GROUP_LABELS[g]} · {DASHBOARD_GROUP_TITLES[g]}
+                  </option>
+                ))}
               </select>
             </label>
-            {preview && <button className="button button-outline" type="button" onClick={() => setPreviewValue("")}><RotateCcw size={14} />返回管理者視角</button>}
           </div>
         </section>
       )}
@@ -256,13 +218,26 @@ export function DashboardPage({
               部分任務狀態自動校正寫入失敗，下次載入會再試；若持續出現請通知系統管理員。
             </p>
           )}
-          {active === "reviewer" && <ReviewerTab data={data} staffId={user?.staffId ?? ""} onExecute={setExecuting} sections={sections} />}
-          {active === "nurse" && <NurseTab data={data} staffId={user?.staffId ?? ""} unitCode={user?.unitCode ?? ""} sections={sections} />}
-          {active === "headNurse" && <HeadNurseTab data={data} unitCode={user?.unitCode ?? ""} sections={sections} />}
-          {active === "officer" && <OfficerTab data={data} staffId={user?.staffId ?? ""} onAction={onAction} sections={sections} />}
-          {active === "convener" && <ConvenerTab data={data} sections={sections} />}
-          {active === "supervisor" && <SupervisorTab data={data} titleUnitCodes={user?.titleUnitCodes ?? []} cycle={statsCycle} sections={sections} />}
-          {active === "director" && <DirectorTab data={data} sections={sections} />}
+          <AnnouncementsSection group={active} />
+          {active === "g1" && <Group1Tab data={data} scope={scope} />}
+          {active === "g2" && (
+            <Group2Tab data={data} unitCode={user?.unitCode ?? ""} />
+          )}
+          {active === "g3" && (
+            <Group3Tab
+              data={data}
+              staffId={user?.staffId ?? ""}
+              onExecute={setExecuting}
+            />
+          )}
+          {active === "g4" && (
+            <Group4Tab
+              data={data}
+              staffId={user?.staffId ?? ""}
+              unitCode={user?.unitCode ?? ""}
+              cycle={statsCycle}
+            />
+          )}
         </>
       )}
     </div>

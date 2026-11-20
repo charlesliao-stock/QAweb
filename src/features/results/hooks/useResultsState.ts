@@ -81,6 +81,11 @@ export function useResultsState() {
   const [interval, setInterval] = useState<AnalysisGranularity>("month");
   /** v1.40.2「未審月份不顯示」：勾選時隱藏該期間欄內零審查的欄位；預設不勾選，全部顯示。純顯示切換，不觸發重新查詢。 */
   const [hideEmptyMonths, setHideEmptyMonths] = useState(false);
+  /**
+   * 搜尋時品管組／單位／指標三者皆未選的提示（按「搜尋」才出現；
+   * 選了任一篩選後，提示不再顯示——面板以三者仍皆未選為條件渲染）。
+   */
+  const [searchPrompt, setSearchPrompt] = useState("");
   // 組別分析
   const [selGroup, setSelGroup] = useState("");
   const [groupUnit, setGroupUnit] = useState<UnitMode>("unit");
@@ -90,7 +95,7 @@ export function useResultsState() {
   // 單位分析
   const [selUnit, setSelUnit] = useState("");
   const [unitUnit, setUnitUnit] = useState<UnitMode>("unit");
-  const [selGroupU, setSelGroupU] = useState("");
+  const [selGroupU, setSelGroupU] = useState("all");
   const [selIndU, setSelIndU] = useState("all");
   // 指標分析
   const [selGroup2, setSelGroup2] = useState("");
@@ -256,6 +261,8 @@ export function useResultsState() {
     setSelIndicator,
     setSelGroupU,
     setSelIndU,
+    searchPrompt,
+    setSearchPrompt,
     hideEmptyMonths,
     unitUnit,
     groupUnit,
