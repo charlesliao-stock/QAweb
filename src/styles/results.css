@@ -717,6 +717,11 @@
   cursor: pointer;
   font-size: 14px;
   color: #314447;
+  /* 與品管審查原生 <select> 一致：選項單行顯示，不斷行；
+     長指標名稱以省略號截斷，不把下拉撐寬、不推高選項列。 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .searchable-select-list button:hover,
 .searchable-select-list button.active {

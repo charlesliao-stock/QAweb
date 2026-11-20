@@ -92,7 +92,7 @@ export function ScheduleListView({ ctx }: { ctx: ScheduleCtx }) {
                   <option value="">全部指標</option>
                   {indicatorOptions.map((i) => (
                     <option key={i.id} value={i.id}>
-                      {i.name}（{i.id}）
+                      {i.name}
                     </option>
                   ))}
                 </FormSelect>

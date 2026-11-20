@@ -16,6 +16,11 @@ import {
   PageHeading,
 } from "../components/ui";
 import { loadRefCollection } from "../lib/refLoad";
+import { getFirebaseDb } from "../lib/firebase";
+import { doc } from "../lib/db";
+import { getCachedRef, SYSTEM_CONFIG_KEY } from "../lib/refCache";
+import { getDocCacheFirst } from "../lib/cacheFirst";
+import { yearOptionLabel } from "../lib/scheduling";
 import {
   canShowOverviewAction,
   filterOverviewRows,
@@ -64,9 +69,32 @@ export function IndicatorOverviewPage({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [year, setYear] = useState(() => new Date().getFullYear());
+  /** 年別：與排程頁一致，鎖定系統管理「統計週期」設定（不可手動切換）。 */
+  const [statsCycle, setStatsCycle] = useState<"year" | "academic">("year");
   const [groupFilter, setGroupFilter] = useState("");
   const [keyword, setKeyword] = useState("");
   const [keywordDraft, setKeywordDraft] = useState("");
+
+  // 年別跟隨系統管理「統計週期」設定（與排程頁、結果分析頁讀同一份
+  // systemParams/config；讀不到就用預設「年度」）。
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const snap = await getCachedRef(SYSTEM_CONFIG_KEY, () =>
+          getDocCacheFirst(doc(getFirebaseDb(), "systemParams", "config")),
+        );
+        if (cancelled) return;
+        const data = snap.data() as Record<string, unknown> | undefined;
+        setStatsCycle(data?.statsCycle === "academic" ? "academic" : "year");
+      } catch {
+        if (!cancelled) setStatsCycle("year");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -209,9 +237,18 @@ export function IndicatorOverviewPage({
         >
           {overviewYearOptions().map((y) => (
             <option key={y} value={y}>
-              {y} 年
+              {yearOptionLabel(y)}
             </option>
           ))}
+        </FormSelect>
+        <FormSelect
+          label="年別"
+          value={statsCycle}
+          disabled
+          title="年別跟隨系統管理「統計週期」設定"
+        >
+          <option value="year">年度</option>
+          <option value="academic">學年度</option>
         </FormSelect>
         <FormSelect
           label="組別"
@@ -270,7 +307,7 @@ export function IndicatorOverviewPage({
           <span>已停用</span>
         </div>
         <p className="indicator-overview-stats-note">
-          年份僅作為排程、審查與結果分析的年度上下文，不會隱藏任何指標。
+          年份與年別僅作為排程、審查與結果分析的年度上下文，不會隱藏任何指標；年別跟隨系統管理「統計週期」設定。
         </p>
       </div>
       {loading ? (

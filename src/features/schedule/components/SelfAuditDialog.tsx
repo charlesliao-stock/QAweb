@@ -123,7 +123,7 @@ export function SelfAuditDialog({
             onChange={(e) => setIndicatorId(e.target.value)}>
             {activeIndicators.map((i) => (
               <option key={i.id} value={i.id}>
-                {i.name}（{i.id}）
+                {i.name}
               </option>
             ))}
           </FormSelect>

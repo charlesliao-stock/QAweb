@@ -275,6 +275,7 @@ export function SearchableSelect({
                   type="button"
                   role="option"
                   aria-selected={o.value === value}
+                  title={o.label}
                   className={o.value === value ? "active" : ""}
                   onMouseDown={(e) => {
                     e.preventDefault();
