@@ -23,18 +23,37 @@ export function SchedulePage(props: SchedulePageProps) {
   const ctx = useScheduleCtx(props);
   const { view, canEdit, groupMap, rows, myUnitCode, assignments, units, reviewersByGroup, scheduleRestrictedUnits, unitNameOf, actor, schedules, onAction, usersMap, indicatorOf, backToList, reviewerRoleIds, inactiveIds, scheduleScopeUnits, user } = ctx;
 
-  // 指標總覽帶入：指標清單載入完成後，預選該指標與年份（只設篩選、留在清單頁，
-  // 不直接跳進排程編輯器；編輯仍由使用者在清單上點選，權限與範圍邏輯不動）。
+  // 指標總覽帶入：預選該指標與年份，並觸發一次載入（等同於手動搜尋該指標），
+  // 只設篩選、留在清單頁，不直接跳進排程編輯器；編輯仍由使用者在清單上點選，
+  // 權限與範圍邏輯不動。
+  // 根因（v1.88.31 起即失效）：舊寫法等 ctx.queried 才套用，但排程頁掛載時
+  // 不會自動查詢，queried 永遠是 false（只有關鍵字搜尋等操作才會呼叫
+  // loadData），所以預選從未執行。改為不等 queried：年份與指標立即預選，
+  // 再主動呼叫 loadData 一次；組別等指標清單載入後才補（indicatorOf 找得到時）。
+  // 直接進排程頁時 initial 為 null，維持現況（不預選、不自動查詢）。
   const initialRef = useRef(props.initial ?? null);
   const initialAppliedRef = useRef(false);
+  const initialLoadRef = useRef(false);
+  const initialGroupRef = useRef(false);
   useEffect(() => {
     const init = initialRef.current;
-    if (!init || initialAppliedRef.current || !ctx.queried) return;
-    initialAppliedRef.current = true;
-    const ind = ctx.indicatorOf(init.indicatorId);
-    ctx.setFilterYear(init.year);
-    if (ind) ctx.setFilterGroup(ind.groupId);
-    ctx.setFilterIndicator(init.indicatorId);
+    if (!init) return;
+    if (!initialAppliedRef.current) {
+      initialAppliedRef.current = true;
+      ctx.setFilterYear(init.year);
+      ctx.setFilterIndicator(init.indicatorId);
+    }
+    if (!initialLoadRef.current) {
+      initialLoadRef.current = true;
+      void ctx.loadData();
+    }
+    if (!initialGroupRef.current) {
+      const ind = ctx.indicatorOf(init.indicatorId);
+      if (ind) {
+        initialGroupRef.current = true;
+        ctx.setFilterGroup(ind.groupId);
+      }
+    }
   }, [ctx]);
 
   // ================= 主畫面 =================

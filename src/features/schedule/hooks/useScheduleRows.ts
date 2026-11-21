@@ -109,6 +109,7 @@ export function useScheduleRows(props: SchedulePageProps, prev: ReturnType<typeo
     cycle,
     period,
     filterGroup,
+    filterIndicator,
     filterKeyword,
     showTemp,
     isUnitScheduler,
