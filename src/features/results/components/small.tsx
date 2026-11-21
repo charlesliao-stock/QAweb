@@ -356,6 +356,8 @@ export function RateMatrix({
     /**
      * v1.88.17：該列的合併格（表頭仍為單月欄；每列資料格按自己的排程區間
      * colspan 合併）。未傳時退回一月一格。
+     * v1.88.45：用戶示意圖定案——維持一張表、月欄表頭，各列切法不同也
+     * 不拆表；合併格內容置於合併格中間（見 results.css 置中註記）。
      */
     spans?: RowSpan[];
     details?: { key: string; label: string; cells: Record<string, PassRate> }[];

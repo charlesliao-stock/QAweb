@@ -2,7 +2,7 @@ import type { AnalysisPeriodColumn, CalendarMonth } from "../../../lib/analysisP
 import { recordsForIndex, buildRecordIndex, columnRecordCount } from "../../../lib/resultsMatrix";
 import { columnTempNote } from "../../../lib/tempChartNote";
 import { fmtYm } from "../../../lib/ym";
-import { type ScheduleSpanGroup, scheduleIntervalsInRange, groupSchedulesForRows, type RowSpan, buildRowSpans } from "../../../lib/analysisSpans";
+import { type ScheduleSpanGroup, scheduleIntervalsInRange, groupSchedulesForRows, type RowSpan, buildRowSpans, firstMonthLabel } from "../../../lib/analysisSpans";
 import { scheduleDocId } from "../../../lib/scheduling";
 import type { IndicatorOpt, UnitMode, MatrixRow, CellValue } from "../model/types";
 import { useMemo, useState, useRef, useEffect, useCallback } from "react";
@@ -758,8 +758,9 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
   }
 
   /**
-   * 曲線圖數列（v1.88.17 Q6=A：一點一合併格，x 軸標籤為區間，如 9–11月；
-   * 只取有資料的格；附 hover 提示文字；v1.59.0 附加審標註）。
+   * 曲線圖數列（v1.88.17 Q6=A：一點一合併格；v1.88.45：x 軸標籤為區間
+   * 第一個月，如 9–11 月區間的點標為 9 月，一個區間一個點；
+   * hover 提示仍顯示完整區間。只取有資料的格；v1.59.0 附加審標註）。
    * spans 為該列的合併格（矩陣列的 spans；未傳時以單月格計）。
    */
   function chartSeries(
@@ -795,7 +796,7 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
             : curTh > 0 ? curTh : null,
         );
         values.push(c.rate);
-        labels.push(col.label);
+        labels.push(firstMonthLabel(col));
         tips.push(`${col.label}${note ?? ""}：${formatPassRate(c, true)}`);
         cols.push(col);
         notes.push(note);
@@ -866,7 +867,7 @@ export function useResultsCompute(prev: ReturnType<typeof useResultsState> & Ret
             : ind.threshold > 0 ? ind.threshold : null,
         );
         values.push(pr.rate);
-        labels.push(col.label);
+        labels.push(firstMonthLabel(col));
         tips.push(`${col.label}${note ?? ""}：${formatPassRate(pr, true)}`);
         cols.push(col);
         notes.push(note);

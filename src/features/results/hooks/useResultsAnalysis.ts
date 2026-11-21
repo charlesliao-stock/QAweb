@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { recordsForIndex } from "../../../lib/resultsMatrix";
-import type { RowSpan } from "../../../lib/analysisSpans";
+import { firstMonthLabel, type RowSpan } from "../../../lib/analysisSpans";
 import { unitPeriodPassRateFromCells, passRateFromCells, cellsInMonths, unitPassRateFromCells, columnThresholdFromCells, unitScoringRowsFromCells, personScoringRowsFromCells, questionSummariesFromCells } from "../../../lib/reviewSummary";
 import { columnTempNote } from "../../../lib/tempChartNote";
 import { formatPassRate, optionDetailRows, unitPeriodPassRate, passRateOf, unitPassRate, recordsInMonths, type PassRate, columnThresholdOf, unitScoringBreakdownRows, personScoringBreakdownRows, questionErrorRowsFromSummaries, questionErrorRows, collectConsolidatedRecordNotes } from "../../../lib/analysisRates";
@@ -102,7 +102,8 @@ export function useResultsAnalysis(prev: ResultsCtx) {
         ownPersonPr: merged,
         ownTotal: merged.total,
         chartValues: pts.map((point) => point.pr.rate as number),
-        chartLabels: pts.map((point) => point.column.label),
+        // v1.88.45：曲線一個區間一個點，X 軸標籤為區間第一個月。
+        chartLabels: pts.map((point) => firstMonthLabel(point.column)),
         chartTips: pts.map((point, i) => `${point.column.label}${chartNotes[i] ?? ""}：${formatPassRate(point.pr, true)}`),
         chartNotes,
         chartThresholds: pts.map((point) =>
@@ -141,7 +142,8 @@ export function useResultsAnalysis(prev: ResultsCtx) {
       // v1.44.0：結果分析不再讀預存摘要；明細只含本人單位範圍，不提供全院彙總。
       ownPersonPr: merged, ownTotal: indRecs.length,
       chartValues: pts.map((point) => point.pr.rate as number),
-      chartLabels: pts.map((point) => point.column.label),
+      // v1.88.45：曲線一個區間一個點，X 軸標籤為區間第一個月。
+      chartLabels: pts.map((point) => firstMonthLabel(point.column)),
       chartTips: pts.map((point, i) => `${point.column.label}${chartNotes[i] ?? ""}：${formatPassRate(point.pr, true)}`),
       chartNotes,
       chartThresholds: pts.map((point) =>

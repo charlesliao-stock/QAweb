@@ -207,6 +207,18 @@ export function groupSchedulesForRows(
   return groups;
 }
 
+/* ================= 曲線圖 X 軸標籤（v1.88.45） ================= */
+
+/**
+ * 一個區間一個點，點以區間的第一個月為主：X 軸標籤取 span 內第一個月
+ *（如 9-11 月區間的點標為 2026/9）。單月格回傳該月本身。
+ * hover 提示仍用 span 完整標籤（起訖），不經此函式。
+ */
+export function firstMonthLabel(col: AnalysisPeriodColumn): string {
+  const m = col.months[0];
+  return fmtYm(m.year, m.month);
+}
+
 /** 由一支排程推導其（已裁切到查詢範圍的）區間；範圍外無區間回 []。 */
 export function scheduleIntervalsInRange(
   sched: {

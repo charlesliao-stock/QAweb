@@ -244,6 +244,9 @@
 .analysis-table-wrap {
   overflow-x: auto;
 }
+/* v1.88.45：區間合併格內容置於合併格中間（水平置中；.rate-stack 為
+   inline-flex 且本身 justify-content: center，故 colspan 橫跨多月欄時
+   文字仍落在合併格正中間，不靠左）。 */
 .analysis-matrix th.rate-col,
 .analysis-matrix td.rate-cell {
   text-align: center;
