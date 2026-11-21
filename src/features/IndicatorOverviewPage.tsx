@@ -372,11 +372,13 @@ export function IndicatorOverviewPage({
                 <dl className="indicator-overview-card-meta">
                   <div>
                     <dt>品管組別</dt>
-                    <dd>{row.groupName}</dd>
+                    <dd title={row.groupName}>{row.groupName}</dd>
                   </div>
                   <div>
                     <dt>指標編號</dt>
-                    <dd>{indicatorCodeOf(row.id)}</dd>
+                    <dd title={indicatorCodeOf(row.id)}>
+                      {indicatorCodeOf(row.id)}
+                    </dd>
                   </div>
                   <div>
                     <dt>閾值</dt>

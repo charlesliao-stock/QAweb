@@ -710,7 +710,8 @@ th[aria-sort="descending"] .th-sort .lucide {
 }
 
 /* 指標總覽手機版卡片（寬度 <768px 才顯示，桌機維持表格）。
-   一張卡片三行：第 1 行指標名稱、第 2 行基本資料、第 3 行淡彩操作按鈕。
+   一張卡片三行、各一行不換行：第 1 行指標名稱、第 2 行基本資料（四項同行，
+   過長省略）、第 3 行五顆淡彩操作按鈕（同行等分）。
    淡彩色沿用系統現有色票（雷達圖／狀態燈號色），淺底＋深色文字。 */
 .indicator-overview-cards {
   display: none;
@@ -737,29 +738,59 @@ th[aria-sort="descending"] .th-sort .lucide {
     font-weight: 700;
     line-height: 1.4;
   }
+  /* 第 2 行基本資料：四項（品管組別／指標編號／閾值／狀態）擠在同一行，
+     不換行；字體縮到 11px、間距縮小（項目間 6px、標籤與值之間 2px），
+     品管組名與指標編號過長時用省略號，閾值與狀態徽章不壓縮，
+     確保整行不溢出。實測 360px 寬螢幕一般資料可完整顯示。 */
   .indicator-overview-card-meta {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px 16px;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
     margin: 0 0 12px;
+    overflow: hidden;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .indicator-overview-card-meta > div {
+    display: flex;
+    align-items: baseline;
+    gap: 2px;
+    min-width: 0;
   }
   .indicator-overview-card-meta dt {
-    font-size: var(--font-small);
+    flex-shrink: 0;
+    font-size: 11px;
     color: var(--muted);
   }
   .indicator-overview-card-meta dd {
-    margin: 2px 0 0;
-    font-size: var(--font-body);
-    overflow-wrap: anywhere;
+    margin: 0;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
+  /* 狀態徽章左右內距略縮，替基本資料行省出空間。 */
+  .indicator-overview-card-meta .indicator-overview-status {
+    padding: 2px 8px;
+  }
+  /* 閾值與狀態不參與壓縮（數值短、徽章固定寬），只壓組名與編號。 */
+  .indicator-overview-card-meta > div:nth-child(3),
+  .indicator-overview-card-meta > div:nth-child(4) {
+    flex-shrink: 0;
+  }
+  /* 第 3 行操作按鈕：五顆同一行不換行；等分寬度、縮小內距與字體。 */
   .indicator-overview-card .indicator-overview-actions {
-    gap: 8px;
+    flex-wrap: nowrap;
+    gap: 6px;
   }
   .indicator-overview-card .indicator-overview-actions .button {
-    flex: 1 1 calc(33.333% - 8px);
-    min-height: 44px;
-    padding: 10px 8px;
-    font-size: var(--font-body);
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 40px;
+    padding: 8px 2px;
+    font-size: 13px;
     font-weight: 700;
   }
   /* 淡彩按鈕配色已移至全域（桌機與手機共用），此處只留手機版尺寸。 */
